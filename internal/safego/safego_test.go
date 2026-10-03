@@ -89,6 +89,7 @@ func TestGoRecoversPanics(t *testing.T) {
 			_ = s[i]
 		}, wantType: "runtime.boundsError"},
 		{name: "nil", fn: func() { panic(nil) }, wantType: "*runtime.PanicNilError"},
+		{name: "http abort sentinel", fn: func() { panic(http.ErrAbortHandler) }, wantType: "*errors.errorString"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -143,6 +144,57 @@ func TestRecoverInHandler(t *testing.T) {
 	default:
 		t.Fatal("Recover did not report the panic before the handler returned")
 	}
+}
+
+func checkNotReported(t *testing.T, reg *metrics.Registry, lines lineWriter) {
+	t.Helper()
+	select {
+	case line := <-lines:
+		t.Fatalf("http.ErrAbortHandler was reported as a panic: %s", line)
+	default:
+	}
+	var b strings.Builder
+	if err := reg.WriteText(&b); err != nil {
+		t.Fatalf("WriteText: %v", err)
+	}
+	if strings.Contains(b.String(), "wawarden_panics_total") {
+		t.Fatalf("http.ErrAbortHandler was counted as a panic:\n%s", b.String())
+	}
+}
+
+func TestRecoverPropagatesErrAbortHandler(t *testing.T) {
+	reg, lines := install(t)
+	func() {
+		defer func() {
+			if v := recover(); v != http.ErrAbortHandler {
+				t.Fatalf("recovered %v, want http.ErrAbortHandler to propagate", v)
+			}
+		}()
+		defer safego.Recover("handler")
+		panic(http.ErrAbortHandler)
+	}()
+	checkNotReported(t, reg, lines)
+}
+
+func TestRecoverLetsNetHTTPAbortTheResponse(t *testing.T) {
+	reg, lines := install(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer safego.Recover("handler")
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		panic(http.ErrAbortHandler)
+	}))
+	defer srv.Close()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
+	resp, err := srv.Client().Do(req)
+	if err == nil {
+		_ = resp.Body.Close()
+		t.Fatalf("the aborted handler produced a response with status %d", resp.StatusCode)
+	}
+	checkNotReported(t, reg, lines)
 }
 
 func TestInstallRejectsMissingDependencies(t *testing.T) {

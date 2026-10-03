@@ -4,6 +4,7 @@ package safego
 import (
 	"fmt"
 	"log/slog"
+	"net/http"
 	"runtime/debug"
 	"sync/atomic"
 
@@ -29,13 +30,21 @@ func Install(logger *slog.Logger, reg *metrics.Registry) {
 
 func Go(name string, fn func()) {
 	go func() {
-		defer Recover(name)
+		// Not Recover: no net/http frame above a goroutine would catch its ErrAbortHandler re-panic.
+		defer func() { report(name, recover()) }()
 		fn()
 	}()
 }
 
 func Recover(name string) {
 	v := recover()
+	if v == http.ErrAbortHandler {
+		panic(v)
+	}
+	report(name, v)
+}
+
+func report(name string, v any) {
 	if v == nil {
 		return
 	}
