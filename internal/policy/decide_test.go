@@ -304,6 +304,73 @@ func TestZeroValueGrantsAreInvalid(t *testing.T) {
 	}
 }
 
+func TestGrantsWithoutTheOkFlagAllowNothing(t *testing.T) {
+	chats := append([]CanonicalChat{{}}, knownChats...)
+
+	reads := []struct {
+		name string
+		g    ReadGrant
+	}{
+		{name: "read-all", g: ReadGrant{client: "c1", all: true}},
+		{name: "read-set", g: ReadGrant{client: "c1", chats: set(chatA, chatB)}},
+		{name: "read-all with a set holding the zero chat", g: ReadGrant{client: "c1", all: true, chats: set(chatA, CanonicalChat{})}},
+	}
+	for _, tt := range reads {
+		t.Run("ReadGrant "+tt.name, func(t *testing.T) {
+			if tt.g.Valid() || tt.g.All() || len(tt.g.Chats()) != 0 {
+				t.Fatalf("Valid() = %v, All() = %v, Chats() = %v, want false, false, empty", tt.g.Valid(), tt.g.All(), tt.g.Chats())
+			}
+			for _, chat := range chats {
+				if tt.g.Allows(chat) {
+					t.Fatalf("Allows(%q) = true", chat.jid)
+				}
+			}
+		})
+	}
+
+	writes := []struct {
+		name string
+		g    WriteGrant
+	}{
+		{name: "write-set with first contact", g: WriteGrant{client: "c1", chats: set(chatA, chatB), allowFirstContact: true}},
+		{name: "set holding the zero chat", g: WriteGrant{client: "c1", chats: set(chatA, CanonicalChat{}), allowFirstContact: true}},
+	}
+	for _, tt := range writes {
+		t.Run("WriteGrant "+tt.name, func(t *testing.T) {
+			if tt.g.Valid() || tt.g.AllowFirstContact() {
+				t.Fatalf("Valid() = %v, AllowFirstContact() = %v, want false, false", tt.g.Valid(), tt.g.AllowFirstContact())
+			}
+			for _, chat := range chats {
+				if tt.g.Allows(chat) {
+					t.Fatalf("Allows(%q) = true", chat.jid)
+				}
+			}
+		})
+	}
+}
+
+func TestValidGrantsRefuseTheZeroChatEvenWhenTheirSetHoldsIt(t *testing.T) {
+	c := &Client{ID: "c1", Read: set(chatA), Write: set(chatA), ExpiresAt: future}
+	r, ok := DecideRead(c, now)
+	if !ok {
+		t.Fatal("DecideRead() denied a live client")
+	}
+	w, ok := DecideWrite(c, now)
+	if !ok {
+		t.Fatal("DecideWrite() denied a live client")
+	}
+
+	r.chats[CanonicalChat{}] = struct{}{}
+	w.chats[CanonicalChat{}] = struct{}{}
+
+	if r.Allows(CanonicalChat{}) || w.Allows(CanonicalChat{}) {
+		t.Fatalf("a valid grant allows the zero-value chat: read %v, write %v", r.Allows(CanonicalChat{}), w.Allows(CanonicalChat{}))
+	}
+	if !r.Allows(chatA) || !w.Allows(chatA) {
+		t.Fatal("the grants no longer allow their own chat")
+	}
+}
+
 func TestDecisionTypesHaveNoExportedFields(t *testing.T) {
 	for _, typ := range []reflect.Type{
 		reflect.TypeFor[CanonicalChat](),

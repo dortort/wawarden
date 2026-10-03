@@ -53,6 +53,7 @@ func checkDecideAdmin(t *testing.T, tok string) {
 	}{
 		{name: "empty token", cred: cred, presented: ""},
 		{name: "zero credential", cred: AdminCredential{}, presented: tok},
+		{name: "credential holding the hash without its ok flag", cred: AdminCredential{sum: sha256.Sum256([]byte(tok))}, presented: tok},
 		{name: "truncated by one", cred: cred, presented: tok[:len(tok)-1]},
 		{name: "truncated to the prefix", cred: cred, presented: tok[:len("wwadm_")]},
 		{name: "extended", cred: cred, presented: tok + "0"},
