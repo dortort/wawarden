@@ -8,10 +8,18 @@ import (
 )
 
 const (
+	codeForbidden        = "forbidden"
 	codeInternal         = "internal_error"
 	codeMethodNotAllowed = "method_not_allowed"
 	codeNotFound         = "not_found"
+	codeTooManyRequests  = "too_many_requests"
+	codeUnauthorized     = "unauthorized"
 )
+
+func setSecurityHeaders(h http.Header) {
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Content-Type-Options", "nosniff")
+}
 
 func writeError(w http.ResponseWriter, status int, code string) {
 	writeResponse(w, status, dto.Error{Code: code})
