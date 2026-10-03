@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"net/http"
 	"time"
@@ -68,11 +67,7 @@ func NewAdminHandler(d AdminDeps) http.Handler {
 		},
 	}
 	p.router.admin("GET /metrics", func(context.Context, policy.AdminGrant, *Request) (dto.Response, error) {
-		var b bytes.Buffer
-		if err := d.Metrics.WriteText(&b); err != nil {
-			return nil, err
-		}
-		return dto.Prometheus{Text: b.Bytes()}, nil
+		return dto.Metrics(d.Metrics), nil
 	})
 	return p
 }

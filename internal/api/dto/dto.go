@@ -2,6 +2,7 @@
 package dto
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 
@@ -10,7 +11,10 @@ import (
 
 const jsonContentType = "application/json; charset=utf-8"
 
-var errNoResponse = errors.New("dto: no response to encode")
+var (
+	errNoResponse = errors.New("dto: no response to encode")
+	errNoRegistry = errors.New("dto: no metrics registry to encode")
+)
 
 type Response interface {
 	encode() (contentType string, body []byte, err error)
@@ -36,10 +40,21 @@ type Health struct {
 func (h Health) encode() (string, []byte, error) { return encodeJSON(h) }
 
 type Prometheus struct {
-	Text []byte `json:"-"`
+	reg *metrics.Registry
 }
 
-func (p Prometheus) encode() (string, []byte, error) { return metrics.ContentType, p.Text, nil }
+func Metrics(reg *metrics.Registry) Prometheus { return Prometheus{reg: reg} }
+
+func (p Prometheus) encode() (string, []byte, error) {
+	if p.reg == nil {
+		return "", nil, errNoRegistry
+	}
+	var b bytes.Buffer
+	if err := p.reg.WriteText(&b); err != nil {
+		return "", nil, err
+	}
+	return metrics.ContentType, b.Bytes(), nil
+}
 
 func encodeJSON(v any) (string, []byte, error) {
 	b, err := json.Marshal(v)

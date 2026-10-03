@@ -22,11 +22,13 @@ func samples() []dto.Response {
 	return []dto.Response{
 		dto.Error{Code: "not_found"},
 		dto.Health{Status: "ok"},
-		dto.Prometheus{Text: []byte("# TYPE wawarden_example counter\nwawarden_example 1\n")},
+		dto.Metrics(metrics.NewRegistry()),
 	}
 }
 
 func TestEncode(t *testing.T) {
+	reg := metrics.NewRegistry()
+	reg.Counter("wawarden_example_total", "Synthetic example.").Inc()
 	tests := []struct {
 		name            string
 		response        dto.Response
@@ -46,10 +48,10 @@ func TestEncode(t *testing.T) {
 			wantBody:        `{"status":"unavailable"}`,
 		},
 		{
-			name:            "prometheus",
-			response:        dto.Prometheus{Text: []byte("wawarden_example 1\n")},
-			wantContentType: metrics.ContentType,
-			wantBody:        "wawarden_example 1\n",
+			name:            "metrics",
+			response:        dto.Metrics(reg),
+			wantContentType: "text/plain; version=0.0.4; charset=utf-8",
+			wantBody:        "# HELP wawarden_example_total Synthetic example.\n# TYPE wawarden_example_total counter\nwawarden_example_total 1\n",
 		},
 	}
 	for _, tt := range tests {
@@ -65,9 +67,21 @@ func TestEncode(t *testing.T) {
 	}
 }
 
-func TestEncodeRefusesNil(t *testing.T) {
-	if _, _, err := dto.Encode(nil); err == nil {
-		t.Fatal("Encode(nil) succeeded")
+func TestEncodeRefusesMissingContent(t *testing.T) {
+	tests := []struct {
+		name     string
+		response dto.Response
+	}{
+		{name: "nil response"},
+		{name: "zero metrics payload", response: dto.Prometheus{}},
+		{name: "metrics without a registry", response: dto.Metrics(nil)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if contentType, body, err := dto.Encode(tt.response); err == nil {
+				t.Fatalf("Encode() = %q, %q; want an error", contentType, body)
+			}
+		})
 	}
 }
 
@@ -137,6 +151,9 @@ func TestFirewallCatchesForbiddenShapes(t *testing.T) {
 		{name: "map", typ: reflect.TypeFor[struct{ Extra map[string]string }]()},
 		{name: "interface", typ: reflect.TypeFor[struct{ Extra any }]()},
 		{name: "custom marshaller", typ: reflect.TypeFor[struct{ Extra json.RawMessage }]()},
+		{name: "exported field hidden from JSON", typ: reflect.TypeFor[struct {
+			Text []byte `json:"-"`
+		}]()},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -182,6 +199,9 @@ func jsonKeyProblems(typ reflect.Type, path string, visited map[reflect.Type]boo
 func fieldProblems(f reflect.StructField, path string, visited map[reflect.Type]bool) []string {
 	tag := f.Tag.Get("json")
 	if tag == "-" {
+		if f.IsExported() {
+			return []string{fmt.Sprintf("%s.%s: an exported field hidden from JSON lets any caller set content the firewall cannot check", path, f.Name)}
+		}
 		return nil
 	}
 	name, _, _ := strings.Cut(tag, ",")
