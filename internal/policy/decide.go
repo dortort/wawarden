@@ -1,6 +1,10 @@
 package policy
 
-import "time"
+import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"time"
+)
 
 func DecideRead(c *Client, now time.Time) (ReadGrant, bool) {
 	if !live(c, now) {
@@ -22,6 +26,17 @@ func DecideWrite(c *Client, now time.Time) (WriteGrant, bool) {
 		return WriteGrant{}, false
 	}
 	return WriteGrant{client: c.ID, chats: chats, allowFirstContact: c.AllowFirstContact, ok: true}, true
+}
+
+func DecideAdmin(cred AdminCredential, presented string) (AdminGrant, bool) {
+	if !cred.ok || presented == "" {
+		return AdminGrant{}, false
+	}
+	sum := sha256.Sum256([]byte(presented))
+	if subtle.ConstantTimeCompare(sum[:], cred.sum[:]) != 1 {
+		return AdminGrant{}, false
+	}
+	return AdminGrant{ok: true}, true
 }
 
 func live(c *Client, now time.Time) bool {

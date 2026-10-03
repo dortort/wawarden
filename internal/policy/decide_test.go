@@ -299,6 +299,9 @@ func TestZeroValueGrantsAreInvalid(t *testing.T) {
 			t.Fatalf("a zero-value grant allows %q", chat.jid)
 		}
 	}
+	if (AdminGrant{}).Valid() {
+		t.Fatal("zero AdminGrant is valid")
+	}
 }
 
 func TestDecisionTypesHaveNoExportedFields(t *testing.T) {
@@ -306,6 +309,8 @@ func TestDecisionTypesHaveNoExportedFields(t *testing.T) {
 		reflect.TypeFor[CanonicalChat](),
 		reflect.TypeFor[ReadGrant](),
 		reflect.TypeFor[WriteGrant](),
+		reflect.TypeFor[AdminGrant](),
+		reflect.TypeFor[AdminCredential](),
 	} {
 		t.Run(typ.Name(), func(t *testing.T) {
 			if typ.Kind() != reflect.Struct {

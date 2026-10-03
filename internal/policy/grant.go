@@ -49,3 +49,9 @@ func (g WriteGrant) Allows(chat CanonicalChat) bool {
 	_, ok := g.chats[chat]
 	return ok
 }
+
+type AdminGrant struct {
+	ok bool
+}
+
+func (g AdminGrant) Valid() bool { return g.ok }
