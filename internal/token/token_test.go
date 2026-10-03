@@ -62,6 +62,7 @@ func TestFormatAdminVectors(t *testing.T) {
 func TestNewAdmin(t *testing.T) {
 	const n = 2000
 	seen := make(map[string]bool, n)
+	var ones, zeros [secretSize]byte
 	for range n {
 		tok := NewAdmin()
 		if !adminFormat.MatchString(tok) {
@@ -75,6 +76,10 @@ func TestNewAdmin(t *testing.T) {
 		if err != nil || len(secret) != secretSize {
 			t.Fatalf("secret of %q decodes to %d bytes, err %v", tok, len(secret), err)
 		}
+		for i, b := range secret {
+			ones[i] |= b
+			zeros[i] |= ^b
+		}
 		if !ValidAdmin(tok) {
 			t.Fatalf("ValidAdmin(%q) = false for a generated token", tok)
 		}
@@ -82,6 +87,11 @@ func TestNewAdmin(t *testing.T) {
 			t.Fatalf("NewAdmin() repeated %q after %d tokens", tok, len(seen))
 		}
 		seen[tok] = true
+	}
+	for i := range secretSize {
+		if ones[i] != 0xff || zeros[i] != 0xff {
+			t.Errorf("secret byte %d never varied in bits %08b across %d tokens", i, ^(ones[i] & zeros[i]), n)
+		}
 	}
 }
 
