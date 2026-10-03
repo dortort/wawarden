@@ -78,6 +78,19 @@ func checkDecideAdmin(t *testing.T, tok string) {
 			t.Fatalf("DecideAdmin() accepted a token differing from the configured one at byte %d", i)
 		}
 	}
+
+	configured := token.Hash(tok)
+	for i := range len(configured) {
+		for _, d := range "0123456789abcdef" {
+			if byte(d) == configured[i] {
+				continue
+			}
+			nearMiss := mustCredential(t, configured[:i]+string(d)+configured[i+1:])
+			if g, ok := DecideAdmin(nearMiss, tok); ok || !reflect.ValueOf(g).IsZero() {
+				t.Fatalf("DecideAdmin() accepted the token against a credential differing at hex digit %d", i)
+			}
+		}
+	}
 }
 
 func TestDecideAdminDeniesTheEmptyTokenEvenWhenItsHashIsConfigured(t *testing.T) {
