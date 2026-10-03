@@ -22,6 +22,7 @@ const (
 	keyReadAll  = "synthetic-read-all-client"
 	keyRevoked  = "synthetic-revoked-client"
 	keyExpired  = "synthetic-expired-client"
+	keyNoClient = "synthetic-key-without-client"
 	panicCanary = "canary-0d5e7c31-private-message-text"
 )
 
@@ -56,10 +57,11 @@ func newClientFixture(t *testing.T) *clientFixture {
 	f := &clientFixture{reg: metrics.NewRegistry(), clock: newClock()}
 	f.handler = NewClientHandler(ClientDeps{
 		Authenticator: fakeAuthenticator{
-			keyLive:    liveClient("client-live"),
-			keyReadAll: &policy.Client{ID: "client-all", ReadAll: true, ExpiresAt: testNow.Add(24 * time.Hour)},
-			keyRevoked: &policy.Client{ID: "client-revoked", ReadAll: true, ExpiresAt: testNow.Add(24 * time.Hour), Revoked: true},
-			keyExpired: &policy.Client{ID: "client-expired", ReadAll: true, ExpiresAt: testNow.Add(-time.Second)},
+			keyLive:     liveClient("client-live"),
+			keyReadAll:  &policy.Client{ID: "client-all", ReadAll: true, ExpiresAt: testNow.Add(24 * time.Hour)},
+			keyRevoked:  &policy.Client{ID: "client-revoked", ReadAll: true, ExpiresAt: testNow.Add(24 * time.Hour), Revoked: true},
+			keyExpired:  &policy.Client{ID: "client-expired", ReadAll: true, ExpiresAt: testNow.Add(-time.Second)},
+			keyNoClient: nil,
 		},
 		Metrics: f.reg,
 		Now:     f.clock.now,
@@ -176,6 +178,7 @@ func TestAuthenticationPrecedesRoutingAndTheBody(t *testing.T) {
 		{name: "unknown key", header: bearer("synthetic-unknown-client")},
 		{name: "other scheme", header: http.Header{"Authorization": {"Basic " + keyLive}}},
 		{name: "key without scheme", header: http.Header{"Authorization": {keyLive}}},
+		{name: "authenticator accepts the key but returns no client", header: bearer(keyNoClient)},
 	}
 	targets := []struct {
 		method string
