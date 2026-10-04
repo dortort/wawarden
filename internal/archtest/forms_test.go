@@ -1,8 +1,16 @@
 package archtest
 
-import "go/ast"
+import (
+	"go/ast"
+	"maps"
+	"regexp"
+	"slices"
+	"strings"
+)
 
 var formParsers = set("FormFile", "FormValue", "MultipartReader", "ParseForm", "ParseMultipartForm", "PostFormValue")
+
+var formParserName = regexp.MustCompile(`\b(` + strings.Join(slices.Sorted(maps.Keys(formParsers)), "|") + `)\b`)
 
 var formRule = rule{
 	name:  "form-parsing",
@@ -32,6 +40,30 @@ func f(r *web.Request, w wrapped) {
 type form interface{ FormValue(string) string }
 
 func f(r form) string { return r.FormValue("a") }
+`},
+		{name: "method names spelled in strings", rel: "internal/api/dto/x.go", want: 5, src: `package dto
+
+import (
+	"net/http"
+	"reflect"
+	"text/template"
+)
+
+const verb = "Parse" + "Form"
+
+func f(r *http.Request) {
+	reflect.ValueOf(r).MethodByName("Parse" + "Form").Call(nil)
+	_ = reflect.ValueOf(r).MethodByName(verb)
+	_ = reflect.ValueOf(r).MethodByName("ParseMultipartForm")
+	_ = template.Must(template.New("").Parse("{{.FormValue .Key}}"))
+	_ = []string{"x", ("Post" + "Form") + "Value"}
+}
+`},
+		{name: "strings near the method names", rel: "internal/api/x.go", src: `package api
+
+func f(x string) []string {
+	return []string{"ParseFormat", "Form" + "s", "MyFormValue", "FormValues", "form value", "Parse" + x + "Form", "multipart/form-data"}
+}
 `},
 		{name: "JSON bodies in api", rel: "internal/api/x.go", src: `package api
 
@@ -81,6 +113,11 @@ func checkFormParsing(f *sourceFile) []string {
 			out = append(out, f.at(sel, "%s names a net/http Request method that parses a form body: only %s serves requests, and it reads JSON bodies only", sel.Sel.Name, apiDir))
 		}
 		return true
+	})
+	literalRuns(f.file, func(at ast.Node, s string) {
+		if name := formParserName.FindString(s); name != "" {
+			out = append(out, f.at(at, "%q spells %s, a net/http Request method that parses a form body, which reflection or a template could call by name", s, name))
+		}
 	})
 	return out
 }
