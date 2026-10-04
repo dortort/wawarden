@@ -299,7 +299,7 @@ reason codes of the M0 checks.
 | The admin credential is supplied in plaintext (`WAWARDEN_ADMIN_TOKEN`). Only `WAWARDEN_ADMIN_TOKEN_SHA256` or `WAWARDEN_ADMIN_TOKEN_SHA256_FILE` (a SHA-256 in hexadecimal) is accepted. Without a hash, the admin listener is disabled, never open. | M0 |
 | The admin hash is not 64 hexadecimal characters, both hash sources are set, or the hash file cannot be read or is not a regular file. | M0 |
 | A release build sees a `WAWARDEN_DEV_*` variable. Only builds with the `dev` tag will contain the fake engine those variables configure. | M0 |
-| `GOTRACEBACK` is set to anything other than `none` or `single`, levels that would print every goroutine's stack in crash output. | M0 |
+| `GOTRACEBACK` is set to anything other than unset, empty, `none` or `single`; numeric levels are refused too, `0` included. The named levels `all`, `system`, `crash` and `wer` print every goroutine's stack in crash output, and so does every other refused value once the service sets the `single` level itself. | M0 |
 | A listen address is not an IP literal with a port from 1 to 65535, the health address is not loopback, or two enabled listeners share an address. | M0 |
 | The process runs with a real or effective user ID of 0 without `--allow-root`. | M0 |
 | The data directory cannot be created, is not a directory, is a symbolic link, is not owned by the process's effective user, or does not have mode `0700` exactly. | M0 |

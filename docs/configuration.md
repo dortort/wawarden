@@ -166,9 +166,12 @@ Rules that apply to all of them:
 |---|---|---|
 | `GOTRACEBACK` | unset, empty, `none` or `single` | `traceback_level_unsafe` |
 
-Any other level makes a crash print the stack of every goroutine. `serve` sets the
-level to `single` itself before doing anything else, but the Go runtime does not
-let a program lower the level that this variable sets.
+Every other value is refused, numeric levels included, `0` and `1` as well. The
+named levels `all`, `system`, `crash` and `wer` make a crash print the stack of
+every goroutine. `serve` sets the level to `single` itself before doing anything
+else, but the Go runtime does not let a program lower the level that this
+variable sets, and combined with `single`, every other refused value (`0`, any
+other number, or a name the runtime does not know) prints every goroutine too.
 
 ### Listen addresses
 
@@ -208,7 +211,7 @@ The checks run in this order:
 | 1 | `plaintext_admin_token` | `WAWARDEN_ADMIN_TOKEN` | `WAWARDEN_ADMIN_TOKEN` is set, to any value. |
 | 2 | `dev_variable_in_release` | the first such name, in sorted order | A release build sees any `WAWARDEN_DEV_*` variable. |
 | 3 | `unknown_variable` | the first such name, in sorted order | Any other `WAWARDEN_` name is not one of the [environment variables](#environment-variables). |
-| 4 | `traceback_level_unsafe` | `GOTRACEBACK` | `GOTRACEBACK` is set to anything other than empty, `none` or `single`. |
+| 4 | `traceback_level_unsafe` | `GOTRACEBACK` | `GOTRACEBACK` is set to anything other than empty, `none` or `single`, a numeric level included. |
 | 5 | `listen_address_invalid` | the listen variable | `WAWARDEN_LISTEN`, `WAWARDEN_ADMIN_LISTEN` or `WAWARDEN_HEALTH_LISTEN` (checked in that order) is not a valid [listen address](#listen-addresses). |
 | 6 | `health_address_not_loopback` | `WAWARDEN_HEALTH_LISTEN` | The health address is not a loopback address. |
 | 7 | `admin_hash_sources_conflict` | `WAWARDEN_ADMIN_TOKEN_SHA256_FILE` | Both admin hash variables are set. |
