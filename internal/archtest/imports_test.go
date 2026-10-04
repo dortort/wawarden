@@ -17,24 +17,33 @@ import (
 )
 
 const (
-	apiDir      = "internal/api"
-	apiAdminDir = "internal/api/admin"
-	appDir      = "internal/app"
-	policyDir   = "internal/policy"
-	sealDir     = policyDir + "/internal/seal"
-	sealPath    = module + "/" + sealDir
+	apiDir    = "internal/api"
+	appDir    = "internal/app"
+	policyDir = "internal/policy"
+	sealDir   = policyDir + "/internal/seal"
+	sealPath  = module + "/" + sealDir
 )
 
 var bannedImports = set("net/http/pprof", "expvar", "net/http/cgi", "net/http/fcgi", "plugin", "unsafe", "C")
 
-var apiDenied = []string{"database/sql", "html/template", "text/template", "modernc.org/sqlite", "go.mau.fi/whatsmeow", module + "/internal/store/ingest"}
+var apiDenied = []string{"database/sql", "html/template", "text/template", "modernc.org/sqlite", "go.mau.fi/whatsmeow", module + "/internal/store"}
 
 var policyAllowed = set("bytes", "cmp", "crypto/sha256", "crypto/subtle", "encoding/base64", "encoding/binary", "encoding/hex",
 	"errors", "hash/crc32", "iter", "maps", "slices", "sort", "strconv", "strings", "time", "unicode", "unicode/utf8", "unique")
 
-var importableModules []string
+var importableModules = []string{"modernc.org/sqlite"}
 
-var indirectOnlyModules []string
+var indirectOnlyModules = []string{
+	"github.com/dustin/go-humanize",
+	"github.com/google/uuid",
+	"github.com/mattn/go-isatty",
+	"github.com/ncruces/go-strftime",
+	"github.com/remyoudompheng/bigfft",
+	"golang.org/x/sys",
+	"modernc.org/libc",
+	"modernc.org/mathutil",
+	"modernc.org/memory",
+}
 
 var bannedImportRule = rule{
 	name:  "banned-imports",
@@ -188,7 +197,7 @@ import (
 	"github.com/dortort/wawarden/internal/store/admin/sub"
 )
 `},
-		{name: "api/admin imports the admin store and mime", rel: "internal/api/admin/x.go", src: `package admin
+		{name: "api/admin imports the admin store and mime", rel: "internal/api/admin/x.go", want: 1, src: `package admin
 
 import (
 	"mime"
@@ -307,8 +316,7 @@ func checkFences(f *sourceFile) []string {
 		}
 		switch {
 		case within(f.dir, apiDir):
-			if slices.ContainsFunc(apiDenied, func(denied string) bool { return within(imp.path, denied) }) ||
-				within(imp.path, module+"/internal/store/admin") && !within(f.dir, apiAdminDir) {
+			if slices.ContainsFunc(apiDenied, func(denied string) bool { return within(imp.path, denied) }) {
 				out = append(out, f.at(imp.node, "%s may not import %q", apiDir, imp.path))
 			}
 		case within(f.dir, policyDir):

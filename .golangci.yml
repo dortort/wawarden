@@ -36,15 +36,24 @@ linters:
               desc: the raw database handle lives in internal/store/internal/db
             - pkg: go.mau.fi/whatsmeow
               desc: the protocol client is confined to internal/engine
-            - pkg: github.com/dortort/wawarden/internal/store/ingest
-              desc: ingest is engine-only
-        api-fence-admin-store:
+            - pkg: github.com/dortort/wawarden/internal/store
+              desc: internal/api depends on interfaces that internal/app wires, never on a store package
+        store-sql:
           files:
-            - ${base-path}/internal/api/**
-            - "!${base-path}/internal/api/admin/**"
+            - $all
+            - "!$test"
+            - "!${base-path}/internal/store/**"
           deny:
-            - pkg: github.com/dortort/wawarden/internal/store/admin
-              desc: only internal/api/admin may use the admin store
+            - pkg: database/sql
+              desc: only internal/store talks to a database
+        sqlite-driver:
+          files:
+            - $all
+            - "!$test"
+            - "!${base-path}/internal/store/internal/db/**"
+          deny:
+            - pkg: modernc.org/sqlite
+              desc: the SQLite driver is confined to internal/store/internal/db, the only holder of a database handle
         no-multipart:
           files:
             - $all

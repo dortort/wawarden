@@ -1,0 +1,150 @@
+package archtest
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+)
+
+const (
+	storeDir   = "internal/store"
+	dbDir      = storeDir + "/internal/db"
+	sqliteMod  = "modernc.org/sqlite"
+	libcModule = "modernc.org/libc"
+)
+
+type confinement struct {
+	pkg  string
+	dirs []string
+}
+
+var confinements = []confinement{
+	{pkg: "database/sql", dirs: []string{storeDir}},
+	{pkg: sqliteMod, dirs: []string{dbDir}},
+}
+
+var confinementRule = rule{
+	name:  "confined-imports",
+	check: checkConfinement,
+	cases: []snippet{
+		{name: "the database packages and the driver outside the store", rel: "internal/app/x.go", want: 4, src: `package app
+
+import (
+	"database/sql"
+	"database/sql/driver"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
+)
+`},
+		{name: "the driver in a store package other than db", rel: "internal/store/ingest/x.go", want: 1, src: `package ingest
+
+import (
+	"database/sql"
+	_ "modernc.org/sqlite"
+)
+`},
+		{name: "a directory that only starts like the store", rel: "internal/storex/x.go", want: 1, src: `package storex
+
+import "database/sql"
+`},
+		{name: "the db package", rel: "internal/store/internal/db/x.go", src: `package db
+
+import (
+	"database/sql"
+	"database/sql/driver"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
+)
+`},
+		{name: "another store package", rel: "internal/store/admin/x.go", src: `package admin
+
+import "database/sql"
+`},
+		{name: "a test", rel: "internal/app/x_test.go", src: `package app
+
+import (
+	"database/sql"
+	_ "modernc.org/sqlite"
+)
+`},
+		{name: "neighbouring import paths", rel: "internal/app/x.go", src: `package app
+
+import (
+	_ "database/sqlx"
+	_ "modernc.org/sqlitex"
+)
+`},
+	},
+}
+
+func checkConfinement(f *sourceFile) []string {
+	if f.test {
+		return nil
+	}
+	var out []string
+	for _, imp := range f.imports {
+		var best *confinement
+		for i := range confinements {
+			c := &confinements[i]
+			if within(imp.path, c.pkg) && (best == nil || len(c.pkg) > len(best.pkg)) {
+				best = c
+			}
+		}
+		if best != nil && !slices.ContainsFunc(best.dirs, func(d string) bool { return within(f.dir, d) }) {
+			out = append(out, f.at(imp.node, "%q may be imported only under %s", imp.path, strings.Join(best.dirs, ", ")))
+		}
+	}
+	return out
+}
+
+func requiredVersion(gomod, module string) string {
+	for line := range strings.Lines(gomod) {
+		code, _, _ := strings.Cut(line, "//")
+		fields := strings.Fields(code)
+		if len(fields) > 0 && fields[0] == "require" {
+			fields = fields[1:]
+		}
+		if len(fields) == 2 && fields[0] == module {
+			return fields[1]
+		}
+	}
+	return ""
+}
+
+func TestRequiredVersion(t *testing.T) {
+	const gomod = "module x\n\nrequire example.com/a v1.0.0\n\nrequire (\n\texample.com/b v1.2.3 // indirect\n\texample.com/bb v9.9.9\n)\n"
+	for module, want := range map[string]string{"example.com/a": "v1.0.0", "example.com/b": "v1.2.3", "example.com/c": ""} {
+		if got := requiredVersion(gomod, module); got != want {
+			t.Errorf("requiredVersion(%s) = %q, want %q", module, got, want)
+		}
+	}
+}
+
+func TestSQLiteRuntimeIsTheDriversOwn(t *testing.T) {
+	root := moduleRoot(t)
+	cmd := exec.CommandContext(t.Context(), "go", "list", "-m", "-f", "{{.Path}} {{.Version}} {{.GoMod}}", sqliteMod, libcModule)
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("go list -m: %v", err)
+	}
+	versions, gomods := map[string]string{}, map[string]string{}
+	for line := range strings.Lines(string(out)) {
+		fields := strings.Fields(line)
+		if len(fields) != 3 {
+			t.Fatalf("unexpected go list line %q", line)
+		}
+		versions[fields[0]], gomods[fields[0]] = fields[1], fields[2]
+	}
+	data, err := os.ReadFile(filepath.Clean(gomods[sqliteMod]))
+	if err != nil {
+		t.Fatalf("read the go.mod of %s: %v", sqliteMod, err)
+	}
+	want := requiredVersion(string(data), libcModule)
+	if want == "" || versions[libcModule] != want {
+		t.Fatalf("this module builds %s %s with %s %s, but the driver requires %s %q: its documentation requires exactly the driver's version", sqliteMod, versions[sqliteMod], libcModule, versions[libcModule], libcModule, want)
+	}
+}
