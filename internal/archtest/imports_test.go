@@ -2,7 +2,12 @@ package archtest
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -238,6 +243,75 @@ func thirdPartyImports(allowed []string) func(*sourceFile) []string {
 			out = append(out, f.at(imp.node, "%q is outside the standard library and this module, and not on the reviewed allow-list", imp.path))
 		}
 		return out
+	}
+}
+
+var goModDirectives = set("module", "go", "toolchain")
+
+func goModProblems(gomod string, allowed []string) []string {
+	var out []string
+	var block string
+	for i, line := range strings.Split(gomod, "\n") {
+		code, _, _ := strings.Cut(line, "//")
+		fields := strings.Fields(code)
+		if len(fields) == 0 {
+			continue
+		}
+		directive, args := block, fields
+		switch {
+		case block != "" && fields[0] == ")":
+			block = ""
+			continue
+		case block == "":
+			directive, args = fields[0], fields[1:]
+			if len(args) == 1 && args[0] == "(" {
+				block = directive
+				continue
+			}
+		}
+		if goModDirectives[directive] || directive == "require" && len(args) > 0 && slices.ContainsFunc(allowed, func(m string) bool { return within(args[0], m) }) {
+			continue
+		}
+		out = append(out, fmt.Sprintf("go.mod:%d: %s %s: only module, go, toolchain and requirements on reviewed modules are allowed", i+1, directive, strings.Join(args, " ")))
+	}
+	return out
+}
+
+func TestGoModDirectives(t *testing.T) {
+	allowed := []string{"example.com/allowed"}
+	for _, tt := range []struct {
+		name  string
+		gomod string
+		want  int
+	}{
+		{name: "the module's own directives", gomod: "module " + module + "\n\ngo 1.26.0 // comment\n\ntoolchain go1.27.1\n"},
+		{name: "reviewed requirements", gomod: "require example.com/allowed v1.0.0\n\nrequire (\n\texample.com/allowed/sub v1.0.0 // indirect\n)\n"},
+		{name: "unreviewed requirements", want: 3, gomod: "require example.com/allowedx v1.0.0\n\nrequire (\n\t" + module + "/internal/evil v0.0.0\n\texample.com/other v1.0.0\n)\n"},
+		{name: "replacements and other directives", want: 7, gomod: "replace " + module + "/internal/evil => ../evil\n\nreplace (\n\texample.com/allowed => ./x\n)\n\n" +
+			"exclude example.com/allowed v1.0.0\n\nretract v0.1.0\n\ntool example.com/allowed/cmd\n\ngodebug default=go1.20\n\nignore ./x\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := goModProblems(tt.gomod, allowed); len(got) != tt.want {
+				t.Fatalf("%d problems, want %d: %q", len(got), tt.want, got)
+			}
+		})
+	}
+}
+
+func TestModuleDefinition(t *testing.T) {
+	root := moduleRoot(t)
+	data, err := fs.ReadFile(os.DirFS(root), "go.mod")
+	if err != nil {
+		t.Fatalf("read go.mod: %v", err)
+	}
+	for _, problem := range goModProblems(string(data), allowedModules) {
+		t.Error(problem)
+	}
+	switch _, err := os.Lstat(filepath.Join(root, "go.work")); {
+	case err == nil:
+		t.Error("go.work at the module root: a workspace builds in modules this walk does not read")
+	case !errors.Is(err, fs.ErrNotExist):
+		t.Errorf("stat go.work: %v", err)
 	}
 }
 
