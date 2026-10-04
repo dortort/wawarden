@@ -132,23 +132,19 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	a.logger.Info("shutting down", slog.String("event", "shutdown_started"))
 
-	drained := a.shutdown(ctx, a.serving)
+	grace, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.grace)
+	defer cancel()
+	drained := a.serving.Shutdown(grace)
 	if a.afterDrain != nil {
 		a.afterDrain()
 	}
-	err := errors.Join(failure, drained, a.shutdown(ctx, a.health))
+	err := errors.Join(failure, drained, a.health.Shutdown(grace))
 	if err != nil {
 		a.logger.Error("stopped with errors", slog.String("event", "stopped"), slog.String("error", err.Error()))
 		return err
 	}
 	a.logger.Info("stopped", slog.String("event", "stopped"))
 	return nil
-}
-
-func (a *App) shutdown(ctx context.Context, s listenerSet) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.grace)
-	defer cancel()
-	return s.Shutdown(ctx)
 }
 
 type noClients struct{}

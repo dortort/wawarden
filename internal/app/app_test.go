@@ -423,6 +423,37 @@ func TestUnsentBodiesDoNotHoldTheShutdown(t *testing.T) {
 	}
 }
 
+type stuckSet struct{ listenerSet }
+
+func (s stuckSet) Shutdown(ctx context.Context) error {
+	<-ctx.Done()
+	return errors.Join(ctx.Err(), s.listenerSet.Shutdown(ctx))
+}
+
+type graceProbe struct {
+	listenerSet
+	expired chan<- bool
+}
+
+func (p graceProbe) Shutdown(ctx context.Context) error {
+	p.expired <- ctx.Err() != nil
+	return p.listenerSet.Shutdown(ctx)
+}
+
+func TestOneGracePeriodBoundsTheWholeShutdown(t *testing.T) {
+	a, _ := open(t, testConfig(t, ""), noClients{})
+	a.grace = 100 * time.Millisecond
+	expired := make(chan bool, 1)
+	a.serving = stuckSet{a.serving}
+	a.health = graceProbe{a.health, expired}
+	if err := run(t, a)(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run = %v, want the expired grace period reported", err)
+	}
+	if !<-expired {
+		t.Fatal("the health listener got a fresh grace period after the serving listeners used up theirs")
+	}
+}
+
 type failingSet struct {
 	listenerSet
 	errs chan error
