@@ -3,6 +3,11 @@ package archtest
 import (
 	"go/ast"
 	"go/token"
+	"maps"
+	"os"
+	"path/filepath"
+	"slices"
+	"testing"
 )
 
 const (
@@ -15,6 +20,8 @@ var (
 	grantTypes  = []string{"ReadGrant", "WriteGrant", "AdminGrant"}
 	sealedTypes = append([]string{chatType}, grantTypes...)
 )
+
+var grantSetFields = set("chats")
 
 var grantRule = rule{
 	name:  "grant-forging",
@@ -154,6 +161,46 @@ func (g *ReadGrant) widen(c CanonicalChat, more map[CanonicalChat]struct{}, coun
 
 func (g WriteGrant) add(c CanonicalChat) { g.chats[c] = struct{}{} }
 `},
+		{name: "grant sets aliased elsewhere in policy", rel: "internal/policy/grant.go", want: 9, src: `package policy
+
+import "maps"
+
+func (g ReadGrant) widen(c CanonicalChat, more map[CanonicalChat]struct{}) {
+	chats := g.chats
+	chats[c] = struct{}{}
+	maps.Copy(chats, more)
+}
+
+func (g *WriteGrant) widen(c *Client, out chan<- map[CanonicalChat]struct{}) map[CanonicalChat]struct{} {
+	set := g.chats
+	for chat := range c.Read {
+		set[chat] = struct{}{}
+	}
+	var alias = (g.chats)
+	keep(g.chats, alias)
+	out <- g.chats
+	_ = []map[CanonicalChat]struct{}{g.chats}
+	_ = func() map[CanonicalChat]struct{} { return g.chats }
+	_ = maps.Keys(g.chats)
+	return g.chats
+}
+
+func keep(...map[CanonicalChat]struct{}) {}
+`},
+		{name: "grant sets read elsewhere in policy", rel: "internal/policy/grant.go", src: `package policy
+
+import "maps"
+
+func (g ReadGrant) read(c CanonicalChat, more map[CanonicalChat]struct{}) (int, map[CanonicalChat]struct{}, bool) {
+	_, ok := (g.chats)[c]
+	for chat := range g.chats {
+		ok = ok || chat == c
+	}
+	out := maps.Clone(g.chats)
+	maps.Copy(out, more)
+	return len(g.chats), out, ok && g.Allows(c)
+}
+`},
 		{name: "field changes in decide.go and local changes elsewhere in policy", rel: grantFile, src: `package policy
 
 import "maps"
@@ -164,6 +211,8 @@ func f(c *Client, more map[CanonicalChat]struct{}) ReadGrant {
 	g.all = c.ReadAll
 	maps.Copy(g.chats, more)
 	delete(g.chats, CanonicalChat{})
+	alias := g.chats
+	maps.Copy(alias, more)
 	return g
 }
 `},
@@ -310,8 +359,10 @@ func checkGrants(f *sourceFile) []string {
 			}
 		}
 	}
+	settled := map[ast.Expr]bool{}
 	fieldWrites := func(exprs ...ast.Expr) {
 		for _, e := range exprs {
+			settled[ast.Unparen(e)] = true
 			if msg := f.fieldWrite(e); msg != "" {
 				out = append(out, f.at(e, "%s", msg))
 			}
@@ -319,6 +370,12 @@ func checkGrants(f *sourceFile) []string {
 	}
 	ast.Inspect(f.file, func(n ast.Node) bool {
 		switch n := n.(type) {
+		case *ast.IndexExpr:
+			settled[ast.Unparen(n.X)] = true
+		case *ast.SelectorExpr:
+			if f.setAlias(n) && !settled[n] {
+				out = append(out, f.at(n, "a grant's %s set used outside %s other than by indexing it, ranging over it, or passing it to len or maps.Clone: an alias of it could widen an existing grant", n.Sel.Name, grantFile))
+			}
 		case *ast.TypeSpec:
 			constraints(n.TypeParams)
 			if name, ok := f.policyType(n.Type, sealedTypes); ok {
@@ -339,6 +396,11 @@ func checkGrants(f *sourceFile) []string {
 			if f.mutatesMap(n) {
 				fieldWrites(n.Args[0])
 			}
+			if f.readsMap(n) {
+				for _, arg := range n.Args {
+					settled[ast.Unparen(arg)] = true
+				}
+			}
 			name, ok := f.policyType(n.Fun, sealedTypes)
 			switch {
 			case !ok:
@@ -358,6 +420,7 @@ func checkGrants(f *sourceFile) []string {
 		case *ast.IncDecStmt:
 			fieldWrites(n.X)
 		case *ast.RangeStmt:
+			settled[ast.Unparen(n.X)] = true
 			if n.Tok == token.ASSIGN {
 				fieldWrites(n.Key, n.Value)
 			}
@@ -385,6 +448,22 @@ func (f *sourceFile) fieldWrite(e ast.Expr) string {
 		}
 	}
 	return ""
+}
+
+func (f *sourceFile) setAlias(sel *ast.SelectorExpr) bool {
+	if f.dir != policyDir || f.rel == grantFile || !grantSetFields[sel.Sel.Name] {
+		return false
+	}
+	s, _ := f.ref(sel)
+	return s == nil
+}
+
+func (f *sourceFile) readsMap(call *ast.CallExpr) bool {
+	if id, ok := ast.Unparen(call.Fun).(*ast.Ident); ok {
+		return id.Name == "len"
+	}
+	sel, p := f.ref(call.Fun)
+	return sel != nil && p == "maps" && sel.Sel.Name == "Clone"
 }
 
 func (f *sourceFile) mutatesMap(call *ast.CallExpr) bool {
@@ -427,4 +506,60 @@ func (f *sourceFile) mentionedType(e ast.Expr, names []string) (string, bool) {
 		return true
 	})
 	return found, found != ""
+}
+
+var valueTypes = set("bool", "string", "byte", "rune", "int", "int8", "int16", "int32", "int64",
+	"uint", "uint8", "uint16", "uint32", "uint64", "uintptr", "float32", "float64", "complex64", "complex128")
+
+func valueType(e ast.Expr) bool {
+	switch t := e.(type) {
+	case *ast.Ident:
+		return valueTypes[t.Name]
+	case *ast.ArrayType:
+		return t.Len != nil && valueType(t.Elt)
+	}
+	return false
+}
+
+func TestGrantSetFields(t *testing.T) {
+	files, err := moduleFiles(os.DirFS(filepath.Join(moduleRoot(t), policyDir)))
+	if err != nil {
+		t.Fatalf("walk %s: %v", policyDir, err)
+	}
+	declared, fields := map[string]bool{}, map[string]bool{}
+	for _, f := range files {
+		if f.test || f.dir != "." {
+			continue
+		}
+		ast.Inspect(f.file, func(n ast.Node) bool {
+			ts, ok := n.(*ast.TypeSpec)
+			if !ok || !slices.Contains(sealedTypes, ts.Name.Name) {
+				return true
+			}
+			declared[ts.Name.Name] = true
+			st, ok := ts.Type.(*ast.StructType)
+			if !ok {
+				t.Fatalf("policy.%s is no longer a struct, so the grant-forging rule cannot read its fields: update it", ts.Name.Name)
+			}
+			for _, field := range st.Fields.List {
+				if len(field.Names) == 0 {
+					t.Fatalf("policy.%s embeds a field: name it, so the grant-forging rule can confine it", ts.Name.Name)
+				}
+				for _, name := range field.Names {
+					if !valueType(field.Type) {
+						fields[name.Name] = true
+					}
+				}
+			}
+			return false
+		})
+	}
+	if len(declared) != len(sealedTypes) {
+		t.Fatalf("package policy declares %q of %q, so the grant-forging rule guards a type that is gone: update it",
+			slices.Sorted(maps.Keys(declared)), sealedTypes)
+	}
+	if !maps.Equal(fields, grantSetFields) {
+		t.Fatalf("the grant types hold %q by reference, but the grant-forging rule confines aliases of %q: they must match",
+			slices.Sorted(maps.Keys(fields)), slices.Sorted(maps.Keys(grantSetFields)))
+	}
 }
