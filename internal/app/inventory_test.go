@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/dortort/wawarden/internal/listeners/listenertest"
+	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/token"
 )
 
@@ -50,7 +51,7 @@ func TestHealthListenerIsRefusedBeyondLoopback(t *testing.T) {
 		t.Run(health, func(t *testing.T) {
 			cfg := testConfig(t, "")
 			cfg.HealthListen = netip.MustParseAddrPort(health)
-			a, err := newApp(t.Context(), cfg, io.Discard, noClients{})
+			a, err := newApp(t.Context(), cfg, logx.NewWriter(io.Discard), noClients{})
 			if err == nil {
 				t.Cleanup(func() { _ = run(t, a)() })
 			}
@@ -66,7 +67,7 @@ func TestFailedStartLeavesNoListener(t *testing.T) {
 	a, _, stop := start(t, testConfig(t, token.NewAdmin()), noClients{})
 	cfg := testConfig(t, token.NewAdmin())
 	cfg.HealthListen = addr(t, a, "health")
-	if _, err := newApp(t.Context(), cfg, io.Discard, noClients{}); err == nil {
+	if _, err := newApp(t.Context(), cfg, logx.NewWriter(io.Discard), noClients{}); err == nil {
 		t.Fatal("newApp bound an address already in use")
 	}
 	listenertest.Require(t, inventoryAddrs(a)...)

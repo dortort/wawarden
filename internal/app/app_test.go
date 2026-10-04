@@ -21,6 +21,7 @@ import (
 	"github.com/dortort/wawarden/internal/api"
 	"github.com/dortort/wawarden/internal/buildinfo"
 	"github.com/dortort/wawarden/internal/config"
+	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/token"
@@ -137,7 +138,7 @@ func testConfig(t *testing.T, adminToken string) config.Config {
 func open(t *testing.T, cfg config.Config, auth api.Authenticator) (*App, *syncBuffer) {
 	t.Helper()
 	logs := &syncBuffer{}
-	a, err := newApp(t.Context(), cfg, logs, auth)
+	a, err := newApp(t.Context(), cfg, logx.NewWriter(logs), auth)
 	if err != nil {
 		t.Fatalf("newApp: %v", err)
 	}
@@ -753,26 +754,5 @@ func TestDevBuildWarnsAtEveryLogLevel(t *testing.T) {
 				t.Fatalf("dev_build was logged at %v, want WARN", warnings[0]["level"])
 			}
 		})
-	}
-}
-
-func TestLoggerWritesUTCJSON(t *testing.T) {
-	at := time.Date(2026, time.January, 2, 3, 4, 5, 6_000_000, time.FixedZone("synthetic", -4*60*60))
-	record := slog.NewRecord(at, slog.LevelInfo, "message", 0)
-	record.AddAttrs(slog.String("event", "probe"))
-	var buf bytes.Buffer
-	if err := NewLogger(&buf, nil).Handler().Handle(t.Context(), record); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	var rec struct {
-		Time  string `json:"time"`
-		Event string `json:"event"`
-	}
-	if err := json.Unmarshal(buf.Bytes(), &rec); err != nil {
-		t.Fatalf("not JSON: %v: %q", err, buf.String())
-	}
-	ts, err := time.Parse(time.RFC3339Nano, rec.Time)
-	if err != nil || !strings.HasSuffix(rec.Time, "Z") || !ts.Equal(at) || rec.Event != "probe" {
-		t.Fatalf("record = %+v (%v), want %v written in UTC and the event attribute", rec, err, at)
 	}
 }

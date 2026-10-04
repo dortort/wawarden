@@ -4,7 +4,6 @@ package app
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"strconv"
 	"sync/atomic"
@@ -14,6 +13,7 @@ import (
 	"github.com/dortort/wawarden/internal/buildinfo"
 	"github.com/dortort/wawarden/internal/config"
 	"github.com/dortort/wawarden/internal/listeners"
+	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/safego"
@@ -46,28 +46,16 @@ type App struct {
 	afterDrain func()
 }
 
-func NewLogger(w io.Writer, level slog.Leveler) *slog.Logger {
-	return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{
-		Level: level,
-		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-			if len(groups) == 0 && a.Key == slog.TimeKey && a.Value.Kind() == slog.KindTime {
-				return slog.Time(slog.TimeKey, a.Value.Time().UTC())
-			}
-			return a
-		},
-	}))
-}
-
-func New(ctx context.Context, cfg config.Config, out io.Writer) (*App, error) {
+func New(ctx context.Context, cfg config.Config, out *logx.Writer) (*App, error) {
 	return newApp(ctx, cfg, out, noClients{})
 }
 
-func newApp(ctx context.Context, cfg config.Config, out io.Writer, auth api.Authenticator) (*App, error) {
+func newApp(ctx context.Context, cfg config.Config, out *logx.Writer, auth api.Authenticator) (*App, error) {
 	if !cfg.HealthListen.Addr().IsLoopback() {
 		return nil, errHealthNotLoopback
 	}
-	logger := NewLogger(out, cfg.LogLevel)
-	alerts := NewLogger(out, slog.LevelWarn)
+	logger := logx.New(out, cfg.LogLevel)
+	alerts := logx.New(out, slog.LevelWarn)
 	reg := metrics.NewRegistry()
 	safego.Install(logger, reg)
 	info := buildinfo.Read()

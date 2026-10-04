@@ -13,6 +13,8 @@ import (
 	"github.com/dortort/wawarden/internal/app"
 	"github.com/dortort/wawarden/internal/buildinfo"
 	"github.com/dortort/wawarden/internal/config"
+	"github.com/dortort/wawarden/internal/keys"
+	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/token"
 )
 
@@ -61,21 +63,33 @@ func serve(ctx context.Context, args, environ []string, stdout, stderr io.Writer
 		return usageError(stderr)
 	}
 
+	out := logx.NewWriter(stdout)
 	cfg, refusal := config.Load(environ, config.Options{AllowRoot: *allowRoot, UIDs: uids})
 	if refusal != nil {
-		app.NewLogger(stdout, slog.LevelInfo).Error("startup refused",
-			slog.String("event", "startup_refused"), slog.String("reason", refusal.Reason), slog.String("error", refusal.Error()))
-		return 2
+		return refused(out, refusal.Reason, refusal)
 	}
-	a, err := app.New(ctx, cfg, stdout)
+	master, keysRefusal := keys.Load(cfg.DataDir, cfg.UID)
+	if keysRefusal != nil {
+		return refused(out, keysRefusal.Reason, keysRefusal)
+	}
+	out.SetKey(master.LogRedactKey())
+	logger := logx.New(out, cfg.LogLevel)
+	logger.Info("keys loaded", slog.String("event", "keys_loaded"), slog.String("key_id", master.ID()))
+	a, err := app.New(ctx, cfg, out)
 	if err != nil {
-		app.NewLogger(stdout, cfg.LogLevel).Error("startup failed", slog.String("event", "startup_failed"), slog.String("error", err.Error()))
+		logger.Error("startup failed", slog.String("event", "startup_failed"), slog.String("error", err.Error()))
 		return 1
 	}
 	if err := runApp(a, ctx); err != nil {
 		return 1
 	}
 	return 0
+}
+
+func refused(out *logx.Writer, reason string, err error) int {
+	logx.New(out, slog.LevelInfo).Error("startup refused",
+		slog.String("event", "startup_refused"), slog.String("reason", reason), slog.String("error", err.Error()))
+	return 2
 }
 
 func healthcheck(ctx context.Context, args, environ []string, stderr io.Writer) int {

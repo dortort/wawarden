@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -18,7 +20,10 @@ import (
 
 	"github.com/dortort/wawarden/internal/app"
 	"github.com/dortort/wawarden/internal/buildinfo"
+	"github.com/dortort/wawarden/internal/keys"
+	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/policy"
+	"github.com/dortort/wawarden/internal/safego"
 	"github.com/dortort/wawarden/internal/token"
 )
 
@@ -194,6 +199,92 @@ func TestServeRefusal(t *testing.T) {
 				t.Fatalf("log = %+v, want an ERROR startup_refused line with reason %q", rec, tt.reason)
 			}
 		})
+	}
+}
+
+func TestServeRefusesKeysItCannotTrust(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	if err := os.Mkdir(data, 0o700); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(data, "keys"), nil, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	code, stdout, stderr := invoke(t, []string{"serve", "--allow-root"}, []string{"WAWARDEN_DATA_DIR=" + data})
+	var rec struct {
+		Level  string `json:"level"`
+		Event  string `json:"event"`
+		Reason string `json:"reason"`
+		Error  string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &rec); err != nil || code != 2 || strings.Count(stdout, "\n") != 1 {
+		t.Fatalf("serve = %d %q %q, want 2 with one startup_refused line", code, stdout, stderr)
+	}
+	if rec.Level != "ERROR" || rec.Event != "startup_refused" || rec.Reason != "keys_dir_not_directory" || strings.Contains(rec.Error, data) {
+		t.Fatalf("log = %+v, want an ERROR startup_refused line with reason keys_dir_not_directory that does not repeat the data directory", rec)
+	}
+}
+
+func TestServeKeysItsOutputWithTheMasterKey(t *testing.T) {
+	const chat = "15550100042@s.whatsapp.net"
+	saved := runApp
+	t.Cleanup(func() { runApp = saved })
+	var stdout *output
+	runApp = func(a *app.App, ctx context.Context) error {
+		safego.Go("probe "+chat, func() { panic("synthetic panic") })
+		stdout.waitFor(t, "panic")
+		stopped, stop := context.WithCancel(ctx)
+		stop()
+		return saved(a, stopped)
+	}
+	data := filepath.Join(t.TempDir(), "data")
+	environ := []string{
+		"WAWARDEN_DATA_DIR=" + data,
+		"WAWARDEN_LISTEN=" + freeAddr(t),
+		"WAWARDEN_HEALTH_LISTEN=" + freeAddr(t),
+	}
+	stdout = newOutput()
+	if code := run(t.Context(), []string{"serve", "--allow-root"}, environ, stdout, newOutput()); code != 0 {
+		t.Fatalf("serve = %d, want 0; stdout %q", code, stdout.String())
+	}
+	master, refusal := keys.Load(data, os.Geteuid())
+	if refusal != nil {
+		t.Fatalf("keys.Load after serve: %v", refusal)
+	}
+	var reference bytes.Buffer
+	scrubber := logx.NewWriter(&reference)
+	scrubber.SetKey(master.LogRedactKey())
+	if _, err := io.WriteString(scrubber, chat); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	pseudonym := reference.String()
+
+	var loaded, panicked []map[string]any
+	for line := range strings.Lines(stdout.String()) {
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("not a JSON line: %q", line)
+		}
+		switch rec["event"] {
+		case "keys_loaded":
+			loaded = append(loaded, rec)
+		case "panic":
+			panicked = append(panicked, rec)
+		}
+	}
+	if len(loaded) != 1 || loaded[0]["key_id"] != master.ID() || len(loaded[0]) != 5 {
+		t.Fatalf("keys_loaded events = %v, want one carrying only the key id %s", loaded, master.ID())
+	}
+	if len(panicked) != 1 || panicked[0]["name"] != "probe "+pseudonym || !strings.HasPrefix(pseudonym, "jid:") || pseudonym == "jid:unkeyed" {
+		t.Fatalf("panic events = %v, want one naming the goroutine with the keyed pseudonym %q", panicked, pseudonym)
+	}
+	if strings.Contains(stdout.String(), "15550100042") {
+		t.Fatalf("the chat identifier reached standard output:\n%s", stdout.String())
+	}
+	for _, key := range [][]byte{master.LogRedactKey(), master.ChatHMACKey()} {
+		if strings.Contains(stdout.String(), hex.EncodeToString(key)) {
+			t.Fatal("a derived key reached standard output")
+		}
 	}
 }
 
