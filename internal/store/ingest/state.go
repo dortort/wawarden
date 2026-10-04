@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dortort/wawarden/internal/store/admin"
 )
 
 const (
@@ -25,7 +27,7 @@ const (
 var (
 	errCorruptHistory = errors.New("ingest: the stored start history is unreadable")
 	syncKey           = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
-	reservedKeys      = map[string]bool{startsKey: true, lastIngestKey: true}
+	reservedKeys      = map[string]bool{startsKey: true, admin.LastIngestKey: true}
 )
 
 func (r *Reader) SyncValue(key string) (string, bool, error) {

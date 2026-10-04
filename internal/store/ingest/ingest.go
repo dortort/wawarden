@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dortort/wawarden/internal/policy"
+	"github.com/dortort/wawarden/internal/store/admin"
 	"github.com/dortort/wawarden/internal/store/internal/db"
 )
 
@@ -37,6 +38,7 @@ type Store struct {
 	db      *db.DB
 	version int
 	floor   uint64
+	admin   *admin.Reader
 
 	mu     sync.Mutex
 	paused bool
@@ -51,7 +53,7 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 	if err != nil {
 		return nil, errors.Join(err, d.Close())
 	}
-	return &Store{db: d, version: version, floor: opts.MinFreeBytes}, nil
+	return &Store{db: d, version: version, floor: opts.MinFreeBytes, admin: admin.New(d)}, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -63,6 +65,8 @@ func (s *Store) SchemaVersion() int { return s.version }
 func (s *Store) Profile() Profile { return s.db.Profile() }
 
 func (s *Store) OFDLocking() bool { return s.db.OFDLocking() }
+
+func (s *Store) Admin() *admin.Reader { return s.admin }
 
 func (s *Store) Backup(ctx context.Context, staging string, w io.Writer) error {
 	return s.db.Backup(ctx, staging, w)

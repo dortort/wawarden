@@ -7,9 +7,8 @@ import (
 
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/sanitize"
+	"github.com/dortort/wawarden/internal/store/admin"
 )
-
-const lastIngestKey = "last_ingest_at"
 
 type Origin string
 
@@ -177,7 +176,7 @@ func (tx *Tx) InsertMessage(m Message) (Ref, bool, error) {
 	if _, err := tx.q.ExecContext(tx.ctx, insertFTS, seq, text); err != nil {
 		return Ref{}, false, err
 	}
-	if _, err := tx.q.ExecContext(tx.ctx, setLastIngest, lastIngestKey, formatMS(m.Ingested)); err != nil {
+	if _, err := tx.q.ExecContext(tx.ctx, setLastIngest, admin.LastIngestKey, formatMS(m.Ingested)); err != nil {
 		return Ref{}, false, err
 	}
 	return Ref{seq: seq, chat: chat}, true, nil
