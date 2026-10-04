@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -474,17 +475,63 @@ func TestWorkflowsUseReadOnlyModules(t *testing.T) {
 			continue
 		}
 		checked++
-		if got, _ := yamlValue(config, "env", "GOFLAGS"); got != "-mod=readonly" {
-			t.Errorf("%s: env.GOFLAGS is %q, want -mod=readonly, so that no job builds from a vendor directory", name, got)
-		}
-		for i, line := range strings.Split(config, "\n") {
-			if strings.Contains(strings.ReplaceAll(line, "-mod=readonly", ""), "-mod=") || strings.Contains(line, "GOFLAGS") && strings.TrimSpace(line) != "GOFLAGS: -mod=readonly" {
-				t.Errorf("%s:%d: %q may set a module mode other than -mod=readonly", name, i+1, strings.TrimSpace(line))
-			}
+		for _, problem := range workflowModuleProblems(config) {
+			t.Errorf("%s: %s", name, problem)
 		}
 	}
 	if checked == 0 {
 		t.Fatal("no workflow sets up Go, so this check passes vacuously")
+	}
+}
+
+var moduleFlag = regexp.MustCompile(`(?:^|\W)-mod\b(\S*)`)
+
+func workflowModuleProblems(config string) []string {
+	var out []string
+	if got, _ := yamlValue(config, "env", "GOFLAGS"); got != "-mod=readonly" {
+		out = append(out, fmt.Sprintf("env.GOFLAGS is %q, want -mod=readonly, so that no job builds from a vendor directory", got))
+	}
+	lines := strings.Split(config, "\n")
+	for i, line := range lines {
+		if strings.Contains(line, "GOFLAGS") && strings.TrimSpace(line) != "GOFLAGS: -mod=readonly" {
+			out = append(out, fmt.Sprintf("line %d: %q may set GOFLAGS to something other than -mod=readonly", i+1, strings.TrimSpace(line)))
+		}
+	}
+	for _, m := range moduleFlag.FindAllStringSubmatchIndex(config, -1) {
+		if config[m[2]:m[3]] != "=readonly" {
+			i := strings.Count(config[:m[2]], "\n")
+			out = append(out, fmt.Sprintf("line %d: %q may set a module mode other than -mod=readonly", i+1, strings.TrimSpace(lines[i])))
+		}
+	}
+	return out
+}
+
+func TestWorkflowModuleProblems(t *testing.T) {
+	const prefix = "env:\n  GOFLAGS: -mod=readonly\njobs:\n  build:\n"
+	for _, tt := range []struct {
+		name   string
+		config string
+		want   int
+	}{
+		{name: "read-only modules", config: prefix + "    env:\n      GOFLAGS: -mod=readonly\n    steps:\n      - name: go-mod-verify\n" +
+			"        run: go build -mod=readonly -modfile=go.mod -modcacherw ./...\n      - uses: github/codeql-action/init@v4\n        with:\n          build-mode: manual\n"},
+		{name: "no workflow-wide GOFLAGS", want: 1, config: "jobs:\n  build:\n    env:\n      GOFLAGS: -mod=readonly\n"},
+		{name: "workflow-wide vendor mode", want: 3, config: "env:\n  GOFLAGS: -mod=vendor\n"},
+		{name: "space-separated flag", want: 1, config: prefix + "    steps:\n      - run: go build -mod vendor ./...\n"},
+		{name: "flag with a value", want: 1, config: prefix + "    steps:\n      - run: go build -mod=vendor ./...\n"},
+		{name: "double-dash flag", want: 1, config: prefix + "    steps:\n      - run: go list --mod=mod -m all\n"},
+		{name: "value on the next line", want: 1, config: prefix + "    steps:\n      - run: |\n          go build -mod\n            vendor ./...\n"},
+		{name: "shell-quoted value", want: 1, config: prefix + "    steps:\n      - run: go build -mod'='vendor ./...\n"},
+		{name: "job-level GOFLAGS", want: 2, config: prefix + "    env:\n      GOFLAGS: -mod=vendor\n"},
+		{name: "extra GOFLAGS", want: 1, config: prefix + "    env:\n      GOFLAGS: -mod=readonly -modcacherw\n"},
+		{name: "go env -w GOFLAGS", want: 2, config: prefix + "    steps:\n      - run: go env -w GOFLAGS=-mod=vendor\n"},
+		{name: "GOFLAGS through GITHUB_ENV", want: 1, config: prefix + "    steps:\n      - run: echo GOFLAGS= >> \"$GITHUB_ENV\"\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := workflowModuleProblems(tt.config); len(got) != tt.want {
+				t.Fatalf("%d problems, want %d: %q", len(got), tt.want, got)
+			}
+		})
 	}
 }
 
