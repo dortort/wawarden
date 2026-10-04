@@ -53,7 +53,7 @@ type rule struct {
 var rules = []rule{
 	goroutineRule, netHTTPRule, dotImportRule, socketRule, muxRule, serverRule, handlerRule,
 	inListRule, bannedImportRule, reflectionRule, fenceRule, grantRule, chatMethodRule, thirdPartyRule, hiddenPackageRule, nolintRule, generatedRule, wildcardRule,
-	credentialRule, preludeRule, secretComparisonRule, formRule, shadowRule,
+	credentialRule, preludeRule, secretComparisonRule, formRule, shadowRule, sealRule,
 }
 
 var majorVersion = regexp.MustCompile(`^v([2-9]|[1-9][0-9]+)$`)
@@ -335,6 +335,7 @@ func TestArchitecture(t *testing.T) {
 		"internal/archtest/arch_test.go",
 		"internal/listeners/listeners.go",
 		"internal/policy/decide.go",
+		"internal/policy/internal/seal/seal.go",
 		"internal/safego/safego.go",
 	} {
 		if !walked[rel] {

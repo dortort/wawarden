@@ -11,8 +11,6 @@ import (
 
 const (
 	policyPath = module + "/" + policyDir
-	grantFile  = "internal/policy/decide.go"
-	chatFile   = "internal/policy/normalize.go"
 	chatType   = "CanonicalChat"
 )
 
