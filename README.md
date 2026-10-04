@@ -17,7 +17,8 @@ It is not:
 - **a network security layer**: it terminates no TLS, keeps no IP allowlist and
   has no user accounts;
 - **a bulk messaging tool**: sending will be limited to the chats a client may
-  write to, paced and budgeted, with no first contact.
+  write to, paced and budgeted, and with no first contact unless a client is
+  explicitly allowed it (M3).
 
 ## Security posture
 
