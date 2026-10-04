@@ -1,0 +1,221 @@
+package archtest
+
+import "go/ast"
+
+var handlerBuilders = map[string]map[string]bool{
+	"net/http": set("AllowQuerySemicolons", "CrossOriginProtection", "FileServer", "FileServerFS", "HandlerFunc", "MaxBytesHandler",
+		"NewCrossOriginProtection", "NotFoundHandler", "RedirectHandler", "StripPrefix", "TimeoutHandler"),
+	"net/http/httputil": set("NewSingleHostReverseProxy", "ReverseProxy"),
+	"net/rpc":           set("DefaultServer", "NewServer", "Server"),
+}
+
+var handlerRule = rule{
+	name:  "handler-ownership",
+	check: checkHandlers,
+	cases: []snippet{
+		{name: "handlers built or wrapped outside api", rel: "internal/app/x.go", want: 13, src: `package app
+
+import (
+	web "net/http"
+	"net/http/httputil"
+	"net/rpc"
+)
+
+type open struct{ next web.Handler }
+
+func (o open) ServeHTTP(w web.ResponseWriter, r *web.Request) { o.next.ServeHTTP(w, r) }
+
+func (o *open) wrap() (web.Handler, error) { return o, nil }
+
+func f(h web.Handler, fn func(web.ResponseWriter, *web.Request)) {
+	_ = web.HandlerFunc(fn)
+	_ = web.StripPrefix("/x", h)
+	_ = web.TimeoutHandler(h, 0, "")
+	_ = web.MaxBytesHandler(h, 1)
+	_ = web.AllowQuerySemicolons(h)
+	_ = web.NotFoundHandler()
+	_ = web.FileServerFS(nil)
+	_ = web.NewCrossOriginProtection().Handler(h)
+	_ = httputil.NewSingleHostReverseProxy(nil)
+	_ = rpc.NewServer()
+	_ = func() web.Handler { return nil }
+}
+`},
+		{name: "handlers built or swapped in listeners", rel: "internal/listeners/x.go", want: 5, src: `package listeners
+
+import "net/http"
+
+type Spec struct{ Handler http.Handler }
+
+func (s Spec) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.Handler.ServeHTTP(w, r) }
+
+func f(spec Spec, h http.Handler) []*http.Server {
+	return []*http.Server{
+		{Handler: http.TimeoutHandler(spec.Handler, 0, "")},
+		{Handler: h},
+		{ReadTimeout: 1},
+	}
+}
+`},
+		{name: "specs that do not carry an api handler unchanged", rel: "internal/app/x.go", want: 5, src: `package app
+
+import (
+	"github.com/dortort/wawarden/internal/api"
+	"github.com/dortort/wawarden/internal/listeners"
+	other "example.com/api"
+)
+
+func f(d api.ClientDeps, h interface{ ServeHTTP() }, wrap func(any) any) []listeners.Spec {
+	s := listeners.Spec{Name: "client", Handler: api.NewClientHandler(d)}
+	s.Handler = nil
+	return []listeners.Spec{
+		s,
+		{Name: "client", Handler: wrap(api.NewClientHandler(d))},
+		{Name: "admin", Handler: other.NewAdminHandler(d)},
+		{"health", s.Addr, api.NewHealthHandler(nil)},
+		{Name: "unset"},
+	}
+}
+`},
+		{name: "a handler built in an api subpackage", rel: "internal/api/dto/x.go", want: 1, src: `package dto
+
+import "net/http"
+
+var _ = http.HandlerFunc(nil)
+`},
+		{name: "the app hands the api handlers to the listeners", rel: "internal/app/x.go", src: `package app
+
+import (
+	"net/http"
+
+	"github.com/dortort/wawarden/internal/api"
+	"github.com/dortort/wawarden/internal/listeners"
+)
+
+type serving interface {
+	ServeHTTP(http.ResponseWriter, *http.Request)
+}
+
+func f(d api.ClientDeps, ready func() bool, h http.Handler) []listeners.Spec {
+	specs := []listeners.Spec{{Name: "client", Handler: api.NewClientHandler(d)}}
+	return append(specs, listeners.Spec{Name: "health", Handler: (api.NewHealthHandler(ready))})
+}
+`},
+		{name: "listeners serve the handler their spec carries", rel: "internal/listeners/x.go", src: `package listeners
+
+import "net/http"
+
+type Spec struct {
+	Name    string
+	Handler http.Handler
+}
+
+func f(spec Spec) *http.Server {
+	return &http.Server{Handler: spec.Handler, ReadHeaderTimeout: 1}
+}
+`},
+		{name: "handlers in api", rel: "internal/api/x.go", src: `package api
+
+import "net/http"
+
+type router struct{}
+
+func (rt *router) ServeHTTP(http.ResponseWriter, *http.Request) {}
+
+func NewHealthHandler(ready func() bool) http.Handler {
+	return http.StripPrefix("", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+}
+`},
+		{name: "handlers and servers in tests", rel: "internal/listeners/x_test.go", src: `package listeners
+
+import "net/http"
+
+func f(h http.Handler) http.Handler {
+	_ = Spec{Handler: http.NotFoundHandler()}
+	_ = &http.Server{Handler: h}
+	return http.HandlerFunc(nil)
+}
+`},
+		{name: "another package's handler builders", rel: "internal/app/x.go", src: `package app
+
+import "example.com/http"
+
+var _ = http.HandlerFunc(nil)
+
+func f() http.Handler { return nil }
+`},
+	},
+}
+
+func checkHandlers(f *sourceFile) []string {
+	if f.test || f.dir == apiDir {
+		return nil
+	}
+	var out []string
+	ast.Inspect(f.file, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.FuncDecl:
+			if n.Recv != nil && n.Name.Name == "ServeHTTP" {
+				out = append(out, f.at(n.Name, "a ServeHTTP method outside %s makes a handler that no policy-classed registration guards", apiDir))
+			}
+		case *ast.FuncType:
+			if n.Results == nil {
+				break
+			}
+			for _, r := range n.Results.List {
+				if f.isType(r.Type, "net/http", "Handler") {
+					out = append(out, f.at(r, "a function returning an http.Handler outside %s builds or wraps a handler", apiDir))
+				}
+			}
+		case *ast.SelectorExpr:
+			if sel, p := f.ref(n); sel != nil && handlerBuilders[p][sel.Sel.Name] {
+				out = append(out, f.at(n, "%s.%s outside %s builds or wraps a handler", p, sel.Sel.Name, apiDir))
+			}
+		case *ast.AssignStmt:
+			if within(f.dir, listenersDir) {
+				break
+			}
+			for _, lhs := range n.Lhs {
+				if sel, ok := ast.Unparen(lhs).(*ast.SelectorExpr); ok && sel.Sel.Name == "Handler" {
+					out = append(out, f.at(lhs, "Handler assigned after its listeners.Spec literal: set it only in the literal, to the result of an %s constructor", apiDir))
+				}
+			}
+		}
+		return true
+	})
+	f.compositeLits(func(lit *ast.CompositeLit, typ ast.Expr) {
+		handler := keyedValue(lit, "Handler")
+		switch {
+		case f.isType(typ, module+"/"+listenersDir, "Spec") && !within(f.dir, listenersDir) && !f.apiCall(handler):
+			out = append(out, f.at(lit, "a listeners.Spec must set Handler by name to the direct result of an %s constructor, so no listener serves a wrapped or foreign handler", apiDir))
+		case f.dir == listenersDir && f.isType(typ, "net/http", "Server") && !specHandler(handler):
+			out = append(out, f.at(lit, "an http.Server in %s must serve its spec's Handler unchanged", listenersDir))
+		}
+	})
+	return out
+}
+
+func keyedValue(lit *ast.CompositeLit, key string) ast.Expr {
+	for _, e := range lit.Elts {
+		if kv, ok := e.(*ast.KeyValueExpr); ok {
+			if id, ok := kv.Key.(*ast.Ident); ok && id.Name == key {
+				return kv.Value
+			}
+		}
+	}
+	return nil
+}
+
+func (f *sourceFile) apiCall(e ast.Expr) bool {
+	call, ok := ast.Unparen(e).(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, p := f.ref(call.Fun)
+	return sel != nil && p == module+"/"+apiDir
+}
+
+func specHandler(e ast.Expr) bool {
+	sel, ok := ast.Unparen(e).(*ast.SelectorExpr)
+	return ok && sel.Sel.Name == "Handler"
+}
