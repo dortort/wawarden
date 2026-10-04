@@ -66,7 +66,7 @@ func binaryContainsMarker(t *testing.T) bool {
 	if err != nil {
 		t.Fatalf("locate test binary: %v", err)
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: the path is the running test binary, from os.Executable
 	if err != nil {
 		t.Fatalf("read test binary: %v", err)
 	}
