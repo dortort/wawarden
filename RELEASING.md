@@ -54,7 +54,7 @@ of these endpoints answer only to repository administrators.
   or branch.
 - **The default workflow token is read-only.**
   `gh api repos/dortort/wawarden/actions/permissions/workflow --jq .default_workflow_permissions`
-  prints `"read"`.
+  prints `read`.
 
 Neither ruleset has bypass actors, so they apply to administrators too.
 
