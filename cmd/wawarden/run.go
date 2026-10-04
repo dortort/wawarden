@@ -25,6 +25,8 @@ const usage = `usage:
 
 const healthcheckTimeout = 2 * time.Second
 
+var runApp = (*app.App).Run
+
 func run(ctx context.Context, args, environ []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
 		return serve(ctx, args, environ, stdout, stderr)
@@ -68,7 +70,7 @@ func serve(ctx context.Context, args, environ []string, stdout, stderr io.Writer
 		logger.Error("startup failed", slog.String("event", "startup_failed"), slog.String("error", err.Error()))
 		return 1
 	}
-	if err := a.Run(ctx); err != nil {
+	if err := runApp(a, ctx); err != nil {
 		return 1
 	}
 	return 0

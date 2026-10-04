@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dortort/wawarden/internal/app"
 	"github.com/dortort/wawarden/internal/buildinfo"
 	"github.com/dortort/wawarden/internal/token"
 )
@@ -196,6 +198,26 @@ func TestServeFailsWhenItCannotBind(t *testing.T) {
 	code, stdout, _ := invoke(t, []string{"serve", "--allow-root"}, environ)
 	if code != 1 || !strings.Contains(stdout, `"event":"startup_failed"`) {
 		t.Fatalf("serve = %d %q, want 1 with a startup_failed event", code, stdout)
+	}
+}
+
+func TestServeExitsOneOnARuntimeFailure(t *testing.T) {
+	failure := errors.New("synthetic runtime failure")
+	saved := runApp
+	t.Cleanup(func() { runApp = saved })
+	runApp = func(a *app.App, ctx context.Context) error {
+		stopped, stop := context.WithCancel(ctx)
+		stop()
+		return errors.Join(saved(a, stopped), failure)
+	}
+	environ := []string{
+		"WAWARDEN_DATA_DIR=" + filepath.Join(t.TempDir(), "data"),
+		"WAWARDEN_LISTEN=" + freeAddr(t),
+		"WAWARDEN_HEALTH_LISTEN=" + freeAddr(t),
+	}
+	code, stdout, _ := invoke(t, []string{"serve", "--allow-root"}, environ)
+	if code != 1 || !strings.Contains(stdout, `"event":"stopped"`) {
+		t.Fatalf("serve = %d %q, want 1 after the app stopped with a failure", code, stdout)
 	}
 }
 
