@@ -45,9 +45,9 @@ of these endpoints answer only to repository administrators.
   `gh api repos/dortort/wawarden/rulesets --jq '.[] | select(.target == "tag") | .id'`
   prints the tag ruleset's id, and
   `gh api repos/dortort/wawarden/rulesets/<id> --jq '{enforcement, include: .conditions.ref_name.include, rules: [.rules[].type], bypass_actors}'`
-  shows enforcement `"active"`, `["refs/tags/v*"]`, the rules `"deletion"`,
-  `"update"` and `"non_fast_forward"`, and no bypass actors. Creating a tag is not
-  restricted, because the release workflow creates it.
+  prints
+  `{"bypass_actors":[],"enforcement":"active","include":["refs/tags/v*"],"rules":["deletion","update","non_fast_forward"]}`.
+  Creating a tag is not restricted, because the release workflow creates it.
 - **Actions must be pinned by commit SHA.**
   `gh api repos/dortort/wawarden/actions/permissions --jq .sha_pinning_required`
   prints `true`. GitHub refuses to run a workflow that references an action by tag
@@ -60,17 +60,24 @@ Neither ruleset has bypass actors, so they apply to administrators too.
 
 The release workflow's first job reads the `release` environment through the API
 and stops unless it exists, has a required reviewer, does not let administrators
-bypass its protection rules, and accepts deployments only from the branch `main`. The workflow token cannot read the other settings: check
-them with the commands above after any change to the repository settings.
+bypass its protection rules, and accepts deployments only from the branch `main`.
+The workflow token cannot read the other settings: check them with the commands
+above after any change to the repository settings.
 
 ## How a release is produced
 
 - Releases are cut **only from `main`**, by the manually dispatched workflow
   `.github/workflows/release.yml`. Nobody pushes release tags by hand.
-- Every job in the workflow runs only when the workflow was dispatched on
-  `refs/heads/main`. The workflow input is the version (`vMAJOR.MINOR.PATCH`); it
-  is checked against that format, and the run stops if the tag already exists.
-- The first job also checks the `release` environment as described under
+- The workflow has four jobs, which run in this order: `guard` (*Check version,
+  tag, environment and CI*), `build` (*Build*), `rebuild` (*Rebuild and
+  compare*) and `release` (*Publish*), the publishing job. Every job runs only
+  when the workflow was dispatched on `refs/heads/main`.
+- The workflow input is the version. The `guard` job accepts only
+  `vMAJOR.MINOR.PATCH` with decimal numbers without leading zeros and no suffix
+  (`v0.1.0`, not `v0.01.0` or `v1.0.0-rc.1`), and stops when `git ls-remote`
+  finds the tag in the repository or fails. The publishing job checks again
+  that the tag does not exist just before it creates the release.
+- The `guard` job also checks the `release` environment as described under
   [Repository settings](#repository-settings), and stops unless `ci.yml` has a
   successful `push` run on `main` for the commit being released. Dispatch only
   after CI on `main` has finished.
@@ -109,13 +116,19 @@ release workflow, by CI and by anyone reproducing a release:
 - Go binaries for `linux/amd64` and `linux/arm64`, built with `CGO_ENABLED=0`,
   `-trimpath`, `-buildvcs=true` and an empty build ID, from the vendored modules
   once the module has dependencies, with the toolchain named by the `toolchain`
-  line in `go.mod` (`GOTOOLCHAIN=local`). The version string is injected at link
-  time; `wawarden version` prints it.
+  line in `go.mod` (`GOTOOLCHAIN=local`): the script stops unless
+  `go env GOVERSION` equals that line. In `ci.yml`, `codeql.yml` and
+  `release.yml`, every job that runs Go also runs `hack/check-go-version.sh`
+  right after setting Go up, which makes the same comparison in the job's own
+  environment. The script accepts any `VERSION` that is a valid image tag (CI
+  builds with `VERSION=ci`); the version string is injected at link time into
+  `internal/buildinfo.Version`, and `wawarden version` prints it.
 - Before packaging, the script checks each binary: its embedded build settings
   must show no `dev` tag, `vcs.revision` equal to the commit, `vcs.modified=false`,
   `CGO_ENABLED=0` and the right architecture; the binary must not contain the
   marker string that only dev builds carry; and it must contain the version
-  variable that the link step sets. On a Linux host, and only in its `binaries`
+  variable that the link step sets (`go tool nm` lists
+  `internal/buildinfo.Version`). On a Linux host, and only in its `binaries`
   and `oci` modes, the script also runs the binary built for the host's
   architecture, with an empty environment (`env -i`): `wawarden version` must
   print exactly the requested version, the commit and `dev build false`. In the
@@ -132,26 +145,29 @@ release workflow, by CI and by anyone reproducing a release:
   to it.
 - A multi-arch OCI image built by BuildKit from a digest-pinned
   `gcr.io/distroless/static-debian13:nonroot` base. The image adds the binary,
-  `/wawarden`, and an empty `/data` directory owned by the runtime user to the
-  base, runs as `65532:65532` and has no shell. The image's runtime contract is in
-  [`docs/configuration.md`](docs/configuration.md#container-image).
+  `/wawarden`, and an empty `/data` directory owned by the runtime user with mode
+  `0700` to the base, runs as `65532:65532` and has no shell. The image's runtime
+  contract is in [`docs/configuration.md`](docs/configuration.md#container-image).
 - The script creates its own temporary `docker-container` builder from a BuildKit
   image pinned by version and digest in the script, and removes it afterwards. The
-  workflow pins the buildx version and downloads that buildx release on every run
-  instead of restoring it from the GitHub Actions cache. No build cache is used,
-  and BuildKit's own provenance and SBOM attestations are switched off, because
-  they differ between identical builds. Provenance is attested separately (below).
+  workflows pin the buildx version in `BUILDX_VERSION` and download that buildx
+  release on every run instead of restoring it from the GitHub Actions cache, and
+  the script stops when `BUILDX_VERSION` is set and the installed buildx reports
+  another version. No build cache is used, and BuildKit's own provenance and SBOM
+  attestations are switched off, because they differ between identical builds.
+  Provenance is attested separately (below).
 - The release jobs check out the commit shallowly and fetch no tags
   (`fetch-depth: 1`, `fetch-tags: false`), so the build sees no tag. The script
   stops if any tag is reachable from the commit.
 - Every GitHub Action in the workflows is pinned by commit SHA, which the
   repository requires (see [Repository settings](#repository-settings)).
 
-A second job then runs the same script from scratch on a fresh runner of the
-other architecture. **The release proceeds only when both jobs produce identical
-binary checksums and an identical image index digest.** Both jobs also generate
-the SPDX SBOMs, and the release stops unless the two sets are identical apart from
-the document namespace and the creation time. The publishing job builds and
+The `rebuild` job then runs the same script from scratch on a fresh runner of the
+other architecture: `arm64`, where the `build` job ran on `amd64`. **The release
+proceeds only when both jobs produce identical binary checksums and an identical
+image index digest.** Both jobs also generate the SPDX SBOMs, and the release
+stops unless the two sets are identical apart from the document namespace and the
+creation time. The publishing job builds and
 pushes the image a third time and stops unless the pushed digest equals the one
 both builds produced.
 
@@ -375,7 +391,7 @@ Dependabot does not update the following, so they are bumped by hand:
 
 | Item | Where it is pinned |
 |---|---|
-| Go | The `go` and `toolchain` lines of `go.mod`. The workflows set up Go from `go.mod`; every job that runs Go in `ci.yml`, `codeql.yml` and `release.yml` then runs `hack/check-go-version.sh`, which stops the job unless `go env GOVERSION` equals the `toolchain` version, and `hack/repro-build.sh` requires exactly that version too. |
+| Go | The `go` and `toolchain` lines of `go.mod`. The workflows set up Go from `go.mod`; every job that runs Go in `ci.yml`, `codeql.yml` and `release.yml` then runs `hack/check-go-version.sh`, which stops the job unless `go env GOVERSION` equals the `toolchain` version, and `hack/repro-build.sh` requires exactly that version too. Dependabot proposes no Go release, but a module update it proposes can raise the `go` line when the new version needs a newer Go; review such a pull request as a Go bump. |
 | golangci-lint | The `version` input of both `golangci/golangci-lint-action` steps in `.github/workflows/ci.yml`. |
 | govulncheck | The `go install golang.org/x/vuln/cmd/govulncheck@<version>` step in `.github/workflows/ci.yml` and in `.github/workflows/govulncheck-daily.yml`. |
 | buildx | `BUILDX_VERSION` in the `env` block of `.github/workflows/ci.yml` and of `.github/workflows/release.yml`. |
