@@ -101,6 +101,12 @@ import "github.com/dortort/wawarden/internal/policy/internal/seal"
 
 var _ seal.Chat
 `},
+		{name: "the seal package imported by package policy's external test", rel: "internal/policy/x_test.go", want: 1, src: `package policy_test
+
+import "github.com/dortort/wawarden/internal/policy/internal/seal"
+
+var _ seal.Chat
+`},
 		{name: "the seal package imported by another package's test", rel: "internal/api/x_test.go", want: 1, src: `package api
 
 import "github.com/dortort/wawarden/internal/policy/internal/seal"
@@ -190,7 +196,7 @@ func checkSealConstructors(f *sourceFile) []string {
 		if imp.path != sealPath {
 			continue
 		}
-		if f.dir != policyDir {
+		if f.dir != policyDir || f.file.Name.Name != "policy" {
 			out = append(out, f.at(imp.node, "only package policy may import %q, whose constructors build valid chats and grants", sealPath))
 		}
 		if imp.node.Name != nil {
