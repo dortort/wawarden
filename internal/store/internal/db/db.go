@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/url"
 	"path/filepath"
+	"runtime"
 	"runtime/pprof"
 	"strconv"
 	"strings"
@@ -68,6 +69,7 @@ type Options struct {
 	writeTimeout time.Duration
 	pragmas      []string
 	disposable   bool
+	ofdEnabled   func() bool
 }
 
 type Refusal struct {
@@ -146,6 +148,9 @@ func Open(ctx context.Context, name Name, opts Options) (*DB, error) {
 	if err := d.acquire(ctx, opts.acquireFor, opts.retryBase); err != nil {
 		return nil, errors.Join(err, d.sql.Close())
 	}
+	if opts.Profile == Local && runtime.GOOS == "linux" && !opts.ofdEnabled() {
+		return nil, errors.Join(&Refusal{Reason: "storage_ofd_unavailable", detail: "storage profile local needs open-file-description locks, and the kernel or the data directory's filesystem refused them"}, d.sql.Close())
+	}
 	return d, nil
 }
 
@@ -173,6 +178,9 @@ func defaults(o *Options) {
 	}
 	if o.pragmas == nil {
 		o.pragmas = requiredPragmas(o.busyTimeout)
+	}
+	if o.ofdEnabled == nil {
+		o.ofdEnabled = sqlite.OFDLockingEnabled
 	}
 }
 

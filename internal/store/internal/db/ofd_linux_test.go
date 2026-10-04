@@ -2,6 +2,7 @@ package db
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -102,5 +103,21 @@ func TestOneLockKindPerProcess(t *testing.T) {
 	}
 	if !held.OFDLocking() {
 		t.Fatal("a refused Open changed the lock kind")
+	}
+}
+
+func TestLocalProfileRefusesAFallbackToClassicLocks(t *testing.T) {
+	opts, _ := testOptions(t)
+	opts.ofdEnabled = func() bool { return false }
+	d, err := Open(t.Context(), Archive, opts)
+	if err == nil {
+		_ = d.Close()
+		t.Fatal("Open accepted profile local without open-file-description locks")
+	}
+	if r, ok := errors.AsType[*Refusal](err); !ok || r.Reason != "storage_ofd_unavailable" {
+		t.Fatalf("Open = %v, want a storage_ofd_unavailable refusal", err)
+	}
+	if got := probeFromAnotherProcess(t, filepath.Join(opts.DataDir, "archive.db")); got != probeFree {
+		t.Fatalf("another process after the refusal = %d, want free: the refused Open must release the lock", got)
 	}
 }

@@ -262,7 +262,8 @@ The checks run in this order:
 | 43 | `archive_journal_not_regular` | none; the error names `archive.db-journal` | `archive.db-journal` exists but is not a regular file. |
 | 44 | `archive_journal_foreign_owner` | none; the error names `archive.db-journal` | `archive.db-journal` is not owned by the process's effective user ID. |
 | 45 | `archive_journal_permissions` | none; the error names `archive.db-journal` | `archive.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 46 | `archive_schema_newer` | none; the error names `archive.db` | The archive's schema version is newer than this build knows: a newer release wrote it. |
+| 46 | `storage_ofd_unavailable` | none | On Linux, the storage profile is `local` and the kernel or the data directory's filesystem refused open-file-description locks; see [Storage profiles](#storage-profiles). |
+| 47 | `archive_schema_newer` | none; the error names `archive.db` | The archive's schema version is newer than this build knows: a newer release wrote it. |
 
 When the data directory is missing, it is created only after checks 1 to 14 pass,
 so a start refused by checks 1 to 14 leaves nothing behind. `history/` and
@@ -365,16 +366,21 @@ Right after the master key, `serve`:
    write while the service runs. When another process holds it, `serve` logs
    `db_lock_wait` once and retries with growing pauses for up to five minutes,
    then exits `1` with `startup_failed`. A stop signal ends the wait within one
-   busy timeout and also exits `1`;
+   busy timeout and also exits `1`. On Linux, profile `local` takes it with
+   open-file-description locks, and a kernel or filesystem that refuses them
+   is refused in turn (46) instead of falling back to classic locks;
 5. brings the schema up to date (an archive written by a newer release is
-   refused, 46) and logs `archive_opened`.
+   refused, 47) and logs `archive_opened`.
 
 The connection that holds the lock is the only one the service ever opens to
 the archive. It survives a call that runs out of time, and should it ever be
 lost, the service refuses to open another, logs `db_lost` and answers `503` on
 `/healthz` from then on; restart it. No other code in the service opens the
 database file, and on Linux, profile `local` uses open-file-description locks,
-so that closing some other descriptor of the file cannot drop the lock.
+so that closing some other descriptor of the file cannot drop the lock; it
+refuses to start (`storage_ofd_unavailable`) where the kernel or the filesystem
+rejects them, because SQLite would otherwise fall back to classic locks without
+a sign.
 
 The journal, `archive.db-journal`, appears at the first write and is truncated to
 zero bytes after every transaction; SQLite gives it the database file's mode.
@@ -395,7 +401,7 @@ outside that guarantee.
 
 | Profile | Use it for | Locks | Free-space floor |
 |---|---|---|---|
-| `local` (default) | A local disk or a container's own filesystem | Open-file-description locks on Linux, classic POSIX record locks elsewhere | Applies |
+| `local` (default) | A local disk or a container's own filesystem | Open-file-description locks on Linux, where a kernel or filesystem that refuses them is refused (`storage_ofd_unavailable`); classic POSIX record locks elsewhere | Applies |
 | `nfs` | A network filesystem such as Amazon EFS | Classic POSIX record locks | Does not apply |
 
 With profile `local`, `serve` refuses a data directory on a network filesystem
