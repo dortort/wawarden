@@ -36,6 +36,9 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 
+if [ -e vendor ] || [ -L vendor ]; then
+  die "vendor exists at the repository root; modules are pinned by go.sum and never vendored, so remove it"
+fi
 changes=$(git status --porcelain --untracked-files=normal --ignore-submodules=none)
 if [ -n "$changes" ]; then
   git status --short >&2
@@ -55,11 +58,6 @@ goversion=$(go env GOVERSION)
 hostos=$(go env GOHOSTOS)
 hostarch=$(go env GOHOSTARCH)
 
-modflag=-mod=readonly
-if [ -f vendor/modules.txt ]; then
-  modflag=-mod=vendor
-fi
-
 marker=$(sed -nE 's/.*devMarker[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' internal/buildinfo/dev.go)
 [ -n "$marker" ] || die "cannot read devMarker from internal/buildinfo/dev.go"
 
@@ -68,7 +66,7 @@ SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)
 export SOURCE_DATE_EPOCH
 stamp=$(TZ=UTC git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd HEAD)
 
-log "commit $revision, SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH ($stamp), $goversion, $modflag"
+log "commit $revision, SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH ($stamp), $goversion, -mod=readonly"
 
 build_setting() {
   awk -v key="$1" '$1 == "build" { i = index($2, "="); if (substr($2, 1, i - 1) == key) print substr($2, i + 1) }' <<< "$2"
@@ -118,7 +116,7 @@ mkdir dist
 names=()
 for arch in "${arches[@]}"; do
   name=wawarden_${VERSION}_linux_$arch
-  GOARCH=$arch go build "$modflag" -trimpath -buildvcs=true \
+  GOARCH=$arch go build -mod=readonly -trimpath -buildvcs=true \
     -ldflags="-buildid= -X $module/internal/buildinfo.Version=$VERSION" \
     -o "dist/$name" ./cmd/wawarden
   check_binary "dist/$name" "$arch"
