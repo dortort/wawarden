@@ -1,0 +1,104 @@
+version: "2"
+
+run:
+  timeout: 5m
+  relative-path-mode: gomod
+
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - ineffassign
+    - unused
+    - gosec
+    - bodyclose
+    - noctx
+    - depguard
+    - forbidigo
+  settings:
+    depguard:
+      rules:
+        api-fence:
+          files:
+            - ${base-path}/internal/api/**
+          deny:
+            - pkg: database/sql
+              desc: internal/api reaches data only through internal/store/scoped
+            - pkg: modernc.org/sqlite
+              desc: the raw database handle lives in internal/store/internal/db
+            - pkg: go.mau.fi/whatsmeow
+              desc: the protocol client is confined to internal/engine
+            - pkg: github.com/dortort/wawarden/internal/store/ingest
+              desc: ingest is engine-only
+        api-fence-admin-store:
+          files:
+            - ${base-path}/internal/api/**
+            - "!${base-path}/internal/api/admin/**"
+          deny:
+            - pkg: github.com/dortort/wawarden/internal/store/admin
+              desc: only internal/api/admin may use the admin store
+        no-default-mux-registrars:
+          files:
+            - $all
+          deny:
+            - pkg: net/http/pprof
+              desc: registers handlers on http.DefaultServeMux
+            - pkg: expvar
+              desc: registers handlers on http.DefaultServeMux
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^http\.(ListenAndServe|ListenAndServeTLS|Serve|ServeTLS|Handle|HandleFunc)$
+          pkg: ^net/http$
+          msg: build an http.Server with timeouts and an explicit handler in internal/listeners
+        - pattern: ^http\.DefaultServeMux$
+          pkg: ^net/http$
+          msg: "default-mux-proof: http.DefaultServeMux is never served or registered on"
+        - pattern: ^http\.(DefaultClient|Get|Post|PostForm|Head)$
+          pkg: ^net/http$
+          msg: use an http.Client with a timeout and http.NewRequestWithContext
+        - pattern: ^http\.Server\.(ListenAndServe|ListenAndServeTLS)$
+          pkg: ^net/http$
+          msg: serve an internal/listeners listener with (*http.Server).Serve
+        - pattern: ^net\.(Listen|ListenTCP|ListenUDP|ListenIP|ListenUnix|ListenUnixgram|ListenPacket|ListenMulticastUDP|FileListener|FilePacketConn)$
+          pkg: ^net$
+          msg: "listeners-only: OS listeners belong in internal/listeners"
+        - pattern: ^net\.ListenConfig\.(Listen|ListenPacket)$
+          pkg: ^net$
+          msg: "listeners-only: OS listeners belong in internal/listeners"
+        - pattern: ^tls\.Listen$
+          pkg: ^crypto/tls$
+          msg: "listeners-only: OS listeners belong in internal/listeners"
+        - pattern: ^syscall\.Listen$
+          pkg: ^syscall$
+          msg: "listeners-only: OS listeners belong in internal/listeners"
+  exclusions:
+    rules:
+      - path: ^internal/listeners/[^/]+\.go$
+        linters:
+          - forbidigo
+        text: listeners-only
+      - path: _test\.go$
+        linters:
+          - forbidigo
+        text: listeners-only
+      - path: ^internal/(api/coverage|app/app)_test\.go$
+        linters:
+          - forbidigo
+        text: default-mux-proof
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/dortort/wawarden
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: false
