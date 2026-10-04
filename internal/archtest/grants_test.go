@@ -74,6 +74,68 @@ func f(c *Client, gs []ReadGrant, x struct{ ok bool }) {
 	_ = (*AdminGrant)(nil)
 }
 `},
+		{name: "generic forms and ok pointers elsewhere in policy", rel: "internal/policy/grant.go", want: 7, src: `package policy
+
+type only interface{ ReadGrant }
+
+type either interface {
+	~WriteGrant | int
+}
+
+type shadow struct {
+	client string
+	all    bool
+	chats  map[CanonicalChat]struct{}
+	ok     bool
+}
+
+type box[K comparable, T *AdminGrant] struct{ v map[K]T }
+
+func mint[T only]() T { return T{ok: true, all: true} }
+
+func conv[T ReadGrant](s shadow) T { return T(s) }
+
+func nested[T interface{ ~[]ReadGrant }]() T { return T{{ok: true}} }
+
+func ptr(g *ReadGrant, flags []bool) {
+	p := &g.ok
+	*p = true
+	_ = &(g.ok)
+	_ = &flags[0]
+}
+`},
+		{name: "generic forms outside policy", rel: "internal/api/x.go", want: 3, src: `package api
+
+import "github.com/dortort/wawarden/internal/policy"
+
+type only interface {
+	policy.ReadGrant | policy.WriteGrant
+}
+
+func mint[T only, U policy.AdminGrant]() {}
+
+func slice[S ~[]E, E interface{ *policy.WriteGrant }]() {}
+`},
+		{name: "interfaces and type parameters that name no grant", rel: "internal/api/x.go", src: `package api
+
+import "github.com/dortort/wawarden/internal/policy"
+
+type granted interface {
+	Valid() bool
+	Grant() policy.ReadGrant
+}
+
+type holder struct{ g policy.ReadGrant }
+
+type handler[G any] func(G) error
+
+func decide[G interface{ Valid() bool }](g G) bool { return g.Valid() }
+
+func f(h func(policy.ReadGrant), g *policy.ReadGrant) {
+	_ = &g
+	_ = &holder{}
+}
+`},
 		{name: "a chat with fields and an alias in decide.go", rel: grantFile, want: 2, src: `package policy
 
 type rg = ReadGrant
@@ -128,38 +190,56 @@ func checkGrants(f *sourceFile) []string {
 		return nil
 	}
 	var out []string
-	grantType := func(e ast.Expr) (string, bool) {
-		for _, name := range grantTypes {
-			if f.isType(e, policyPath, name) {
-				return name, true
-			}
-		}
-		return "", false
-	}
 	f.compositeLits(func(lit *ast.CompositeLit, typ ast.Expr) {
-		if name, ok := grantType(typ); ok && f.rel != grantFile {
+		if name, ok := f.policyType(typ, grantTypes); ok && f.rel != grantFile {
 			out = append(out, f.at(lit, "policy.%s composite literal outside %s: grants are minted only by the Decide functions", name, grantFile))
 		}
 		if f.isType(typ, policyPath, "CanonicalChat") && len(lit.Elts) > 0 {
 			out = append(out, f.at(lit, "policy.CanonicalChat composite literal with fields: no constructor exists in M0"))
 		}
 	})
+	constraints := func(params *ast.FieldList) {
+		if params == nil {
+			return
+		}
+		for _, p := range params.List {
+			if name, ok := f.mentionedType(p.Type, grantTypes); ok {
+				out = append(out, f.at(p, "a type parameter constrained by policy.%s can build or convert to one", name))
+			}
+		}
+	}
 	ast.Inspect(f.file, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.TypeSpec:
-			if name, ok := grantType(n.Type); ok {
+			constraints(n.TypeParams)
+			if name, ok := f.policyType(n.Type, grantTypes); ok {
 				out = append(out, f.at(n, "type %s is declared from policy.%s, so its literals or conversions would mint grants", n.Name.Name, name))
 			}
+		case *ast.FuncType:
+			constraints(n.TypeParams)
+		case *ast.InterfaceType:
+			for _, elem := range n.Methods.List {
+				if len(elem.Names) > 0 {
+					continue
+				}
+				if name, ok := f.mentionedType(elem.Type, grantTypes); ok {
+					out = append(out, f.at(elem, "an interface element names policy.%s, so a type parameter it constrains can build or convert to one", name))
+				}
+			}
 		case *ast.CallExpr:
-			if name, ok := grantType(n.Fun); ok && f.rel != grantFile {
+			if name, ok := f.policyType(n.Fun, grantTypes); ok && f.rel != grantFile {
 				out = append(out, f.at(n, "conversion to policy.%s outside %s: grants are minted only by the Decide functions", name, grantFile))
+			}
+		case *ast.UnaryExpr:
+			if n.Op == token.AND && f.dir == policyDir && f.rel != grantFile && okFlag(n.X) {
+				out = append(out, f.at(n, "the address of an ok flag taken outside %s: build values that carry an ok flag whole, with a literal", grantFile))
 			}
 		case *ast.AssignStmt:
 			if n.Tok == token.DEFINE || f.dir != policyDir || f.rel == grantFile {
 				break
 			}
 			for _, lhs := range n.Lhs {
-				if sel, ok := ast.Unparen(lhs).(*ast.SelectorExpr); ok && sel.Sel.Name == "ok" {
+				if okFlag(lhs) {
 					out = append(out, f.at(lhs, "an ok flag set by assignment outside %s: build values that carry an ok flag whole, with a literal", grantFile))
 				}
 			}
@@ -167,4 +247,40 @@ func checkGrants(f *sourceFile) []string {
 		return true
 	})
 	return out
+}
+
+func okFlag(e ast.Expr) bool {
+	sel, ok := ast.Unparen(e).(*ast.SelectorExpr)
+	return ok && sel.Sel.Name == "ok"
+}
+
+func (f *sourceFile) policyType(e ast.Expr, names []string) (string, bool) {
+	for _, name := range names {
+		if f.isType(e, policyPath, name) {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+func (f *sourceFile) mentionedType(e ast.Expr, names []string) (string, bool) {
+	var found string
+	ast.Inspect(e, func(n ast.Node) bool {
+		if found != "" {
+			return false
+		}
+		switch n := n.(type) {
+		case *ast.Field:
+			found, _ = f.mentionedType(n.Type, names)
+			return false
+		case *ast.InterfaceType:
+			return false
+		case ast.Expr:
+			found, _ = f.policyType(n, names)
+			_, selector := n.(*ast.SelectorExpr)
+			return found == "" && !selector
+		}
+		return true
+	})
+	return found, found != ""
 }
