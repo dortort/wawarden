@@ -54,7 +54,7 @@ func chat(t *testing.T, jid string) policy.CanonicalChat {
 
 func testOptions(t *testing.T) Options {
 	t.Helper()
-	return Options{DataDir: t.TempDir(), UID: os.Geteuid(), Profile: ProfileLocal, Logger: testLogger()}
+	return Options{DataDir: t.TempDir(), UID: os.Geteuid(), Profile: ProfileLocal, MinFreeBytes: 1, Logger: testLogger()}
 }
 
 func openStore(t *testing.T) *Store {

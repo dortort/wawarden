@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/dortort/wawarden/internal/policy"
@@ -25,15 +26,20 @@ const (
 type Refusal = db.Refusal
 
 type Options struct {
-	DataDir string
-	UID     int
-	Profile Profile
-	Logger  *slog.Logger
+	DataDir      string
+	UID          int
+	Profile      Profile
+	MinFreeBytes uint64
+	Logger       *slog.Logger
 }
 
 type Store struct {
 	db      *db.DB
 	version int
+	floor   uint64
+
+	mu     sync.Mutex
+	paused bool
 }
 
 func Open(ctx context.Context, opts Options) (*Store, error) {
@@ -45,7 +51,7 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 	if err != nil {
 		return nil, errors.Join(err, d.Close())
 	}
-	return &Store{db: d, version: version}, nil
+	return &Store{db: d, version: version, floor: opts.MinFreeBytes}, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -97,6 +103,8 @@ var (
 )
 
 func ms(t time.Time) int64 { return t.UnixMilli() }
+
+func fromMS(v int64) time.Time { return time.UnixMilli(v).UTC() }
 
 func formatMS(t time.Time) string { return strconv.FormatInt(ms(t), 10) }
 
