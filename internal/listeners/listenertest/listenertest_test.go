@@ -90,6 +90,8 @@ func TestListeningTCP(t *testing.T) {
 			if got := listening(t); !slices.Equal(got, want) {
 				t.Fatalf("listening = %v, want %v: UDP, unix-domain and connected sockets must not appear", got, want)
 			}
+			slices.Reverse(want)
+			Require(t, want...)
 
 			if err := second.Close(); err != nil {
 				t.Fatalf("close: %v", err)

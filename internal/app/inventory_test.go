@@ -6,25 +6,11 @@ import (
 	"errors"
 	"io"
 	"net/netip"
-	"slices"
 	"testing"
 
 	"github.com/dortort/wawarden/internal/listeners/listenertest"
 	"github.com/dortort/wawarden/internal/token"
 )
-
-func requireProcessListeners(t *testing.T, want []netip.AddrPort) {
-	t.Helper()
-	got, err := listenertest.ListeningTCP()
-	if err != nil {
-		t.Fatalf("ListeningTCP: %v", err)
-	}
-	want = slices.Clone(want)
-	slices.SortFunc(want, netip.AddrPort.Compare)
-	if !slices.Equal(got, want) {
-		t.Fatalf("the process listens on %v, want exactly %v", got, want)
-	}
-}
 
 func inventoryAddrs(a *App) []netip.AddrPort {
 	var out []netip.AddrPort
@@ -45,16 +31,16 @@ func TestProcessListenersAreExactlyTheInventory(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			requireProcessListeners(t, nil)
+			listenertest.Require(t)
 			a, _, stop := start(t, testConfig(t, tt.adminToken), noClients{})
 			if len(a.Inventory()) != tt.count {
 				t.Fatalf("inventory = %+v, want %d listeners", a.Inventory(), tt.count)
 			}
-			requireProcessListeners(t, inventoryAddrs(a))
+			listenertest.Require(t, inventoryAddrs(a)...)
 			if err := stop(); err != nil {
 				t.Fatalf("Run = %v", err)
 			}
-			requireProcessListeners(t, nil)
+			listenertest.Require(t)
 		})
 	}
 }
@@ -71,7 +57,7 @@ func TestHealthListenerIsRefusedBeyondLoopback(t *testing.T) {
 			if !errors.Is(err, errHealthNotLoopback) {
 				t.Fatalf("newApp = %v, want the non-loopback health address refused before anything is bound", err)
 			}
-			requireProcessListeners(t, nil)
+			listenertest.Require(t)
 		})
 	}
 }
@@ -83,9 +69,9 @@ func TestFailedStartLeavesNoListener(t *testing.T) {
 	if _, err := newApp(t.Context(), cfg, NewLogger(io.Discard, nil), noClients{}); err == nil {
 		t.Fatal("newApp bound an address already in use")
 	}
-	requireProcessListeners(t, inventoryAddrs(a))
+	listenertest.Require(t, inventoryAddrs(a)...)
 	if err := stop(); err != nil {
 		t.Fatalf("Run = %v", err)
 	}
-	requireProcessListeners(t, nil)
+	listenertest.Require(t)
 }

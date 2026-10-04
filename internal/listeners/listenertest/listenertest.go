@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"syscall"
+	"testing"
 )
 
 const probeCeiling = 1 << 16
@@ -42,6 +43,19 @@ func ListeningTCP() ([]netip.AddrPort, error) {
 	}
 	slices.SortFunc(out, netip.AddrPort.Compare)
 	return out, nil
+}
+
+func Require(t testing.TB, want ...netip.AddrPort) {
+	t.Helper()
+	got, err := ListeningTCP()
+	if err != nil {
+		t.Fatalf("ListeningTCP: %v", err)
+	}
+	want = slices.Clone(want)
+	slices.SortFunc(want, netip.AddrPort.Compare)
+	if !slices.Equal(got, want) {
+		t.Fatalf("the process listens on %v, want exactly %v", got, want)
+	}
 }
 
 func openFDs() ([]int, error) {
