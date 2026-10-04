@@ -3,6 +3,7 @@
 package app
 
 import (
+	"errors"
 	"io"
 	"net/netip"
 	"slices"
@@ -52,6 +53,23 @@ func TestProcessListenersAreExactlyTheInventory(t *testing.T) {
 			requireProcessListeners(t, inventoryAddrs(a))
 			if err := stop(); err != nil {
 				t.Fatalf("Run = %v", err)
+			}
+			requireProcessListeners(t, nil)
+		})
+	}
+}
+
+func TestHealthListenerIsRefusedBeyondLoopback(t *testing.T) {
+	for _, health := range []string{"192.0.2.1:8081", "[2001:db8::1]:8081"} {
+		t.Run(health, func(t *testing.T) {
+			cfg := testConfig(t, "")
+			cfg.HealthListen = netip.MustParseAddrPort(health)
+			a, err := newApp(t.Context(), cfg, NewLogger(io.Discard, nil), noClients{})
+			if err == nil {
+				t.Cleanup(func() { _ = run(t, a)() })
+			}
+			if !errors.Is(err, errHealthNotLoopback) {
+				t.Fatalf("newApp = %v, want the non-loopback health address refused before anything is bound", err)
 			}
 			requireProcessListeners(t, nil)
 		})

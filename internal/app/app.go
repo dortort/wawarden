@@ -27,6 +27,8 @@ const (
 	shutdownGrace = 10 * time.Second
 )
 
+var errHealthNotLoopback = errors.New("app: the unauthenticated health listener must be bound to a loopback address")
+
 type listenerSet interface {
 	Inventory() []listeners.Bound
 	Serve()
@@ -61,6 +63,9 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 }
 
 func newApp(ctx context.Context, cfg config.Config, logger *slog.Logger, auth api.Authenticator) (*App, error) {
+	if !cfg.HealthListen.Addr().IsLoopback() {
+		return nil, errHealthNotLoopback
+	}
 	reg := metrics.NewRegistry()
 	safego.Install(logger, reg)
 	info := buildinfo.Read()
