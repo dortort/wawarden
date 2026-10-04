@@ -3,6 +3,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -23,7 +24,10 @@ type route struct {
 	class   class
 }
 
-type Request struct{}
+type Request struct {
+	w   http.ResponseWriter
+	req *http.Request
+}
 
 type router struct {
 	mux        *http.ServeMux
@@ -62,7 +66,11 @@ func decided[G any](decide func(*http.Request) (G, bool), h func(context.Context
 			writeError(w, http.StatusNotFound, codeNotFound)
 			return
 		}
-		resp, err := h(r.Context(), g, &Request{})
+		resp, err := h(r.Context(), g, &Request{w: w, req: r})
+		if refusal, ok := errors.AsType[*bodyError](err); ok {
+			writeError(w, refusal.status, refusal.code)
+			return
+		}
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, codeInternal)
 			return

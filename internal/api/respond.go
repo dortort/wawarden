@@ -8,12 +8,15 @@ import (
 )
 
 const (
-	codeForbidden        = "forbidden"
-	codeInternal         = "internal_error"
-	codeMethodNotAllowed = "method_not_allowed"
-	codeNotFound         = "not_found"
-	codeTooManyRequests  = "too_many_requests"
-	codeUnauthorized     = "unauthorized"
+	codeBodyTooLarge         = "body_too_large"
+	codeForbidden            = "forbidden"
+	codeInternal             = "internal_error"
+	codeInvalidBody          = "invalid_body"
+	codeMethodNotAllowed     = "method_not_allowed"
+	codeNotFound             = "not_found"
+	codeTooManyRequests      = "too_many_requests"
+	codeUnauthorized         = "unauthorized"
+	codeUnsupportedMediaType = "unsupported_media_type"
 )
 
 func setSecurityHeaders(h http.Header) {
