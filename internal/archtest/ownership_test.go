@@ -27,16 +27,95 @@ func f() {
 
 func f() { go f() }
 `},
+		{name: "functions run on goroutines the standard library starts", rel: "internal/app/x.go", want: 9, src: `package app
+
+import (
+	stdctx "context"
+	"net/http"
+	"runtime"
+	"sync"
+	"time"
+)
+
+type group struct{ sync.WaitGroup }
+
+func f(ctx stdctx.Context, wg *sync.WaitGroup, g group, srv *http.Server, fn func()) {
+	_ = time.AfterFunc(0, fn)
+	_ = stdctx.AfterFunc(ctx, fn)
+	runtime.SetFinalizer(srv, nil)
+	_ = runtime.AddCleanup(srv, func(int) {}, 0)
+	wg.Go(fn)
+	start := wg.Go
+	g.Go(fn)
+	srv.RegisterOnShutdown(fn)
+	_ = (*sync.WaitGroup).Go
+	_ = start
+}
+`},
+		{name: "another package's Go", rel: "internal/safego/sub/x.go", want: 2, src: `package sub
+
+import (
+	"example.com/errgroup"
+	"example.com/pool"
+)
+
+func f(g *errgroup.Group) {
+	g.Go(nil)
+	pool.Go(nil)
+}
+`},
+		{name: "safego.Go and functions that start no goroutine", rel: "internal/app/x.go", src: `package app
+
+import (
+	"context"
+	"os"
+	"os/signal"
+	"time"
+
+	sg "github.com/dortort/wawarden/internal/safego"
+	"example.com/clock"
+)
+
+func f(fn func()) {
+	sg.Go("x", fn)
+	_ = time.NewTimer(0)
+	_ = time.After(0)
+	_, _ = signal.NotifyContext(context.Background(), os.Interrupt)
+	_ = clock.AfterFunc
+}
+`},
 		{name: "go statement in safego", rel: "internal/safego/x.go", src: `package safego
 
-func f() { go f() }
+import "time"
+
+func f() {
+	go f()
+	_ = time.AfterFunc(0, f)
+}
 `},
 		{name: "go statement in a test", rel: "internal/app/x_test.go", src: `package app
 
-func f() { go f() }
+import (
+	"net/http"
+	"sync"
+)
+
+func f(wg *sync.WaitGroup, srv *http.Server) {
+	go f(wg, srv)
+	wg.Go(func() {})
+	srv.RegisterOnShutdown(func() {})
+}
 `},
 	},
 }
+
+var goroutineStarters = map[string]map[string]bool{
+	"context": set("AfterFunc"),
+	"runtime": set("AddCleanup", "SetFinalizer"),
+	"time":    set("AfterFunc"),
+}
+
+var goroutineMethods = set("Go", "RegisterOnShutdown")
 
 func checkGoroutines(f *sourceFile) []string {
 	if f.test || f.dir == safegoDir {
@@ -44,8 +123,18 @@ func checkGoroutines(f *sourceFile) []string {
 	}
 	var out []string
 	ast.Inspect(f.file, func(n ast.Node) bool {
-		if g, ok := n.(*ast.GoStmt); ok {
-			out = append(out, f.at(g, "go statement outside %s: start goroutines with safego.Go", safegoDir))
+		switch n := n.(type) {
+		case *ast.GoStmt:
+			out = append(out, f.at(n, "go statement outside %s: start goroutines with safego.Go", safegoDir))
+		case *ast.SelectorExpr:
+			sel, p := f.ref(n)
+			switch {
+			case sel != nil && goroutineStarters[p][sel.Sel.Name]:
+				out = append(out, f.at(n, "%s.%s runs its function on a goroutine that safego does not recover", p, sel.Sel.Name))
+			case sel != nil && p == module+"/"+safegoDir:
+			case goroutineMethods[n.Sel.Name]:
+				out = append(out, f.at(n, "%s runs its function on a goroutine that safego does not recover: start goroutines with safego.Go", n.Sel.Name))
+			}
 		}
 		return true
 	})
