@@ -31,7 +31,9 @@ var apiDenied = []string{"database/sql", "html/template", "text/template", "mode
 var policyAllowed = set("bytes", "cmp", "crypto/sha256", "crypto/subtle", "encoding/base64", "encoding/binary", "encoding/hex",
 	"errors", "hash/crc32", "iter", "maps", "slices", "sort", "strconv", "strings", "time", "unicode", "unicode/utf8", "unique")
 
-var allowedModules []string
+var importableModules []string
+
+var indirectOnlyModules []string
 
 var bannedImportRule = rule{
 	name:  "banned-imports",
@@ -327,7 +329,7 @@ var standardLibrary = sync.OnceValues(func() (map[string]bool, error) {
 
 var thirdPartyRule = rule{
 	name:  "third-party-imports",
-	check: thirdPartyImports(allowedModules),
+	check: thirdPartyImports(importableModules),
 	cases: []snippet{
 		{name: "third-party imports", rel: "internal/app/x_test.go", want: 4, src: `package app
 
@@ -361,7 +363,7 @@ func thirdPartyImports(allowed []string) func(*sourceFile) []string {
 			if std[imp.path] || within(imp.path, module) || slices.ContainsFunc(allowed, func(m string) bool { return within(imp.path, m) }) {
 				continue
 			}
-			out = append(out, f.at(imp.node, "%q is outside the standard library and this module, and not on the reviewed allow-list", imp.path))
+			out = append(out, f.at(imp.node, "%q is outside the standard library and this module, and not on the reviewed list of importable modules", imp.path))
 		}
 		return out
 	}
@@ -369,11 +371,11 @@ func thirdPartyImports(allowed []string) func(*sourceFile) []string {
 
 var goModDirectives = set("module", "go", "toolchain")
 
-func goModProblems(gomod string, allowed []string) []string {
+func goModProblems(gomod string, importable, indirectOnly []string) []string {
 	var out []string
 	var block string
 	for i, line := range strings.Split(gomod, "\n") {
-		code, _, _ := strings.Cut(line, "//")
+		code, comment, _ := strings.Cut(line, "//")
 		fields := strings.Fields(code)
 		if len(fields) == 0 {
 			continue
@@ -390,29 +392,39 @@ func goModProblems(gomod string, allowed []string) []string {
 				continue
 			}
 		}
-		if goModDirectives[directive] || directive == "require" && len(args) > 0 && slices.ContainsFunc(allowed, func(m string) bool { return within(args[0], m) }) {
+		listed := func(modules []string) bool {
+			return len(args) > 0 && slices.ContainsFunc(modules, func(m string) bool { return within(args[0], m) })
+		}
+		note := strings.Fields(comment)
+		indirect := len(note) == 1 && note[0] == "indirect" || len(note) > 1 && note[0] == "indirect;"
+		if goModDirectives[directive] || directive == "require" && (listed(importable) || indirect && listed(indirectOnly)) {
 			continue
 		}
-		out = append(out, fmt.Sprintf("go.mod:%d: %s %s: only module, go, toolchain and requirements on reviewed modules are allowed", i+1, directive, strings.Join(args, " ")))
+		out = append(out, fmt.Sprintf("go.mod:%d: %s %s: only module, go, toolchain, requirements on reviewed importable modules and indirect requirements on reviewed indirect-only modules are allowed", i+1, directive, strings.Join(args, " ")))
 	}
 	return out
 }
 
 func TestGoModDirectives(t *testing.T) {
-	allowed := []string{"example.com/allowed"}
+	importable := []string{"example.com/allowed"}
+	indirectOnly := []string{"example.com/transitive"}
 	for _, tt := range []struct {
 		name  string
 		gomod string
 		want  int
 	}{
 		{name: "the module's own directives", gomod: "module " + module + "\n\ngo 1.26.0 // comment\n\ntoolchain go1.27.1\n"},
-		{name: "reviewed requirements", gomod: "require example.com/allowed v1.0.0\n\nrequire (\n\texample.com/allowed/sub v1.0.0 // indirect\n)\n"},
-		{name: "unreviewed requirements", want: 3, gomod: "require example.com/allowedx v1.0.0\n\nrequire (\n\t" + module + "/internal/evil v0.0.0\n\texample.com/other v1.0.0\n)\n"},
+		{name: "reviewed requirements", gomod: "require example.com/allowed v1.0.0\n\nrequire (\n\texample.com/allowed/sub v1.0.0 // indirect\n\texample.com/transitive v1.0.0 // indirect\n" +
+			"\texample.com/transitive/sub v1.0.0 // indirect; for a test\n)\n\nrequire example.com/transitive/other v1.0.0 //indirect\n"},
+		{name: "unreviewed requirements", want: 4, gomod: "require example.com/allowedx v1.0.0\n\nrequire (\n\t" + module + "/internal/evil v0.0.0\n\texample.com/other v1.0.0 // indirect\n" +
+			"\texample.com/transitivex v1.0.0 // indirect\n)\n"},
+		{name: "indirect-only modules required directly", want: 4, gomod: "require example.com/transitive v1.0.0\n\nrequire (\n\texample.com/transitive/sub v1.0.0 // indirectly\n" +
+			"\texample.com/transitive v1.0.0 // indirect;\n\texample.com/transitive v1.0.0 // not indirect\n)\n"},
 		{name: "replacements and other directives", want: 7, gomod: "replace " + module + "/internal/evil => ../evil\n\nreplace (\n\texample.com/allowed => ./x\n)\n\n" +
 			"exclude example.com/allowed v1.0.0\n\nretract v0.1.0\n\ntool example.com/allowed/cmd\n\ngodebug default=go1.20\n\nignore ./x\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := goModProblems(tt.gomod, allowed); len(got) != tt.want {
+			if got := goModProblems(tt.gomod, importable, indirectOnly); len(got) != tt.want {
 				t.Fatalf("%d problems, want %d: %q", len(got), tt.want, got)
 			}
 		})
@@ -425,7 +437,7 @@ func TestModuleDefinition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read go.mod: %v", err)
 	}
-	for _, problem := range goModProblems(string(data), allowedModules) {
+	for _, problem := range goModProblems(string(data), importableModules, indirectOnlyModules) {
 		t.Error(problem)
 	}
 	switch _, err := os.Lstat(filepath.Join(root, "go.work")); {
@@ -433,6 +445,15 @@ func TestModuleDefinition(t *testing.T) {
 		t.Error("go.work at the module root: a workspace builds in modules this walk does not read")
 	case !errors.Is(err, fs.ErrNotExist):
 		t.Errorf("stat go.work: %v", err)
+	}
+}
+
+func TestNoVendorDirectory(t *testing.T) {
+	switch _, err := os.Lstat(filepath.Join(moduleRoot(t), "vendor")); {
+	case err == nil:
+		t.Error("vendor at the module root: modules are pinned by go.sum and never vendored")
+	case !errors.Is(err, fs.ErrNotExist):
+		t.Errorf("stat vendor: %v", err)
 	}
 }
 
