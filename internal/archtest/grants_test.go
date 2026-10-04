@@ -8,9 +8,13 @@ import (
 const (
 	policyPath = module + "/" + policyDir
 	grantFile  = "internal/policy/decide.go"
+	chatType   = "CanonicalChat"
 )
 
-var grantTypes = []string{"ReadGrant", "WriteGrant", "AdminGrant"}
+var (
+	grantTypes  = []string{"ReadGrant", "WriteGrant", "AdminGrant"}
+	sealedTypes = append([]string{chatType}, grantTypes...)
+)
 
 var grantRule = rule{
 	name:  "grant-forging",
@@ -31,7 +35,7 @@ var (
 	_ = p.CanonicalChat{}
 )
 `},
-		{name: "aliases and conversions outside policy", rel: "internal/api/x.go", want: 3, src: `package api
+		{name: "aliases and conversions outside policy", rel: "internal/api/x.go", want: 5, src: `package api
 
 import "github.com/dortort/wawarden/internal/policy"
 
@@ -39,8 +43,11 @@ type rg = policy.ReadGrant
 
 type ag policy.AdminGrant
 
-func f(g policy.ReadGrant, x struct{ ok bool }) {
+type cc = policy.CanonicalChat
+
+func f(g policy.ReadGrant, c policy.CanonicalChat, x struct{ ok bool }) {
 	_ = policy.ReadGrant(g)
+	_ = policy.CanonicalChat(c)
 	x.ok = true
 }
 `},
@@ -104,6 +111,29 @@ func ptr(g *ReadGrant, flags []bool) {
 	_ = &flags[0]
 }
 `},
+		{name: "chat aliases, conversions, generics and ok assignments elsewhere in policy", rel: "internal/policy/chat.go", want: 6, src: `package policy
+
+type cc = CanonicalChat
+
+type fake struct {
+	jid string
+	ok  bool
+}
+
+var (
+	_ = cc{ok: true}
+	_ = CanonicalChat(fake{"x", true})
+	_ = (*CanonicalChat)(&CanonicalChat{})
+)
+
+func chat[T interface{ ~struct{ jid string; ok bool } | CanonicalChat }]() T { return T{ok: true} }
+
+func set(c *CanonicalChat, flags []bool) {
+	for _, c.ok = range flags {
+	}
+	c.ok, _ = true, 0
+}
+`},
 		{name: "generic forms outside policy", rel: "internal/api/x.go", want: 3, src: `package api
 
 import "github.com/dortort/wawarden/internal/policy"
@@ -136,22 +166,41 @@ func f(h func(policy.ReadGrant), g *policy.ReadGrant) {
 	_ = &holder{}
 }
 `},
-		{name: "a chat with fields and an alias in decide.go", rel: grantFile, want: 2, src: `package policy
+		{name: "chats, aliases, generics and ok flags in decide.go", rel: grantFile, want: 9, src: `package policy
 
 type rg = ReadGrant
 
+type cc = CanonicalChat
+
 var _ = CanonicalChat{jid: "x", ok: true}
+
+func f(c CanonicalChat, g ReadGrant, x struct{ jid string; ok bool }, flags []bool) {
+	c.ok = true
+	g.ok = true
+	_ = &c.ok
+	_ = CanonicalChat(x)
+	for _, g.ok = range flags {
+	}
+}
+
+func mint[T ReadGrant | WriteGrant]() (t T) { return t }
 `},
 		{name: "grants in decide.go", rel: grantFile, src: `package policy
 
-func f() {
+func f(chats map[CanonicalChat]struct{}, flags []bool) {
 	_ = ReadGrant{}
 	_ = WriteGrant{ok: true}
 	_ = AdminGrant{ok: true}
 	_ = CanonicalChat{}
 	var g ReadGrant
-	g.ok = true
 	_ = ReadGrant(g)
+	_ = (*WriteGrant)(nil)
+	for chat := range chats {
+		_ = chat.ok && g.ok
+	}
+	for _, ok := range flags {
+		_ = ok
+	}
 }
 `},
 		{name: "grants in a test", rel: "internal/api/x_test.go", src: `package api
@@ -194,7 +243,7 @@ func checkGrants(f *sourceFile) []string {
 		if name, ok := f.policyType(typ, grantTypes); ok && f.rel != grantFile {
 			out = append(out, f.at(lit, "policy.%s composite literal outside %s: grants are minted only by the Decide functions", name, grantFile))
 		}
-		if f.isType(typ, policyPath, "CanonicalChat") && len(lit.Elts) > 0 {
+		if f.isType(typ, policyPath, chatType) && len(lit.Elts) > 0 {
 			out = append(out, f.at(lit, "policy.CanonicalChat composite literal with fields: no constructor exists in M0"))
 		}
 	})
@@ -203,8 +252,15 @@ func checkGrants(f *sourceFile) []string {
 			return
 		}
 		for _, p := range params.List {
-			if name, ok := f.mentionedType(p.Type, grantTypes); ok {
+			if name, ok := f.mentionedType(p.Type, sealedTypes); ok {
 				out = append(out, f.at(p, "a type parameter constrained by policy.%s can build or convert to one", name))
+			}
+		}
+	}
+	okFlags := func(exprs ...ast.Expr) {
+		for _, e := range exprs {
+			if f.dir == policyDir && okFlag(e) {
+				out = append(out, f.at(e, "an ok flag set by assignment: build values that carry an ok flag whole, with a literal"))
 			}
 		}
 	}
@@ -212,8 +268,8 @@ func checkGrants(f *sourceFile) []string {
 		switch n := n.(type) {
 		case *ast.TypeSpec:
 			constraints(n.TypeParams)
-			if name, ok := f.policyType(n.Type, grantTypes); ok {
-				out = append(out, f.at(n, "type %s is declared from policy.%s, so its literals or conversions would mint grants", n.Name.Name, name))
+			if name, ok := f.policyType(n.Type, sealedTypes); ok {
+				out = append(out, f.at(n, "type %s is declared from policy.%s, so its literals or conversions would forge one", n.Name.Name, name))
 			}
 		case *ast.FuncType:
 			constraints(n.TypeParams)
@@ -222,26 +278,30 @@ func checkGrants(f *sourceFile) []string {
 				if len(elem.Names) > 0 {
 					continue
 				}
-				if name, ok := f.mentionedType(elem.Type, grantTypes); ok {
+				if name, ok := f.mentionedType(elem.Type, sealedTypes); ok {
 					out = append(out, f.at(elem, "an interface element names policy.%s, so a type parameter it constrains can build or convert to one", name))
 				}
 			}
 		case *ast.CallExpr:
-			if name, ok := f.policyType(n.Fun, grantTypes); ok && f.rel != grantFile {
+			name, ok := f.policyType(n.Fun, sealedTypes)
+			switch {
+			case !ok:
+			case name == chatType:
+				out = append(out, f.at(n, "conversion to policy.CanonicalChat: no constructor exists in M0"))
+			case f.rel != grantFile:
 				out = append(out, f.at(n, "conversion to policy.%s outside %s: grants are minted only by the Decide functions", name, grantFile))
 			}
 		case *ast.UnaryExpr:
-			if n.Op == token.AND && f.dir == policyDir && f.rel != grantFile && okFlag(n.X) {
-				out = append(out, f.at(n, "the address of an ok flag taken outside %s: build values that carry an ok flag whole, with a literal", grantFile))
+			if n.Op == token.AND && f.dir == policyDir && okFlag(n.X) {
+				out = append(out, f.at(n, "the address of an ok flag taken: build values that carry an ok flag whole, with a literal"))
 			}
 		case *ast.AssignStmt:
-			if n.Tok == token.DEFINE || f.dir != policyDir || f.rel == grantFile {
-				break
+			if n.Tok != token.DEFINE {
+				okFlags(n.Lhs...)
 			}
-			for _, lhs := range n.Lhs {
-				if okFlag(lhs) {
-					out = append(out, f.at(lhs, "an ok flag set by assignment outside %s: build values that carry an ok flag whole, with a literal", grantFile))
-				}
+		case *ast.RangeStmt:
+			if n.Tok == token.ASSIGN {
+				okFlags(n.Key, n.Value)
 			}
 		}
 		return true
