@@ -27,6 +27,7 @@ const (
 	envAdminHashFile  = "WAWARDEN_ADMIN_TOKEN_SHA256_FILE"
 	envLogLevel       = "WAWARDEN_LOG_LEVEL"
 	envPlaintextAdmin = "WAWARDEN_ADMIN_TOKEN"
+	envTraceback      = "GOTRACEBACK"
 
 	prefix    = "WAWARDEN_"
 	devPrefix = "WAWARDEN_DEV_"
@@ -56,6 +57,7 @@ const (
 	reasonDataDirNotDirectory      = "data_dir_not_directory"
 	reasonDataDirForeignOwner      = "data_dir_foreign_owner"
 	reasonDataDirPermissions       = "data_dir_permissions"
+	reasonTracebackLevelUnsafe     = "traceback_level_unsafe"
 )
 
 var known = []string{envDataDir, envListen, envAdminListen, envHealthListen, envAdminHash, envAdminHashFile, envLogLevel}
@@ -98,6 +100,9 @@ func (r *Refusal) Error() string {
 func Load(environ []string, opts Options) (Config, *Refusal) {
 	env := variables(environ)
 	if r := checkNames(env); r != nil {
+		return Config{}, r
+	}
+	if r := checkTraceback(environ); r != nil {
 		return Config{}, r
 	}
 	var cfg Config
@@ -178,6 +183,16 @@ func checkNames(env map[string]string) *Refusal {
 	for _, name := range names {
 		if !slices.Contains(known, name) {
 			return &Refusal{Reason: reasonUnknownVariable, Variable: name, detail: "unknown variable"}
+		}
+	}
+	return nil
+}
+
+func checkTraceback(environ []string) *Refusal {
+	for _, kv := range environ {
+		name, value, _ := strings.Cut(kv, "=")
+		if name == envTraceback && value != "" && value != "none" && value != "single" {
+			return &Refusal{Reason: reasonTracebackLevelUnsafe, Variable: envTraceback, detail: "must be unset, none or single: any other level makes a crash print every goroutine"}
 		}
 	}
 	return nil

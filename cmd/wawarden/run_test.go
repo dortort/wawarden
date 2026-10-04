@@ -165,6 +165,7 @@ func TestServeRefusal(t *testing.T) {
 		{name: "plaintext admin token, serve by default", environ: []string{"WAWARDEN_ADMIN_TOKEN=" + secret}, reason: "plaintext_admin_token"},
 		{name: "host name", args: []string{"--allow-root"}, environ: []string{"WAWARDEN_LISTEN=localhost:8080"}, reason: "listen_address_invalid"},
 		{name: "invalid hash", args: []string{"serve"}, environ: []string{"WAWARDEN_ADMIN_TOKEN_SHA256=" + secret}, reason: "admin_hash_invalid"},
+		{name: "traceback level", args: []string{"serve"}, environ: []string{"GOTRACEBACK=crash"}, reason: "traceback_level_unsafe"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

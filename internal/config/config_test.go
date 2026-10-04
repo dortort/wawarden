@@ -126,6 +126,15 @@ func TestRefusals(t *testing.T) {
 		{name: "dev variable", vars: map[string]string{"WAWARDEN_DEV_FAKE_ENGINE": "1"}, reason: devVariableReason, variable: "WAWARDEN_DEV_FAKE_ENGINE"},
 		{name: "dev variable before unknown names", vars: map[string]string{"WAWARDEN_AAA": "x", "WAWARDEN_DEV_X": ""}, reason: devVariableReason, variable: firstOfDevAndUnknown},
 
+		{name: "traceback all", vars: map[string]string{"GOTRACEBACK": "all"}, reason: "traceback_level_unsafe", variable: "GOTRACEBACK"},
+		{name: "traceback system", vars: map[string]string{"GOTRACEBACK": "system"}, reason: "traceback_level_unsafe", variable: "GOTRACEBACK"},
+		{name: "traceback crash", vars: map[string]string{"GOTRACEBACK": "crash"}, reason: "traceback_level_unsafe", variable: "GOTRACEBACK"},
+		{name: "traceback wer", vars: map[string]string{"GOTRACEBACK": "wer"}, reason: "traceback_level_unsafe", variable: "GOTRACEBACK"},
+		{name: "traceback 0, which still prints every goroutine", vars: map[string]string{"GOTRACEBACK": "0"}, reason: "traceback_level_unsafe", variable: "GOTRACEBACK"},
+		{name: "traceback 1", vars: map[string]string{"GOTRACEBACK": "1"}, reason: "traceback_level_unsafe", variable: "GOTRACEBACK"},
+		{name: "traceback 2", vars: map[string]string{"GOTRACEBACK": "2"}, reason: "traceback_level_unsafe", variable: "GOTRACEBACK"},
+		{name: "traceback in another case", vars: map[string]string{"GOTRACEBACK": "Single"}, reason: "traceback_level_unsafe", variable: "GOTRACEBACK"},
+
 		{name: "host name", vars: map[string]string{envListen: "localhost:8080"}, reason: "listen_address_invalid", variable: envListen},
 		{name: "dns name", vars: map[string]string{envListen: "gateway.example.invalid:8080"}, reason: "listen_address_invalid", variable: envListen},
 		{name: "port 0", vars: map[string]string{envListen: "127.0.0.1:0"}, reason: "listen_address_invalid", variable: envListen},
@@ -349,6 +358,9 @@ func TestAccepted(t *testing.T) {
 			name: "uid 0 with --allow-root",
 			opts: func(o *Options) { o.UIDs = uids(0, 0); o.FileOwner = owned(0); o.AllowRoot = true },
 		},
+		{name: "empty traceback level", vars: map[string]string{"GOTRACEBACK": ""}},
+		{name: "traceback level single", vars: map[string]string{"GOTRACEBACK": "single"}},
+		{name: "traceback level none", vars: map[string]string{"GOTRACEBACK": "none"}},
 		{
 			name: "data directory owned by the effective user",
 			opts: func(o *Options) { o.UIDs = uids(otherUID, testUID) },
@@ -505,6 +517,7 @@ func TestRefusalsNeverEchoValues(t *testing.T) {
 		{envPlaintextAdmin: secret},
 		{"WAWARDEN_DEV_X": secret},
 		{"WAWARDEN_UNKNOWN": secret},
+		{"GOTRACEBACK": secret},
 	}
 	for _, vars := range tests {
 		_, r := Load(environ(withDataDir(t, vars)), testOptions())
