@@ -123,6 +123,11 @@ for arch in "${arches[@]}"; do
   touch -d "$stamp" "dist/$name"
   names+=("$name")
 done
+hack/licenses.sh
+licenses=wawarden_${VERSION}_licenses.tar.gz
+GOOS=$hostos GOARCH=$hostarch go run hack/tarball.go dist/licenses "dist/$licenses" "$SOURCE_DATE_EPOCH"
+touch -d "$stamp" "dist/$licenses"
+names+=("$licenses")
 (cd dist && sha256 "${names[@]}" > SHA256SUMS)
 cat dist/SHA256SUMS >&2
 

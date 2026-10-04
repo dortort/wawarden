@@ -258,3 +258,9 @@ licence text is in [`LICENSE`](LICENSE). `v0.1.0` was released under the MIT
 licence, which still applies to that release. The licence changed because
 the WhatsApp protocol library that WaWarden will link depends on a component
 licensed under GPL-3.0.
+
+The binaries link third-party Go modules under their own licences, such as
+the SQLite driver and the C library translation it builds on. Every release
+ships their licence files, as `wawarden_<version>_licenses.tar.gz` and under
+`/licenses` in the image; [`RELEASING.md`](RELEASING.md#licences) describes how
+they are collected.

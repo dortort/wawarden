@@ -156,12 +156,19 @@ release workflow, by CI and by anyone reproducing a release:
   ones the two other jobs ran: the image it pushes must have the `build` job's
   index digest, and its `SHA256SUMS` must equal the `build` job's, which the
   `rebuild` job reproduced.
+- After building the binaries, the script runs `hack/licenses.sh`, which
+  collects the licence files of every module linked into them (see
+  [Licences](#licences)) into `dist/licenses`, and packs that directory into
+  `wawarden_<version>_licenses.tar.gz` with `hack/tarball.go`. `SHA256SUMS`
+  lists this archive next to the binaries, so every comparison of
+  `SHA256SUMS` below covers it too.
 - `SOURCE_DATE_EPOCH` is the commit time. File times inside the image are set
   to it.
 - A multi-arch OCI image built by BuildKit from a digest-pinned
   `gcr.io/distroless/static-debian13:nonroot` base. The image adds the binary,
   `/wawarden`, and an empty `/data` directory owned by the runtime user with mode
-  `0700` to the base, runs as `65532:65532` and has no shell. The image's runtime
+  `0700` and the licence files under `/licenses` to the base, runs as
+  `65532:65532` and has no shell. The image's runtime
   contract is in [`docs/configuration.md`](docs/configuration.md#container-image).
 - The script creates its own temporary `docker-container` builder from a BuildKit
   image pinned by version and digest in the script, and removes it afterwards. The
@@ -192,7 +199,8 @@ both builds produced.
 |---|---|
 | Multi-arch image (`linux/amd64`, `linux/arm64`) | `ghcr.io/dortort/wawarden@sha256:<digest>`, also tagged `<version>`; the release notes state the index digest |
 | Binaries `wawarden_<version>_linux_amd64` and `wawarden_<version>_linux_arm64` | Release assets |
-| `SHA256SUMS` for the binaries | Release asset |
+| The licence files of every module linked into the binaries, `wawarden_<version>_licenses.tar.gz` | Release asset, and `/licenses` in the image |
+| `SHA256SUMS` for the binaries and the licence archive | Release asset |
 | SPDX 2.3 SBOMs for the binaries, `wawarden_<version>_linux_<arch>.spdx.json` | Release assets, and attested to each binary in GitHub's attestation store |
 | Build provenance attestations (SLSA, via `actions/attest-build-provenance`) for the image index and for each binary | GitHub's attestation store; the image attestation is also pushed to the registry, and the binaries' Sigstore bundle is the release asset `wawarden_<version>_provenance.sigstore.json` |
 | Keyless cosign signature on the image index, made with cosign v3.1.3 | Registry, next to the image |
@@ -212,14 +220,28 @@ released under the MIT licence. From M1 on, the image's
 annotation on the image index, set by `hack/repro-build.sh`, are
 `GPL-3.0-or-later`.
 
-No release links a third-party module yet. The following are requirements for
-the first release that does, and for every release after it; the release
-workflow does not meet them yet:
+From M1 on, the binaries link third-party Go modules, each under its own
+licence. Every release ships their licence texts:
 
-- The release ships the licence text of every module linked into the binaries,
-  inside the image and as a release asset.
-- The corresponding source of the release is its tagged commit together with
-  the module versions that the commit's `go.sum` pins.
+- `hack/licenses.sh` lists, with `go list -deps`, the modules whose packages are
+  compiled into `./cmd/wawarden` for `linux/amd64` and `linux/arm64`, and copies
+  from the Go module cache every regular file at the root of each module whose
+  name starts with `LICENSE`, `LICENCE`, `COPYING`, `NOTICE`, `PATENTS` or
+  `UNLICENSE`, in any letter case, to
+  `dist/licenses/<module path>@<version>/`. Files get mode `0444`, directories
+  `0755`, and every timestamp is set to the commit time. The script stops when
+  a linked module ships none of these files. It can be run on its own; it
+  writes nothing outside `dist/licenses`.
+- The image carries that directory as `/licenses`.
+- `hack/tarball.go`, run with `go run`, packs the directory into
+  `wawarden_<version>_licenses.tar.gz`: entries in lexical order, mode `0444`
+  or `0755`, owner and group `0` without names, the commit time as every
+  modification time, and a gzip header without a name or a time. Its output
+  depends only on the files and the Go toolchain, which `go.mod` pins, so the
+  archive is reproducible like the binaries. The release attaches it, and
+  `SHA256SUMS` lists it.
+- The corresponding source of a release is its tagged commit together with the
+  module versions that the commit's `go.sum` pins.
 
 ## Verifying a release
 
@@ -386,8 +408,9 @@ remains.
       Scorecard results are checked by hand.
 - [ ] Choose the version under [Versioning](#versioning) and check that the tag
       does not exist.
-- [ ] If `go.mod` requires any module, the release meets the requirements under
-      [Licences](#licences).
+- [ ] The build and rebuild jobs list `wawarden_<version>_licenses.tar.gz` in
+      identical `SHA256SUMS`, and it holds a directory for every module in
+      `go.mod` that the binaries link (see [Licences](#licences)).
 - [ ] Dispatch the workflow on `main`:
       `gh workflow run release.yml --ref main -f version=<version>`.
 - [ ] Before approving the `release` environment, read the run: the commit is the

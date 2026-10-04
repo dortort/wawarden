@@ -154,6 +154,7 @@ jobs:
           path: |
             dist/wawarden_*_linux_amd64
             dist/wawarden_*_linux_arm64
+            dist/wawarden_*_licenses.tar.gz
             dist/wawarden_*.spdx.json
             dist/SHA256SUMS
             dist/image-digest
@@ -390,6 +391,10 @@ jobs:
             done
             echo '```'
             echo
+            echo "## Licences"
+            echo
+            echo "WaWarden is licensed under GPL-3.0-or-later. The licence, copying, notice and patents files of every module linked into the binaries are in \`wawarden_${VERSION}_licenses.tar.gz\`, which \`SHA256SUMS\` covers, and under \`/licenses\` in the image."
+            echo
             echo "## Reproduce"
             echo
             echo "From commit $GITHUB_SHA fetched without tags, as RELEASING.md describes, \`BUILDX_VERSION=$BUILDX_VERSION VERSION=$VERSION hack/repro-build.sh oci\` prints \`$DIGEST\` and writes binaries that match \`SHA256SUMS\`."
@@ -417,6 +422,7 @@ jobs:
             --notes-file "$RUNNER_TEMP/notes.md" \
             "dist/wawarden_${VERSION}_linux_amd64" \
             "dist/wawarden_${VERSION}_linux_arm64" \
+            "dist/wawarden_${VERSION}_licenses.tar.gz" \
             dist/SHA256SUMS \
             "$BUILD_DIR/wawarden_${VERSION}_linux_amd64.spdx.json" \
             "$BUILD_DIR/wawarden_${VERSION}_linux_arm64.spdx.json" \
