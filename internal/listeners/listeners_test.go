@@ -94,6 +94,7 @@ func TestServersAreHardened(t *testing.T) {
 				{name: "MaxHeaderBytes", got: got.MaxHeaderBytes, want: 16 * 1024},
 				{name: "ErrorLog set", got: got.ErrorLog != nil, want: true},
 				{name: "Handler set", got: got.Handler != nil, want: true},
+				{name: "DisableGeneralOptionsHandler", got: got.DisableGeneralOptionsHandler, want: true},
 			}
 			for _, tt := range tests {
 				if tt.got != tt.want {

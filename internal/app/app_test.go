@@ -1,12 +1,14 @@
 package app
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
 	"slices"
@@ -548,6 +550,76 @@ func TestNoListenerSendsAccessControlHeaders(t *testing.T) {
 					mustDo(t, method, b.Addr, path, header)
 				}
 			}
+		}
+	}
+}
+
+func rawDo(t *testing.T, to netip.AddrPort, request string) reply {
+	t.Helper()
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", to.String())
+	if err != nil {
+		t.Fatalf("dial %v: %v", to, err)
+	}
+	defer func() { _ = conn.Close() }()
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("SetDeadline: %v", err)
+	}
+	if _, err := io.WriteString(conn, request); err != nil {
+		t.Fatalf("write to %v: %v", to, err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("no reply from %v to %q: %v", to, request, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read the reply body from %v: %v", to, err)
+	}
+	for k := range resp.Header {
+		if strings.HasPrefix(strings.ToLower(k), "access-control-") {
+			t.Errorf("%q on %v carries %s", request, to, k)
+		}
+	}
+	return reply{status: resp.StatusCode, header: resp.Header, body: string(body)}
+}
+
+func TestAsteriskOptionsGoesThroughTheHandlers(t *testing.T) {
+	adminToken := token.NewAdmin()
+	a, _, _ := start(t, testConfig(t, adminToken), oneClient{})
+	refused := map[string]reply{
+		"client": {status: http.StatusMethodNotAllowed, body: `{"error":"method_not_allowed"}`},
+		"admin":  {status: http.StatusMethodNotAllowed, body: `{"error":"method_not_allowed"}`},
+		"health": {status: http.StatusNotFound, body: `{"error":"not_found"}`},
+	}
+	browser := map[string]reply{
+		"client": {status: http.StatusForbidden, body: `{"error":"forbidden"}`},
+		"admin":  {status: http.StatusForbidden, body: `{"error":"forbidden"}`},
+		"health": refused["health"],
+	}
+	type variant struct {
+		name, head string
+		want       reply
+	}
+	for _, b := range a.Inventory() {
+		variants := []variant{
+			{name: "plain", head: "Connection: close\r\n", want: refused[b.Name]},
+			{name: "with Origin", head: "Origin: https://attacker.example\r\nConnection: close\r\n", want: browser[b.Name]},
+			{name: "with Sec-Fetch-Site", head: "Sec-Fetch-Site: cross-site\r\nConnection: close\r\n", want: browser[b.Name]},
+		}
+		if b.Name != "health" {
+			variants = append(variants, variant{name: "with an unsent body", head: "Content-Length: 10\r\n", want: refused[b.Name]})
+		}
+		for _, tt := range variants {
+			t.Run(b.Name+" "+tt.name, func(t *testing.T) {
+				r := rawDo(t, b.Addr, "OPTIONS * HTTP/1.1\r\nHost: wawarden.test\r\n"+tt.head+"\r\n")
+				if r.status != tt.want.status || r.body != tt.want.body {
+					t.Fatalf("OPTIONS * = %d %q, want %d %q", r.status, r.body, tt.want.status, tt.want.body)
+				}
+				if r.header.Get("Cache-Control") != "no-store" || r.header.Get("X-Content-Type-Options") != "nosniff" {
+					t.Fatalf("OPTIONS * headers = %v, want no-store and nosniff", r.header)
+				}
+			})
 		}
 	}
 }

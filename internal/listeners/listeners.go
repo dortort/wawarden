@@ -77,13 +77,14 @@ func open(ctx context.Context, logger *slog.Logger, spec Spec) (*server, error) 
 		bound: ln.Addr().(*net.TCPAddr).AddrPort(),
 		ln:    ln,
 		http: &http.Server{
-			Handler:           spec.Handler,
-			ReadHeaderTimeout: readHeaderTimeout,
-			ReadTimeout:       readTimeout,
-			WriteTimeout:      writeTimeout,
-			IdleTimeout:       idleTimeout,
-			MaxHeaderBytes:    maxHeaderBytes,
-			ErrorLog:          slog.NewLogLogger(errorLog.Handler(), slog.LevelWarn),
+			Handler:                      spec.Handler,
+			DisableGeneralOptionsHandler: true,
+			ReadHeaderTimeout:            readHeaderTimeout,
+			ReadTimeout:                  readTimeout,
+			WriteTimeout:                 writeTimeout,
+			IdleTimeout:                  idleTimeout,
+			MaxHeaderBytes:               maxHeaderBytes,
+			ErrorLog:                     slog.NewLogLogger(errorLog.Handler(), slog.LevelWarn),
 		},
 	}, nil
 }
