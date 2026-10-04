@@ -63,6 +63,9 @@ func dirWithMode(t *testing.T, mode fs.FileMode) string {
 	if err := os.Chmod(path, mode); err != nil {
 		t.Fatalf("Chmod: %v", err)
 	}
+	if got := mustLstat(t, path).Mode() &^ fs.ModeDir; got != mode {
+		t.Fatalf("the directory has mode %v after Chmod, want %v", got, mode)
+	}
 	return path
 }
 
@@ -219,6 +222,10 @@ func TestDataDirectoryRefusals(t *testing.T) {
 		{name: "mode 0701", path: dirWithMode(t, 0o701), owner: testUID, reason: "data_dir_permissions"},
 		{name: "mode 0710", path: dirWithMode(t, 0o710), owner: testUID, reason: "data_dir_permissions"},
 		{name: "mode 0702", path: dirWithMode(t, 0o702), owner: testUID, reason: "data_dir_permissions"},
+		{name: "setgid", path: dirWithMode(t, fs.ModeSetgid|0o700), owner: testUID, reason: "data_dir_permissions"},
+		{name: "sticky", path: dirWithMode(t, fs.ModeSticky|0o700), owner: testUID, reason: "data_dir_permissions"},
+		{name: "mode 0500", path: dirWithMode(t, 0o500), owner: testUID, reason: "data_dir_permissions"},
+		{name: "mode 0000", path: dirWithMode(t, 0), owner: testUID, reason: "data_dir_permissions"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

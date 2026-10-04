@@ -302,8 +302,8 @@ func dataDirectory(env map[string]string, uid int, owner func(fs.FileInfo) (int,
 	if got, ok := owner(fi); !ok || got != uid {
 		return "", &Refusal{Reason: reasonDataDirForeignOwner, Variable: envDataDir, detail: "is not owned by the current user"}
 	}
-	if fi.Mode().Perm()&0o077 != 0 {
-		return "", &Refusal{Reason: reasonDataDirPermissions, Variable: envDataDir, detail: "must not grant any permission to group or others (use mode 0700)"}
+	if fi.Mode()&(fs.ModePerm|fs.ModeSetuid|fs.ModeSetgid|fs.ModeSticky) != 0o700 {
+		return "", &Refusal{Reason: reasonDataDirPermissions, Variable: envDataDir, detail: "must have mode 0700: full access for its owner, none for group or others, and no setuid, setgid or sticky bit"}
 	}
 	return path, nil
 }
