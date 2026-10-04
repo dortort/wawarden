@@ -5,11 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	_ "expvar"
 	"io"
 	"log/slog"
 	"net/http"
-	_ "net/http/pprof" //nolint:gosec // registers the profiling routes on the default mux so the tests can prove no listener serves them
 	"net/netip"
 	"slices"
 	"strconv"
@@ -27,6 +25,14 @@ import (
 )
 
 const syntheticClientToken = "synthetic-client-token-for-tests"
+
+func init() {
+	for _, pattern := range []string{"/debug/pprof/", "/debug/vars"} {
+		http.DefaultServeMux.HandleFunc(pattern, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, "debug")
+		})
+	}
+}
 
 type syncBuffer struct {
 	mu      sync.Mutex
