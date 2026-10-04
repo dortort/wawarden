@@ -58,6 +58,20 @@ var (
 	_ = netip.AddrFromSlice([]byte{0, 0, 0, 0})
 	_ = netip.AddrFromSlice(net.IP{0, 0, 0, 0})
 	_ = net.IP([]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
+	_ = netip.AddrFrom4([4]byte{3: 0})
+	_ = net.IP{15: 0}
+	_ = netip.AddrFrom4(zero)
+	_ = netip.AddrFrom16(*(*[16]byte)(b))
+	_ = netip.AddrFromSlice(b)
+	_ = net.IP(make([]byte, 4))
+	_ = net.IPv4(0, 0, 0, z)
+	_ = net.IP{0, z, 0, 0}
+)
+
+var (
+	zero [4]byte
+	b    []byte
+	z    byte
 )
 `
 
@@ -65,7 +79,7 @@ var wildcardRule = rule{
 	name:  "test-wildcard-addresses",
 	check: wildcardAddresses(wildcardAllowances),
 	cases: []snippet{
-		{name: "wildcard addresses in a test", rel: "internal/app/x_test.go", want: 20, src: "package app\n" + everyWildcard},
+		{name: "wildcard addresses in a test", rel: "internal/app/x_test.go", want: 28, src: "package app\n" + everyWildcard},
 		{name: "loopback and specific addresses in a test", rel: "internal/app/x_test.go", src: `package app
 
 import (
@@ -118,7 +132,7 @@ func wildcardAddresses(allowed map[string]wildcardAllowance) func(*sourceFile) [
 				}
 			}
 			if f.zeroAddress(n) {
-				found = append(found, f.at(n, "an address built from zero bytes is a wildcard address: tests listen on loopback only"))
+				found = append(found, f.at(n, "an address built from zero bytes, or from bytes that are not literal constants, may be a wildcard address: tests listen on loopback only"))
 			}
 			return true
 		})
@@ -150,42 +164,59 @@ func unspecifiedAddress(s string) bool {
 }
 
 func (f *sourceFile) zeroAddress(n ast.Node) bool {
-	ipBytes := func(e ast.Expr) bool {
-		lit, ok := ast.Unparen(e).(*ast.CompositeLit)
-		return ok && (len(lit.Elts) == net.IPv4len || len(lit.Elts) == net.IPv6len) && zeroInts(lit.Elts)
-	}
 	switch n := n.(type) {
 	case *ast.CompositeLit:
-		return f.isType(n.Type, "net", "IP") && ipBytes(n)
+		return f.isType(n.Type, "net", "IP") && unspecifiedBytes(n.Elts, false)
 	case *ast.CallExpr:
 		sel, p := f.ref(n.Fun)
 		if sel == nil || len(n.Args) == 0 {
 			return false
 		}
-		arg, _ := ast.Unparen(n.Args[0]).(*ast.CompositeLit)
+		arg, literal := ast.Unparen(n.Args[0]).(*ast.CompositeLit)
 		switch p + "." + sel.Sel.Name {
 		case "net.IPv4":
-			return len(n.Args) == net.IPv4len && zeroInts(n.Args)
+			return unspecifiedBytes(n.Args, true)
 		case "net/netip.AddrFrom4", "net/netip.AddrFrom16":
-			return arg != nil && zeroInts(arg.Elts)
+			return !literal || unspecifiedBytes(arg.Elts, true)
 		case "net/netip.AddrFromSlice", "net.IP":
-			return arg != nil && !f.isType(arg.Type, "net", "IP") && ipBytes(arg)
+			return !literal || !f.isType(arg.Type, "net", "IP") && unspecifiedBytes(arg.Elts, false)
 		}
 	}
 	return false
 }
 
-func zeroInts(es []ast.Expr) bool {
-	for _, e := range es {
-		v, ok := ast.Unparen(e).(*ast.BasicLit)
-		if !ok || v.Kind != token.INT {
-			return false
+func unspecifiedBytes(elts []ast.Expr, fixedSize bool) bool {
+	size, next := 0, 0
+	zero := true
+	for _, e := range elts {
+		if kv, ok := e.(*ast.KeyValueExpr); ok {
+			k, ok := intLit(kv.Key)
+			if !ok {
+				return true
+			}
+			if k >= net.IPv6len {
+				return false
+			}
+			next, e = int(k), kv.Value
 		}
-		if n, err := strconv.ParseUint(v.Value, 0, 64); err != nil || n != 0 {
-			return false
+		v, ok := intLit(e)
+		if !ok {
+			return true
 		}
+		zero = zero && v == 0
+		next++
+		size = max(size, next)
 	}
-	return true
+	return zero && (fixedSize || size == net.IPv4len || size == net.IPv6len)
+}
+
+func intLit(e ast.Expr) (uint64, bool) {
+	v, ok := ast.Unparen(e).(*ast.BasicLit)
+	if !ok || v.Kind != token.INT {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(v.Value, 0, 64)
+	return n, err == nil
 }
 
 func TestWildcardAllowance(t *testing.T) {
