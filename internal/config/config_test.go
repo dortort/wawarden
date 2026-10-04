@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/dortort/wawarden/internal/buildinfo"
 	"github.com/dortort/wawarden/internal/policy"
@@ -52,6 +54,15 @@ func writeFile(t *testing.T, content string) string {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	return path
+}
+
+func linkTo(t *testing.T, target string) string {
+	t.Helper()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+	return link
 }
 
 func dirWithMode(t *testing.T, mode fs.FileMode) string {
@@ -154,6 +165,7 @@ func TestRefusals(t *testing.T) {
 		{name: "hash file one byte over the size limit", vars: map[string]string{envAdminHashFile: writeFile(t, validHash+strings.Repeat(" ", maxHashFileBytes+1-len(validHash)))}, reason: "admin_hash_invalid", variable: envAdminHashFile},
 		{name: "missing hash file", vars: map[string]string{envAdminHashFile: missing}, reason: "admin_hash_file_unreadable", variable: envAdminHashFile},
 		{name: "hash file is a directory", vars: map[string]string{envAdminHashFile: t.TempDir()}, reason: "admin_hash_file_unreadable", variable: envAdminHashFile},
+		{name: "hash file is a device", vars: map[string]string{envAdminHashFile: os.DevNull}, reason: "admin_hash_file_unreadable", variable: envAdminHashFile},
 		{name: "both hash sources", vars: map[string]string{envAdminHash: validHash, envAdminHashFile: writeFile(t, validHash)}, reason: "admin_hash_sources_conflict", variable: envAdminHashFile},
 
 		{name: "unknown log level", vars: map[string]string{envLogLevel: "trace"}, reason: "log_level_invalid", variable: envLogLevel},
@@ -183,6 +195,31 @@ func TestRefusals(t *testing.T) {
 				t.Fatal("a refused start created the data directory")
 			}
 		})
+	}
+}
+
+func TestHashFileThatWouldBlockIsRefused(t *testing.T) {
+	fifo := filepath.Join(t.TempDir(), "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatalf("Mkfifo: %v", err)
+	}
+	env := environ(withDataDir(t, map[string]string{envAdminHashFile: fifo}))
+	done := make(chan *Refusal, 1)
+	go func() {
+		_, r := Load(env, testOptions())
+		done <- r
+	}()
+	select {
+	case r := <-done:
+		if r == nil || r.Reason != "admin_hash_file_unreadable" || r.Variable != envAdminHashFile {
+			t.Fatalf("Load = %v, want admin_hash_file_unreadable on %s", r, envAdminHashFile)
+		}
+	case <-time.After(5 * time.Second):
+		if writer, err := os.OpenFile(filepath.Clean(fifo), os.O_WRONLY, 0); err == nil {
+			_ = writer.Close()
+		}
+		<-done
+		t.Fatal("Load still waited for a writer on a FIFO after 5 s, want it refused at once")
 	}
 }
 
@@ -312,6 +349,18 @@ func TestAccepted(t *testing.T) {
 		{
 			name: "admin hash from a file with surrounding whitespace",
 			vars: map[string]string{envAdminHashFile: writeFile(t, "\n  "+token.Hash(adminToken)+" \r\n")},
+			check: func(t *testing.T, c Config) {
+				if c.AdminCredential == nil {
+					t.Fatal("the admin listener is disabled")
+				}
+				if _, ok := policy.DecideAdmin(*c.AdminCredential, adminToken); !ok {
+					t.Fatal("the configured hash does not admit its token")
+				}
+			},
+		},
+		{
+			name: "hash file reached through a symbolic link",
+			vars: map[string]string{envAdminHashFile: linkTo(t, writeFile(t, token.Hash(adminToken)))},
 			check: func(t *testing.T, c Config) {
 				if c.AdminCredential == nil {
 					t.Fatal("the admin listener is disabled")

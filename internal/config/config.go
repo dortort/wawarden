@@ -230,17 +230,24 @@ func invalidHash(variable string) *Refusal {
 }
 
 func readHashFile(path string) (string, *Refusal) {
-	unreadable := func(err error) *Refusal {
-		return &Refusal{Reason: reasonAdminHashFileUnreadable, Variable: envAdminHashFile, detail: "cannot be read: " + cause(err)}
+	unreadable := func(why string) *Refusal {
+		return &Refusal{Reason: reasonAdminHashFileUnreadable, Variable: envAdminHashFile, detail: "cannot be read: " + why}
 	}
-	f, err := os.Open(filepath.Clean(path))
+	f, err := os.OpenFile(filepath.Clean(path), os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return "", unreadable(err)
+		return "", unreadable(cause(err))
 	}
 	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		return "", unreadable(cause(err))
+	}
+	if !fi.Mode().IsRegular() {
+		return "", unreadable("not a regular file")
+	}
 	b, err := io.ReadAll(io.LimitReader(f, maxHashFileBytes+1))
 	if err != nil {
-		return "", unreadable(err)
+		return "", unreadable(cause(err))
 	}
 	if len(b) > maxHashFileBytes {
 		return "", invalidHash(envAdminHashFile)
