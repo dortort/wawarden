@@ -57,6 +57,79 @@ func TestUnscopedForbidigoPatterns(t *testing.T) {
 	}
 }
 
+func yamlValue(config string, keys ...string) (string, bool) {
+	parent, child := -1, 0
+	for line := range strings.Lines(config) {
+		text := strings.TrimSpace(line)
+		if text == "" || strings.HasPrefix(text, "#") {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if indent <= parent {
+			return "", false
+		}
+		if child < 0 {
+			child = indent
+		}
+		key, value, _ := strings.Cut(text, ":")
+		if indent != child || key != keys[0] {
+			continue
+		}
+		if len(keys) == 1 {
+			return strings.TrimSpace(value), true
+		}
+		keys = keys[1:]
+		parent, child = indent, -1
+	}
+	return "", false
+}
+
+func TestYAMLValue(t *testing.T) {
+	const config = `linters:
+  settings:
+    exclusions:
+      generated: lax
+  exclusions:
+    # comment
+    rules:
+      - path: x
+        generated: strict
+    generated: disable
+formatters:
+  enable:
+    - gofmt
+other:
+  exclusions:
+    generated: lax
+`
+	for _, tt := range []struct {
+		keys  []string
+		want  string
+		found bool
+	}{
+		{keys: []string{"linters", "exclusions", "generated"}, want: "disable", found: true},
+		{keys: []string{"linters", "settings", "exclusions", "generated"}, want: "lax", found: true},
+		{keys: []string{"formatters", "exclusions", "generated"}},
+		{keys: []string{"exclusions", "generated"}},
+	} {
+		if got, found := yamlValue(config, tt.keys...); got != tt.want || found != tt.found {
+			t.Errorf("yamlValue(%q) = %q, %v, want %q, %v", tt.keys, got, found, tt.want, tt.found)
+		}
+	}
+}
+
+func TestLintChecksGeneratedFiles(t *testing.T) {
+	data, err := fs.ReadFile(os.DirFS(moduleRoot(t)), ".golangci.yml")
+	if err != nil {
+		t.Fatalf("read .golangci.yml: %v", err)
+	}
+	for _, section := range []string{"linters", "formatters"} {
+		if got, _ := yamlValue(string(data), section, "exclusions", "generated"); got != "disable" {
+			t.Errorf("%s.exclusions.generated is %q, want disable: otherwise a \"Code generated ... DO NOT EDIT.\" header switches off every check for its file", section, got)
+		}
+	}
+}
+
 func TestLintBansListenAndServeOnAnyReceiver(t *testing.T) {
 	data, err := fs.ReadFile(os.DirFS(moduleRoot(t)), ".golangci.yml")
 	if err != nil {

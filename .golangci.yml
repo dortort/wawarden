@@ -74,6 +74,7 @@ linters:
           pkg: ^syscall$
           msg: "listeners-only: OS listeners belong in internal/listeners"
   exclusions:
+    generated: disable
     rules:
       - path: ^internal/listeners/[^/]+\.go$
         linters:
@@ -96,6 +97,8 @@ formatters:
     goimports:
       local-prefixes:
         - github.com/dortort/wawarden
+  exclusions:
+    generated: disable
 
 issues:
   max-issues-per-linter: 0
