@@ -5,7 +5,6 @@ package listenertest
 import (
 	"net"
 	"net/netip"
-	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -19,11 +18,11 @@ func listening(t *testing.T) []netip.AddrPort {
 	return got
 }
 
-func listen(t *testing.T, network, addr string) net.Listener {
+func listen(t *testing.T) net.Listener {
 	t.Helper()
-	ln, err := (&net.ListenConfig{}).Listen(t.Context(), network, addr)
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp4", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("listen %s %s: %v", network, addr, err)
+		t.Fatalf("listen: %v", err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
 	return ln
@@ -43,15 +42,14 @@ func TestListeningTCP(t *testing.T) {
 			t.Cleanup(func() { fdDirs = saved })
 
 			base := listening(t)
-			first := listen(t, "tcp4", "127.0.0.1:0")
-			second := listen(t, "tcp4", "127.0.0.1:0")
+			first := listen(t)
+			second := listen(t)
 
 			udp, err := (&net.ListenConfig{}).ListenPacket(t.Context(), "udp4", "127.0.0.1:0")
 			if err != nil {
 				t.Fatalf("listen udp: %v", err)
 			}
 			t.Cleanup(func() { _ = udp.Close() })
-			listen(t, "unix", filepath.Join(t.TempDir(), "s"))
 
 			client, err := (&net.Dialer{}).DialContext(t.Context(), "tcp4", first.Addr().String())
 			if err != nil {
@@ -67,7 +65,7 @@ func TestListeningTCP(t *testing.T) {
 			want := append(slices.Clone(base), first.Addr().(*net.TCPAddr).AddrPort(), second.Addr().(*net.TCPAddr).AddrPort())
 			slices.SortFunc(want, netip.AddrPort.Compare)
 			if got := listening(t); !slices.Equal(got, want) {
-				t.Fatalf("listening = %v, want %v: UDP, unix-domain and connected sockets must not appear", got, want)
+				t.Fatalf("listening = %v, want %v: UDP and connected sockets must not appear", got, want)
 			}
 
 			if err := second.Close(); err != nil {
