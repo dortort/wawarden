@@ -3,8 +3,9 @@
 This is the authoritative reference for configuring and running WaWarden. It
 describes the current build on `main`: milestone **M0**, plus the parts of milestone
 **M1** merged so far, which are the [master key](#master-key), the pseudonyms and
-dropped lines in the [logs](#pseudonyms-and-dropped-lines), and the
-[request-body decoder](#request-bodies), which no route uses yet. Everything listed
+dropped lines in the [logs](#pseudonyms-and-dropped-lines), the
+[request-body decoder](#request-bodies), which no route uses yet, and the
+[message archive](#message-archive), which nothing writes WhatsApp traffic to yet. Everything listed
 here is implemented, and nothing else is. Settings planned for later milestones are
 listed under [Reserved names](#reserved-names) and are refused by this build.
 
@@ -14,7 +15,7 @@ listed under [Reserved names](#reserved-names) and are refused by this build.
 > whose name begins with `WAWARDEN_` and that this build does not implement.** A
 > typo, a variable meant for a later release, or a leftover from another
 > deployment stops the service with the reason code `unknown_variable` instead of
-> being ignored. An empty value counts as set: `WAWARDEN_STORAGE_PROFILE=` is
+> being ignored. An empty value counts as set: `WAWARDEN_OWNER_PHONE=` is
 > refused as well.
 
 Only the names in [Environment variables](#environment-variables) are accepted.
@@ -29,7 +30,6 @@ with `unknown_variable`.
 
 | Variable | Planned purpose | Becomes valid in |
 |---|---|---|
-| `WAWARDEN_STORAGE_PROFILE` | Storage profile, `local` or `nfs` | M1 |
 | `WAWARDEN_OWNER_PHONE` | The account owner's number in E.164 form, checked when pairing | M1 |
 | `WAWARDEN_BACKUP_AGE_RECIPIENT` | The age recipient that backups are encrypted to | M1 |
 | `WAWARDEN_METRICS_EMF` | `1` writes metrics as embedded-metric-format lines on standard output | M1 |
@@ -130,7 +130,7 @@ errors.
 | Code | Meaning |
 |---|---|
 | `0` | `serve` stopped cleanly after `SIGTERM` or `SIGINT`; `healthcheck` got `200`; `version` and `admin init` printed their output. |
-| `1` | `serve` failed after its configuration was accepted: a listener could not be opened (`startup_failed`), a listener failed while running (`listener_failed`), or shutdown ended with errors, for example when the grace period ran out. `healthcheck` failed for any reason, including extra arguments. `version` or `admin init` could not write to standard output. |
+| `1` | `serve` failed after its configuration was accepted: the [archive](#message-archive) could not be opened or its lock was not acquired within five minutes, or a listener could not be opened (`startup_failed`), a listener failed while running (`listener_failed`), or shutdown ended with errors, for example when the grace period ran out. `healthcheck` failed for any reason, including extra arguments. `version` or `admin init` could not write to standard output. |
 | `2` | `serve` refused to start (`startup_refused`, see [Startup refusals](#startup-refusals)). Or a usage error: an unknown subcommand, or an unknown flag or extra argument given to `serve`, `version` or `admin`; the usage text goes to standard error. |
 
 `healthcheck` never exits `2`, because container runtimes reserve that code in
@@ -150,6 +150,8 @@ These are all the variables this build reads.
 | `WAWARDEN_ADMIN_TOKEN_SHA256` | unset | The admin token's SHA-256: exactly 64 hexadecimal characters, either case, nothing else (no surrounding whitespace). | `admin_hash_invalid`, `admin_hash_sources_conflict` |
 | `WAWARDEN_ADMIN_TOKEN_SHA256_FILE` | unset | A path to a regular file of at most 4096 bytes that holds the hash. Whitespace around the hash is removed. Symbolic links are followed. | `admin_hash_file_unreadable`, `admin_hash_invalid`, `admin_hash_sources_conflict` |
 | `WAWARDEN_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`, in lower case. | `log_level_invalid` |
+| `WAWARDEN_STORAGE_PROFILE` | `local` | `local` or `nfs`, in lower case; see [Storage profiles](#storage-profiles). | `storage_profile_invalid` |
+| `WAWARDEN_MIN_FREE_BYTES` | `268435456` (256 MiB) | A number of bytes in decimal digits, from `0` to `18446744073709551615`: no sign, unit, separator or white space. `0` turns the floor off. See [Free space](#free-space). | `min_free_bytes_invalid` |
 
 Rules that apply to all of them:
 
@@ -198,8 +200,8 @@ A listen address is an IP literal and a port from 1 to 65535: `127.0.0.1:8080`,
 
 ## Startup refusals
 
-`serve` validates its whole configuration and the [master key](#master-key) before
-opening any socket. The first failed check stops it: it writes one log line with
+`serve` validates its whole configuration, the [master key](#master-key) and the
+[archive](#message-archive) before opening any socket. The first failed check stops it: it writes one log line with
 `"event":"startup_refused"`, the reason code in `reason` and a fixed explanation in
 `error`, and exits `2`. A refusal names the variable or the file in the data
 directory involved, never a configured value or the data directory's path. For
@@ -208,6 +210,7 @@ example:
 ```json
 {"time":"2026-10-04T08:09:24.446116295Z","level":"ERROR","msg":"startup refused","event":"startup_refused","reason":"data_dir_foreign_owner","error":"config: WAWARDEN_DATA_DIR: is not owned by the current user"}
 {"time":"2026-10-04T08:11:02.518840121Z","level":"ERROR","msg":"startup refused","event":"startup_refused","reason":"master_key_permissions","error":"keys: keys/master must grant no access to group or others and have no setuid, setgid or sticky bit"}
+{"time":"2026-10-04T08:12:40.002931604Z","level":"ERROR","msg":"startup refused","event":"startup_refused","reason":"archive_db_permissions","error":"db: archive.db must grant no access to group or others and have no setuid, setgid or sticky bit"}
 ```
 
 The checks run in this order:
@@ -225,27 +228,50 @@ The checks run in this order:
 | 9 | `admin_hash_invalid` | the hash variable | The hash is not exactly 64 hexadecimal characters, or the file holds more than 4096 bytes. |
 | 10 | `listen_address_shared` | the later listener | Two enabled listeners overlap. |
 | 11 | `log_level_invalid` | `WAWARDEN_LOG_LEVEL` | The level is not `debug`, `info`, `warn` or `error`. |
-| 12 | `running_as_root` | none | The real or the effective user ID is 0 and `--allow-root` was not given. |
-| 13 | `data_dir_unusable` | `WAWARDEN_DATA_DIR` | The directory does not exist and cannot be created, or cannot be inspected; the path is empty. |
-| 14 | `data_dir_not_directory` | `WAWARDEN_DATA_DIR` | The path is not a directory, or its last component is a symbolic link. |
-| 15 | `data_dir_foreign_owner` | `WAWARDEN_DATA_DIR` | The directory is not owned by the process's effective user ID. |
-| 16 | `data_dir_permissions` | `WAWARDEN_DATA_DIR` | The directory's mode is not exactly `0700`. |
-| 17 | `keys_dir_unusable` | none; the error names `keys/` | `keys` in the data directory does not exist and cannot be created, or cannot be inspected. |
-| 18 | `keys_dir_not_directory` | none; the error names `keys/` | `keys` is not a directory, or is a symbolic link. |
-| 19 | `keys_dir_foreign_owner` | none; the error names `keys/` | `keys` is not owned by the process's effective user ID. |
-| 20 | `keys_dir_permissions` | none; the error names `keys/` | The mode of `keys` is not exactly `0700`. |
-| 21 | `master_key_unusable` | none; the error names `keys/master` | `keys/master` does not exist and cannot be created, or cannot be inspected, opened or read. |
-| 22 | `master_key_not_regular` | none; the error names `keys/master` | `keys/master` is not a regular file: a symbolic link (even to a valid key), a directory or a named pipe, for example. |
-| 23 | `master_key_foreign_owner` | none; the error names `keys/master` | `keys/master` is not owned by the process's effective user ID. |
-| 24 | `master_key_permissions` | none; the error names `keys/master` | `keys/master` grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 25 | `master_key_size` | none; the error names `keys/master` | `keys/master` does not hold exactly 32 bytes. |
+| 12 | `storage_profile_invalid` | `WAWARDEN_STORAGE_PROFILE` | The profile is not `local` or `nfs`. |
+| 13 | `min_free_bytes_invalid` | `WAWARDEN_MIN_FREE_BYTES` | The value is not a number of bytes in decimal digits that fits in 64 bits. |
+| 14 | `running_as_root` | none | The real or the effective user ID is 0 and `--allow-root` was not given. |
+| 15 | `data_dir_unusable` | `WAWARDEN_DATA_DIR` | The directory does not exist and cannot be created, or cannot be inspected; the path is empty. |
+| 16 | `data_dir_not_directory` | `WAWARDEN_DATA_DIR` | The path is not a directory, or its last component is a symbolic link. |
+| 17 | `data_dir_foreign_owner` | `WAWARDEN_DATA_DIR` | The directory is not owned by the process's effective user ID. |
+| 18 | `data_dir_permissions` | `WAWARDEN_DATA_DIR` | The directory's mode is not exactly `0700`. |
+| 19 | `history_dir_unusable` | none; the error names `history/` | `history` exists in the data directory but cannot be inspected. |
+| 20 | `history_dir_not_directory` | none; the error names `history/` | `history` exists but is not a directory, or is a symbolic link. |
+| 21 | `history_dir_foreign_owner` | none; the error names `history/` | `history` is not owned by the process's effective user ID. |
+| 22 | `history_dir_permissions` | none; the error names `history/` | The mode of `history` is not exactly `0700`. |
+| 23 | `backups_dir_unusable` | none; the error names `backups/` | `backups` exists in the data directory but cannot be inspected. |
+| 24 | `backups_dir_not_directory` | none; the error names `backups/` | `backups` exists but is not a directory, or is a symbolic link. |
+| 25 | `backups_dir_foreign_owner` | none; the error names `backups/` | `backups` is not owned by the process's effective user ID. |
+| 26 | `backups_dir_permissions` | none; the error names `backups/` | The mode of `backups` is not exactly `0700`. |
+| 27 | `keys_dir_unusable` | none; the error names `keys/` | `keys` in the data directory does not exist and cannot be created, or cannot be inspected. |
+| 28 | `keys_dir_not_directory` | none; the error names `keys/` | `keys` is not a directory, or is a symbolic link. |
+| 29 | `keys_dir_foreign_owner` | none; the error names `keys/` | `keys` is not owned by the process's effective user ID. |
+| 30 | `keys_dir_permissions` | none; the error names `keys/` | The mode of `keys` is not exactly `0700`. |
+| 31 | `master_key_unusable` | none; the error names `keys/master` | `keys/master` does not exist and cannot be created, or cannot be inspected, opened or read. |
+| 32 | `master_key_not_regular` | none; the error names `keys/master` | `keys/master` is not a regular file: a symbolic link (even to a valid key), a directory or a named pipe, for example. |
+| 33 | `master_key_foreign_owner` | none; the error names `keys/master` | `keys/master` is not owned by the process's effective user ID. |
+| 34 | `master_key_permissions` | none; the error names `keys/master` | `keys/master` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 35 | `master_key_size` | none; the error names `keys/master` | `keys/master` does not hold exactly 32 bytes. |
+| 36 | `storage_filesystem_unknown` | none | The filesystem of the data directory cannot be inspected (`statfs`). |
+| 37 | `storage_network_filesystem` | none | The storage profile is `local` and the data directory is on a network filesystem; see [Storage profiles](#storage-profiles). |
+| 38 | `archive_db_unusable` | none; the error names `archive.db` | `archive.db` does not exist and cannot be created, or cannot be inspected. |
+| 39 | `archive_db_not_regular` | none; the error names `archive.db` | `archive.db` is not a regular file: a symbolic link or a directory, for example. |
+| 40 | `archive_db_foreign_owner` | none; the error names `archive.db` | `archive.db` is not owned by the process's effective user ID. |
+| 41 | `archive_db_permissions` | none; the error names `archive.db` | `archive.db` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 42 | `archive_journal_unusable` | none; the error names `archive.db-journal` | `archive.db-journal` exists but cannot be inspected. |
+| 43 | `archive_journal_not_regular` | none; the error names `archive.db-journal` | `archive.db-journal` exists but is not a regular file. |
+| 44 | `archive_journal_foreign_owner` | none; the error names `archive.db-journal` | `archive.db-journal` is not owned by the process's effective user ID. |
+| 45 | `archive_journal_permissions` | none; the error names `archive.db-journal` | `archive.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 46 | `archive_schema_newer` | none; the error names `archive.db` | The archive's schema version is newer than this build knows: a newer release wrote it. |
 
-When the data directory is missing, it is created only after checks 1 to 12 pass,
-so a start refused by checks 1 to 12 leaves nothing behind. `keys/` and the master
-key are created, when missing, only after checks 13 to 16 pass. A refusal by a
-later check (on a filesystem that forces its own ownership or mode, for example),
-or a `startup_failed` exit, leaves what was created in place: the data directory,
-`keys/` and the master key.
+When the data directory is missing, it is created only after checks 1 to 14 pass,
+so a start refused by checks 1 to 14 leaves nothing behind. `history/` and
+`backups/` are checked only when they exist, and are never created by this
+build. `keys/` and the master key are created, when missing, only after checks 15
+to 26 pass, and an empty `archive.db` only after checks 15 to 37 pass. A refusal
+by a later check (on a filesystem that forces its own ownership or mode, for
+example), or a `startup_failed` exit, leaves what was created in place: the data
+directory, `keys/`, the master key and `archive.db`.
 
 ## Data directory
 
@@ -262,11 +288,15 @@ The data directory is `WAWARDEN_DATA_DIR`, by default `/data`.
   others, and no setuid, setgid or sticky bit. `0750`, `0755`, `0701` and `0500`
   are all refused.
 
-The checks run once, at start. Then `serve` creates the [master key](#master-key)
-in the directory when it is missing; this build writes nothing else there. Later
-in M1 the directory also holds the WhatsApp session and the message archive. It
-must be on a writable, persistent filesystem that supports hard links and that
-only the service's user can read.
+The checks run once, at start. When they exist, `history/` and `backups/` in the
+data directory must also be directories, not symbolic links, owned by the
+effective user ID with mode exactly `0700` (refusals 19 to 26); this build does
+not create them, and later M1 releases will keep history-sync downloads and
+backups there. Then `serve` creates the [master key](#master-key) when it is
+missing and opens the [message archive](#message-archive), `archive.db`; this
+build writes nothing else there. Later in M1 the directory also holds the
+WhatsApp session. It must be on a writable, persistent filesystem that supports
+hard links and that only the service's user can read.
 
 Mechanisms that add group permissions or the setgid bit to a volume, such as
 Kubernetes `fsGroup`, make the directory fail the mode check.
@@ -309,6 +339,85 @@ leave a `keys/.master-<random>` file behind, with mode `0600`. It holds either a
 unused key or, after a crash right after the link, a second name of the current
 master key, so delete it together with `keys/master` when you replace the key; it
 can be deleted at any time while the service is stopped.
+
+### Message archive
+
+`archive.db` in the data directory is the message archive: a SQLite database
+written by the SQLite engine compiled into the binary (`modernc.org/sqlite`).
+This build creates it, applies its schema and records each start in it; nothing
+writes WhatsApp traffic into it yet, because the engine arrives later in M1.
+Right after the master key, `serve`:
+
+1. checks the data directory's filesystem against the
+   [storage profile](#storage-profiles) (refusals 36 and 37);
+2. creates `archive.db` empty with mode `0600` when it does not exist, and
+   refuses (38 to 41) one that is not a regular file, belongs to another user,
+   or grants any access to group or others; then refuses (42 to 45) an
+   `archive.db-journal` that exists and fails the same checks;
+3. opens one connection and reads back every setting it applies, refusing the
+   connection on any difference: foreign keys on, the rollback journal in
+   `TRUNCATE` mode, `synchronous` `FULL`, exclusive locking, temporary storage
+   in memory, `secure_delete` `ON` (not `FAST`) and a 5-second busy timeout.
+   None of these is configurable; write-ahead logging, `PERSIST` and every
+   other journal mode are refused, and a database left in write-ahead-log mode
+   is converted back to a rollback journal;
+4. takes an exclusive lock on the database, which no other process can read or
+   write while the service runs. When another process holds it, `serve` logs
+   `db_lock_wait` once and retries with growing pauses for up to five minutes,
+   then exits `1` with `startup_failed`. A stop signal ends the wait within one
+   busy timeout and also exits `1`;
+5. brings the schema up to date (an archive written by a newer release is
+   refused, 46) and logs `archive_opened`.
+
+The connection that holds the lock is the only one the service ever opens to
+the archive. It survives a call that runs out of time, and should it ever be
+lost, the service refuses to open another, logs `db_lost` and answers `503` on
+`/healthz` from then on; restart it. No other code in the service opens the
+database file, and on Linux, profile `local` uses open-file-description locks,
+so that closing some other descriptor of the file cannot drop the lock.
+
+The journal, `archive.db-journal`, appears at the first write and is truncated to
+zero bytes after every transaction; SQLite gives it the database file's mode.
+Temporary data stays in memory, so the service writes no other file next to the
+archive.
+
+Every read of the archive must finish within 2 seconds and every write within
+10 seconds. A call that runs out of time is interrupted and logged as
+`db_deadline` with the profile of every goroutine of the process (function names
+and source positions only).
+
+Revoked, edited and expired message text will be removed from the database file,
+its journal and the full-text index, as described in the
+[threat model](threat-model.md#security-invariants) (I-8); backups are
+outside that guarantee.
+
+### Storage profiles
+
+| Profile | Use it for | Locks | Free-space floor |
+|---|---|---|---|
+| `local` (default) | A local disk or a container's own filesystem | Open-file-description locks on Linux, classic POSIX record locks elsewhere | Applies |
+| `nfs` | A network filesystem such as Amazon EFS | Classic POSIX record locks | Does not apply |
+
+With profile `local`, `serve` refuses a data directory on a network filesystem
+(`storage_network_filesystem`). On Linux it recognises NFS (Amazon EFS
+included), SMB and CIFS, Ceph, AFS, Coda, NCP and 9P by the filesystem type that
+`statfs` reports; on macOS, any mount without the local flag. FUSE filesystems
+are not recognised, so do not run profile `local` on a FUSE mount of remote
+storage. Profile `nfs` accepts any filesystem. Both profiles use the same
+rollback journal and exclusive locking, and neither ever uses write-ahead
+logging. Running SQLite on a network filesystem remains outside SQLite's
+recommended configurations, and only one process may use the data directory at
+a time.
+
+### Free space
+
+`WAWARDEN_MIN_FREE_BYTES` sets a floor on the free space of the data
+directory's filesystem, for profile `local` only: below it ingest will pause,
+and it resumes once the free space reaches 1.25 times the floor. `0` turns the
+floor off. This build validates the setting, but it ingests nothing yet, so
+nothing measures the free space or pauses; the engine that does arrives later
+in M1. With profile `nfs` the floor never applies, because a network filesystem
+such as Amazon EFS grows on demand; watch its own capacity metrics instead.
 
 ## Listeners
 
@@ -423,14 +532,16 @@ route's grant was decided. It answers with a fixed error and reads no further wh
 
 | Request | Answer |
 |---|---|
-| `GET /healthz` while the service is serving | `200` `{"status":"ok"}` |
-| `GET /healthz` once shutdown has begun | `503` `{"status":"unavailable"}` |
+| `GET /healthz` while the service is serving and holds the [archive](#message-archive) | `200` `{"status":"ok"}` |
+| `GET /healthz` once shutdown has begun, or after the archive's connection was lost (`db_lost`) | `503` `{"status":"unavailable"}` |
 | Any other method on `/healthz`, including `HEAD` | `405` `{"error":"method_not_allowed"}` with `Allow: GET` |
 | Any other path | `404` `{"error":"not_found"}` |
 
 The health listener requires no credential, so its address must be loopback; the
-service refuses any other (`health_address_not_loopback`). In M0, `200` means the
-process is up and its listeners are serving.
+service refuses any other (`health_address_not_loopback`). `200` means the
+process is up, its listeners are serving, and the archive is open and locked by
+the service. The health listener opens only after the archive, so while `serve`
+waits for the archive's lock, health checks fail to connect.
 
 ### Responses
 
@@ -480,7 +591,9 @@ loopback.
 |---|---|---|---|
 | `startup_refused` | `ERROR` | `reason`, `error` | The configuration or the [master key](#master-key) is refused; exit `2`. |
 | `keys_loaded` | `INFO` | `key_id` | The master key is loaded and the log pseudonyms are keyed with it; `key_id` is the 8-digit key id, never a key. |
-| `startup_failed` | `ERROR` | `error` | A listener cannot be opened, for example because its address is in use; exit `1`. |
+| `db_lock_wait` | `WARN` | `database` (`archive`), `within` | Another process holds the archive's lock; `serve` retries until `within` (`5m0s`) has passed. Logged once per start. |
+| `archive_opened` | `INFO` | `schema_version`, `profile`, `ofd_locking`, `recent_starts` | The [archive](#message-archive) is open and locked. `ofd_locking` is `true` when open-file-description locks are in use, and `recent_starts` counts the starts of the last ten minutes, this one included, at most 64. |
+| `startup_failed` | `ERROR` | `error` | The archive cannot be opened or its lock was not acquired in time, or a listener cannot be opened, for example because its address is in use; exit `1`. |
 | `starting` | `INFO` | `version`, `revision`, `modified`, `dev` | The listeners are open. |
 | `dev_build` | `WARN`, at every log level | | The binary was built with the `dev` tag. |
 | `listening` | `INFO` | `listener`, `address` | Once per open listener. |
@@ -491,6 +604,8 @@ loopback.
 | `stopped` | `INFO`, or `ERROR` with `error` | | Shutdown ended. |
 | `panic` | `ERROR` | `name`, `panic_type`, `stack` | A panic was recovered in a handler or a goroutine; `name` is as in `wawarden_panics_total`. |
 | `http_server_error` | `WARN` | `listener` | Go's HTTP server reported an error of its own, such as a failed accept; `msg` holds the server's text. |
+| `db_deadline` | `ERROR` | `database`, `operation`, `timeout_ms`, `goroutines` | A read of the archive ran beyond 2 seconds or a write beyond 10; the call is interrupted and fails. `operation` names the call in the code, and `goroutines` holds the goroutine profile of the process (function names and source positions, cut at 32 KiB). |
+| `db_lost` | `ERROR` | `database` | The connection that held the archive's lock is gone, and the service refuses to open another; `/healthz` answers `503` from then on. |
 | `log_dropped` | `WARN` | `reason`: `xml` or `too_long` | Replaces a line that carried XML (`xml`) or was longer than 65,536 bytes (`too_long`); see [Pseudonyms and dropped lines](#pseudonyms-and-dropped-lines). It is written in place of a line that passed the log level, whatever that line's level was. |
 
 What is never logged: requests (there is no access log), request bodies, header
@@ -649,7 +764,8 @@ the events under [Logging](#logging):
 1. `/healthz` starts answering `503`.
 2. The client and admin listeners stop accepting connections, and requests in
    flight are allowed to finish.
-3. The health listener stops.
+3. The [archive](#message-archive) is closed, which releases its lock.
+4. The health listener stops.
 
 One grace period of 10 seconds bounds the whole shutdown. When it runs out, the
 remaining connections are closed and `serve` exits `1`; otherwise it exits `0`.
@@ -678,12 +794,15 @@ applies to release images:
 | Health check | `["/wawarden","healthcheck"]`, in exec form; the image declares no health check of its own |
 | Exposed ports | None declared |
 | Labels | `org.opencontainers.image.source`, `licenses`, `version`, `revision` |
+| Licences | `/licenses`: the licence files of every Go module linked into `/wawarden`, one directory per module and version; see [`RELEASING.md`](../RELEASING.md#licences) |
 
 Notes:
 
 - **Data volume.** An empty named Docker volume mounted on `/data` takes the
   image directory's owner and mode, so it passes the
-  [data directory](#data-directory) checks as is. A bind-mounted host directory
+  [data directory](#data-directory) checks as is. A volume on a network
+  filesystem, such as Amazon EFS, needs `WAWARDEN_STORAGE_PROFILE=nfs`; see
+  [Storage profiles](#storage-profiles). A bind-mounted host directory
   must be owned by `65532:65532` with mode `0700`, or `serve` refuses it
   (`data_dir_foreign_owner` or `data_dir_permissions`).
 - **Health check form.** Use the exec form: `test: ["CMD", "/wawarden",

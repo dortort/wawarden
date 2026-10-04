@@ -42,8 +42,9 @@ It is not:
   client listener.
 - **The service refuses to start rather than run misconfigured**: on any
   `WAWARDEN_` variable it does not implement, a plaintext admin token, a
-  non-loopback health address, running as root, or a data directory or master
-  key that is not private to the service's user.
+  non-loopback health address, running as root, a data directory, master key or
+  message archive that is not private to the service's user, or the default
+  storage profile on a network filesystem.
 - **Browser-originated requests are refused.** Any request to the client or admin
   listener carrying an `Origin` or `Sec-Fetch-Site` header gets `403`.
 - **Your WhatsApp account is at risk.** See the residual risks in the
@@ -79,6 +80,13 @@ What works today:
   [logging](docs/configuration.md#pseudonyms-and-dropped-lines)). Internally:
   sanitisers for display text and terminal output, and a strict JSON decoder for
   request bodies, which no route uses yet.
+- Also on `main`: `serve` opens the message archive, `archive.db` in the data
+  directory, in SQLite through one connection that holds an exclusive lock and
+  whose settings it verifies, and `/healthz` answers `200` only while it holds
+  it; a second instance waits for the lock. Nothing writes WhatsApp traffic into
+  the archive yet. Internally: the archive's schema and write side, which keys
+  every chat canonically and removes revoked, edited and expired text from the
+  disk. See [the message archive](docs/configuration.md#message-archive).
 
 Planned:
 
