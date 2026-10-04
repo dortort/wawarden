@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"io/fs"
 	"log/slog"
 	"maps"
@@ -85,8 +86,8 @@ func dirWithMode(t *testing.T, mode fs.FileMode) string {
 }
 
 func TestDefaults(t *testing.T) {
-	if defaultDataDir != "/data" {
-		t.Fatalf("default data directory = %q, want /data", defaultDataDir)
+	if defaultDataDir != "/data" || defaultMinFreeBytes != 268435456 {
+		t.Fatalf("default data directory = %q and free-space floor = %d, want /data and 268435456", defaultDataDir, defaultMinFreeBytes)
 	}
 	vars := withDataDir(t, nil)
 	cfg, r := Load(environ(vars), testOptions())
@@ -94,12 +95,14 @@ func TestDefaults(t *testing.T) {
 		t.Fatalf("Load: %v", r)
 	}
 	want := Config{
-		DataDir:      vars[envDataDir],
-		UID:          testUID,
-		Listen:       netip.MustParseAddrPort("127.0.0.1:8080"),
-		AdminListen:  netip.MustParseAddrPort("127.0.0.1:8082"),
-		HealthListen: netip.MustParseAddrPort("127.0.0.1:8081"),
-		LogLevel:     slog.LevelInfo,
+		DataDir:        vars[envDataDir],
+		UID:            testUID,
+		Listen:         netip.MustParseAddrPort("127.0.0.1:8080"),
+		AdminListen:    netip.MustParseAddrPort("127.0.0.1:8082"),
+		HealthListen:   netip.MustParseAddrPort("127.0.0.1:8081"),
+		LogLevel:       slog.LevelInfo,
+		StorageProfile: StorageLocal,
+		MinFreeBytes:   268435456,
 	}
 	if cfg != want {
 		t.Fatalf("Load = %+v, want %+v", cfg, want)
@@ -185,6 +188,21 @@ func TestRefusals(t *testing.T) {
 		{name: "unknown log level", vars: map[string]string{envLogLevel: "trace"}, reason: "log_level_invalid", variable: envLogLevel},
 		{name: "upper-case log level", vars: map[string]string{envLogLevel: "INFO"}, reason: "log_level_invalid", variable: envLogLevel},
 		{name: "empty log level", vars: map[string]string{envLogLevel: ""}, reason: "log_level_invalid", variable: envLogLevel},
+
+		{name: "unknown storage profile", vars: map[string]string{envStorageProfile: "efs"}, reason: "storage_profile_invalid", variable: envStorageProfile},
+		{name: "upper-case storage profile", vars: map[string]string{envStorageProfile: "LOCAL"}, reason: "storage_profile_invalid", variable: envStorageProfile},
+		{name: "empty storage profile", vars: map[string]string{envStorageProfile: ""}, reason: "storage_profile_invalid", variable: envStorageProfile},
+		{name: "storage profile with a space", vars: map[string]string{envStorageProfile: "nfs "}, reason: "storage_profile_invalid", variable: envStorageProfile},
+
+		{name: "empty free-space floor", vars: map[string]string{envMinFreeBytes: ""}, reason: "min_free_bytes_invalid", variable: envMinFreeBytes},
+		{name: "negative free-space floor", vars: map[string]string{envMinFreeBytes: "-1"}, reason: "min_free_bytes_invalid", variable: envMinFreeBytes},
+		{name: "signed free-space floor", vars: map[string]string{envMinFreeBytes: "+1"}, reason: "min_free_bytes_invalid", variable: envMinFreeBytes},
+		{name: "free-space floor with a unit", vars: map[string]string{envMinFreeBytes: "256MiB"}, reason: "min_free_bytes_invalid", variable: envMinFreeBytes},
+		{name: "free-space floor in exponent form", vars: map[string]string{envMinFreeBytes: "1e9"}, reason: "min_free_bytes_invalid", variable: envMinFreeBytes},
+		{name: "hexadecimal free-space floor", vars: map[string]string{envMinFreeBytes: "0x10"}, reason: "min_free_bytes_invalid", variable: envMinFreeBytes},
+		{name: "free-space floor with underscores", vars: map[string]string{envMinFreeBytes: "1_000"}, reason: "min_free_bytes_invalid", variable: envMinFreeBytes},
+		{name: "free-space floor with a space", vars: map[string]string{envMinFreeBytes: " 1"}, reason: "min_free_bytes_invalid", variable: envMinFreeBytes},
+		{name: "free-space floor beyond 64 bits", vars: map[string]string{envMinFreeBytes: "18446744073709551616"}, reason: "min_free_bytes_invalid", variable: envMinFreeBytes},
 
 		{name: "uid 0 without --allow-root", opts: func(o *Options) { o.UIDs = uids(0, 0); o.FileOwner = owned(0) }, reason: "running_as_root"},
 		{name: "effective uid 0 without --allow-root", opts: func(o *Options) { o.UIDs = uids(testUID, 0); o.FileOwner = owned(0) }, reason: "running_as_root"},
@@ -308,6 +326,78 @@ func TestDataDirectoryRefusals(t *testing.T) {
 			t.Fatalf("Load = %v, want data_dir_foreign_owner", r)
 		}
 	})
+}
+
+func TestDataSubdirectoryRefusals(t *testing.T) {
+	for _, name := range []string{"history", "backups"} {
+		tests := []struct {
+			name   string
+			setup  func(t *testing.T, path string)
+			owner  func(fs.FileInfo) (int, bool)
+			reason string
+		}{
+			{name: "a regular file", reason: "_dir_not_directory", setup: func(t *testing.T, path string) {
+				if err := os.WriteFile(path, nil, 0o600); err != nil {
+					t.Fatalf("WriteFile: %v", err)
+				}
+			}},
+			{name: "a symbolic link to a private directory", reason: "_dir_not_directory", setup: func(t *testing.T, path string) {
+				if err := os.Symlink(dirWithMode(t, 0o700), path); err != nil {
+					t.Fatalf("Symlink: %v", err)
+				}
+			}},
+			{name: "another owner", reason: "_dir_foreign_owner", setup: mkdirMode(0o700), owner: func(fi fs.FileInfo) (int, bool) {
+				if fi.Name() == name {
+					return otherUID, true
+				}
+				return testUID, true
+			}},
+			{name: "an unknown owner", reason: "_dir_foreign_owner", setup: mkdirMode(0o700), owner: func(fi fs.FileInfo) (int, bool) { return testUID, fi.Name() != name }},
+			{name: "mode 0750", reason: "_dir_permissions", setup: mkdirMode(0o750)},
+			{name: "mode 0705", reason: "_dir_permissions", setup: mkdirMode(0o705)},
+			{name: "mode 0500", reason: "_dir_permissions", setup: mkdirMode(0o500)},
+			{name: "setgid", reason: "_dir_permissions", setup: mkdirMode(fs.ModeSetgid | 0o700)},
+		}
+		for _, tt := range tests {
+			t.Run(name+" "+tt.name, func(t *testing.T) {
+				data := dirWithMode(t, 0o700)
+				tt.setup(t, filepath.Join(data, name))
+				opts := testOptions()
+				if tt.owner != nil {
+					opts.FileOwner = tt.owner
+				}
+				cfg, r := Load(environ(map[string]string{envDataDir: data}), opts)
+				if r == nil || r.Reason != name+tt.reason || r.Variable != "" || cfg != (Config{}) {
+					t.Fatalf("Load = %+v, %v, want %s%s naming no variable", cfg, r, name, tt.reason)
+				}
+				if strings.Contains(r.Error(), data) || !strings.Contains(r.Error(), name+"/") {
+					t.Fatalf("refusal %q names the data directory, or not %s/", r.Error(), name)
+				}
+			})
+		}
+	}
+	t.Run("private or absent", func(t *testing.T) {
+		data := dirWithMode(t, 0o700)
+		mkdirMode(0o700)(t, filepath.Join(data, "history"))
+		if _, r := Load(environ(map[string]string{envDataDir: data}), testOptions()); r != nil {
+			t.Fatalf("Load refused a private history/ and an absent backups/: %v", r)
+		}
+		if _, err := os.Lstat(filepath.Join(data, "backups")); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("Load created backups/: %v", err)
+		}
+	})
+}
+
+func mkdirMode(mode fs.FileMode) func(*testing.T, string) {
+	return func(t *testing.T, path string) {
+		t.Helper()
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatalf("Mkdir: %v", err)
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatalf("Chmod: %v", err)
+		}
+	}
 }
 
 func TestDataDirectoryIsCreatedPrivate(t *testing.T) {
@@ -489,6 +579,24 @@ func TestAccepted(t *testing.T) {
 			},
 		},
 		{
+			name: "nfs storage profile and a free-space floor of 0",
+			vars: map[string]string{envStorageProfile: "nfs", envMinFreeBytes: "0"},
+			check: func(t *testing.T, c Config) {
+				if c.StorageProfile != StorageNFS || c.MinFreeBytes != 0 {
+					t.Fatalf("StorageProfile = %q, MinFreeBytes = %d", c.StorageProfile, c.MinFreeBytes)
+				}
+			},
+		},
+		{
+			name: "explicit local profile and the largest free-space floor",
+			vars: map[string]string{envStorageProfile: "local", envMinFreeBytes: "18446744073709551615"},
+			check: func(t *testing.T, c Config) {
+				if c.StorageProfile != StorageLocal || c.MinFreeBytes != 18446744073709551615 {
+					t.Fatalf("StorageProfile = %q, MinFreeBytes = %d", c.StorageProfile, c.MinFreeBytes)
+				}
+			},
+		},
+		{
 			name: "error log level",
 			vars: map[string]string{envLogLevel: "error"},
 			check: func(t *testing.T, c Config) {
@@ -535,6 +643,8 @@ func TestRefusalsNeverEchoValues(t *testing.T) {
 		{"WAWARDEN_DEV_X": secret},
 		{"WAWARDEN_UNKNOWN": secret},
 		{"GOTRACEBACK": secret},
+		{envStorageProfile: secret},
+		{envMinFreeBytes: secret},
 	}
 	for _, vars := range tests {
 		_, r := Load(environ(withDataDir(t, vars)), testOptions())

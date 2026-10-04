@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -28,6 +29,8 @@ const (
 	envLogLevel       = "WAWARDEN_LOG_LEVEL"
 	envPlaintextAdmin = "WAWARDEN_ADMIN_TOKEN"
 	envTraceback      = "GOTRACEBACK"
+	envStorageProfile = "WAWARDEN_STORAGE_PROFILE"
+	envMinFreeBytes   = "WAWARDEN_MIN_FREE_BYTES"
 
 	prefix    = "WAWARDEN_"
 	devPrefix = "WAWARDEN_DEV_"
@@ -37,6 +40,7 @@ const (
 	defaultAdminListen  = "127.0.0.1:8082"
 	defaultHealthListen = "127.0.0.1:8081"
 	defaultLogLevel     = "info"
+	defaultMinFreeBytes = 256 << 20
 
 	maxHashFileBytes = 4096
 )
@@ -58,9 +62,20 @@ const (
 	reasonDataDirForeignOwner      = "data_dir_foreign_owner"
 	reasonDataDirPermissions       = "data_dir_permissions"
 	reasonTracebackLevelUnsafe     = "traceback_level_unsafe"
+	reasonStorageProfileInvalid    = "storage_profile_invalid"
+	reasonMinFreeBytesInvalid      = "min_free_bytes_invalid"
 )
 
-var known = []string{envDataDir, envListen, envAdminListen, envHealthListen, envAdminHash, envAdminHashFile, envLogLevel}
+var known = []string{envDataDir, envListen, envAdminListen, envHealthListen, envAdminHash, envAdminHashFile, envLogLevel, envStorageProfile, envMinFreeBytes}
+
+type StorageProfile string
+
+const (
+	StorageLocal StorageProfile = "local"
+	StorageNFS   StorageProfile = "nfs"
+)
+
+var dataSubdirectories = []string{"history", "backups"}
 
 var logLevels = map[string]slog.Level{
 	"debug": slog.LevelDebug,
@@ -77,6 +92,8 @@ type Config struct {
 	HealthListen    netip.AddrPort
 	AdminCredential *policy.AdminCredential
 	LogLevel        slog.Level
+	StorageProfile  StorageProfile
+	MinFreeBytes    uint64
 }
 
 type Options struct {
@@ -126,6 +143,12 @@ func Load(environ []string, opts Options) (Config, *Refusal) {
 	if cfg.LogLevel, r = logLevel(env); r != nil {
 		return Config{}, r
 	}
+	if cfg.StorageProfile, r = storageProfile(env); r != nil {
+		return Config{}, r
+	}
+	if cfg.MinFreeBytes, r = minFreeBytes(env); r != nil {
+		return Config{}, r
+	}
 	uids := processUIDs
 	if opts.UIDs != nil {
 		uids = opts.UIDs
@@ -140,6 +163,11 @@ func Load(environ []string, opts Options) (Config, *Refusal) {
 	}
 	if cfg.DataDir, r = dataDirectory(env, euid, owner); r != nil {
 		return Config{}, r
+	}
+	for _, name := range dataSubdirectories {
+		if r = checkSubdirectory(cfg.DataDir, name, euid, owner); r != nil {
+			return Config{}, r
+		}
 	}
 	cfg.UID = euid
 	return cfg, nil
@@ -304,6 +332,45 @@ func logLevel(env map[string]string) (slog.Level, *Refusal) {
 		return 0, &Refusal{Reason: reasonLogLevelInvalid, Variable: envLogLevel, detail: "must be one of debug, info, warn, error"}
 	}
 	return level, nil
+}
+
+func storageProfile(env map[string]string) (StorageProfile, *Refusal) {
+	switch p := StorageProfile(lookup(env, envStorageProfile, string(StorageLocal))); p {
+	case StorageLocal, StorageNFS:
+		return p, nil
+	}
+	return "", &Refusal{Reason: reasonStorageProfileInvalid, Variable: envStorageProfile, detail: "must be local or nfs"}
+}
+
+func minFreeBytes(env map[string]string) (uint64, *Refusal) {
+	v, ok := env[envMinFreeBytes]
+	if !ok {
+		return defaultMinFreeBytes, nil
+	}
+	n, err := strconv.ParseUint(v, 10, 64)
+	if err != nil {
+		return 0, &Refusal{Reason: reasonMinFreeBytesInvalid, Variable: envMinFreeBytes, detail: "must be a number of bytes written in decimal digits, at most 18446744073709551615"}
+	}
+	return n, nil
+}
+
+func checkSubdirectory(dataDir, name string, uid int, owner func(fs.FileInfo) (int, bool)) *Refusal {
+	fi, err := os.Lstat(filepath.Join(dataDir, name))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return &Refusal{Reason: name + "_dir_unusable", detail: name + "/ cannot be inspected: " + cause(err)}
+	case !fi.IsDir():
+		return &Refusal{Reason: name + "_dir_not_directory", detail: name + "/ is not a directory"}
+	}
+	if got, ok := owner(fi); !ok || got != uid {
+		return &Refusal{Reason: name + "_dir_foreign_owner", detail: name + "/ is not owned by the current user"}
+	}
+	if fi.Mode()&(fs.ModePerm|fs.ModeSetuid|fs.ModeSetgid|fs.ModeSticky) != 0o700 {
+		return &Refusal{Reason: name + "_dir_permissions", detail: name + "/ must have mode 0700: full access for its owner, none for group or others, and no setuid, setgid or sticky bit"}
+	}
+	return nil
 }
 
 func dataDirectory(env map[string]string, uid int, owner func(fs.FileInfo) (int, bool)) (string, *Refusal) {
