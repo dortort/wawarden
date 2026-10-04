@@ -32,6 +32,8 @@ type Options struct {
 	Profile      Profile
 	MinFreeBytes uint64
 	Logger       *slog.Logger
+
+	readTimeout time.Duration
 }
 
 type Store struct {
@@ -45,7 +47,7 @@ type Store struct {
 }
 
 func Open(ctx context.Context, opts Options) (*Store, error) {
-	d, err := db.Open(ctx, db.Archive, db.Options{DataDir: opts.DataDir, UID: opts.UID, Profile: opts.Profile, Logger: opts.Logger})
+	d, err := db.Open(ctx, db.Archive, db.Options{DataDir: opts.DataDir, UID: opts.UID, Profile: opts.Profile, Logger: opts.Logger, ReadTimeout: opts.readTimeout})
 	if err != nil {
 		return nil, err
 	}

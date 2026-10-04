@@ -454,7 +454,7 @@ func TestInterruptedCallsKeepTheConnectionAndTheLock(t *testing.T) {
 
 func TestADisposableConnectionLosesTheLockOnInterrupt(t *testing.T) {
 	opts, _ := testOptions(t)
-	opts.readTimeout = 100 * time.Millisecond
+	opts.ReadTimeout = 100 * time.Millisecond
 	opts.disposable = true
 	d := mustOpen(t, opts)
 	if err := slowStatement(d, t.Context()); !errors.Is(err, context.DeadlineExceeded) {

@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -39,6 +40,7 @@ type proof struct {
 func newProof(t *testing.T) *proof {
 	t.Helper()
 	opts := testOptions(t)
+	opts.readTimeout = time.Minute
 	s := openWith(t, opts)
 	for i, text := range controls {
 		insert(t, s, textMessage(t, groupJID, fmt.Sprintf("CTRL%d", i), bob, text))
@@ -56,6 +58,18 @@ func newProof(t *testing.T) *proof {
 		t.Fatalf("only %d of the canary's trigrams are distinctive", len(p.trigrams))
 	}
 	return p
+}
+
+func TestTheProofsReadDeadlineReachesTheDatabase(t *testing.T) {
+	opts := testOptions(t)
+	opts.readTimeout = time.Nanosecond
+	s, err := Open(t.Context(), opts)
+	if err == nil {
+		_ = s.Close()
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Open with a read deadline of 1 ns = %v, want the schema read to run out of time", err)
+	}
 }
 
 func (p *proof) files() []byte {

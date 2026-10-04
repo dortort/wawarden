@@ -54,17 +54,17 @@ const (
 )
 
 type Options struct {
-	DataDir string
-	UID     int
-	Profile Profile
-	Logger  *slog.Logger
+	DataDir     string
+	UID         int
+	Profile     Profile
+	Logger      *slog.Logger
+	ReadTimeout time.Duration
 
 	owner        func(fs.FileInfo) (int, bool)
 	statfs       func(string, *syscall.Statfs_t) error
 	busyTimeout  time.Duration
 	acquireFor   time.Duration
 	retryBase    time.Duration
-	readTimeout  time.Duration
 	writeTimeout time.Duration
 	pragmas      []string
 	disposable   bool
@@ -131,7 +131,7 @@ func Open(ctx context.Context, name Name, opts Options) (*DB, error) {
 		logger:       opts.Logger,
 		profile:      opts.Profile,
 		statfs:       opts.statfs,
-		readTimeout:  opts.readTimeout,
+		readTimeout:  opts.ReadTimeout,
 		writeTimeout: opts.writeTimeout,
 		backupPages:  backupPagesPerStep,
 	}
@@ -163,8 +163,8 @@ func defaults(o *Options) {
 	if o.retryBase == 0 {
 		o.retryBase = defaultRetryBase
 	}
-	if o.readTimeout == 0 {
-		o.readTimeout = defaultReadTimeout
+	if o.ReadTimeout == 0 {
+		o.ReadTimeout = defaultReadTimeout
 	}
 	if o.writeTimeout == 0 {
 		o.writeTimeout = defaultWriteTimeout
