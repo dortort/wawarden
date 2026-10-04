@@ -411,17 +411,64 @@ func f(h http.Handler, hs []holder) {
 	register("/", h)
 }
 `},
+		{name: "route internals outside register.go", rel: "internal/api/extra.go", want: 6, src: `package api
+
+import "net/http"
+
+func f(rt *router, h http.HandlerFunc) {
+	rt.register(route{pattern: "GET /x", class: classRead}, h)
+	_ = rt.register
+	_ = (*router).register
+	_ = decided[int]
+	rt.mux.ServeHTTP(nil, nil)
+	_ = router{}.mux
+}
+`},
 		{name: "mux in register.go", rel: muxFile, src: `package api
 
 import "net/http"
 
 type router struct{ mux *http.ServeMux }
 
+func (rt *router) register(pattern string, h http.HandlerFunc) { rt.mux.Handle(pattern, h) }
+
 func f(h http.Handler) {
 	mux := http.NewServeMux()
 	mux.Handle("/", h)
 	mux.HandleFunc("/", h.ServeHTTP)
-	_ = router{mux: mux}
+	rt := &router{mux: mux}
+	rt.register("/", decided[int](nil, nil))
+}
+`},
+		{name: "routes through the policy helpers elsewhere in api", rel: "internal/api/api.go", src: `package api
+
+func f(p *pipeline, mux int) {
+	p.router.admin("GET /metrics", nil)
+	p.router.read("GET /r", nil)
+	p.router.write("POST /w", nil)
+	_ = p.router.routes
+	_ = mux
+}
+`},
+		{name: "route internals in an api test", rel: "internal/api/x_test.go", src: `package api
+
+func f(rt *router) {
+	rt.register(route{}, nil)
+	_ = decided[int]
+	_ = rt.mux
+}
+`},
+		{name: "methods named register and fields named mux in other packages", rel: "internal/metrics/x.go", src: `package metrics
+
+type registry struct{ mux int }
+
+func (r *registry) register(name string) int { return r.mux }
+
+func decided() {}
+
+func f(r *registry) {
+	_ = r.register("x")
+	decided()
 }
 `},
 		{name: "mux in a test", rel: "internal/app/x_test.go", src: `package app
@@ -460,10 +507,19 @@ func checkMux(f *sourceFile) []string {
 		return nil
 	}
 	var out []string
+	internal := func(id *ast.Ident) {
+		out = append(out, f.at(id, "%s outside %s reaches the mux without the grant-minting read, write or admin helpers", id.Name, muxFile))
+	}
 	ast.Inspect(f.file, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && f.dir == apiDir && id.Name == "decided" {
+			internal(id)
+		}
 		sel, ok := n.(*ast.SelectorExpr)
 		if !ok {
 			return true
+		}
+		if f.dir == apiDir && (sel.Sel.Name == "register" || sel.Sel.Name == "mux") {
+			internal(sel.Sel)
 		}
 		if s, p := f.ref(sel); s != nil {
 			if p == "net/http" && (s.Sel.Name == "NewServeMux" || s.Sel.Name == "ServeMux") {
