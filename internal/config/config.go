@@ -284,6 +284,9 @@ func logLevel(env map[string]string) (slog.Level, *Refusal) {
 
 func dataDirectory(env map[string]string, uid int, owner func(fs.FileInfo) (int, bool)) (string, *Refusal) {
 	path := lookup(env, envDataDir, defaultDataDir)
+	if path != "" {
+		path = filepath.Clean(path)
+	}
 	fi, err := os.Lstat(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		if err = os.Mkdir(path, 0o700); err == nil {

@@ -189,15 +189,29 @@ func TestDataDirectoryRefusals(t *testing.T) {
 	if err := os.Symlink(dirWithMode(t, 0o700), link); err != nil {
 		t.Fatalf("Symlink: %v", err)
 	}
+	dangling, target := filepath.Join(t.TempDir(), "dangling"), filepath.Join(t.TempDir(), "target")
+	if err := os.Symlink(target, dangling); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := os.Lstat(target); err == nil {
+			t.Error("a refused start created the target of a dangling symbolic link")
+		}
+	})
 	tests := []struct {
 		name   string
 		path   string
 		owner  int
 		reason string
 	}{
+		{name: "empty", path: "", owner: testUID, reason: "data_dir_unusable"},
 		{name: "missing parent", path: filepath.Join(t.TempDir(), "absent", "data"), owner: testUID, reason: "data_dir_unusable"},
 		{name: "regular file", path: file, owner: testUID, reason: "data_dir_not_directory"},
 		{name: "symbolic link", path: link, owner: testUID, reason: "data_dir_not_directory"},
+		{name: "symbolic link with a trailing slash", path: link + "/", owner: testUID, reason: "data_dir_not_directory"},
+		{name: "symbolic link with a trailing dot", path: link + "/.", owner: testUID, reason: "data_dir_not_directory"},
+		{name: "symbolic link with a doubled slash", path: link + "//", owner: testUID, reason: "data_dir_not_directory"},
+		{name: "dangling symbolic link with a trailing slash", path: dangling + "/", owner: testUID, reason: "data_dir_not_directory"},
 		{name: "foreign owner", path: dirWithMode(t, 0o700), owner: otherUID, reason: "data_dir_foreign_owner"},
 		{name: "root-owned", path: dirWithMode(t, 0o700), owner: 0, reason: "data_dir_foreign_owner"},
 		{name: "mode 0750", path: dirWithMode(t, 0o750), owner: testUID, reason: "data_dir_permissions"},
@@ -228,7 +242,7 @@ func TestDataDirectoryRefusals(t *testing.T) {
 
 func TestDataDirectoryIsCreatedPrivate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data")
-	cfg, r := Load(environ(map[string]string{envDataDir: path}), testOptions())
+	cfg, r := Load(environ(map[string]string{envDataDir: path + "/"}), testOptions())
 	if r != nil {
 		t.Fatalf("Load: %v", r)
 	}
