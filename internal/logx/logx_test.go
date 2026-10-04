@@ -205,6 +205,54 @@ func TestLinesCarryingXMLAreDropped(t *testing.T) {
 	}
 }
 
+func TestLinesCarryingEscapedTagsAreDropped(t *testing.T) {
+	dropped := `{"time":"2026-01-02T03:04:05.006Z","level":"WARN","msg":"log line dropped","event":"log_dropped","reason":"xml"}` + "\n"
+	backslash := string(rune(92))
+	lt, gt := backslash+"u003c", backslash+"u003e"
+	stanza, err := json.Marshal(map[string]string{"msg": `<message to="` + canary + `"><body>synthetic secret text</body></message>`})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !bytes.Contains(stanza, []byte(lt)) || bytes.IndexByte(stanza, '<') >= 0 {
+		t.Fatalf("json.Marshal wrote %s with its tags unescaped, so this test proves nothing", stanza)
+	}
+	for name, line := range map[string]string{
+		"json.Marshal":                  string(stanza),
+		"self-closing tag":              `{"msg":"` + lt + "ack/" + gt + `"}`,
+		"upper-case hexadecimal digits": `{"msg":"` + backslash + "u003Cack/" + backslash + "u003E" + `"}`,
+		"closing tag":                   `{"msg":"` + lt + "/message" + gt + `"}`,
+	} {
+		w, out := keyedWriter(t)
+		if got := through(t, w, out, line+"\n"); got != dropped {
+			t.Errorf("%s: Write(%q) wrote %q, want the log_dropped line", name, line, got)
+		}
+	}
+
+	w, out := keyedWriter(t)
+	logger := New(w, slog.LevelDebug)
+	for _, text := range []string{
+		string(stanza),
+		`{"msg":"` + lt + "iq" + backslash + `n id=\"1\"/` + gt + `"}`,
+	} {
+		before := len(out.String())
+		logger.Error("failed", "error", errors.New(text))
+		if got := out.String()[before:]; got != dropped {
+			t.Errorf("logging an error of text %q wrote %q, want the log_dropped line", text, got)
+		}
+	}
+
+	for _, line := range []string{
+		`{"msg":"a ` + lt + ` b and c ` + gt + ` d"}`,
+		`{"msg":"value ` + lt + "nil" + gt + `"}`,
+		`{"msg":"quoted ` + backslash + `"text` + backslash + `" and ` + lt + "unknown" + gt + `"}`,
+	} {
+		w, out := keyedWriter(t)
+		if got := through(t, w, out, line+"\n"); got != line+"\n" {
+			t.Errorf("Write(%q) wrote %q, want it unchanged", line, got)
+		}
+	}
+}
+
 func TestEachLineOfAWriteIsCheckedOnItsOwn(t *testing.T) {
 	w, out := keyedWriter(t)
 	got := through(t, w, out, "{\"a\":\"15550100001@s.whatsapp.net\"}\n{\"b\":\"<ack/>\"}\n{\"c\":\"kept\"}")

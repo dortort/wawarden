@@ -24,7 +24,7 @@ const (
 
 const (
 	xmlName      = `[A-Za-z_][\w:.-]*`
-	xmlSpace     = `(?:\s|\\[nrt])+`
+	xmlSpace     = `(?:\s|\\+[nrt])+`
 	xmlAttribute = xmlSpace + xmlName + `\s*=\s*(?:\\?"[^"]*"|'[^']*')`
 )
 
@@ -32,7 +32,7 @@ var (
 	jidPattern  = regexp.MustCompile(`(?i)[0-9a-z._:+-]+@(s\.whatsapp\.net|c\.us|lid|g\.us|broadcast|newsletter|hosted\.lid|hosted|bot|msgr|interop)\b`)
 	userPattern = regexp.MustCompile(`[0-9][0-9._:-]*$`)
 	xmlPattern  = regexp.MustCompile(`</` + xmlName + `\s*>|<` + xmlName + `(?:` + xmlAttribute + `)*\s*/>|<` + xmlName + `(?:` + xmlAttribute + `)+\s*>|<!--|<!\[CDATA\[|<\?xml`)
-	escapedTag  = strings.NewReplacer(`<`, "<", `<`, "<", `>`, ">", `>`, ">")
+	escapedTag  = regexp.MustCompile(`\\+(u003[cCeE]|")`)
 )
 
 type Writer struct {
@@ -85,10 +85,20 @@ func (w *Writer) scrub(line []byte) []byte {
 }
 
 func carriesXML(line []byte) bool {
-	if bytes.Contains(line, []byte(`\u003`)) {
-		line = []byte(escapedTag.Replace(string(line)))
+	if bytes.IndexByte(line, '\\') >= 0 {
+		line = escapedTag.ReplaceAllFunc(line, unescapeTag)
 	}
 	return bytes.IndexByte(line, '<') >= 0 && xmlPattern.Match(line)
+}
+
+func unescapeTag(escape []byte) []byte {
+	switch escape[len(escape)-1] {
+	case 'c', 'C':
+		return []byte("<")
+	case 'e', 'E':
+		return []byte(">")
+	}
+	return []byte(`"`)
 }
 
 func (w *Writer) pseudonymise(line []byte) []byte {
