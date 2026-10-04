@@ -444,30 +444,33 @@ func TestNoListenerSendsAccessControlHeaders(t *testing.T) {
 
 func TestNonLoopbackListenerWarns(t *testing.T) {
 	tests := []struct {
-		name   string
-		listen string
-		warned bool
+		name                string
+		listen, adminListen string
+		warned              []string
 	}{
-		{name: "every ipv4 address", listen: "0.0.0.0:0", warned: true},
-		{name: "loopback", listen: "127.0.0.1:0"},
+		{name: "client on every ipv4 address", listen: "0.0.0.0:0", adminListen: "127.0.0.1:0", warned: []string{"client"}},
+		{name: "admin on every ipv4 address", listen: "127.0.0.1:0", adminListen: "0.0.0.0:0", warned: []string{"admin"}},
+		{name: "loopback", listen: "127.0.0.1:0", adminListen: "127.0.0.1:0"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := testConfig(t, token.NewAdmin())
 			cfg.Listen = netip.MustParseAddrPort(tt.listen)
+			cfg.AdminListen = netip.MustParseAddrPort(tt.adminListen)
 			_, logs, stop := start(t, cfg, noClients{})
 			if err := stop(); err != nil {
 				t.Fatalf("Run = %v", err)
 			}
-			warnings := logs.find("listener_not_loopback")
-			if !tt.warned {
-				if len(warnings) != 0 {
-					t.Fatalf("loopback listeners logged %v", warnings)
+			var warned []string
+			for _, rec := range logs.find("listener_not_loopback") {
+				name, _ := rec["listener"].(string)
+				if rec["level"] != "WARN" {
+					t.Fatalf("the %s warning was logged at %v, want WARN", name, rec["level"])
 				}
-				return
+				warned = append(warned, name)
 			}
-			if len(warnings) != 1 || warnings[0]["listener"] != "client" || warnings[0]["level"] != "WARN" {
-				t.Fatalf("warnings = %v, want one for the client listener", warnings)
+			if !slices.Equal(warned, tt.warned) {
+				t.Fatalf("non-loopback warnings for %v, want exactly %v", warned, tt.warned)
 			}
 		})
 	}
