@@ -178,6 +178,7 @@ type reply struct {
 	status int
 	header http.Header
 	body   string
+	close  bool
 }
 
 func do(t *testing.T, method string, to netip.AddrPort, path string, header http.Header) (reply, error) {
@@ -395,6 +396,33 @@ func TestShutdownIsBoundedByTheGracePeriod(t *testing.T) {
 	}
 }
 
+func TestUnsentBodiesDoNotHoldTheShutdown(t *testing.T) {
+	a, _, stop := start(t, testConfig(t, token.NewAdmin()), noClients{})
+	const head, unsent = "Host: wawarden.test\r\n", "Content-Length: 100000\r\n\r\nabc"
+	tests := []struct {
+		listener, request string
+		status            int
+	}{
+		{listener: "client", request: "POST /v1/x HTTP/1.1\r\n" + head + unsent, status: http.StatusUnauthorized},
+		{listener: "client", request: "POST /v1/x HTTP/1.1\r\n" + head + "Transfer-Encoding: chunked\r\n\r\n10\r\nabc", status: http.StatusUnauthorized},
+		{listener: "client", request: "POST /v1/x HTTP/1.1\r\n" + head + "Expect: 100-continue\r\nContent-Length: 100000\r\n\r\n", status: http.StatusUnauthorized},
+		{listener: "client", request: "POST /v1/x HTTP/1.1\r\n" + head + "Origin: https://attacker.example\r\n" + unsent, status: http.StatusForbidden},
+		{listener: "client", request: "OPTIONS /v1/x HTTP/1.1\r\n" + head + unsent, status: http.StatusMethodNotAllowed},
+		{listener: "admin", request: "POST /metrics HTTP/1.1\r\n" + head + unsent, status: http.StatusUnauthorized},
+		{listener: "health", request: "GET /healthz HTTP/1.1\r\n" + head + unsent, status: http.StatusOK},
+		{listener: "health", request: "POST /healthz HTTP/1.1\r\n" + head + unsent, status: http.StatusMethodNotAllowed},
+		{listener: "health", request: "POST /elsewhere HTTP/1.1\r\n" + head + unsent, status: http.StatusNotFound},
+	}
+	for _, tt := range tests {
+		if r := rawDo(t, addr(t, a, tt.listener), tt.request); r.status != tt.status || !r.close {
+			t.Fatalf("%q on the %s listener = %d (close %v), want %d with Connection: close", tt.request, tt.listener, r.status, r.close, tt.status)
+		}
+	}
+	if err := stop(); err != nil {
+		t.Fatalf("Run = %v, want a clean shutdown while answered callers still hold their bodies back", err)
+	}
+}
+
 type failingSet struct {
 	listenerSet
 	errs chan error
@@ -560,7 +588,7 @@ func rawDo(t *testing.T, to netip.AddrPort, request string) reply {
 	if err != nil {
 		t.Fatalf("dial %v: %v", to, err)
 	}
-	defer func() { _ = conn.Close() }()
+	t.Cleanup(func() { _ = conn.Close() })
 	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatalf("SetDeadline: %v", err)
 	}
@@ -581,7 +609,7 @@ func rawDo(t *testing.T, to netip.AddrPort, request string) reply {
 			t.Errorf("%q on %v carries %s", request, to, k)
 		}
 	}
-	return reply{status: resp.StatusCode, header: resp.Header, body: string(body)}
+	return reply{status: resp.StatusCode, header: resp.Header, body: string(body), close: resp.Close}
 }
 
 func TestAsteriskOptionsGoesThroughTheHandlers(t *testing.T) {
@@ -597,20 +625,16 @@ func TestAsteriskOptionsGoesThroughTheHandlers(t *testing.T) {
 		"admin":  {status: http.StatusForbidden, body: `{"error":"forbidden"}`},
 		"health": refused["health"],
 	}
-	type variant struct {
-		name, head string
-		want       reply
-	}
 	for _, b := range a.Inventory() {
-		variants := []variant{
+		for _, tt := range []struct {
+			name, head string
+			want       reply
+		}{
 			{name: "plain", head: "Connection: close\r\n", want: refused[b.Name]},
 			{name: "with Origin", head: "Origin: https://attacker.example\r\nConnection: close\r\n", want: browser[b.Name]},
 			{name: "with Sec-Fetch-Site", head: "Sec-Fetch-Site: cross-site\r\nConnection: close\r\n", want: browser[b.Name]},
-		}
-		if b.Name != "health" {
-			variants = append(variants, variant{name: "with an unsent body", head: "Content-Length: 10\r\n", want: refused[b.Name]})
-		}
-		for _, tt := range variants {
+			{name: "with an unsent body", head: "Content-Length: 10\r\n", want: refused[b.Name]},
+		} {
 			t.Run(b.Name+" "+tt.name, func(t *testing.T) {
 				r := rawDo(t, b.Addr, "OPTIONS * HTTP/1.1\r\nHost: wawarden.test\r\n"+tt.head+"\r\n")
 				if r.status != tt.want.status || r.body != tt.want.body {

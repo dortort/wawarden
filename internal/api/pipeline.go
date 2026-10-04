@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/safego"
@@ -44,11 +45,17 @@ func (p *pipeline) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func refuse(w http.ResponseWriter, r *http.Request, status int, code string) {
-	if r.ContentLength != 0 {
-		// Otherwise net/http reads up to 256 KiB of the unread body before it sends this reply.
-		w.Header().Set("Connection", "close")
-	}
+	ignoreBody(w, r)
 	writeError(w, status, code)
+}
+
+func ignoreBody(w http.ResponseWriter, r *http.Request) {
+	if r.ContentLength == 0 {
+		return
+	}
+	// Otherwise net/http waits for up to 256 KiB of the unread body, both before and after the reply.
+	w.Header().Set("Connection", "close")
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now())
 }
 
 func recovering(name string, w http.ResponseWriter, r *http.Request, serve http.HandlerFunc) {

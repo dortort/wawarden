@@ -78,6 +78,7 @@ func NewHealthHandler(ready func() bool) http.Handler {
 	}
 	serve := func(w http.ResponseWriter, r *http.Request) {
 		setSecurityHeaders(w.Header())
+		ignoreBody(w, r)
 		switch {
 		case r.URL.Path != "/healthz":
 			writeError(w, http.StatusNotFound, codeNotFound)
