@@ -13,6 +13,7 @@ func main() {
 	syscall.Umask(0o077)
 	debug.SetTraceback("single")
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	context.AfterFunc(ctx, stop)
 	code := run(ctx, os.Args[1:], os.Environ(), os.Stdout, os.Stderr)
 	stop()
 	os.Exit(code)
