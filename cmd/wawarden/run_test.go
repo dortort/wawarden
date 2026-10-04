@@ -254,10 +254,10 @@ func TestServeKeysItsOutputWithTheMasterKey(t *testing.T) {
 	var reference bytes.Buffer
 	scrubber := logx.NewWriter(&reference)
 	scrubber.SetKey(master.LogRedactKey())
-	if _, err := io.WriteString(scrubber, chat); err != nil {
+	if _, err := io.WriteString(scrubber, chat+"\n"); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	pseudonym := reference.String()
+	pseudonym := strings.TrimSuffix(reference.String(), "\n")
 
 	var loaded, panicked []map[string]any
 	for line := range strings.Lines(stdout.String()) {

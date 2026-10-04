@@ -16,10 +16,13 @@ import (
 )
 
 const (
-	keySize     = 32
-	unkeyed     = "jid:unkeyed"
-	phoneServer = "s.whatsapp.net"
-	legacyPhone = "c.us"
+	keySize       = 32
+	maxLineBytes  = 64 << 10
+	unkeyed       = "jid:unkeyed"
+	phoneServer   = "s.whatsapp.net"
+	legacyPhone   = "c.us"
+	reasonXML     = "xml"
+	reasonTooLong = "too_long"
 )
 
 const (
@@ -36,10 +39,12 @@ var (
 )
 
 type Writer struct {
-	mu  sync.Mutex
-	out io.Writer
-	key []byte
-	now func() time.Time
+	mu       sync.Mutex
+	out      io.Writer
+	key      []byte
+	now      func() time.Time
+	pending  []byte
+	overlong bool
 }
 
 func NewWriter(out io.Writer) *Writer {
@@ -62,8 +67,21 @@ func (w *Writer) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	var out []byte
-	for line := range bytes.Lines(p) {
-		out = append(out, w.scrub(line)...)
+	for chunk := range bytes.Lines(p) {
+		body, complete := bytes.CutSuffix(chunk, []byte("\n"))
+		w.overlong = w.overlong || len(w.pending)+len(body) > maxLineBytes
+		if w.overlong {
+			w.pending = w.pending[:0]
+		} else {
+			w.pending = append(w.pending, body...)
+		}
+		if complete {
+			out = append(out, w.scrub(w.pending, w.overlong)...)
+			w.pending, w.overlong = w.pending[:0], false
+		}
+	}
+	if len(out) == 0 {
+		return len(p), nil
 	}
 	if _, err := w.out.Write(out); err != nil {
 		return 0, err
@@ -71,17 +89,19 @@ func (w *Writer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (w *Writer) scrub(line []byte) []byte {
-	body, newline := bytes.CutSuffix(line, []byte("\n"))
-	if carriesXML(body) {
-		return fmt.Appendf(nil, `{"time":%q,"level":"WARN","msg":"log line dropped","event":"log_dropped","reason":"xml"}`+"\n",
-			w.now().UTC().Format(time.RFC3339Nano))
+func (w *Writer) scrub(line []byte, overlong bool) []byte {
+	switch {
+	case overlong:
+		return w.dropped(reasonTooLong)
+	case carriesXML(line):
+		return w.dropped(reasonXML)
 	}
-	out := w.pseudonymise(body)
-	if newline {
-		out = append(out, '\n')
-	}
-	return out
+	return append(w.pseudonymise(line), '\n')
+}
+
+func (w *Writer) dropped(reason string) []byte {
+	return fmt.Appendf(nil, `{"time":%q,"level":"WARN","msg":"log line dropped","event":"log_dropped","reason":%q}`+"\n",
+		w.now().UTC().Format(time.RFC3339Nano), reason)
 }
 
 func carriesXML(line []byte) bool {

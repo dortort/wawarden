@@ -158,13 +158,10 @@ func TestTextThatIsNotAnIdentifierIsKept(t *testing.T) {
 		`{"msg":"a < b and c > d, x<3, got <unknown> state, <-chan int"}`,
 		`{"msg":"<message> without attributes"}`,
 		`{"msg":"plain"}`,
-		`plain text without a newline`,
+		`plain text`,
 	} {
 		w, out := keyedWriter(t)
-		want := line
-		if !strings.HasPrefix(line, "plain text") {
-			want += "\n"
-		}
+		want := line + "\n"
 		if got := through(t, w, out, want); got != want {
 			t.Errorf("Write(%q) wrote %q, want it unchanged", want, got)
 		}
@@ -255,12 +252,78 @@ func TestLinesCarryingEscapedTagsAreDropped(t *testing.T) {
 
 func TestEachLineOfAWriteIsCheckedOnItsOwn(t *testing.T) {
 	w, out := keyedWriter(t)
-	got := through(t, w, out, "{\"a\":\"15550100001@s.whatsapp.net\"}\n{\"b\":\"<ack/>\"}\n{\"c\":\"kept\"}")
+	got := through(t, w, out, "{\"a\":\"15550100001@s.whatsapp.net\"}\n{\"b\":\"<ack/>\"}\n{\"c\":\"kept\"}\n")
 	want := `{"a":"` + expected("15550100001@s.whatsapp.net") + `"}` + "\n" +
 		`{"time":"2026-01-02T03:04:05.006Z","level":"WARN","msg":"log line dropped","event":"log_dropped","reason":"xml"}` + "\n" +
-		`{"c":"kept"}`
+		`{"c":"kept"}` + "\n"
 	if got != want {
 		t.Fatalf("wrote %q\nwant  %q", got, want)
+	}
+}
+
+func TestALineIsWrittenOnlyWhenItEnds(t *testing.T) {
+	dropped := func(reason string) string {
+		return `{"time":"2026-01-02T03:04:05.006Z","level":"WARN","msg":"log line dropped","event":"log_dropped","reason":"` + reason + `"}` + "\n"
+	}
+	split := expected("15550100173@s.whatsapp.net")
+	tests := []struct {
+		name   string
+		chunks []string
+		want   []string
+	}{
+		{
+			name:   "identifier split across two writes",
+			chunks: []string{`{"msg":"155501001`, "73@s.whatsapp.net\"}\n"},
+			want:   []string{"", `{"msg":"` + split + `"}` + "\n"},
+		},
+		{
+			name:   "identifier split at its server",
+			chunks: []string{`{"msg":"15550100173@s.what`, "sapp.net\"}\n{\"n\":1}\n"},
+			want:   []string{"", `{"msg":"` + split + `"}` + "\n" + `{"n":1}` + "\n"},
+		},
+		{
+			name:   "tag split across two writes",
+			chunks: []string{`{"msg":"<iq id=`, `\"1\"/>"}` + "\n"},
+			want:   []string{"", dropped("xml")},
+		},
+		{
+			name:   "line ended by a write of its newline",
+			chunks: []string{`{"msg":"15550100173@s.whatsapp.net"}`, "\n"},
+			want:   []string{"", `{"msg":"` + split + `"}` + "\n"},
+		},
+		{
+			name:   "whole lines and the start of the next",
+			chunks: []string{"{\"a\":1}\n{\"b\":\"155501001", "73@s.whatsapp.net\"}\n"},
+			want:   []string{`{"a":1}` + "\n", `{"b":"` + split + `"}` + "\n"},
+		},
+		{
+			name:   "line of the largest length in pieces",
+			chunks: []string{strings.Repeat("a", maxLineBytes-1), "b", "\n"},
+			want:   []string{"", "", strings.Repeat("a", maxLineBytes-1) + "b\n"},
+		},
+		{
+			name:   "line one byte too long in pieces",
+			chunks: []string{strings.Repeat("a", maxLineBytes), canary, "\n{\"next\":true}\n"},
+			want:   []string{"", "", dropped("too_long") + `{"next":true}` + "\n"},
+		},
+		{
+			name:   "line one byte too long in one write",
+			chunks: []string{strings.Repeat("a", maxLineBytes+1) + "\n"},
+			want:   []string{dropped("too_long")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w, out := keyedWriter(t)
+			for i, chunk := range tt.chunks {
+				if got := through(t, w, out, chunk); got != tt.want[i] {
+					t.Fatalf("write %d of %q wrote %q, want %q", i, chunk, got, tt.want[i])
+				}
+			}
+			if strings.Contains(out.String(), "155501001") {
+				t.Fatalf("part of an identifier reached the output: %q", out.String())
+			}
+		})
 	}
 }
 
