@@ -62,6 +62,10 @@ jobs:
             echo "::error::the release environment has no required reviewers"
             exit 1
           fi
+          if ! jq -e '.can_admins_bypass == false' <<< "$env_json" > /dev/null; then
+            echo "::error::the release environment must not let administrators bypass its protection rules (can_admins_bypass must be false)"
+            exit 1
+          fi
           if ! jq -e '.deployment_branch_policy == {"protected_branches": false, "custom_branch_policies": true}' <<< "$env_json" > /dev/null; then
             echo "::error::the release environment must limit deployments with custom branch policies"
             exit 1

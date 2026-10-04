@@ -24,6 +24,9 @@ of these endpoints answer only to repository administrators.
   `gh api repos/dortort/wawarden/environments/release --jq '[.protection_rules[].type]'`
   prints `["required_reviewers","branch_policy"]`. Self-review is allowed: with a
   single maintainer, preventing it would block every release.
+- **Administrators cannot bypass the `release` environment's protection rules.**
+  `gh api repos/dortort/wawarden/environments/release --jq .can_admins_bypass`
+  prints `false`.
 - **The `release` environment accepts deployments only from `main`.**
   `gh api repos/dortort/wawarden/environments/release --jq .deployment_branch_policy`
   prints `{"custom_branch_policies":true,"protected_branches":false}`, and
@@ -50,8 +53,8 @@ of these endpoints answer only to repository administrators.
 Neither ruleset has bypass actors, so they apply to administrators too.
 
 The release workflow's first job reads the `release` environment through the API
-and stops unless it exists, has a required reviewer, and accepts deployments only
-from the branch `main`. The workflow token cannot read the other settings: check
+and stops unless it exists, has a required reviewer, does not let administrators
+bypass its protection rules, and accepts deployments only from the branch `main`. The workflow token cannot read the other settings: check
 them with the commands above after any change to the repository settings.
 
 ## How a release is produced
