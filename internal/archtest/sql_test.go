@@ -3,7 +3,6 @@ package archtest
 import (
 	"go/ast"
 	"regexp"
-	"strings"
 )
 
 const inBuilder = "internal/store/scoped/inbuilder.go"
@@ -53,48 +52,10 @@ func checkInLists(f *sourceFile) []string {
 		return nil
 	}
 	var out []string
-	report := func(at ast.Node, s string) {
+	literalRuns(f.file, func(at ast.Node, s string) {
 		if inList.MatchString(s) {
 			out = append(out, f.at(at, "SQL IN list outside %s: build IN lists only there", inBuilder))
 		}
-	}
-	var visit func(ast.Node) bool
-	visit = func(n ast.Node) bool {
-		switch e := n.(type) {
-		case *ast.BinaryExpr:
-			operands := addOperands(e)
-			if len(operands) < 2 {
-				return true
-			}
-			var run strings.Builder
-			var start ast.Node
-			flush := func() {
-				if start != nil {
-					report(start, run.String())
-				}
-				run.Reset()
-				start = nil
-			}
-			for _, operand := range operands {
-				if s, ok := stringLit(operand); ok {
-					if start == nil {
-						start = operand
-					}
-					run.WriteString(s)
-					continue
-				}
-				flush()
-				ast.Inspect(operand, visit)
-			}
-			flush()
-			return false
-		case *ast.BasicLit:
-			if s, ok := stringLit(e); ok {
-				report(e, s)
-			}
-		}
-		return true
-	}
-	ast.Inspect(f.file, visit)
+	})
 	return out
 }

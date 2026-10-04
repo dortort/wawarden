@@ -182,6 +182,47 @@ func stringLit(e ast.Expr) (string, bool) {
 	return s, err == nil
 }
 
+func literalRuns(root ast.Node, visit func(at ast.Node, s string)) {
+	var walk func(ast.Node) bool
+	walk = func(n ast.Node) bool {
+		switch e := n.(type) {
+		case *ast.BinaryExpr:
+			operands := addOperands(e)
+			if len(operands) < 2 {
+				return true
+			}
+			var run strings.Builder
+			var start ast.Node
+			flush := func() {
+				if start != nil {
+					visit(start, run.String())
+				}
+				run.Reset()
+				start = nil
+			}
+			for _, operand := range operands {
+				if s, ok := stringLit(operand); ok {
+					if start == nil {
+						start = operand
+					}
+					run.WriteString(s)
+					continue
+				}
+				flush()
+				ast.Inspect(operand, walk)
+			}
+			flush()
+			return false
+		case *ast.BasicLit:
+			if s, ok := stringLit(e); ok {
+				visit(e, s)
+			}
+		}
+		return true
+	}
+	ast.Inspect(root, walk)
+}
+
 func constString(e ast.Expr) (string, bool) {
 	if e == nil {
 		return "", false
