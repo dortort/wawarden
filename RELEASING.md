@@ -106,11 +106,19 @@ release workflow, by CI and by anyone reproducing a release:
   must show no `dev` tag, `vcs.revision` equal to the commit, `vcs.modified=false`,
   `CGO_ENABLED=0` and the right architecture; the binary must not contain the
   marker string that only dev builds carry; and it must contain the version
-  variable that the link step sets. On a Linux host, the script also runs the
-  binary built for the host's architecture: `wawarden version` must print
-  exactly the requested version, the commit and `dev build false`. The release
-  builds on an `amd64` runner and rebuilds on an `arm64` runner, so both release
-  binaries are run before anything is published.
+  variable that the link step sets. On a Linux host, and only in its `binaries`
+  and `oci` modes, the script also runs the binary built for the host's
+  architecture, with an empty environment (`env -i`): `wawarden version` must
+  print exactly the requested version, the commit and `dev build false`. In the
+  release workflow, the `build` job runs the `amd64` binary on an `amd64` runner
+  and the `rebuild` job runs the `arm64` binary on an `arm64` runner, so both
+  release binaries are run before anything is published. The publishing job
+  runs the script in `push` mode, which runs none of the binaries it builds:
+  that job holds the write permissions, so it runs no code built from the
+  repository. It proves instead that its binaries are byte-identical to the
+  ones the two other jobs ran: the image it pushes must have the `build` job's
+  index digest, and its `SHA256SUMS` must equal the `build` job's, which the
+  `rebuild` job reproduced.
 - `SOURCE_DATE_EPOCH` is the commit time. File times inside the image are set
   to it.
 - A multi-arch OCI image built by BuildKit from a digest-pinned

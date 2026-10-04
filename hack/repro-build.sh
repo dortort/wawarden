@@ -90,12 +90,16 @@ check_binary() {
   fi
   go tool nm "$bin" | grep -E "[[:space:]]$module/internal/buildinfo\.Version\$" > /dev/null ||
     die "$bin lacks $module/internal/buildinfo.Version, the -X target symbol"
+  if [ "$mode" = push ]; then
+    log "$bin not run: push mode runs no binary it builds"
+    return
+  fi
   if [ "$hostos" != linux ] || [ "$arch" != "$hostarch" ]; then
     log "$bin not run: the host is $hostos/$hostarch"
     return
   fi
   local reported expected
-  reported=$("$bin" version) || die "$bin version failed"
+  reported=$(env -i "$bin" version) || die "$bin version failed"
   expected=$(printf 'wawarden %s\nrevision %s\ndev build false' "$VERSION" "$revision")
   [ "$reported" = "$expected" ] || die "$bin version does not report version $VERSION, revision $revision and a release build"
   log "$bin version reports $VERSION, revision $revision and a release build"
