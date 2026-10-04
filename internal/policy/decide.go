@@ -29,7 +29,7 @@ func DecideWrite(c *Client, now time.Time) (WriteGrant, bool) {
 }
 
 func DecideAdmin(cred AdminCredential, presented string) (AdminGrant, bool) {
-	if !cred.ok || presented == "" {
+	if !cred.ok || !wellFormedAdminToken(presented) {
 		return AdminGrant{}, false
 	}
 	sum := sha256.Sum256([]byte(presented))

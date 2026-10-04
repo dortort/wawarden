@@ -17,6 +17,7 @@ import (
 
 	"github.com/dortort/wawarden/internal/app"
 	"github.com/dortort/wawarden/internal/buildinfo"
+	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/token"
 )
 
@@ -107,11 +108,15 @@ func TestAdminInit(t *testing.T) {
 	if !okToken || !okHash {
 		t.Fatalf("stdout = %q", stdout)
 	}
-	if !token.ValidAdmin(secret) {
-		t.Fatalf("the printed token %q fails the syntax and checksum check", secret)
-	}
 	if hash != token.Hash(secret) {
 		t.Fatalf("printed hash %s, want the token's SHA-256 %s", hash, token.Hash(secret))
+	}
+	cred, err := policy.ParseAdminCredential(hash)
+	if err != nil {
+		t.Fatalf("the printed hash does not parse as an admin credential: %v", err)
+	}
+	if _, ok := policy.DecideAdmin(cred, secret); !ok {
+		t.Fatalf("the printed token %q fails the syntax and checksum check against its own hash", secret)
 	}
 	if n := strings.Count(stdout+stderr, secret); n != 1 {
 		t.Fatalf("the token is printed %d times, want once", n)

@@ -19,8 +19,8 @@ var bannedImports = set("net/http/pprof", "expvar", "plugin", "unsafe", "C")
 
 var apiDenied = []string{"database/sql", "modernc.org/sqlite", "go.mau.fi/whatsmeow", module + "/internal/store/ingest"}
 
-var policyAllowed = set("bytes", "cmp", "crypto/sha256", "crypto/subtle", "encoding/hex", "errors", "iter", "maps", "slices",
-	"sort", "strconv", "strings", "time", "unicode", "unicode/utf8")
+var policyAllowed = set("bytes", "cmp", "crypto/sha256", "crypto/subtle", "encoding/base64", "encoding/binary", "encoding/hex",
+	"errors", "hash/crc32", "iter", "maps", "slices", "sort", "strconv", "strings", "time", "unicode", "unicode/utf8")
 
 var allowedModules []string
 
@@ -131,8 +131,11 @@ import (
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"hash/crc32"
 	"maps"
 	"slices"
 	"time"

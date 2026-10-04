@@ -2,8 +2,17 @@ package policy
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"hash/crc32"
+	"strings"
+)
+
+const (
+	adminTokenPrefix = "wwadm_"
+	adminSecretSize  = 32
 )
 
 var ErrAdminCredential = errors.New("policy: the admin credential must be a SHA-256 written as 64 hexadecimal characters")
@@ -22,4 +31,21 @@ func ParseAdminCredential(s string) (AdminCredential, error) {
 		return AdminCredential{}, ErrAdminCredential
 	}
 	return AdminCredential{sum: sum, ok: true}, nil
+}
+
+func wellFormedAdminToken(s string) bool {
+	i := strings.LastIndexByte(s, '_')
+	if i < 0 {
+		return false
+	}
+	body, sum := s[:i], s[i+1:]
+	encoded, ok := strings.CutPrefix(body, adminTokenPrefix)
+	if !ok {
+		return false
+	}
+	secret, err := base64.RawURLEncoding.DecodeString(encoded)
+	return err == nil &&
+		len(secret) == adminSecretSize &&
+		base64.RawURLEncoding.EncodeToString(secret) == encoded &&
+		sum == hex.EncodeToString(binary.BigEndian.AppendUint32(nil, crc32.ChecksumIEEE([]byte(body))))
 }
