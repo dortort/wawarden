@@ -86,7 +86,7 @@ func TestGoRecoversPanics(t *testing.T) {
 		{name: "runtime error", fn: func() {
 			var s []string
 			i := len(canary)
-			_ = s[i]
+			_ = s[i] //nolint:gosec // G602: the out-of-range index is the panic under test
 		}, wantType: "runtime.boundsError"},
 		{name: "nil", fn: func() { panic(nil) }, wantType: "*runtime.PanicNilError"},
 		{name: "http abort sentinel", fn: func() { panic(http.ErrAbortHandler) }, wantType: "*errors.errorString"},
