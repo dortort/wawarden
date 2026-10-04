@@ -14,7 +14,7 @@ import (
 var adminFormat = regexp.MustCompile(`^wwadm_[A-Za-z0-9_-]{43}_[0-9a-f]{8}$`)
 
 const (
-	sequentialToken = "wwadm_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8_c307c63e"
+	sequentialToken = "wwadm_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8_c307c63e" //nolint:gosec // G101: known-answer vector encoding bytes 0..31, not a credential
 	allOnesToken    = "wwadm___________________________________________8_384c24f2"
 )
 

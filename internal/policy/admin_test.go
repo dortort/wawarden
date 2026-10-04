@@ -11,7 +11,7 @@ import (
 	"github.com/dortort/wawarden/internal/token"
 )
 
-const syntheticAdminToken = "wwadm_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8_c307c63e"
+const syntheticAdminToken = "wwadm_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8_c307c63e" //nolint:gosec // G101: known-answer vector encoding bytes 0..31, not a credential
 
 func mustCredential(t *testing.T, s string) AdminCredential {
 	t.Helper()
