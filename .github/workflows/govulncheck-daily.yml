@@ -11,9 +11,6 @@ concurrency:
   group: govulncheck-daily
   cancel-in-progress: false
 
-env:
-  GOTOOLCHAIN: local
-
 defaults:
   run:
     shell: bash

@@ -17,7 +17,6 @@ concurrency:
 env:
   VERSION: ${{ inputs.version }}
   IMAGE: ghcr.io/dortort/wawarden
-  GOTOOLCHAIN: local
   BUILDX_VERSION: v0.37.1
 
 defaults:
