@@ -131,9 +131,13 @@ release workflow, by CI and by anyone reproducing a release:
   its hash in `go.sum`; with default settings, it checks a new hash against the
   Go checksum database (`sum.golang.org`) before adding it to `go.sum`. The CI
   `modules` job and an architecture test also fail when anything named `vendor`
-  exists at the repository root, and another architecture test requires every
-  workflow that sets up Go to set `GOFLAGS=-mod=readonly` for all its jobs and
-  no other module mode.
+  exists at the repository root. Another architecture test requires every
+  workflow that sets up Go to set `GOFLAGS: -mod=readonly` in its top-level
+  `env`, and fails on any line of such a workflow that mentions `GOFLAGS` but is
+  not exactly `GOFLAGS: -mod=readonly`, and on any `-mod` flag there that is not
+  written `-mod=readonly`, such as `-mod vendor`, `-mod=vendor` or `--mod=mod`.
+  It reads the workflow text only, so it does not see a module mode chosen in a
+  script that a workflow calls.
 - Before packaging, the script checks each binary: its embedded build settings
   must show no `dev` tag, `vcs.revision` equal to the commit, `vcs.modified=false`,
   `CGO_ENABLED=0` and the right architecture; the binary must not contain the
