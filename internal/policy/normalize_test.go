@@ -2,11 +2,14 @@ package policy
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 var canonicalJID = regexp.MustCompile(`^(?:[0-9]{1,24}@(?:s\.whatsapp\.net|lid)|[0-9]{1,24}(?:-[0-9]{1,24})?@g\.us)$`)
+
+var acceptedForm = regexp.MustCompile(`^([0-9]{1,24})(?:(?:\.([0-9]{1,3}))?:([0-9]{1,5}))?@(s\.whatsapp\.net|c\.us|lid)$|^([0-9]{1,24}(?:-[0-9]{1,24})?)@g\.us$`)
 
 var canonicalKinds = map[string]ChatKind{"s.whatsapp.net": PhoneChat, "lid": LIDChat, "g.us": GroupChat}
 
@@ -121,6 +124,26 @@ func mustNormalize(s string) CanonicalChat {
 	return c
 }
 
+func normalizeModel(s string) (string, bool) {
+	m := acceptedForm.FindStringSubmatch(s)
+	switch {
+	case m == nil:
+		return "", false
+	case m[5] != "":
+		return m[5] + "@g.us", true
+	}
+	agent, _ := strconv.Atoi("0" + m[2])
+	device, _ := strconv.Atoi("0" + m[3])
+	if agent > 255 || device > 65535 {
+		return "", false
+	}
+	server := m[4]
+	if server == "c.us" {
+		server = "s.whatsapp.net"
+	}
+	return m[1] + "@" + server, true
+}
+
 func checkCanonical(t *testing.T, c CanonicalChat) {
 	t.Helper()
 	jid := c.JID()
@@ -225,4 +248,27 @@ func TestNormalizeAllocations(t *testing.T) {
 			}
 		})
 	}
+}
+
+func FuzzNormalize(f *testing.F) {
+	for _, tt := range normalizeCases {
+		f.Add(tt.in)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		c, ok := Normalize(s)
+		want, wantOK := normalizeModel(s)
+		if ok != wantOK || c.JID() != want {
+			t.Fatalf("Normalize(%q) = %q, %v, but the accepted forms give %q, %v", s, c.JID(), ok, want, wantOK)
+		}
+		if !ok {
+			if c != (CanonicalChat{}) {
+				t.Fatalf("Normalize(%q) rejected the input but returned %+v, want the zero value", s, c)
+			}
+			return
+		}
+		if len(s) > 128 {
+			t.Fatalf("Normalize accepted a %d-byte input", len(s))
+		}
+		checkCanonical(t, c)
+	})
 }
