@@ -1,9 +1,8 @@
 package api
 
 import (
-	_ "expvar"
+	"io"
 	"net/http"
-	_ "net/http/pprof" //nolint:gosec // registers the profiling routes on the default mux so the test can prove they stay unreachable
 	"slices"
 	"testing"
 
@@ -11,6 +10,14 @@ import (
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/token"
 )
+
+func init() {
+	for _, pattern := range []string{"/debug/pprof/", "/debug/vars"} {
+		http.DefaultServeMux.HandleFunc(pattern, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, "debug")
+		})
+	}
+}
 
 func TestRoutesMatchTheGoldenList(t *testing.T) {
 	golden := map[string][]route{
