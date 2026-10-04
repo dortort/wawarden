@@ -155,7 +155,7 @@ build_args=(
   --build-arg "VERSION=$VERSION"
   --build-arg "REVISION=$revision"
   --annotation "index:org.opencontainers.image.source=$source_url"
-  --annotation "index:org.opencontainers.image.licenses=MIT"
+  --annotation "index:org.opencontainers.image.licenses=GPL-3.0-or-later"
   --annotation "index:org.opencontainers.image.version=$VERSION"
   --annotation "index:org.opencontainers.image.revision=$revision"
   --metadata-file dist/metadata.json

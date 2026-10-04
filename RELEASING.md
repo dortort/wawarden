@@ -1,8 +1,8 @@
 # Releasing and verifying WaWarden
 
 This document describes the repository settings a release depends on, how
-releases are produced, what each release contains, how to verify one, and the
-checklists the maintainer follows.
+releases are produced, what each release contains and under which licences, how
+to verify one, and the checklists the maintainer follows.
 
 ## Repository settings
 
@@ -190,6 +190,23 @@ base image are not listed; an image-level SBOM is planned and not produced yet.
 Signing and attesting use GitHub's OIDC identity for the release workflow on
 `main`. No long-lived signing key exists.
 
+## Licences
+
+WaWarden is licensed under `GPL-3.0-or-later` from milestone M1 on; `v0.1.0` was
+released under the MIT licence. From M1 on, the image's
+`org.opencontainers.image.licenses` label, set in the `Dockerfile`, and the same
+annotation on the image index, set by `hack/repro-build.sh`, are
+`GPL-3.0-or-later`.
+
+No release links a third-party module yet. The following are requirements for
+the first release that does, and for every release after it; the release
+workflow does not meet them yet:
+
+- The release ships the licence text of every module linked into the binaries,
+  inside the image and as a release asset.
+- The corresponding source of the release is its tagged commit together with
+  the module versions that the commit's `go.sum` pins.
+
 ## Verifying a release
 
 Replace `<version>` with the release (for example `v0.1.0`), `<digest>` with the
@@ -352,6 +369,8 @@ remains.
       Scorecard results are checked by hand.
 - [ ] Choose the version under [Versioning](#versioning) and check that the tag
       does not exist.
+- [ ] If `go.mod` requires any module, the release meets the requirements under
+      [Licences](#licences).
 - [ ] Dispatch the workflow on `main`:
       `gh workflow run release.yml --ref main -f version=<version>`.
 - [ ] Before approving the `release` environment, read the run: the commit is the

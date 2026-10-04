@@ -241,4 +241,11 @@ image, the binaries and their SBOMs, and to reproduce a release from source.
 
 ## Licence
 
-MIT. See [`LICENSE`](LICENSE).
+Copyright (C) 2026 Francis Eytan Dortort.
+
+From milestone M1 on, WaWarden is licensed under the GNU General Public License,
+version 3 or (at your option) any later version (`GPL-3.0-or-later`); the
+licence text is in [`LICENSE`](LICENSE). `v0.1.0` was released under the MIT
+licence, which still applies to that release. The licence changed because
+the WhatsApp protocol library that WaWarden will link depends on a component
+licensed under GPL-3.0.

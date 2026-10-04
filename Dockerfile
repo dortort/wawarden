@@ -6,7 +6,7 @@ ARG TARGETARCH
 ARG VERSION
 ARG REVISION
 LABEL org.opencontainers.image.source="https://github.com/dortort/wawarden" \
-      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.licenses="GPL-3.0-or-later" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}"
 COPY --chmod=0555 dist/wawarden_${VERSION}_linux_${TARGETARCH} /wawarden
