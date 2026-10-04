@@ -50,7 +50,7 @@ type rule struct {
 
 var rules = []rule{
 	goroutineRule, netHTTPRule, dotImportRule, socketRule, muxRule, serverRule,
-	inListRule, bannedImportRule, fenceRule, grantRule, thirdPartyRule, nolintRule,
+	inListRule, bannedImportRule, fenceRule, grantRule, thirdPartyRule, nolintRule, wildcardRule,
 }
 
 func parseSource(rel string, src []byte) (*sourceFile, error) {
@@ -278,6 +278,11 @@ func TestArchitecture(t *testing.T) {
 	} {
 		if !walked[rel] {
 			t.Fatalf("the walk missed %s, so every rule would pass on it vacuously", rel)
+		}
+	}
+	for rel := range wildcardAllowances {
+		if !walked[rel] {
+			t.Errorf("the wildcard allow-list names %s, which the walk did not find", rel)
 		}
 	}
 	for _, r := range rules {
