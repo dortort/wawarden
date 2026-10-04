@@ -1,0 +1,310 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GOTOOLCHAIN: local
+  BUILDX_VERSION: v0.37.1
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-and-test:
+    name: Build and test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Check formatting
+        run: |
+          unformatted=$(git ls-files -z -- '*.go' ':(exclude)vendor/**' | xargs -0 -r gofmt -l)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt -l lists unformatted files"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with the race detector
+        run: go test -race -count=1 ./...
+
+      - name: Build with the dev tag
+        run: go build -tags dev ./...
+
+      - name: Vet with the dev tag
+        run: go vet -tags dev ./...
+
+      - name: Test with the race detector and the dev tag
+        run: go test -race -count=1 -tags dev ./...
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.14.0
+          args: --config=.golangci.yml
+
+      - name: Run golangci-lint with the dev tag
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.14.0
+          args: --config=.golangci.yml --build-tags=dev
+
+  modules:
+    name: Modules
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Check that go mod tidy changes nothing
+        run: go mod tidy -diff
+
+      - name: Require vendored modules once go.mod has requirements
+        run: |
+          requires=$(go mod edit -json | jq '.Require // [] | length')
+          if [ "$requires" -gt 0 ] && [ ! -f vendor/modules.txt ]; then
+            echo "::error::go.mod has $requires requirement(s) but vendor/modules.txt is missing; run go mod vendor and commit vendor/"
+            exit 1
+          fi
+
+      - name: Check that go mod vendor changes nothing
+        run: |
+          if [ ! -f vendor/modules.txt ]; then
+            echo "No vendor/modules.txt; nothing to check."
+            exit 0
+          fi
+          go mod vendor
+          changes=$(git status --porcelain --untracked-files=all -- vendor)
+          if [ -n "$changes" ]; then
+            echo "::error::go mod vendor changed vendor/; run it and commit the result"
+            echo "$changes" | head -n 100
+            exit 1
+          fi
+
+      - name: Verify module checksums
+        run: go mod verify
+
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+
+      - name: Run govulncheck
+        run: |
+          if [ -f vendor/modules.txt ]; then
+            export GOFLAGS=-mod=vendor
+          fi
+          govulncheck ./...
+
+  fuzz-targets:
+    name: List fuzz targets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      targets: ${{ steps.list.outputs.targets }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: List fuzz targets
+        id: list
+        run: |
+          targets=$(go test -count=1 -list '^Fuzz' ./... |
+            awk '/^Fuzz/ { t[n++] = $1; next } /^ok/ { for (i = 0; i < n; i++) printf "{\"pkg\":\"%s\",\"target\":\"%s\"}\n", $2, t[i]; n = 0 }' |
+            jq -cs .)
+          echo "Fuzz targets: $targets"
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    needs: fuzz-targets
+    if: needs.fuzz-targets.outputs.targets != '[]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.fuzz-targets.outputs.targets) }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Fuzz for 60 seconds
+        env:
+          PKG: ${{ matrix.pkg }}
+          TARGET: ${{ matrix.target }}
+        run: go test -run='^$' -fuzz="^${TARGET}\$" -fuzztime=60s -fuzzminimizetime=10s "$PKG"
+
+      - name: Collect new crashers
+        if: failure()
+        run: |
+          mkdir -p "$RUNNER_TEMP/crashers"
+          git ls-files -z --others --exclude-standard -- '*/testdata/fuzz/*' |
+            xargs -0 -r cp --parents -t "$RUNNER_TEMP/crashers"
+
+      - name: Upload crashers
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-crashers-${{ strategy.job-index }}-${{ matrix.target }}
+          path: ${{ runner.temp }}/crashers
+          if-no-files-found: ignore
+          retention-days: 14
+
+  reproducible-build:
+    name: Reproducible build (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Install pinned buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          version: ${{ env.BUILDX_VERSION }}
+          driver: docker
+          cache-binary: false
+
+      - name: Build binaries and OCI image
+        env:
+          VERSION: ci
+        run: hack/repro-build.sh oci
+
+      - name: Upload checksums and digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: repro-${{ matrix.runner }}
+          path: |
+            dist/SHA256SUMS
+            dist/image-digest
+          if-no-files-found: error
+          retention-days: 7
+
+  reproducible-compare:
+    name: Compare reproducible builds
+    needs: reproducible-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Download build results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: repro-*
+          path: ${{ runner.temp }}/repro
+
+      - name: Compare checksums and index digests
+        run: |
+          cd "$RUNNER_TEMP/repro"
+          set -- */
+          if [ "$#" -ne 2 ]; then
+            echo "::error::expected two build results, found $#"
+            exit 1
+          fi
+          diff -u "$1SHA256SUMS" "$2SHA256SUMS"
+          diff -u "$1image-digest" "$2image-digest"
+          {
+            echo "### Reproducible build"
+            echo
+            echo "Both builds produced index digest \`$(cat "$1image-digest")\` and these binaries:"
+            echo
+            echo '```text'
+            cat "$1SHA256SUMS"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
