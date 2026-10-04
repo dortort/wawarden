@@ -130,6 +130,9 @@ func mustNormalize(s string) CanonicalChat {
 }
 
 func normalizeModel(s string) (string, bool) {
+	if len(s) > 128 {
+		return "", false
+	}
 	m := acceptedForm.FindStringSubmatch(s)
 	switch {
 	case m == nil:
