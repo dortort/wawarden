@@ -1,8 +1,11 @@
 package api
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -462,6 +465,74 @@ func TestFailedAuthenticationIsThrottled(t *testing.T) {
 	expect("refill is capped at the burst", nil, http.StatusTooManyRequests)
 	if got := f.failures(t); got != "67" {
 		t.Fatalf("authentication failures = %s, want 67", got)
+	}
+}
+
+func refusalBeforeTheBody(t *testing.T, addr, head string) int {
+	t.Helper()
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("SetDeadline: %v", err)
+	}
+	if _, err := io.WriteString(conn, head+"Host: wawarden.test\r\n\r\n"); err != nil {
+		t.Fatalf("write the request head: %v", err)
+	}
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("no response while the announced body is unsent: %v", err)
+	}
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		t.Fatalf("read the response body: %v", err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatalf("close the response body: %v", err)
+	}
+	if !resp.Close {
+		t.Fatalf("the %d refusal leaves the connection open for another request", resp.StatusCode)
+	}
+	if err := conn.(*net.TCPConn).CloseWrite(); err != nil {
+		t.Fatalf("CloseWrite: %v", err)
+	}
+	if n, err := br.Read(make([]byte, 1)); n != 0 || !errors.Is(err, io.EOF) {
+		t.Fatalf("after the %d refusal the connection gave %d bytes and %v, want EOF", resp.StatusCode, n, err)
+	}
+	return resp.StatusCode
+}
+
+func TestRefusalsAnswerAtOnceAndCloseInsteadOfReadingTheBody(t *testing.T) {
+	f := newClientFixture(t)
+	srv := httptest.NewServer(f.handler)
+	defer srv.Close()
+	addr := srv.Listener.Addr().String()
+
+	tests := []struct {
+		name   string
+		head   string
+		status int
+	}{
+		{name: "unauthenticated", head: "POST /probe/write HTTP/1.1\r\nContent-Length: 200000\r\n", status: http.StatusUnauthorized},
+		{name: "unauthenticated chunked", head: "POST /probe/write HTTP/1.1\r\nTransfer-Encoding: chunked\r\n", status: http.StatusUnauthorized},
+		{name: "browser", head: "POST /probe/write HTTP/1.1\r\nOrigin: https://app.example.test\r\nContent-Length: 200000\r\n", status: http.StatusForbidden},
+		{name: "options", head: "OPTIONS /probe/read HTTP/1.1\r\nContent-Length: 200000\r\n", status: http.StatusMethodNotAllowed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := refusalBeforeTheBody(t, addr, tt.head); got != tt.status {
+				t.Fatalf("status = %d, want %d", got, tt.status)
+			}
+		})
+	}
+
+	for range failureBurst {
+		serve(f.handler, newRequest(t, http.MethodGet, "/probe/read", nil))
+	}
+	if got := refusalBeforeTheBody(t, addr, "POST /probe/write HTTP/1.1\r\nContent-Length: 200000\r\n"); got != http.StatusTooManyRequests {
+		t.Fatalf("throttled status = %d, want %d", got, http.StatusTooManyRequests)
 	}
 }
 
