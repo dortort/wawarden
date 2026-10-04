@@ -304,9 +304,11 @@ The key id is the only value derived from the master key that the service ever
 writes. Replacing or deleting the master key changes the key id and every log
 pseudonym; this build has no command to rotate it. To provide your own key, write
 32 random bytes to `keys/master` with mode `0600` or `0400`, owned by the service's
-user, before the first start. A crash during the first start can leave a
-`keys/.master-<random>` file behind; it holds an unused key, has mode `0600`, and
-can be deleted while the service is stopped.
+user, before the first start. A crash or power loss during the first start can
+leave a `keys/.master-<random>` file behind, with mode `0600`. It holds either an
+unused key or, after a crash right after the link, a second name of the current
+master key, so delete it together with `keys/master` when you replace the key; it
+can be deleted at any time while the service is stopped.
 
 ## Listeners
 

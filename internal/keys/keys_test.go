@@ -142,6 +142,20 @@ func TestLoadCreatesAPrivateMasterKeyOnce(t *testing.T) {
 	}
 }
 
+func TestTheTemporaryNameIsGoneWhenTheDirectoryIsFlushed(t *testing.T) {
+	saved := syncDir
+	t.Cleanup(func() { syncDir = saved })
+	var flushed [][]string
+	syncDir = func(dir string) error {
+		flushed = append(flushed, entries(t, dir))
+		return saved(dir)
+	}
+	mustLoad(t, dataDir(t))
+	if len(flushed) != 1 || !slices.Equal(flushed[0], []string{masterName}) {
+		t.Fatalf("the keys directory held %q when it was flushed, want only %s", flushed, masterName)
+	}
+}
+
 func TestRacingCreatorsEndWithOneKey(t *testing.T) {
 	const rounds, racers = 20, 16
 	for range rounds {

@@ -143,7 +143,6 @@ func create(dir, path string) *Refusal {
 	if err != nil {
 		return &Refusal{Reason: reasonMasterUnusable, detail: name + " cannot be created: " + cause(err)}
 	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
 	secret := make([]byte, masterSize)
 	rand.Read(secret)
 	_, err = tmp.Write(secret)
@@ -156,6 +155,7 @@ func create(dir, path string) *Refusal {
 	if err == nil {
 		err = os.Link(tmp.Name(), path)
 	}
+	_ = os.Remove(tmp.Name())
 	if err != nil && !errors.Is(err, fs.ErrExist) {
 		return &Refusal{Reason: reasonMasterUnusable, detail: name + " cannot be created: " + cause(err)}
 	}
@@ -165,7 +165,7 @@ func create(dir, path string) *Refusal {
 	return nil
 }
 
-func syncDir(dir string) error {
+var syncDir = func(dir string) error {
 	d, err := os.Open(filepath.Clean(dir))
 	if err != nil {
 		return err
