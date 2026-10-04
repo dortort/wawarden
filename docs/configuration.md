@@ -418,10 +418,13 @@ loopback.
 | `http_server_error` | `WARN` | `listener` | Go's HTTP server reported an error of its own, such as a failed accept; `msg` holds the server's text. |
 
 What is never logged: requests (there is no access log), request bodies, header
-values, tokens, failed authentications, configuration values (refusals name the
-variable only) and panic values (only their Go type and the stack). `error` texts
-on `startup_failed` and `listener_failed` come from the operating system and can
-contain a listen address.
+values, tokens, failed authentications, the admin token's hash, the values of
+refused variables (a refusal names the variable only) and panic values (only
+their Go type and the stack). The listen addresses are the only configuration
+values that are logged: the `listening` and `listener_not_loopback` events carry
+the bound address, and the `error` texts of `startup_failed` and
+`listener_failed` come from the operating system and can contain a listen
+address.
 
 The CLI writes to standard error only its usage text, the flag parser's one-line
 error for an unknown flag or an invalid flag value (it repeats the flag as typed,
