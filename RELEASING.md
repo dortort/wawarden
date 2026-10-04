@@ -106,7 +106,11 @@ release workflow, by CI and by anyone reproducing a release:
   must show no `dev` tag, `vcs.revision` equal to the commit, `vcs.modified=false`,
   `CGO_ENABLED=0` and the right architecture; the binary must not contain the
   marker string that only dev builds carry; and it must contain the version
-  variable that the link step sets.
+  variable that the link step sets. On a Linux host, the script also runs the
+  binary built for the host's architecture: `wawarden version` must print
+  exactly the requested version, the commit and `dev build false`. The release
+  builds on an `amd64` runner and rebuilds on an `arm64` runner, so each release
+  binary is run once.
 - `SOURCE_DATE_EPOCH` is the commit time. File times inside the image are set
   to it.
 - A multi-arch OCI image built by BuildKit from a digest-pinned
