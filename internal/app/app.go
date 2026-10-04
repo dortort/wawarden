@@ -58,14 +58,16 @@ func NewLogger(w io.Writer, level slog.Leveler) *slog.Logger {
 	}))
 }
 
-func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, error) {
-	return newApp(ctx, cfg, logger, noClients{})
+func New(ctx context.Context, cfg config.Config, out io.Writer) (*App, error) {
+	return newApp(ctx, cfg, out, noClients{})
 }
 
-func newApp(ctx context.Context, cfg config.Config, logger *slog.Logger, auth api.Authenticator) (*App, error) {
+func newApp(ctx context.Context, cfg config.Config, out io.Writer, auth api.Authenticator) (*App, error) {
 	if !cfg.HealthListen.Addr().IsLoopback() {
 		return nil, errHealthNotLoopback
 	}
+	logger := NewLogger(out, cfg.LogLevel)
+	alerts := NewLogger(out, slog.LevelWarn)
 	reg := metrics.NewRegistry()
 	safego.Install(logger, reg)
 	info := buildinfo.Read()
@@ -103,12 +105,12 @@ func newApp(ctx context.Context, cfg config.Config, logger *slog.Logger, auth ap
 		slog.String("version", info.Version), slog.String("revision", info.Revision),
 		slog.Bool("modified", info.Modified), slog.Bool("dev", info.Dev))
 	if info.Dev {
-		logger.Warn("development build, not for production use", slog.String("event", "dev_build"))
+		alerts.Warn("development build, not for production use", slog.String("event", "dev_build"))
 	}
 	for _, b := range a.Inventory() {
 		logger.Info("listening", slog.String("event", "listening"), slog.String("listener", b.Name), slog.String("address", b.Addr.String()))
 		if !b.Addr.Addr().IsLoopback() {
-			logger.Warn("listener reachable beyond loopback: plain HTTP carries bearer tokens, so securing the network path is the deployer's responsibility",
+			alerts.Warn("listener reachable beyond loopback: plain HTTP carries bearer tokens, so securing the network path is the deployer's responsibility",
 				slog.String("event", "listener_not_loopback"), slog.String("listener", b.Name), slog.String("address", b.Addr.String()))
 		}
 	}

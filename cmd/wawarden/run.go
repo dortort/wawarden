@@ -67,10 +67,9 @@ func serve(ctx context.Context, args, environ []string, stdout, stderr io.Writer
 			slog.String("event", "startup_refused"), slog.String("reason", refusal.Reason), slog.String("error", refusal.Error()))
 		return 2
 	}
-	logger := app.NewLogger(stdout, cfg.LogLevel)
-	a, err := app.New(ctx, cfg, logger)
+	a, err := app.New(ctx, cfg, stdout)
 	if err != nil {
-		logger.Error("startup failed", slog.String("event", "startup_failed"), slog.String("error", err.Error()))
+		app.NewLogger(stdout, cfg.LogLevel).Error("startup failed", slog.String("event", "startup_failed"), slog.String("error", err.Error()))
 		return 1
 	}
 	if err := runApp(a, ctx); err != nil {

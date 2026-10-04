@@ -321,7 +321,7 @@ from someone else's account cannot bind the gateway to that account.
 
 | Default | Status |
 |---|---|
-| The client and admin listeners bind to loopback (`127.0.0.1:8080`, `127.0.0.1:8082`) unless configured otherwise; a warning is logged at every start for each of them bound elsewhere (plain HTTP carries bearer tokens). The health listener defaults to `127.0.0.1:8081` and accepts only loopback addresses. | M0 |
+| The client and admin listeners bind to loopback (`127.0.0.1:8080`, `127.0.0.1:8082`) unless configured otherwise; a warning is logged at every start for each of them bound elsewhere (plain HTTP carries bearer tokens), and the log level cannot suppress it. The health listener defaults to `127.0.0.1:8081` and accepts only loopback addresses. | M0 |
 | The admin listener exists only when an admin token hash is configured. | M0 |
 | `umask 077` and the `single` traceback level are set by the first two statements of `main`, which an architecture test checks. | M0 |
 | HTTP servers have read-header, read, write and idle timeouts and a 16 KiB header limit; responses written by WaWarden's handlers carry `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`, and no CORS headers. Go's HTTP server answers malformed requests itself, before any handler runs, with a plain-text or empty error response without those headers. | M0 |

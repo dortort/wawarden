@@ -183,7 +183,8 @@ A listen address is an IP literal and a port from 1 to 65535: `127.0.0.1:8080`,
   IPv4.
 - The client and admin listeners may use an unspecified address (`0.0.0.0` or
   `[::]`). Every start then logs a `listener_not_loopback` warning for that
-  listener, as for any other non-loopback address.
+  listener, as for any other non-loopback address, whatever
+  `WAWARDEN_LOG_LEVEL` is set to.
 - Two enabled listeners may not overlap: same port and same address family, with
   equal addresses or one of them unspecified (`listen_address_shared`). The
   refusal names the later of the two in the order client, health, admin. The admin
@@ -264,7 +265,8 @@ public internet.
 
 Every start logs a `listening` event for each listener with its bound address,
 and a `listener_not_loopback` warning for each client or admin listener bound to
-an address that is not loopback.
+an address that is not loopback. The warning is written whatever
+`WAWARDEN_LOG_LEVEL` is set to; see [Logging](#logging).
 
 Each listener's HTTP server has these limits: 5 seconds to read the request
 headers, 15 seconds to read the whole request, 30 seconds to write the response,
@@ -393,17 +395,21 @@ has these keys:
 | `msg` | A human-readable sentence; it may change between releases |
 | `event` | A stable, machine-readable event name; match on this, not on `msg` |
 
-`WAWARDEN_LOG_LEVEL` sets the lowest level written. The `startup_refused` line is
-written before the configuration is accepted, so it ignores the setting.
+`WAWARDEN_LOG_LEVEL` sets the lowest level written, with three exceptions that
+ignore the setting. The `startup_refused` line is written before the
+configuration is accepted. The `dev_build` and `listener_not_loopback` warnings
+are written at every level, `error` included, because they are the only signal
+that a development binary is running or that a listener is reachable beyond
+loopback.
 
 | Event | Level | Other keys | Written when |
 |---|---|---|---|
 | `startup_refused` | `ERROR` | `reason`, `error` | The configuration is refused; exit `2`. |
 | `startup_failed` | `ERROR` | `error` | A listener cannot be opened, for example because its address is in use; exit `1`. |
 | `starting` | `INFO` | `version`, `revision`, `modified`, `dev` | The listeners are open. |
-| `dev_build` | `WARN` | | The binary was built with the `dev` tag. |
+| `dev_build` | `WARN`, at every log level | | The binary was built with the `dev` tag. |
 | `listening` | `INFO` | `listener`, `address` | Once per open listener. |
-| `listener_not_loopback` | `WARN` | `listener`, `address` | Once per client or admin listener bound to a non-loopback address. |
+| `listener_not_loopback` | `WARN`, at every log level | `listener`, `address` | Once per client or admin listener bound to a non-loopback address. |
 | `ready` | `INFO` | | The listeners are serving. |
 | `listener_failed` | `ERROR` | `error` | A listener stopped serving on its own; shutdown follows. |
 | `shutdown_started` | `INFO` | | Shutdown begins. |

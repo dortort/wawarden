@@ -32,7 +32,7 @@ It is not:
   path: a VPN or mesh network that forwards to loopback, a private subnet, or a
   reverse proxy that terminates TLS. **Never expose WaWarden to the public
   internet.** A listener bound to a non-loopback address makes the service log a
-  warning at every start.
+  warning at every start, whatever `WAWARDEN_LOG_LEVEL` is set to.
 - **The admin listener is guarded by the admin token alone.** It is opened only
   when the token's SHA-256 is configured; the service never accepts the token
   itself in its configuration. Restrict who can reach it more tightly than the

@@ -137,7 +137,7 @@ func testConfig(t *testing.T, adminToken string) config.Config {
 func open(t *testing.T, cfg config.Config, auth api.Authenticator) (*App, *syncBuffer) {
 	t.Helper()
 	logs := &syncBuffer{}
-	a, err := newApp(t.Context(), cfg, NewLogger(logs, nil), auth)
+	a, err := newApp(t.Context(), cfg, logs, auth)
 	if err != nil {
 		t.Fatalf("newApp: %v", err)
 	}
@@ -679,6 +679,8 @@ func TestAsteriskOptionsGoesThroughTheHandlers(t *testing.T) {
 	}
 }
 
+var everyLogLevel = []slog.Level{slog.LevelDebug, slog.LevelInfo, slog.LevelWarn, slog.LevelError}
+
 func TestNonLoopbackListenerWarns(t *testing.T) {
 	tests := []struct {
 		name                string
@@ -690,26 +692,32 @@ func TestNonLoopbackListenerWarns(t *testing.T) {
 		{name: "loopback", listen: "127.0.0.1:0", adminListen: "127.0.0.1:0"},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := testConfig(t, token.NewAdmin())
-			cfg.Listen = netip.MustParseAddrPort(tt.listen)
-			cfg.AdminListen = netip.MustParseAddrPort(tt.adminListen)
-			_, logs, stop := start(t, cfg, noClients{})
-			if err := stop(); err != nil {
-				t.Fatalf("Run = %v", err)
-			}
-			var warned []string
-			for _, rec := range logs.find("listener_not_loopback") {
-				name, _ := rec["listener"].(string)
-				if rec["level"] != "WARN" {
-					t.Fatalf("the %s warning was logged at %v, want WARN", name, rec["level"])
+		for _, level := range everyLogLevel {
+			t.Run(tt.name+" at "+level.String(), func(t *testing.T) {
+				cfg := testConfig(t, token.NewAdmin())
+				cfg.Listen = netip.MustParseAddrPort(tt.listen)
+				cfg.AdminListen = netip.MustParseAddrPort(tt.adminListen)
+				cfg.LogLevel = level
+				_, logs, stop := start(t, cfg, noClients{})
+				if err := stop(); err != nil {
+					t.Fatalf("Run = %v", err)
 				}
-				warned = append(warned, name)
-			}
-			if !slices.Equal(warned, tt.warned) {
-				t.Fatalf("non-loopback warnings for %v, want exactly %v", warned, tt.warned)
-			}
-		})
+				var warned []string
+				for _, rec := range logs.find("listener_not_loopback") {
+					name, _ := rec["listener"].(string)
+					if rec["level"] != "WARN" {
+						t.Fatalf("the %s warning was logged at %v, want WARN", name, rec["level"])
+					}
+					warned = append(warned, name)
+				}
+				if !slices.Equal(warned, tt.warned) {
+					t.Fatalf("non-loopback warnings for %v, want exactly %v whatever the log level", warned, tt.warned)
+				}
+				if informed, want := len(logs.find("listening")) > 0, level <= slog.LevelInfo; informed != want {
+					t.Fatalf("listening events written = %v, want %v: the log level must still filter other events", informed, want)
+				}
+			})
+		}
 	}
 }
 
@@ -725,6 +733,26 @@ func TestDevBuildWarns(t *testing.T) {
 	dev, _ := starting[0]["dev"].(bool)
 	if warned := len(logs.find("dev_build")) == 1; warned != dev {
 		t.Fatalf("dev build = %v but dev_build warning logged = %v", dev, warned)
+	}
+}
+
+func TestDevBuildWarnsAtEveryLogLevel(t *testing.T) {
+	for _, level := range everyLogLevel {
+		t.Run(level.String(), func(t *testing.T) {
+			cfg := testConfig(t, "")
+			cfg.LogLevel = level
+			_, logs, stop := start(t, cfg, noClients{})
+			if err := stop(); err != nil {
+				t.Fatalf("Run = %v", err)
+			}
+			warnings := logs.find("dev_build")
+			if warned := len(warnings) == 1; warned != buildinfo.Dev {
+				t.Fatalf("dev build = %v but dev_build warning logged = %v", buildinfo.Dev, warned)
+			}
+			if len(warnings) == 1 && warnings[0]["level"] != "WARN" {
+				t.Fatalf("dev_build was logged at %v, want WARN", warnings[0]["level"])
+			}
+		})
 	}
 }
 
