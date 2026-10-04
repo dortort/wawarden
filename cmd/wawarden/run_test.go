@@ -263,18 +263,20 @@ func TestHealthcheckFailures(t *testing.T) {
 	tests := []struct {
 		name    string
 		environ []string
+		reason  string
 	}{
-		{name: "503", environ: []string{"WAWARDEN_HEALTH_LISTEN=" + serveStatus(t, http.StatusServiceUnavailable)}},
-		{name: "204", environ: []string{"WAWARDEN_HEALTH_LISTEN=" + serveStatus(t, http.StatusNoContent)}},
-		{name: "redirect to a 200", environ: []string{"WAWARDEN_HEALTH_LISTEN=" + redirect.Listener.Addr().String()}},
-		{name: "nothing listening", environ: []string{"WAWARDEN_HEALTH_LISTEN=" + freeAddr(t)}},
-		{name: "not loopback", environ: []string{"WAWARDEN_HEALTH_LISTEN=0.0.0.0:8081"}},
-		{name: "host name", environ: []string{"WAWARDEN_HEALTH_LISTEN=localhost:8081"}},
+		{name: "503", environ: []string{"WAWARDEN_HEALTH_LISTEN=" + serveStatus(t, http.StatusServiceUnavailable)}, reason: "status 503"},
+		{name: "204", environ: []string{"WAWARDEN_HEALTH_LISTEN=" + serveStatus(t, http.StatusNoContent)}, reason: "status 204"},
+		{name: "redirect to a 200", environ: []string{"WAWARDEN_HEALTH_LISTEN=" + redirect.Listener.Addr().String()}, reason: "status 302"},
+		{name: "nothing listening", environ: []string{"WAWARDEN_HEALTH_LISTEN=" + freeAddr(t)}, reason: "connection refused"},
+		{name: "not loopback", environ: []string{"WAWARDEN_HEALTH_LISTEN=0.0.0.0:8081"}, reason: "must be a loopback address"},
+		{name: "host name", environ: []string{"WAWARDEN_HEALTH_LISTEN=localhost:8081"}, reason: "must be an IP literal"},
+		{name: "zoned", environ: []string{"WAWARDEN_HEALTH_LISTEN=[::1%lo0]:8081"}, reason: "without a zone"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if code, _, stderr := invoke(t, []string{"healthcheck"}, tt.environ); code != 1 || stderr == "" {
-				t.Fatalf("healthcheck = %d (%q), want 1 with a reason on stderr", code, stderr)
+			if code, _, stderr := invoke(t, []string{"healthcheck"}, tt.environ); code != 1 || !strings.Contains(stderr, tt.reason) {
+				t.Fatalf("healthcheck = %d (%q), want 1 with %q on stderr", code, stderr, tt.reason)
 			}
 		})
 	}
