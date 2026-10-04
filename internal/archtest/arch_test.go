@@ -51,7 +51,7 @@ type rule struct {
 
 var rules = []rule{
 	goroutineRule, netHTTPRule, dotImportRule, socketRule, muxRule, serverRule,
-	inListRule, bannedImportRule, fenceRule, grantRule, thirdPartyRule, hiddenPackageRule, nolintRule, wildcardRule,
+	inListRule, bannedImportRule, reflectionRule, fenceRule, grantRule, thirdPartyRule, hiddenPackageRule, nolintRule, wildcardRule,
 	credentialRule, preludeRule,
 }
 
@@ -338,6 +338,13 @@ func TestArchitecture(t *testing.T) {
 	for rel := range wildcardAllowances {
 		if !walked[rel] {
 			t.Errorf("the wildcard allow-list names %s, which the walk did not find", rel)
+		}
+	}
+	for dir := range reflectAllowed {
+		if !slices.ContainsFunc(files, func(f *sourceFile) bool {
+			return !f.test && f.dir == dir && slices.ContainsFunc(f.imports, func(imp importSpec) bool { return imp.path == "reflect" })
+		}) {
+			t.Errorf("the reflect allow-list names %s, where no non-test file imports reflect", dir)
 		}
 	}
 	for _, r := range rules {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -66,6 +67,89 @@ func checkBannedImports(f *sourceFile) []string {
 			out = append(out, f.at(imp.node, "import of %q is banned", imp.path))
 		}
 	}
+	return out
+}
+
+var reflectAllowed = map[string]string{
+	"internal/api/dto": "compares a response's declaring package with its own",
+}
+
+var unsafePointerMethods = set("NewAt", "SetPointer", "UnsafeAddr", "UnsafePointer")
+
+var reflectionRule = rule{
+	name:  "reflection",
+	check: checkReflection,
+	cases: []snippet{
+		{name: "reflect outside the reviewed packages", rel: "internal/listeners/x.go", want: 1, src: `package listeners
+
+import (
+	"net/http"
+	r "reflect"
+)
+
+func f() *http.Server { return r.New(r.TypeFor[http.Server]()).Interface().(*http.Server) }
+`},
+		{name: "unsafe pointers through any receiver", rel: "internal/app/x_test.go", want: 7, src: `package app
+
+import r "reflect"
+
+type wrapped struct{ r.Value }
+
+func f(g *struct{ ok bool }, v r.Value) {
+	r.NewAt(r.TypeFor[struct{ OK bool }](), r.ValueOf(g).UnsafePointer()).Elem().Field(0).SetBool(true)
+	(*struct{ OK bool })(wrapped{r.ValueOf(g)}.UnsafePointer()).OK = true
+	_ = v.UnsafeAddr()
+	v.SetPointer(nil)
+	_ = r.Value.UnsafePointer
+	_ = r.NewAt
+}
+`},
+		{name: "unsafe pointers in a reviewed package", rel: "internal/api/dto/x.go", want: 1, src: `package dto
+
+import "reflect"
+
+func f(v reflect.Value) { _ = v.UnsafePointer() }
+`},
+		{name: "type inspection in a reviewed package", rel: "internal/api/dto/x.go", src: `package dto
+
+import "reflect"
+
+var pkgPath = reflect.TypeFor[int]().PkgPath()
+
+func f(r any) bool { return reflect.TypeOf(r).Kind() == reflect.Pointer }
+`},
+		{name: "reflection in a test", rel: "internal/policy/x_test.go", src: `package policy
+
+import "reflect"
+
+func f(a, b any) bool {
+	return reflect.DeepEqual(a, b) && reflect.ValueOf(a).IsZero() && reflect.ValueOf(b).Pointer() != 0
+}
+`},
+		{name: "another package named reflect", rel: "internal/app/x.go", src: `package app
+
+import "example.com/reflect"
+
+var _ = reflect.TypeOf
+`},
+	},
+}
+
+func checkReflection(f *sourceFile) []string {
+	var out []string
+	if _, reviewed := reflectAllowed[f.dir]; !f.test && !reviewed {
+		for _, imp := range f.imports {
+			if imp.path == "reflect" {
+				out = append(out, f.at(imp.node, "reflect outside the reviewed packages can build zero values and reach unexported state"))
+			}
+		}
+	}
+	ast.Inspect(f.file, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && unsafePointerMethods[sel.Sel.Name] {
+			out = append(out, f.at(sel, "%s reads or writes memory through an unsafe.Pointer without importing unsafe", sel.Sel.Name))
+		}
+		return true
+	})
 	return out
 }
 
