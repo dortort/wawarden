@@ -350,27 +350,62 @@ func f(h web.Handler) {
 	(s.Handle)("/", h)
 }
 `},
+		{name: "mux values and method values outside register.go", rel: "internal/app/x.go", want: 6, src: `package app
+
+import "net/http"
+
+type holder struct{ mux *http.ServeMux }
+
+func f(h http.Handler, hs []holder) {
+	var m http.ServeMux
+	_ = &http.ServeMux{}
+	_ = new(http.ServeMux)
+	reg := m.HandleFunc
+	reg("/", h.ServeHTTP)
+	register := hs[0].mux.Handle
+	register("/", h)
+}
+`},
 		{name: "mux in register.go", rel: muxFile, src: `package api
 
 import "net/http"
+
+type router struct{ mux *http.ServeMux }
 
 func f(h http.Handler) {
 	mux := http.NewServeMux()
 	mux.Handle("/", h)
 	mux.HandleFunc("/", h.ServeHTTP)
+	_ = router{mux: mux}
 }
 `},
 		{name: "mux in a test", rel: "internal/app/x_test.go", src: `package app
 
 import "net/http"
 
-func f(h http.Handler) { http.NewServeMux().Handle("/", h) }
+func f(h http.Handler) {
+	var m http.ServeMux
+	m.Handle("/", h)
+	http.NewServeMux().Handle("/", h)
+}
 `},
 		{name: "declaring a Handle method", rel: "internal/app/x.go", src: `package app
 
 type h struct{}
 
 func (h) Handle() {}
+`},
+		{name: "a package-level Handle of another package", rel: "internal/app/x.go", src: `package app
+
+import (
+	"example.com/http"
+	"example.com/win"
+)
+
+var (
+	_ win.Handle
+	_ = http.ServeMux{}
+)
 `},
 	},
 }
@@ -381,15 +416,18 @@ func checkMux(f *sourceFile) []string {
 	}
 	var out []string
 	ast.Inspect(f.file, func(n ast.Node) bool {
-		switch n := n.(type) {
-		case *ast.SelectorExpr:
-			if sel, p := f.ref(n); sel != nil && p == "net/http" && sel.Sel.Name == "NewServeMux" {
-				out = append(out, f.at(n, "http.NewServeMux outside %s", muxFile))
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if s, p := f.ref(sel); s != nil {
+			if p == "net/http" && (s.Sel.Name == "NewServeMux" || s.Sel.Name == "ServeMux") {
+				out = append(out, f.at(sel, "http.%s outside %s", s.Sel.Name, muxFile))
 			}
-		case *ast.CallExpr:
-			if sel, ok := ast.Unparen(n.Fun).(*ast.SelectorExpr); ok && (sel.Sel.Name == "Handle" || sel.Sel.Name == "HandleFunc") {
-				out = append(out, f.at(n, "a %s call outside %s registers a route without a policy class", sel.Sel.Name, muxFile))
-			}
+			return true
+		}
+		if sel.Sel.Name == "Handle" || sel.Sel.Name == "HandleFunc" {
+			out = append(out, f.at(sel, "%s outside %s registers a route without a policy class", sel.Sel.Name, muxFile))
 		}
 		return true
 	})
