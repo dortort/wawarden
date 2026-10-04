@@ -48,7 +48,10 @@ type rule struct {
 	cases []snippet
 }
 
-var rules = []rule{goroutineRule, netHTTPRule, dotImportRule, socketRule, muxRule, serverRule}
+var rules = []rule{
+	goroutineRule, netHTTPRule, dotImportRule, socketRule, muxRule, serverRule,
+	inListRule, bannedImportRule, fenceRule, grantRule, thirdPartyRule, nolintRule,
+}
 
 func parseSource(rel string, src []byte) (*sourceFile, error) {
 	fset := token.NewFileSet()
