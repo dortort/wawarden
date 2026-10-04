@@ -48,6 +48,7 @@ func nested(depth int) string {
 
 func TestDecodeJSON(t *testing.T) {
 	atCap := `{"text":"` + strings.Repeat("a", maxBodyBytes-len(`{"text":""}`)) + `"}`
+	bs := string(rune(92))
 	tests := []struct {
 		name  string
 		types []string
@@ -65,7 +66,8 @@ func TestDecodeJSON(t *testing.T) {
 		{name: "null for a field", types: []string{jsonType}, body: `{"options":null}`},
 		{name: "depth of eight", types: []string{jsonType}, body: nested(8)},
 		{name: "exactly at the cap", types: []string{jsonType}, body: atCap},
-		{name: "escaped key", types: []string{jsonType}, body: `{"text":"hi"}`},
+		{name: "escaped key", types: []string{jsonType}, body: `{"te` + bs + `u0078t":"hi"}`},
+		{name: "escaped character in a value", types: []string{jsonType}, body: `{"text":"` + bs + `u00e9 ` + bs + `uD83D` + bs + `uDE00"}`},
 		{name: "text with every escape", types: []string{jsonType}, body: `{"text":"\"\\\/\b\f\n\r\té"}`},
 
 		{name: "one byte over the cap", types: []string{jsonType}, body: atCap + " ", want: errTooLarge},
@@ -84,7 +86,12 @@ func TestDecodeJSON(t *testing.T) {
 		{name: "unknown field", types: []string{jsonType}, body: `{"text":"a","nope":1}`, want: errBadBody},
 		{name: "unknown nested field", types: []string{jsonType}, body: `{"options":{"level":1,"other":2}}`, want: errBadBody},
 		{name: "duplicate key", types: []string{jsonType}, body: `{"text":"a","text":"b"}`, want: errBadBody},
-		{name: "duplicate key after unescaping", types: []string{jsonType}, body: `{"text":"a","text":"b"}`, want: errBadBody},
+		{name: "duplicate key after unescaping", types: []string{jsonType}, body: `{"text":"a","te` + bs + `u0078t":"b"}`, want: errBadBody},
+		{name: "duplicate keys escaped in two ways", types: []string{jsonType}, body: `{"te` + bs + `u0078t":"a","` + bs + `u0074ext":"b"}`, want: errBadBody},
+		{name: "duplicate key after unescaping in free-form content", types: []string{jsonType}, body: `{"nested":{"a":1,"` + bs + `u0061":2}}`, want: errBadBody},
+		{name: "duplicate key after unescaping at depth six", types: []string{jsonType}, body: `{"nested":{"a":{"b":{"c":{"d":{"e":1,"` + bs + `u0065":2}}}}}}`, want: errBadBody},
+		{name: "escaped upper-case key", types: []string{jsonType}, body: `{"` + bs + `u0054ext":"a"}`, want: errBadBody},
+		{name: "escaped key that folds to a field", types: []string{jsonType}, body: `{"te` + bs + `u017Ft":"a"}`, want: errBadBody},
 		{name: "duplicate nested key", types: []string{jsonType}, body: `{"options":{"level":1,"level":2}}`, want: errBadBody},
 		{name: "duplicate key in an array element", types: []string{jsonType}, body: `{"items":[{"name":"a"},{"name":"b","name":"c"}]}`, want: errBadBody},
 		{name: "duplicate key with values of other types", types: []string{jsonType}, body: `{"nested":[1,2],"nested":3}`, want: errBadBody},
@@ -138,7 +145,8 @@ func TestDecodeJSON(t *testing.T) {
 }
 
 func TestDecodedValues(t *testing.T) {
-	_, req := jsonRequest(t, []string{jsonType}, `{"text":"hi é","reply_to":"ref","count":-3,"flag":true,"options":{"level":2},"items":[{"name":"a"}]}`)
+	bs := string(rune(92))
+	_, req := jsonRequest(t, []string{jsonType}, `{"te`+bs+`u0078t":"hi `+bs+`u00e9","reply_to":"ref","count":-3,"flag":true,"options":{"level":2},"items":[{"name":"a"}]}`)
 	var got sample
 	if err := req.DecodeJSON(&got); err != nil {
 		t.Fatalf("DecodeJSON: %v", err)
@@ -303,8 +311,11 @@ func TestDecodingIsReachableOnlyAfterAuthenticationAndADecision(t *testing.T) {
 }
 
 func FuzzDecodeJSON(f *testing.F) {
+	bs := string(rune(92))
 	for _, seed := range []struct{ contentType, body string }{
 		{jsonType, `{"text":"hi","reply_to":"x","count":3,"flag":true}`},
+		{jsonType, `{"te` + bs + `u0078t":"hi ` + bs + `u00e9"}`},
+		{jsonType, `{"te` + bs + `u0078t":"a","text":"b"}`},
 		{jsonType, `{"options":{"level":1},"items":[{"name":"a"}],"nested":{"a":[1,{"b":null}]}}`},
 		{jsonType, `{"text":"a","text":"b"}`},
 		{jsonType, nested(9)},
