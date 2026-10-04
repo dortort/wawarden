@@ -23,9 +23,7 @@ type route struct {
 	class   class
 }
 
-type Request struct {
-	req *http.Request
-}
+type Request struct{}
 
 type router struct {
 	mux        *http.ServeMux
@@ -64,7 +62,7 @@ func decided[G any](decide func(*http.Request) (G, bool), h func(context.Context
 			writeError(w, http.StatusNotFound, codeNotFound)
 			return
 		}
-		resp, err := h(r.Context(), g, &Request{req: r})
+		resp, err := h(r.Context(), g, &Request{})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, codeInternal)
 			return

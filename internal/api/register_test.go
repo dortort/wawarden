@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -196,5 +197,11 @@ func TestRegistrationRecordsEveryRouteWithItsClass(t *testing.T) {
 	want := []route{{pattern: "GET /r", class: classRead}, {pattern: "POST /w", class: classWrite}, {pattern: "GET /a", class: classAdmin}}
 	if !slices.Equal(rt.routes, want) {
 		t.Fatalf("routes = %+v, want %+v", rt.routes, want)
+	}
+}
+
+func TestRequestCarriesNoFieldWithoutAnAccessor(t *testing.T) {
+	if fields, methods := reflect.TypeFor[Request]().NumField(), reflect.TypeFor[*Request]().NumMethod(); fields != 0 && methods == 0 {
+		t.Fatalf("Request has %d fields and no method to read them: a field arrives together with its accessor", fields)
 	}
 }
