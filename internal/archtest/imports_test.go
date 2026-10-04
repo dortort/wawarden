@@ -24,7 +24,7 @@ const (
 
 var bannedImports = set("net/http/pprof", "expvar", "net/http/cgi", "net/http/fcgi", "plugin", "unsafe", "C")
 
-var apiDenied = []string{"database/sql", "mime/multipart", "modernc.org/sqlite", "go.mau.fi/whatsmeow", module + "/internal/store/ingest"}
+var apiDenied = []string{"database/sql", "modernc.org/sqlite", "go.mau.fi/whatsmeow", module + "/internal/store/ingest"}
 
 var policyAllowed = set("bytes", "cmp", "crypto/sha256", "crypto/subtle", "encoding/base64", "encoding/binary", "encoding/hex",
 	"errors", "hash/crc32", "iter", "maps", "slices", "sort", "strconv", "strings", "time", "unicode", "unicode/utf8")
@@ -199,6 +199,14 @@ import (
 
 import "database/sql"
 `},
+		{name: "multipart in a helper outside api", rel: "internal/httpx/x.go", want: 1, src: `package httpx
+
+import "mime/multipart"
+`},
+		{name: "multipart in a test outside api", rel: "internal/httpx/x_test.go", src: `package httpx
+
+import "mime/multipart"
+`},
 		{name: "policy imports I/O and non-standard packages", rel: "internal/policy/x.go", want: 19, src: `package policy
 
 import (
@@ -271,6 +279,9 @@ func checkFences(f *sourceFile) []string {
 	for _, imp := range f.imports {
 		if within(imp.path, module+"/"+listenersDir) && f.dir != appDir && !within(f.dir, listenersDir) {
 			out = append(out, f.at(imp.node, "only %s may import %q, so the app's inventory names every listener", appDir, imp.path))
+		}
+		if within(imp.path, "mime/multipart") {
+			out = append(out, f.at(imp.node, "%q parses multipart bodies, which nothing in the module reads: only %s serves requests, and it reads JSON bodies only", imp.path, apiDir))
 		}
 		switch {
 		case within(f.dir, apiDir):

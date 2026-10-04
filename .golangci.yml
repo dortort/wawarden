@@ -26,8 +26,6 @@ linters:
           deny:
             - pkg: database/sql
               desc: internal/api reaches data only through internal/store/scoped
-            - pkg: mime/multipart
-              desc: internal/api reads JSON bodies only
             - pkg: modernc.org/sqlite
               desc: the raw database handle lives in internal/store/internal/db
             - pkg: go.mau.fi/whatsmeow
@@ -41,6 +39,13 @@ linters:
           deny:
             - pkg: github.com/dortort/wawarden/internal/store/admin
               desc: only internal/api/admin may use the admin store
+        no-multipart:
+          files:
+            - $all
+            - "!$test"
+          deny:
+            - pkg: mime/multipart
+              desc: only internal/api serves requests, and it reads JSON bodies only
         no-default-mux-registrars:
           files:
             - $all
