@@ -458,6 +458,40 @@ holding the admin credential. Metrics on standard output in embedded metric form
 (`WAWARDEN_METRICS_EMF`), planned for M1, need no token; prefer them for alerting
 once they exist.
 
+### Reserved metric and event names
+
+**Not in this build.** These names are reserved for later milestones; the M0
+binary emits none of them. Deployments may prepare alarms on them, but nothing
+matches until the release that brings them.
+
+Metrics in embedded metric format on standard output, namespace `WaWarden`,
+written every 60 seconds when `WAWARDEN_METRICS_EMF` is `1`:
+
+| Metric | Planned for |
+|---|---|
+| `Paired` | M1 |
+| `Connected` | M1 |
+| `MessagesIngested` | M1 |
+| `PolicyDenials` | M2 |
+| `Panics` | M1 |
+| `SendsRejected` | M3 |
+| `AuthFailures` | M1 |
+| `AdminAuthFailures` | M1 |
+
+Any of these metrics that is also broken down by a label, for example `Panics`
+by goroutine name, is also emitted as a dimensionless total under the same name,
+so an alarm can match it without dimensions.
+
+Events on standard output, as single-line JSON objects with an `event` field like
+the events under [Logging](#logging):
+
+| Event | Planned for |
+|---|---|
+| `admin_mutation` | M1 |
+| `unpaired` | M1 |
+| `quarantine` | M1 |
+| `admin_auth_failure` | M1 |
+
 ## Shutdown
 
 `SIGTERM` or `SIGINT` starts a graceful shutdown:
