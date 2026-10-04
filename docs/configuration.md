@@ -1,9 +1,12 @@
 # Configuration reference
 
 This is the authoritative reference for configuring and running WaWarden. It
-describes the current build, milestone **M0**: everything listed here is
-implemented, and nothing else is. Settings planned for later milestones are listed
-under [Reserved names](#reserved-names) and are refused by this build.
+describes the current build on `main`: milestone **M0**, plus the parts of milestone
+**M1** merged so far, which are the [master key](#master-key), the pseudonyms and
+dropped lines in the [logs](#pseudonyms-and-dropped-lines), and the
+[request-body decoder](#request-bodies), which no route uses yet. Everything listed
+here is implemented, and nothing else is. Settings planned for later milestones are
+listed under [Reserved names](#reserved-names) and are refused by this build.
 
 ## Unknown variables stop the service
 
@@ -136,7 +139,7 @@ that signal, not with an exit code (see [Shutdown](#shutdown)).
 
 ## Environment variables
 
-These are all the variables the M0 build reads.
+These are all the variables this build reads.
 
 | Variable | Default | Accepted values | Reason codes |
 |---|---|---|---|
@@ -195,13 +198,16 @@ A listen address is an IP literal and a port from 1 to 65535: `127.0.0.1:8080`,
 
 ## Startup refusals
 
-`serve` validates its whole configuration before opening any socket. The first
-failed check stops it: it writes one log line with `"event":"startup_refused"`,
-the reason code in `reason` and a fixed explanation in `error`, and exits `2`. A
-refusal names the variable involved but never its value. For example:
+`serve` validates its whole configuration and the [master key](#master-key) before
+opening any socket. The first failed check stops it: it writes one log line with
+`"event":"startup_refused"`, the reason code in `reason` and a fixed explanation in
+`error`, and exits `2`. A refusal names the variable or the file in the data
+directory involved, never a configured value or the data directory's path. For
+example:
 
 ```json
 {"time":"2026-10-04T08:09:24.446116295Z","level":"ERROR","msg":"startup refused","event":"startup_refused","reason":"data_dir_foreign_owner","error":"config: WAWARDEN_DATA_DIR: is not owned by the current user"}
+{"time":"2026-10-04T08:11:02.518840121Z","level":"ERROR","msg":"startup refused","event":"startup_refused","reason":"master_key_permissions","error":"keys: keys/master must grant no access to group or others and have no setuid, setgid or sticky bit"}
 ```
 
 The checks run in this order:
@@ -224,11 +230,22 @@ The checks run in this order:
 | 14 | `data_dir_not_directory` | `WAWARDEN_DATA_DIR` | The path is not a directory, or its last component is a symbolic link. |
 | 15 | `data_dir_foreign_owner` | `WAWARDEN_DATA_DIR` | The directory is not owned by the process's effective user ID. |
 | 16 | `data_dir_permissions` | `WAWARDEN_DATA_DIR` | The directory's mode is not exactly `0700`. |
+| 17 | `keys_dir_unusable` | none; the error names `keys/` | `keys` in the data directory does not exist and cannot be created, or cannot be inspected. |
+| 18 | `keys_dir_not_directory` | none; the error names `keys/` | `keys` is not a directory, or is a symbolic link. |
+| 19 | `keys_dir_foreign_owner` | none; the error names `keys/` | `keys` is not owned by the process's effective user ID. |
+| 20 | `keys_dir_permissions` | none; the error names `keys/` | The mode of `keys` is not exactly `0700`. |
+| 21 | `master_key_unusable` | none; the error names `keys/master` | `keys/master` does not exist and cannot be created, or cannot be inspected, opened or read. |
+| 22 | `master_key_not_regular` | none; the error names `keys/master` | `keys/master` is not a regular file: a symbolic link (even to a valid key), a directory or a named pipe, for example. |
+| 23 | `master_key_foreign_owner` | none; the error names `keys/master` | `keys/master` is not owned by the process's effective user ID. |
+| 24 | `master_key_permissions` | none; the error names `keys/master` | `keys/master` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 25 | `master_key_size` | none; the error names `keys/master` | `keys/master` does not hold exactly 32 bytes. |
 
 When the data directory is missing, it is created only after checks 1 to 12 pass,
-so a start refused by checks 1 to 12 leaves nothing behind. A refusal by a later
-check (on a filesystem that forces its own ownership or mode, for example), or a
-`startup_failed` exit, leaves the newly created empty directory in place.
+so a start refused by checks 1 to 12 leaves nothing behind. `keys/` and the master
+key are created, when missing, only after checks 13 to 16 pass. A refusal by a
+later check (on a filesystem that forces its own ownership or mode, for example),
+or a `startup_failed` exit, leaves what was created in place: the data directory,
+`keys/` and the master key.
 
 ## Data directory
 
@@ -245,13 +262,51 @@ The data directory is `WAWARDEN_DATA_DIR`, by default `/data`.
   others, and no setuid, setgid or sticky bit. `0750`, `0755`, `0701` and `0500`
   are all refused.
 
-The checks run once, at start. In M0 the service writes nothing into the
-directory. From M1 it holds the WhatsApp session, the message archive and the
-service's keys, so it must be on a writable, persistent filesystem that only the
-service's user can read.
+The checks run once, at start. Then `serve` creates the [master key](#master-key)
+in the directory when it is missing; this build writes nothing else there. Later
+in M1 the directory also holds the WhatsApp session and the message archive. It
+must be on a writable, persistent filesystem that supports hard links and that
+only the service's user can read.
 
 Mechanisms that add group permissions or the setgid bit to a volume, such as
 Kubernetes `fsGroup`, make the directory fail the mode check.
+
+### Master key
+
+`keys/master` in the data directory holds the service's master key: exactly 32
+bytes. Right after the data directory checks, `serve`:
+
+1. creates `keys/` with mode `0700` when it does not exist;
+2. checks `keys/` (refusals 17 to 20): a directory, not a symbolic link, owned by
+   the effective user ID, with mode exactly `0700`;
+3. when `keys/master` does not exist, writes 32 bytes from the operating system's
+   cryptographic random source to a new temporary file `keys/.master-<random>`
+   with mode `0600`, flushes it to disk, hard-links it as `keys/master`, removes
+   the temporary name and flushes the directory. When two processes start at once,
+   the second link fails, and both use the key that was linked first. An existing
+   key is never replaced;
+4. checks `keys/master` (refusals 21 to 25): a regular file, not a symbolic link,
+   owned by the effective user ID, without any permission for group or others and
+   without the setuid, setgid or sticky bit, holding exactly 32 bytes. Mode `0600`
+   and mode `0400` are both accepted.
+
+The service derives every key it uses from the master key with HKDF-SHA256 (no
+salt, the information string `wawarden/v1/` followed by the purpose) and keeps
+only the derived keys:
+
+| Purpose | Length | Use in this build |
+|---|---|---|
+| `key-id` | 4 bytes | The key id: logged as 8 hexadecimal digits in the `keys_loaded` event, so that log lines can be grouped by the key their pseudonyms were made with. |
+| `log-redact` | 32 bytes | The key of the [log pseudonyms](#pseudonyms-and-dropped-lines). |
+| `chat-hmac` | 32 bytes | Derived but not used yet; it is reserved for the chat references in notification events (M1). |
+
+The key id is the only value derived from the master key that the service ever
+writes. Replacing or deleting the master key changes the key id and every log
+pseudonym; this build has no command to rotate it. To provide your own key, write
+32 random bytes to `keys/master` with mode `0600` or `0400`, owned by the service's
+user, before the first start. A crash during the first start can leave a
+`keys/.master-<random>` file behind; it holds an unused key, has mode `0600`, and
+can be deleted while the service is stopped.
 
 ## Listeners
 
@@ -349,6 +404,19 @@ which a caller presenting a wrong token sees `429` rather than `401`.
 
 Failed authentications are counted, not logged.
 
+#### Request bodies
+
+No route in this build reads a request body; the admin routes that will (`pair`
+and `reconnect`, M1) and later client routes decode it with one decoder. Only a
+route handler can call it, so it runs only after authentication and after the
+route's grant was decided. It answers with a fixed error and reads no further when:
+
+| Answer | Refused when |
+|---|---|
+| `415` `{"error":"unsupported_media_type"}` | The request does not carry exactly one `Content-Type` header, or that header is not `application/json`, optionally with the single parameter `charset=utf-8` (media type and charset in any letter case). A body the request announces is not read, and the connection is closed. |
+| `413` `{"error":"body_too_large"}` | The body is longer than 16384 bytes, as announced by `Content-Length` (the body is not read) or found while reading; the connection is closed. |
+| `400` `{"error":"invalid_body"}` | The body is not valid UTF-8, starts with a byte-order mark, or is not exactly one JSON object with nothing but white space after it; it nests objects and arrays more than 8 levels deep, counting the outer object; an object holds a key that is not lower-case `snake_case` (a letter `a` to `z`, then letters, digits and `_`), or holds the same key twice once escapes are decoded (`"te\u0078t"` is `"text"`); a key is not a field of the route's request; or a value does not fit its field. |
+
 ### Health listener
 
 | Request | Answer |
@@ -377,6 +445,7 @@ an `Access-Control-*` header. Their error bodies are fixed JSON objects with
 | `{"error":"not_found"}` | `404` |
 | `{"error":"method_not_allowed"}` | `405` |
 | `{"error":"internal_error"}` | `500`, when a handler fails or panics |
+| `{"error":"unsupported_media_type"}`, `{"error":"body_too_large"}`, `{"error":"invalid_body"}` | `415`, `413`, `400`, from a route that reads a body (none in this build); see [Request bodies](#request-bodies) |
 
 Responses never echo request content, header values or tokens.
 
@@ -407,7 +476,8 @@ loopback.
 
 | Event | Level | Other keys | Written when |
 |---|---|---|---|
-| `startup_refused` | `ERROR` | `reason`, `error` | The configuration is refused; exit `2`. |
+| `startup_refused` | `ERROR` | `reason`, `error` | The configuration or the [master key](#master-key) is refused; exit `2`. |
+| `keys_loaded` | `INFO` | `key_id` | The master key is loaded and the log pseudonyms are keyed with it; `key_id` is the 8-digit key id, never a key. |
 | `startup_failed` | `ERROR` | `error` | A listener cannot be opened, for example because its address is in use; exit `1`. |
 | `starting` | `INFO` | `version`, `revision`, `modified`, `dev` | The listeners are open. |
 | `dev_build` | `WARN`, at every log level | | The binary was built with the `dev` tag. |
@@ -419,20 +489,76 @@ loopback.
 | `stopped` | `INFO`, or `ERROR` with `error` | | Shutdown ended. |
 | `panic` | `ERROR` | `name`, `panic_type`, `stack` | A panic was recovered in a handler or a goroutine; `name` is as in `wawarden_panics_total`. |
 | `http_server_error` | `WARN` | `listener` | Go's HTTP server reported an error of its own, such as a failed accept; `msg` holds the server's text. |
+| `log_dropped` | `WARN` | `reason` (always `xml`) | Replaces a line that carried XML; see [Pseudonyms and dropped lines](#pseudonyms-and-dropped-lines). It is written in place of a line that passed the log level, whatever that line's level was. |
 
 What is never logged: requests (there is no access log), request bodies, header
 values, tokens, failed authentications, the admin token's hash, the values of
-refused variables (a refusal names the variable only) and panic values (only
-their Go type and the stack). The listen addresses are the only configuration
-values that are logged: the `listening` and `listener_not_loopback` events carry
-the bound address, and the `error` texts of `startup_failed` and
-`listener_failed` come from the operating system and can contain a listen
-address.
+refused variables (a refusal names the variable only), panic values (only their
+Go type and the stack), the master key and the keys derived from it (only the key
+id), WhatsApp identifiers in their `user@server` form (they become pseudonyms) and
+lines carrying XML. The listen addresses are the only configuration values that
+are logged: the `listening` and `listener_not_loopback` events carry the bound
+address, and the `error` texts of `startup_failed` and `listener_failed` come
+from the operating system and can contain a listen address.
 
 The CLI writes to standard error only its usage text, the flag parser's one-line
 error for an unknown flag or an invalid flag value (it repeats the flag as typed,
 for example `flag provided but not defined: -nope`), `healthcheck` failures and
 the `admin init` reminder. The Go runtime writes crash output to standard error.
+
+### Pseudonyms and dropped lines
+
+Every line `serve` writes to standard output passes through one writer, which
+changes it in the two ways below before it is written. The loggers that feed the
+writer also write values fail-closed, as the third paragraph describes.
+
+**Identifiers become pseudonyms.** Every part of a line shaped like a WhatsApp
+identifier is replaced by `jid:` and 8 lower-case hexadecimal digits. The shape is
+a run of letters, digits, `.`, `_`, `:`, `+` and `-`, then `@`, then one of the
+servers `s.whatsapp.net`, `c.us`, `lid`, `g.us`, `broadcast`, `newsletter`,
+`hosted`, `hosted.lid`, `bot`, `msgr` or `interop` in any letter case, followed by
+a character that is not a letter, digit or `_`, or by the end of the line. The
+identifier is the longest ending of the run that starts with a digit and holds
+only digits, `.`, `_`, `:` and `-`, or the whole run when it has no such ending;
+what precedes it is kept, so `sender:15550100001@s.whatsapp.net` becomes
+`sender:jid:` and 8 digits. A JSON escape sequence such as `\n` just before an
+identifier is kept as well, so the line stays valid JSON. The 8 digits are the first 4 bytes of an
+HMAC-SHA256, under the `log-redact` key derived from the [master key](#master-key),
+of the user cut at its first `.` or `:` (which drops an agent and a device
+number) and lower-cased, then `@`, then the server lower-cased with `c.us` written
+as `s.whatsapp.net`. So `15550100001@s.whatsapp.net`,
+`15550100001:4@s.whatsapp.net`, `15550100001.0:4@s.whatsapp.net` and
+`15550100001@c.us` all become the same pseudonym, and they keep it as long as the
+master key is the same.
+
+- Before the master key is loaded, the writer writes `jid:unkeyed` instead; only a
+  `startup_refused` line can be written that early.
+- Text that only looks like an address on one of these server names, such as
+  `someone@lid.example`, is replaced too. Go module paths such as
+  `example.com/module@v1.2.3` are not.
+- Identifiers written another way are not recognised: a phone number on its own,
+  or a user and device number without `@` and a server.
+- Pseudonyms are 32 bits long, so two identifiers can share one; among some
+  65,000 identifiers a shared pseudonym becomes likely.
+
+**Lines carrying XML are dropped.** A line that contains a closing tag (`</x>`), a
+self-closing tag (`<x/>`, with or without attributes), an opening tag with at
+least one attribute (`<x a="b">`), `<!--`, `<![CDATA[` or `<?xml` is replaced by
+one fixed line, also when the tag's `<` and `>` are written as the JSON escapes
+`\u003c` and `\u003e`:
+
+```json
+{"time":"2026-10-04T08:09:24.446116295Z","level":"WARN","msg":"log line dropped","event":"log_dropped","reason":"xml"}
+```
+
+Text such as `<nil>`, `<autogenerated>` or `a < b` does not count as XML.
+
+**Values are written fail-closed.** In the events above every value is a
+string, a number, a boolean or a time. Should any other value reach a log line, a
+byte slice is written as its length (`[32 bytes]`), an error or a value with a
+`String` method as its text, which is then pseudonymised like the rest of the
+line, and every other value as its Go type in brackets, such as `[seal.Chat]`,
+never as its content.
 
 ## Metrics
 

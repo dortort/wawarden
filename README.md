@@ -42,8 +42,8 @@ It is not:
   client listener.
 - **The service refuses to start rather than run misconfigured**: on any
   `WAWARDEN_` variable it does not implement, a plaintext admin token, a
-  non-loopback health address, running as root, or a data directory that is not
-  private to the service's user.
+  non-loopback health address, running as root, or a data directory or master
+  key that is not private to the service's user.
 - **Browser-originated requests are refused.** Any request to the client or admin
   listener carrying an `Origin` or `Sec-Fetch-Site` header gets `403`.
 - **Your WhatsApp account is at risk.** See the residual risks in the
@@ -72,6 +72,13 @@ What works today:
   identifiers (phone-number users, LID users and groups), the only source of a
   chat that a grant can allow, with a fuzz target. Nothing calls it yet. See the
   [threat model](docs/threat-model.md#secure-by-construction), row 4.
+- Also on `main`: `serve` creates a master key in the data directory on first
+  start and refuses one that is not private to its user; every log line it writes
+  passes through one writer that turns WhatsApp identifiers into pseudonyms keyed
+  by that key and drops lines carrying XML (see
+  [logging](docs/configuration.md#pseudonyms-and-dropped-lines)). Internally:
+  sanitisers for display text and terminal output, and a strict JSON decoder for
+  request bodies, which no route uses yet.
 
 Planned:
 
