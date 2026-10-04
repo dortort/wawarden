@@ -18,6 +18,7 @@ const (
 var ErrAdminCredential = errors.New("policy: the admin credential must be a SHA-256 written as 64 hexadecimal characters")
 
 type AdminCredential struct {
+	_   [0]func() // incomparable, so == cannot stand in for crypto/subtle
 	sum [sha256.Size]byte
 	ok  bool
 }
