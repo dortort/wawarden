@@ -71,6 +71,7 @@ var logLevels = map[string]slog.Level{
 
 type Config struct {
 	DataDir         string
+	UID             int
 	Listen          netip.AddrPort
 	AdminListen     netip.AddrPort
 	HealthListen    netip.AddrPort
@@ -140,6 +141,7 @@ func Load(environ []string, opts Options) (Config, *Refusal) {
 	if cfg.DataDir, r = dataDirectory(env, euid, owner); r != nil {
 		return Config{}, r
 	}
+	cfg.UID = euid
 	return cfg, nil
 }
 

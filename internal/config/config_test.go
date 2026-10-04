@@ -95,6 +95,7 @@ func TestDefaults(t *testing.T) {
 	}
 	want := Config{
 		DataDir:      vars[envDataDir],
+		UID:          testUID,
 		Listen:       netip.MustParseAddrPort("127.0.0.1:8080"),
 		AdminListen:  netip.MustParseAddrPort("127.0.0.1:8082"),
 		HealthListen: netip.MustParseAddrPort("127.0.0.1:8081"),
@@ -340,8 +341,8 @@ func TestDataDirectoryCreatedUnderASetgidParentIsAccepted(t *testing.T) {
 func TestRealOwnershipAndUID(t *testing.T) {
 	path := dirWithMode(t, 0o700)
 	cfg, r := Load(environ(map[string]string{envDataDir: path}), Options{AllowRoot: true})
-	if r != nil || cfg.DataDir != path {
-		t.Fatalf("Load = %+v, %v; want the private directory owned by the current user accepted", cfg, r)
+	if r != nil || cfg.DataDir != path || cfg.UID != os.Geteuid() {
+		t.Fatalf("Load = %+v, %v; want the private directory owned by the current user accepted for the effective user ID %d", cfg, r, os.Geteuid())
 	}
 	if uid, ok := statOwner(mustLstat(t, path)); !ok || uid != os.Geteuid() {
 		t.Fatalf("statOwner = %d, %v; want %d", uid, ok, os.Geteuid())
@@ -375,6 +376,11 @@ func TestAccepted(t *testing.T) {
 		{
 			name: "data directory owned by the effective user",
 			opts: func(o *Options) { o.UIDs = uids(otherUID, testUID) },
+			check: func(t *testing.T, c Config) {
+				if c.UID != testUID {
+					t.Fatalf("UID = %d, want the effective user ID %d", c.UID, testUID)
+				}
+			},
 		},
 		{
 			name: "admin hash inline",
