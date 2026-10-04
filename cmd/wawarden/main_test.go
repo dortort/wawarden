@@ -27,7 +27,7 @@ func TestMain(m *testing.M) {
 			_, _ = fmt.Fprintln(os.Stderr, "draining")
 			select {}
 		}
-		os.Args = []string{"wawarden", "serve"}
+		os.Args = []string{"wawarden", "serve", "--allow-root"}
 		main()
 	}
 	os.Exit(m.Run())
