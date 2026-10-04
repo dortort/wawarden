@@ -210,6 +210,17 @@ func TestAuthenticationPrecedesRoutingAndTheBody(t *testing.T) {
 		}
 		count++
 	}
+	for _, c := range credentials {
+		for _, contentType := range formContentTypes {
+			for _, target := range []string{"/probe/write", "/missing"} {
+				t.Run(c.name+" POST "+target+" as "+contentType, func(t *testing.T) {
+					f.clock.advance(time.Hour)
+					requireUnreadFormRefused(t, serve(f.handler, newFormRequest(t, target, contentType, c.header)))
+				})
+				count++
+			}
+		}
+	}
 	if got, want := f.failures(t), strconv.Itoa(count); got != want {
 		t.Fatalf("authentication failures = %s, want %s", got, want)
 	}

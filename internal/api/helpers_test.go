@@ -120,6 +120,28 @@ func newRequest(t *testing.T, method, target string, header http.Header) *http.R
 	return r
 }
 
+var formContentTypes = []string{"application/x-www-form-urlencoded", "multipart/form-data; boundary=synthetic-boundary"}
+
+func newFormRequest(t *testing.T, target, contentType string, header http.Header) *http.Request {
+	t.Helper()
+	r := newRequest(t, http.MethodPost, target, header)
+	r.Header.Set("Content-Type", contentType)
+	r.ContentLength = 64
+	return r
+}
+
+func requireUnreadFormRefused(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	requireError(t, rec, http.StatusUnauthorized, codeUnauthorized)
+	if got := rec.Header().Get("WWW-Authenticate"); got != "Bearer" {
+		t.Fatalf("WWW-Authenticate = %q, want Bearer", got)
+	}
+	if got := rec.Header().Get("Connection"); got != "close" {
+		t.Fatalf("Connection = %q, want close: a refused request's announced body is never read", got)
+	}
+	requireSecurityHeaders(t, rec.Header())
+}
+
 func bearer(credential string) http.Header {
 	return http.Header{"Authorization": {"Bearer " + credential}}
 }

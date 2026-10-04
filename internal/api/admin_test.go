@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/policy"
@@ -83,6 +84,26 @@ func TestAdminRefusesEveryOtherCredential(t *testing.T) {
 	}
 	f.clock.advance(failureRefill)
 	requireError(t, serve(f.handler, newRequest(t, http.MethodGet, "/metrics", nil)), http.StatusUnauthorized, codeUnauthorized)
+
+	before, err := strconv.Atoi(f.failures(t))
+	if err != nil {
+		t.Fatalf("admin authentication failures: %v", err)
+	}
+	forms := 0
+	for _, tt := range refused {
+		for _, contentType := range formContentTypes {
+			for _, target := range []string{"/metrics", "/missing"} {
+				t.Run(tt.name+" POST "+target+" as "+contentType, func(t *testing.T) {
+					f.clock.advance(time.Hour)
+					requireUnreadFormRefused(t, serve(f.handler, newFormRequest(t, target, contentType, tt.header)))
+				})
+				forms++
+			}
+		}
+	}
+	if got, want := f.failures(t), strconv.Itoa(before+forms); got != want {
+		t.Fatalf("admin authentication failures = %s, want %s", got, want)
+	}
 }
 
 func TestAdminMetricsServesTheExposition(t *testing.T) {
