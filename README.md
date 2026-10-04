@@ -1,10 +1,12 @@
 # WaWarden
 
-WaWarden is a self-hosted WhatsApp gateway. It links to one personal WhatsApp
-account as a companion device and exposes that account to your own AI agents and
-applications, over REST and MCP, with access scoped per client and per chat:
-each client gets a token that may read, or read and write, only the chats on its
-allowlist.
+WaWarden is a self-hosted WhatsApp gateway whose link to a WhatsApp account and
+REST and MCP interfaces are planned and not built yet: the current milestone,
+M0, is a scaffold (see [Status](#status)). When complete, it will link to one
+personal WhatsApp account as a companion device and expose that account to your
+own AI agents and applications, over REST and MCP, with access scoped per client
+and per chat: each client will get a token that may read, or read and write,
+only the chats on its allowlist.
 
 It is not:
 
