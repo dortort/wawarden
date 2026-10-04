@@ -26,6 +26,8 @@ linters:
           deny:
             - pkg: database/sql
               desc: internal/api reaches data only through internal/store/scoped
+            - pkg: mime/multipart
+              desc: internal/api reads JSON bodies only
             - pkg: html/template
               desc: internal/api writes JSON only, and a template can call a Request method by name
             - pkg: text/template
