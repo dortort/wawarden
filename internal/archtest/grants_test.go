@@ -567,6 +567,27 @@ func valueType(e ast.Expr) bool {
 	return false
 }
 
+func TestChatFileDeclaresNormalize(t *testing.T) {
+	files, err := moduleFiles(os.DirFS(filepath.Join(moduleRoot(t), policyDir)))
+	if err != nil {
+		t.Fatalf("walk %s: %v", policyDir, err)
+	}
+	var found []string
+	for _, f := range files {
+		if f.test || f.dir != "." {
+			continue
+		}
+		for _, decl := range f.file.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == "Normalize" {
+				found = append(found, policyDir+"/"+f.rel)
+			}
+		}
+	}
+	if !slices.Equal(found, []string{chatFile}) {
+		t.Fatalf("package policy declares Normalize in %q, but the grant-forging rule lets only %s build a valid chat: they must match", found, chatFile)
+	}
+}
+
 func TestGrantSetFields(t *testing.T) {
 	files, err := moduleFiles(os.DirFS(filepath.Join(moduleRoot(t), policyDir)))
 	if err != nil {
