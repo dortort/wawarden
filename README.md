@@ -158,7 +158,14 @@ wawarden_auth_failures_total 1
 wawarden_build_info{version="dev",revision="<commit>",dev="false"} 1
 ```
 
-Stop the service with `kill %1`; it shuts down gracefully and exits `0`.
+Stop the service; it shuts down gracefully and exits `0`. Then delete the
+temporary directory, which holds the admin token and the data directory:
+
+```sh
+kill %1
+wait
+rm -rf "$demo"
+```
 
 ### From the container image
 
@@ -187,7 +194,14 @@ docker exec wawarden /wawarden healthcheck && echo healthy
 curl -i http://127.0.0.1:8080/v1/me
 curl -H @"$demo/admin.header" http://127.0.0.1:8082/metrics
 docker stop wawarden
+
+docker rm wawarden
+docker volume rm wawarden-data
+rm -rf "$demo"
 ```
+
+The last three commands remove the container, its data volume and the temporary
+directory that holds the admin token.
 
 The image runs as `65532:65532` with `serve` as its default command. `/data` is
 the only path the service writes and the only one that must be writable; a new
