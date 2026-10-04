@@ -360,6 +360,16 @@ func TestALineIsWrittenOnlyWhenItEnds(t *testing.T) {
 			chunks: []string{strings.Repeat("a", maxLineBytes+1) + "\n"},
 			want:   []string{dropped("too_long")},
 		},
+		{
+			name:   "line of 65536 bytes",
+			chunks: []string{strings.Repeat("a", 65536) + "\n"},
+			want:   []string{strings.Repeat("a", 65536) + "\n"},
+		},
+		{
+			name:   "line of 65537 bytes",
+			chunks: []string{strings.Repeat("a", 65537) + "\n"},
+			want:   []string{dropped("too_long")},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
