@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -278,13 +279,20 @@ func moduleFiles(fsys fs.FS) ([]*sourceFile, error) {
 			return err
 		}
 		name := d.Name()
-		if d.IsDir() {
-			if _, err := fs.Stat(fsys, path.Join(p, "go.mod")); err == nil || name == "vendor" || name == "testdata" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") {
-				return fs.SkipDir
+		hidden := strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")
+		switch {
+		case d.IsDir() && (hidden || name == "vendor" || name == "testdata"):
+			return fs.SkipDir
+		case hidden:
+			return nil
+		case d.Type()&fs.ModeSymlink != 0:
+			return fmt.Errorf("%s is a symbolic link: the go tool follows it to code this walk does not read", p)
+		case d.IsDir():
+			if _, err := fs.Stat(fsys, path.Join(p, "go.mod")); err == nil {
+				return fmt.Errorf("%s holds a nested module: a workspace or replace directive can build it in, and this walk does not read it", p)
 			}
 			return nil
-		}
-		if path.Ext(name) != ".go" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") {
+		case path.Ext(name) != ".go":
 			return nil
 		}
 		src, err := fs.ReadFile(fsys, p)
@@ -350,8 +358,8 @@ func TestModuleWalk(t *testing.T) {
 		".hidden/h.go":                   {Data: []byte("package h\n")},
 		"_scratch/s.go":                  {Data: []byte("package s\n")},
 		"internal/_skip.go":              {Data: []byte("package internal\n")},
-		"nested/go.mod":                  {Data: []byte("module example.com/nested\n")},
-		"nested/n.go":                    {Data: []byte("package nested\n")},
+		"internal/a/testdata/go.mod":     {Data: []byte("module example.com/fixture\n")},
+		"internal/a/.link":               {Data: []byte("internal/a"), Mode: fs.ModeSymlink},
 	}
 	files, err := moduleFiles(fsys)
 	if err != nil {
@@ -364,6 +372,20 @@ func TestModuleWalk(t *testing.T) {
 	slices.Sort(got)
 	if want := []string{"internal/a/a.go", "internal/a/a_test.go", "main.go"}; !slices.Equal(got, want) {
 		t.Fatalf("walked %q, want %q", got, want)
+	}
+
+	for name, extra := range map[string]fstest.MapFS{
+		"a nested module":       {"nested/go.mod": {Data: []byte("module " + module + "/nested\n")}, "nested/n.go": {Data: []byte("package nested\n")}},
+		"a symlinked directory": {"internal/evil": {Data: []byte("../outside"), Mode: fs.ModeSymlink}},
+		"a symlinked Go file":   {"internal/a/b.go": {Data: []byte("a.go"), Mode: fs.ModeSymlink}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tree := maps.Clone(fsys)
+			maps.Copy(tree, extra)
+			if _, err := moduleFiles(tree); err == nil {
+				t.Fatal("moduleFiles accepted a tree holding code it cannot read")
+			}
+		})
 	}
 }
 
