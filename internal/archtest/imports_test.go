@@ -24,7 +24,7 @@ const (
 
 var bannedImports = set("net/http/pprof", "expvar", "net/http/cgi", "net/http/fcgi", "plugin", "unsafe", "C")
 
-var apiDenied = []string{"database/sql", "modernc.org/sqlite", "go.mau.fi/whatsmeow", module + "/internal/store/ingest"}
+var apiDenied = []string{"database/sql", "mime/multipart", "modernc.org/sqlite", "go.mau.fi/whatsmeow", module + "/internal/store/ingest"}
 
 var policyAllowed = set("bytes", "cmp", "crypto/sha256", "crypto/subtle", "encoding/base64", "encoding/binary", "encoding/hex",
 	"errors", "hash/crc32", "iter", "maps", "slices", "sort", "strconv", "strings", "time", "unicode", "unicode/utf8")
@@ -160,11 +160,12 @@ var fenceRule = rule{
 	name:  "import-fences",
 	check: checkFences,
 	cases: []snippet{
-		{name: "api imports past its fence", rel: "internal/api/x.go", want: 8, src: `package api
+		{name: "api imports past its fence", rel: "internal/api/x.go", want: 9, src: `package api
 
 import (
 	"database/sql"
 	"database/sql/driver"
+	"mime/multipart"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
 	"modernc.org/sqlite"
@@ -180,9 +181,12 @@ import (
 	"github.com/dortort/wawarden/internal/store/admin/sub"
 )
 `},
-		{name: "api/admin imports the admin store", rel: "internal/api/admin/x.go", src: `package admin
+		{name: "api/admin imports the admin store and mime", rel: "internal/api/admin/x.go", src: `package admin
 
-import "github.com/dortort/wawarden/internal/store/admin"
+import (
+	"mime"
+	"github.com/dortort/wawarden/internal/store/admin"
+)
 `},
 		{name: "outside api", rel: "internal/apiary/x.go", src: `package apiary
 
