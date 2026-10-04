@@ -27,14 +27,44 @@ import (
 const syntheticClientToken = "synthetic-client-token-for-tests"
 
 type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
+	mu      sync.Mutex
+	buf     bytes.Buffer
+	written chan struct{}
 }
 
 func (b *syncBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.written != nil {
+		close(b.written)
+		b.written = nil
+	}
 	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) changed() <-chan struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.written == nil {
+		b.written = make(chan struct{})
+	}
+	return b.written
+}
+
+func (b *syncBuffer) waitFor(t *testing.T, event string) {
+	t.Helper()
+	timeout := time.After(10 * time.Second)
+	for {
+		changed := b.changed()
+		if len(b.find(event)) > 0 {
+			return
+		}
+		select {
+		case <-changed:
+		case <-timeout:
+			t.Fatalf("no %s event in %v", event, b.events())
+		}
+	}
 }
 
 func (b *syncBuffer) events() []map[string]any {
@@ -67,6 +97,17 @@ func (oneClient) Authenticate(_ context.Context, presented string) (*policy.Clie
 		return nil, false
 	}
 	return &policy.Client{ID: "synthetic-client", ExpiresAt: time.Now().Add(time.Hour)}, true
+}
+
+type heldClient struct {
+	entered func()
+	release <-chan struct{}
+}
+
+func (h heldClient) Authenticate(context.Context, string) (*policy.Client, bool) {
+	h.entered()
+	<-h.release
+	return nil, false
 }
 
 func testConfig(t *testing.T, adminToken string) config.Config {
@@ -240,6 +281,60 @@ func TestHealthTurnsUnavailableWhenShutdownBegins(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("events = %v, want %v", got, want)
+	}
+}
+
+func TestShutdownWithARequestInFlight(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	releaseHeld := sync.OnceFunc(func() { close(release) })
+	a, logs := open(t, testConfig(t, ""), heldClient{entered: sync.OnceFunc(func() { close(entered) }), release: release})
+	health, client := addr(t, a, "health"), addr(t, a, "client")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.Run(ctx) }()
+	wait := sync.OnceValue(func() error { return <-done })
+	t.Cleanup(func() {
+		releaseHeld()
+		cancel()
+		_ = wait()
+	})
+
+	type result struct {
+		reply
+		err error
+	}
+	inflight := make(chan result, 1)
+	go func() {
+		r, err := do(t, http.MethodGet, client, "/v1/held", bearer(syntheticClientToken))
+		inflight <- result{r, err}
+	}()
+	select {
+	case <-entered:
+	case r := <-inflight:
+		t.Fatalf("the request never reached the authenticator: %d %q %v", r.status, r.body, r.err)
+	}
+
+	cancel()
+	logs.waitFor(t, "shutdown_started")
+	if r := mustDo(t, http.MethodGet, health, "/healthz", nil); r.status != http.StatusServiceUnavailable || r.body != `{"status":"unavailable"}` {
+		t.Fatalf("/healthz while a request is in flight during shutdown = %d %q, want 503 unavailable", r.status, r.body)
+	}
+	select {
+	case r := <-inflight:
+		t.Fatalf("the in-flight request ended before it was released: %d %q %v", r.status, r.body, r.err)
+	default:
+	}
+	if stopped := logs.find("stopped"); len(stopped) != 0 {
+		t.Fatalf("Run stopped while a request was in flight: %v", stopped)
+	}
+
+	releaseHeld()
+	if r := <-inflight; r.err != nil || r.status != http.StatusUnauthorized || r.body != `{"error":"unauthorized"}` {
+		t.Fatalf("the in-flight request after cancellation = %d %q %v, want it to complete with 401", r.status, r.body, r.err)
+	}
+	if err := wait(); err != nil {
+		t.Fatalf("Run = %v, want a clean shutdown once the in-flight request completed", err)
 	}
 }
 
