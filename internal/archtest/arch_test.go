@@ -50,8 +50,8 @@ type rule struct {
 
 var rules = []rule{
 	goroutineRule, netHTTPRule, dotImportRule, socketRule, muxRule, serverRule,
-	inListRule, bannedImportRule, fenceRule, grantRule, thirdPartyRule, nolintRule, wildcardRule, credentialRule,
-	preludeRule,
+	inListRule, bannedImportRule, fenceRule, grantRule, thirdPartyRule, hiddenPackageRule, nolintRule, wildcardRule,
+	credentialRule, preludeRule,
 }
 
 func parseSource(rel string, src []byte) (*sourceFile, error) {

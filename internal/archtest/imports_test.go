@@ -241,6 +241,54 @@ func thirdPartyImports(allowed []string) func(*sourceFile) []string {
 	}
 }
 
+var hiddenPackageRule = rule{
+	name:  "hidden-packages",
+	check: checkHiddenPackages,
+	cases: []snippet{
+		{name: "module packages in skipped directories", rel: "internal/app/x.go", want: 5, src: `package app
+
+import (
+	_ "github.com/dortort/wawarden/internal/app/testdata/side"
+	_ "github.com/dortort/wawarden/internal/app/_hidden"
+	dot "github.com/dortort/wawarden/internal/.dot"
+	_ "github.com/dortort/wawarden/vendor/example.com/v"
+	_ "github.com/dortort/wawarden/_x/testdata"
+)
+`},
+		{name: "a test imports a fixture", rel: "internal/app/x_test.go", want: 1, src: `package app
+
+import _ "github.com/dortort/wawarden/internal/archtest/testdata/control"
+`},
+		{name: "walked packages and other modules", rel: "internal/app/x.go", src: `package app
+
+import (
+	_ "embed"
+	_ "example.com/testdata/_x/.y"
+	_ "github.com/dortort/wawarden"
+	_ "github.com/dortort/wawarden/internal/a_b"
+	_ "github.com/dortort/wawarden/internal/testdatax"
+	_ "github.com/dortort/wawarden/internal/x.y"
+)
+`},
+	},
+}
+
+func checkHiddenPackages(f *sourceFile) []string {
+	var out []string
+	for _, imp := range f.imports {
+		rest, ok := strings.CutPrefix(imp.path, module+"/")
+		if !ok {
+			continue
+		}
+		if slices.ContainsFunc(strings.Split(rest, "/"), func(elem string) bool {
+			return elem == "testdata" || elem == "vendor" || strings.HasPrefix(elem, "_") || strings.HasPrefix(elem, ".")
+		}) {
+			out = append(out, f.at(imp.node, "%q is in a directory that the architecture tests and the linters skip, yet it would be built in", imp.path))
+		}
+	}
+	return out
+}
+
 func TestThirdPartyAllowList(t *testing.T) {
 	f, err := parseSource("internal/app/x.go", []byte(`package app
 
