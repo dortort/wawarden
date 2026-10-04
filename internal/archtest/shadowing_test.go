@@ -260,6 +260,25 @@ func (one[T]) o() bool { return subtle.ConstantTimeByteEq(1, 1) == 1 }
 
 func (b (*box[K, V])) p[E any]() {}
 `},
+		{name: "import names", rel: "internal/token/token.go", want: 2, src: `package token
+
+import (
+	len "maps"
+	true "strings"
+)
+
+var _, _ = len.Clone[map[int]int], true.Clone
+`},
+		{name: "import names with other names", rel: "internal/token/token.go", src: `package token
+
+import (
+	_ "embed"
+	m "maps"
+	"strings"
+)
+
+var _, _ = m.Clone[map[int]int], strings.Clone
+`},
 		{name: "a policy subpackage", rel: "internal/policy/sub/x.go", want: 1, src: `package sub
 
 func f() { delete := 0; _ = delete }
@@ -310,6 +329,11 @@ func checkShadowing(f *sourceFile) []string {
 			if id, ok := e.(*ast.Ident); ok {
 				declare(id, form)
 			}
+		}
+	}
+	for _, imp := range f.imports {
+		if imp.node.Name != nil && predeclared[imp.name] {
+			out = append(out, f.at(imp.node.Name, "import name %s shadows the predeclared identifier, so the rules that recognise it by name would accept a local look-alike", imp.name))
 		}
 	}
 	ast.Inspect(f.file, func(n ast.Node) bool {
