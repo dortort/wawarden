@@ -312,6 +312,9 @@ func dataDirectory(env map[string]string, uid int, owner func(fs.FileInfo) (int,
 	fi, err := os.Lstat(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		if err = os.Mkdir(path, 0o700); err == nil {
+			err = os.Chmod(path, 0o700) //nolint:gosec // G302: a directory needs its search bit; this clears the setgid bit Linux copies from a setgid parent
+		}
+		if err == nil {
 			fi, err = os.Lstat(path)
 		}
 	}

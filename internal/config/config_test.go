@@ -274,6 +274,7 @@ func TestDataDirectoryRefusals(t *testing.T) {
 		{name: "mode 0701", path: dirWithMode(t, 0o701), owner: testUID, reason: "data_dir_permissions"},
 		{name: "mode 0710", path: dirWithMode(t, 0o710), owner: testUID, reason: "data_dir_permissions"},
 		{name: "mode 0702", path: dirWithMode(t, 0o702), owner: testUID, reason: "data_dir_permissions"},
+		{name: "setuid", path: dirWithMode(t, fs.ModeSetuid|0o700), owner: testUID, reason: "data_dir_permissions"},
 		{name: "setgid", path: dirWithMode(t, fs.ModeSetgid|0o700), owner: testUID, reason: "data_dir_permissions"},
 		{name: "sticky", path: dirWithMode(t, fs.ModeSticky|0o700), owner: testUID, reason: "data_dir_permissions"},
 		{name: "mode 0500", path: dirWithMode(t, 0o500), owner: testUID, reason: "data_dir_permissions"},
@@ -323,6 +324,16 @@ func TestDataDirectoryIsCreatedPrivate(t *testing.T) {
 	}
 	if _, r := Load(environ(map[string]string{envDataDir: path}), testOptions()); r != nil {
 		t.Fatalf("a second start refused the directory the first created: %v", r)
+	}
+}
+
+func TestDataDirectoryCreatedUnderASetgidParentIsAccepted(t *testing.T) {
+	path := filepath.Join(dirWithMode(t, fs.ModeSetgid|0o700), "data")
+	if _, r := Load(environ(map[string]string{envDataDir: path}), testOptions()); r != nil {
+		t.Fatalf("Load refused the directory it created under a setgid parent: %v", r)
+	}
+	if got := mustLstat(t, path).Mode(); got != fs.ModeDir|0o700 {
+		t.Fatalf("the created directory has mode %v, want exactly drwx------", got)
 	}
 }
 
