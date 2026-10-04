@@ -177,7 +177,7 @@ func TestRefusalsBeforeTheBodyLeaveItUnread(t *testing.T) {
 		want          error
 	}{
 		{name: "media type", contentType: "text/plain", contentLength: 10, want: errMediaType},
-		{name: "announced length over the cap", contentType: jsonType, contentLength: maxBodyBytes + 1, want: errTooLarge},
+		{name: "announced length over the cap", contentType: jsonType, contentLength: 16385, want: errTooLarge},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -199,6 +199,86 @@ func TestChunkedBodyOverTheCap(t *testing.T) {
 	req.req.ContentLength = -1
 	if err := req.DecodeJSON(&sample{}); err != errTooLarge {
 		t.Fatalf("DecodeJSON = %v, want %v", err, errTooLarge)
+	}
+}
+
+func sizedBody(size int) string {
+	return `{"text":"` + strings.Repeat("a", size-len(`{"text":""}`)) + `"}`
+}
+
+func TestTheBodyCapIs16384Bytes(t *testing.T) {
+	for _, tt := range []struct {
+		size    int
+		chunked bool
+		want    error
+	}{
+		{size: 16384},
+		{size: 16384, chunked: true},
+		{size: 16385, want: errTooLarge},
+		{size: 16385, chunked: true, want: errTooLarge},
+	} {
+		_, req := jsonRequest(t, []string{jsonType}, sizedBody(tt.size))
+		if tt.chunked {
+			req.req.ContentLength = -1
+		}
+		if err := req.DecodeJSON(&sample{}); err != tt.want {
+			t.Errorf("DecodeJSON of %d bytes, chunked %v = %v, want %v", tt.size, tt.chunked, err, tt.want)
+		}
+	}
+
+	f := newDecodeFixture(t)
+	lengths := make(chan int64, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lengths <- r.ContentLength
+		f.handler.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	tests := []struct {
+		name    string
+		size    int
+		chunked bool
+		status  int
+		body    string
+	}{
+		{name: "16384 bytes announced", size: 16384, status: http.StatusOK, body: `{"status":"ok"}`},
+		{name: "16384 bytes chunked", size: 16384, chunked: true, status: http.StatusOK, body: `{"status":"ok"}`},
+		{name: "16385 bytes announced", size: 16385, status: http.StatusRequestEntityTooLarge, body: `{"error":"` + codeBodyTooLarge + `"}`},
+		{name: "16385 bytes chunked", size: 16385, chunked: true, status: http.StatusRequestEntityTooLarge, body: `{"error":"` + codeBodyTooLarge + `"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/probe/decode", strings.NewReader(sizedBody(tt.size)))
+			if err != nil {
+				t.Fatalf("NewRequestWithContext: %v", err)
+			}
+			req.Header.Set("Authorization", "Bearer "+keyWriter)
+			req.Header.Set("Content-Type", jsonType)
+			wantLength := int64(tt.size)
+			if tt.chunked {
+				req.ContentLength, wantLength = -1, -1
+			}
+			resp, err := srv.Client().Do(req)
+			if err != nil {
+				t.Fatalf("POST: %v", err)
+			}
+			got, err := io.ReadAll(resp.Body)
+			if closeErr := resp.Body.Close(); err != nil || closeErr != nil {
+				t.Fatalf("read the response: %v, %v", err, closeErr)
+			}
+			decodedText := -1
+			if resp.StatusCode == http.StatusOK {
+				decodedText = len((<-f.decoded).Text)
+			}
+			if length := <-lengths; length != wantLength {
+				t.Fatalf("the server saw a Content-Length of %d, want %d", length, wantLength)
+			}
+			if resp.StatusCode != tt.status || string(got) != tt.body {
+				t.Fatalf("response = %d %q, want %d %q", resp.StatusCode, got, tt.status, tt.body)
+			}
+			if want := tt.size - len(`{"text":""}`); tt.status == http.StatusOK && decodedText != want {
+				t.Fatalf("decoded %d bytes of text, want %d", decodedText, want)
+			}
+		})
 	}
 }
 
