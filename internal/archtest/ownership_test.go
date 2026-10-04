@@ -400,7 +400,7 @@ var serverRule = rule{
 	name:  "server-ownership",
 	check: checkServers,
 	cases: []snippet{
-		{name: "servers outside listeners", rel: "internal/app/x.go", want: 4, src: `package app
+		{name: "servers outside listeners", rel: "internal/app/x.go", want: 5, src: `package app
 
 import web "net/http"
 
@@ -411,13 +411,16 @@ func f(h web.Handler) {
 	_ = new((web.Server))
 }
 `},
-		{name: "servers in a listeners test", rel: "internal/listeners/x_test.go", want: 1, src: `package listeners
+		{name: "servers in a listeners test", rel: "internal/listeners/x_test.go", want: 2, src: `package listeners
 
 import "net/http"
 
-var _ = http.Server{Handler: http.NotFoundHandler()}
+var (
+	_ = http.Server{Handler: http.NotFoundHandler()}
+	_ http.Server
+)
 `},
-		{name: "servers in listeners without a handler", rel: "internal/listeners/x.go", want: 5, src: `package listeners
+		{name: "servers in listeners without a handler", rel: "internal/listeners/x.go", want: 6, src: `package listeners
 
 import "net/http"
 
@@ -428,6 +431,28 @@ var (
 	_ = map[string]http.Server{"a": {}}
 	_ = new(http.Server)
 )
+`},
+		{name: "zero-value servers in listeners", rel: "internal/listeners/x.go", want: 7, src: `package listeners
+
+import (
+	"net"
+	"net/http"
+)
+
+type wrap struct{ http.Server }
+
+type holder struct{ srv http.Server }
+
+type alias = http.Server
+
+type defined http.Server
+
+func f(ln net.Listener) error {
+	var srv http.Server
+	_ = make([]http.Server, 1)
+	_ = http.Server(srv)
+	return srv.Serve(ln)
+}
 `},
 		{name: "ListenAndServe on any receiver", rel: "internal/app/x_test.go", want: 3, src: `package app
 
@@ -450,32 +475,58 @@ import (
 	"net/http"
 )
 
+type server struct {
+	http *http.Server
+}
+
+type wrap struct{ *http.Server }
+
 func f(h http.Handler, ln net.Listener) error {
+	var later *http.Server
 	srv := &http.Server{Handler: h, ReadHeaderTimeout: 1}
+	later = srv
 	_ = []*http.Server{{Handler: h}}
+	_ = server{http: later}
 	return srv.Serve(ln)
 }
+`},
+		{name: "server pointers in a test", rel: "internal/app/x_test.go", src: `package app
+
+import "net/http"
+
+func f(srv *http.Server) *http.Server { return srv }
 `},
 		{name: "another package's Server", rel: "internal/app/x.go", src: `package app
 
 import "example.com/http"
 
-var _ = &http.Server{}
+var (
+	_ = &http.Server{}
+	_ http.Server
+)
 `},
 	},
 }
 
 func checkServers(f *sourceFile) []string {
 	var out []string
+	pointerOrLiteral := map[*ast.SelectorExpr]bool{}
 	ast.Inspect(f.file, func(n ast.Node) bool {
 		switch n := n.(type) {
+		case *ast.StarExpr:
+			if sel, _ := f.ref(n.X); sel != nil {
+				pointerOrLiteral[sel] = true
+			}
+		case *ast.CompositeLit:
+			if sel, _ := f.ref(n.Type); sel != nil {
+				pointerOrLiteral[sel] = true
+			}
 		case *ast.SelectorExpr:
 			if n.Sel.Name == "ListenAndServe" || n.Sel.Name == "ListenAndServeTLS" {
 				out = append(out, f.at(n, "%s is banned: servers run only on listeners that %s opened", n.Sel.Name, listenersDir))
 			}
-		case *ast.CallExpr:
-			if id, ok := ast.Unparen(n.Fun).(*ast.Ident); ok && id.Name == "new" && len(n.Args) == 1 && f.isType(n.Args[0], "net/http", "Server") {
-				out = append(out, f.at(n, "new(http.Server) leaves Handler nil, which serves http.DefaultServeMux"))
+			if sel, p := f.ref(n); sel != nil && p == "net/http" && sel.Sel.Name == "Server" && !pointerOrLiteral[sel] {
+				out = append(out, f.at(n, "http.Server used as a value type: a zero http.Server has a nil Handler, which serves http.DefaultServeMux; hold a *http.Server built by a literal"))
 			}
 		}
 		return true
