@@ -11,6 +11,9 @@ concurrency:
   group: govulncheck-daily
   cancel-in-progress: false
 
+env:
+  GOFLAGS: -mod=readonly
+
 defaults:
   run:
     shell: bash
@@ -63,9 +66,6 @@ jobs:
         id: scan
         if: steps.latest.outputs.tag != ''
         run: |
-          if [ -f vendor/modules.txt ]; then
-            export GOFLAGS=-mod=vendor
-          fi
           status=0
           govulncheck ./... > "$RUNNER_TEMP/report.txt" 2>&1 || status=$?
           cat "$RUNNER_TEMP/report.txt"

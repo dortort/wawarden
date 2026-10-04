@@ -14,6 +14,7 @@ concurrency:
 
 env:
   BUILDX_VERSION: v0.37.1
+  GOFLAGS: -mod=readonly
 
 defaults:
   run:
@@ -41,7 +42,7 @@ jobs:
 
       - name: Check formatting
         run: |
-          unformatted=$(git ls-files -z -- '*.go' ':(exclude)vendor/**' | xargs -0 -r gofmt -l)
+          unformatted=$(git ls-files -z -- '*.go' | xargs -0 -r gofmt -l)
           if [ -n "$unformatted" ]; then
             echo "::error::gofmt -l lists unformatted files"
             echo "$unformatted"
@@ -116,37 +117,25 @@ jobs:
       - name: Check the Go version
         run: hack/check-go-version.sh
 
+      - name: Refuse a vendor directory
+        run: |
+          if [ -e vendor ] || [ -L vendor ]; then
+            echo "::error::vendor exists at the repository root; modules are pinned by go.sum and never vendored, so remove it"
+            exit 1
+          fi
+
       - name: Check that go mod tidy changes nothing
         run: go mod tidy -diff
 
-      - name: Require vendored modules once go.mod has requirements
-        run: |
-          requires=$(go mod edit -json | jq '.Require // [] | length')
-          if [[ ! $requires =~ ^[0-9]+$ ]]; then
-            echo "::error::cannot count the requirements in go.mod"
-            exit 1
-          fi
-          if [ "$requires" -gt 0 ] && [ ! -f vendor/modules.txt ]; then
-            echo "::error::go.mod has $requires requirement(s) but vendor/modules.txt is missing; run go mod vendor and commit vendor/"
-            exit 1
-          fi
-
-      - name: Check that go mod vendor changes nothing
-        run: |
-          if [ ! -f vendor/modules.txt ]; then
-            echo "No vendor/modules.txt; nothing to check."
-            exit 0
-          fi
-          go mod vendor
-          changes=$(git status --porcelain --untracked-files=all -- vendor)
-          if [ -n "$changes" ]; then
-            echo "::error::go mod vendor changed vendor/; run it and commit the result"
-            echo "$changes" | head -n 100
-            exit 1
-          fi
-
       - name: Verify module checksums
         run: go mod verify
+
+      - name: Build with read-only modules
+        env:
+          GOFLAGS: -mod=readonly
+        run: |
+          go build ./...
+          go build -tags dev ./...
 
   govulncheck:
     name: govulncheck
@@ -171,11 +160,7 @@ jobs:
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
       - name: Run govulncheck
-        run: |
-          if [ -f vendor/modules.txt ]; then
-            export GOFLAGS=-mod=vendor
-          fi
-          govulncheck ./...
+        run: govulncheck ./...
 
   fuzz-targets:
     name: List fuzz targets
