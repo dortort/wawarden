@@ -106,6 +106,9 @@ func TestIdentifiersBecomePseudonyms(t *testing.T) {
 				{`{"msg":"(`, `)."}`},
 				{`{"`, `":true}`},
 				{`{"msg":"`, `_session"}`},
+				{`{"msg":"`, "\u212a\"}"},
+				{`{"msg":"`, "\u017f\"}"},
+				{`{"msg":"`, "\u00c9\"}"},
 				{`at the end of a line `, ``},
 			}
 			if !tt.letters {

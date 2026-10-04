@@ -497,8 +497,8 @@ What is never logged: requests (there is no access log), request bodies, header
 values, tokens, failed authentications, the admin token's hash, the values of
 refused variables (a refusal names the variable only), panic values (only their
 Go type and the stack), the master key and the keys derived from it (only the key
-id), WhatsApp identifiers in their `user@server` form when no letter or digit
-follows the server name (they become
+id), WhatsApp identifiers in their `user@server` form when no ASCII letter or
+digit follows the server name (they become
 [pseudonyms](#pseudonyms-and-dropped-lines)) and lines carrying XML in one of
 the [recognised shapes](#pseudonyms-and-dropped-lines). The listen addresses are the only configuration values that
 are logged: the `listening` and `listener_not_loopback` events carry the bound
@@ -544,7 +544,7 @@ master key is the same.
   `example.com/module@v1.2.3` are not.
 - Identifiers written another way are not recognised: a phone number on its own,
   a user and device number without `@` and a server, or an identifier whose
-  server name is followed directly by a letter or digit, such as
+  server name is followed directly by an ASCII letter or digit, such as
   `15550100001@g.us2`.
 - Pseudonyms are 32 bits long, so two identifiers can share one; among some
   65,000 identifiers a shared pseudonym becomes likely.
