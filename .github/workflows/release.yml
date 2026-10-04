@@ -79,7 +79,7 @@ jobs:
         run: |
           passed=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$GITHUB_SHA" \
             --branch main --event push --status success --json databaseId --jq length)
-          if [ "$passed" -eq 0 ]; then
+          if [[ ! $passed =~ ^[1-9][0-9]*$ ]]; then
             echo "::error::ci.yml has no successful push run on $GITHUB_SHA; wait for CI on main to pass"
             exit 1
           fi
