@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -124,7 +125,7 @@ func (h heldClient) Authenticate(context.Context, string) (*policy.Client, bool)
 func testConfig(t *testing.T, adminToken string) config.Config {
 	t.Helper()
 	loopback := netip.MustParseAddrPort("127.0.0.1:0")
-	cfg := config.Config{DataDir: t.TempDir(), Listen: loopback, AdminListen: loopback, HealthListen: loopback}
+	cfg := config.Config{DataDir: t.TempDir(), UID: os.Geteuid(), Listen: loopback, AdminListen: loopback, HealthListen: loopback, StorageProfile: config.StorageLocal, MinFreeBytes: 1}
 	if adminToken != "" {
 		cred, err := policy.ParseAdminCredential(token.Hash(adminToken))
 		if err != nil {
@@ -282,9 +283,9 @@ func TestHealthTurnsUnavailableWhenShutdownBegins(t *testing.T) {
 	if _, err := do(t, http.MethodGet, health, "/healthz", nil); err == nil {
 		t.Fatal("the health listener still answers after Run returned")
 	}
-	want := []string{"starting", "listening", "listening", "ready", "shutdown_started", "stopped"}
+	want := []string{"archive_opened", "starting", "listening", "listening", "ready", "shutdown_started", "stopped"}
 	if buildinfo.Dev {
-		want = slices.Insert(want, 1, "dev_build")
+		want = slices.Insert(want, 2, "dev_build")
 	}
 	var got []string
 	for _, rec := range logs.events() {

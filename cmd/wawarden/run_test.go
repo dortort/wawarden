@@ -225,6 +225,39 @@ func TestServeRefusesKeysItCannotTrust(t *testing.T) {
 	}
 }
 
+func TestServeRefusesAnArchiveItCannotTrust(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	if err := os.Mkdir(data, 0o700); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	archive := filepath.Join(data, "archive.db")
+	if err := os.WriteFile(archive, nil, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Chmod(archive, 0o640); err != nil { //nolint:gosec // G302: the refusal under test needs a group-readable archive
+		t.Fatalf("Chmod: %v", err)
+	}
+	environ := []string{
+		"WAWARDEN_DATA_DIR=" + data,
+		"WAWARDEN_LISTEN=" + freeAddr(t),
+		"WAWARDEN_HEALTH_LISTEN=" + freeAddr(t),
+	}
+	code, stdout, stderr := invoke(t, []string{"serve", "--allow-root"}, environ)
+	var refusal map[string]any
+	for line := range strings.Lines(stdout) {
+		var rec map[string]any
+		if json.Unmarshal([]byte(line), &rec) == nil && rec["event"] == "startup_refused" {
+			refusal = rec
+		}
+	}
+	if code != 2 || refusal == nil || refusal["reason"] != "archive_db_permissions" || strings.Contains(stdout, data) {
+		t.Fatalf("serve = %d %q %q, want 2 with an archive_db_permissions refusal that does not name the data directory", code, stdout, stderr)
+	}
+	if strings.Contains(stdout, `"event":"listening"`) {
+		t.Fatal("serve opened a listener before it refused the archive")
+	}
+}
+
 func TestServeKeysItsOutputWithTheMasterKey(t *testing.T) {
 	const chat = "15550100042@s.whatsapp.net"
 	saved := runApp

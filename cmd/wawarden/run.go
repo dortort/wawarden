@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -76,6 +77,9 @@ func serve(ctx context.Context, args, environ []string, stdout, stderr io.Writer
 	logger := logx.New(out, cfg.LogLevel)
 	logger.Info("keys loaded", slog.String("event", "keys_loaded"), slog.String("key_id", master.ID()))
 	a, err := app.New(ctx, cfg, out)
+	if r, ok := errors.AsType[*app.Refusal](err); ok {
+		return refused(out, r.Reason, r)
+	}
 	if err != nil {
 		logger.Error("startup failed", slog.String("event", "startup_failed"), slog.String("error", err.Error()))
 		return 1

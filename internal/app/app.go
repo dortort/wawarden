@@ -17,6 +17,7 @@ import (
 	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/safego"
+	"github.com/dortort/wawarden/internal/store/ingest"
 )
 
 const (
@@ -29,6 +30,8 @@ const (
 
 var errHealthNotLoopback = errors.New("app: the unauthenticated health listener must be bound to a loopback address")
 
+type Refusal = ingest.Refusal
+
 type listenerSet interface {
 	Inventory() []listeners.Bound
 	Serve()
@@ -39,6 +42,7 @@ type listenerSet interface {
 type App struct {
 	logger  *slog.Logger
 	ready   atomic.Bool
+	archive *ingest.Store
 	serving listenerSet
 	health  listenerSet
 	grace   time.Duration
@@ -62,7 +66,25 @@ func newApp(ctx context.Context, cfg config.Config, out *logx.Writer, auth api.A
 	reg.GaugeVec("wawarden_build_info", "Build metadata of the running binary.", "version", "revision", "dev").
 		With(info.Version, info.Revision, strconv.FormatBool(info.Dev)).Set(1)
 
-	a := &App{logger: logger, grace: shutdownGrace}
+	archive, err := ingest.Open(ctx, ingest.Options{
+		DataDir:      cfg.DataDir,
+		UID:          cfg.UID,
+		Profile:      ingest.Profile(cfg.StorageProfile),
+		MinFreeBytes: cfg.MinFreeBytes,
+		Logger:       logger,
+	})
+	if err != nil {
+		return nil, err
+	}
+	starts, err := archive.RecordStart(ctx, time.Now())
+	if err != nil {
+		return nil, errors.Join(err, archive.Close())
+	}
+	logger.Info("archive opened", slog.String("event", "archive_opened"),
+		slog.Int("schema_version", archive.SchemaVersion()), slog.String("profile", string(archive.Profile())),
+		slog.Bool("ofd_locking", archive.OFDLocking()), slog.Int("recent_starts", starts))
+
+	a := &App{logger: logger, archive: archive, grace: shutdownGrace}
 	specs := []listeners.Spec{{
 		Name:    listenerClient,
 		Addr:    cfg.Listen,
@@ -77,15 +99,15 @@ func newApp(ctx context.Context, cfg config.Config, out *logx.Writer, auth api.A
 	}
 	serving, err := listeners.Open(ctx, logger, specs)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(err, archive.Close())
 	}
 	health, err := listeners.Open(ctx, logger, []listeners.Spec{{
 		Name:    listenerHealth,
 		Addr:    cfg.HealthListen,
-		Handler: api.NewHealthHandler(a.ready.Load),
+		Handler: api.NewHealthHandler(a.healthy),
 	}})
 	if err != nil {
-		return nil, errors.Join(err, serving.Shutdown(ctx))
+		return nil, errors.Join(err, serving.Shutdown(ctx), archive.Close())
 	}
 	a.serving, a.health = serving, health
 
@@ -104,6 +126,8 @@ func newApp(ctx context.Context, cfg config.Config, out *logx.Writer, auth api.A
 	}
 	return a, nil
 }
+
+func (a *App) healthy() bool { return a.ready.Load() && a.archive.Healthy() }
 
 func (a *App) Inventory() []listeners.Bound {
 	return append(a.serving.Inventory(), a.health.Inventory()...)
@@ -133,7 +157,7 @@ func (a *App) Run(ctx context.Context) error {
 	if a.afterDrain != nil {
 		a.afterDrain()
 	}
-	err := errors.Join(failure, drained, a.health.Shutdown(grace))
+	err := errors.Join(failure, drained, a.archive.Close(), a.health.Shutdown(grace))
 	if err != nil {
 		a.logger.Error("stopped with errors", slog.String("event", "stopped"), slog.String("error", err.Error()))
 		return err
