@@ -3,11 +3,16 @@
 package listenertest
 
 import (
+	"context"
+	"log/slog"
 	"net"
+	"net/http"
 	"net/netip"
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/dortort/wawarden/internal/listeners"
 )
 
 func listening(t *testing.T) []netip.AddrPort {
@@ -29,6 +34,16 @@ func listen(t *testing.T) net.Listener {
 	return ln
 }
 
+func listenIPv6(t *testing.T) netip.AddrPort {
+	t.Helper()
+	s, err := listeners.Open(t.Context(), slog.New(slog.DiscardHandler), []listeners.Spec{{Name: "v6", Addr: netip.MustParseAddrPort("[::1]:0"), Handler: http.NotFoundHandler()}})
+	if err != nil {
+		t.Fatalf("listen on IPv6 loopback: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Shutdown(context.Background()) })
+	return s.Inventory()[0].Addr
+}
+
 func TestListeningTCP(t *testing.T) {
 	for _, mode := range []struct {
 		name string
@@ -45,6 +60,7 @@ func TestListeningTCP(t *testing.T) {
 			base := listening(t)
 			first := listen(t)
 			second := listen(t)
+			v6 := listenIPv6(t)
 
 			udp, err := (&net.ListenConfig{}).ListenPacket(t.Context(), "udp4", "127.0.0.1:0")
 			if err != nil {
@@ -69,7 +85,7 @@ func TestListeningTCP(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = server.Close() })
 
-			want := append(slices.Clone(base), first.Addr().(*net.TCPAddr).AddrPort(), second.Addr().(*net.TCPAddr).AddrPort())
+			want := append(slices.Clone(base), first.Addr().(*net.TCPAddr).AddrPort(), second.Addr().(*net.TCPAddr).AddrPort(), v6)
 			slices.SortFunc(want, netip.AddrPort.Compare)
 			if got := listening(t); !slices.Equal(got, want) {
 				t.Fatalf("listening = %v, want %v: UDP, unix-domain and connected sockets must not appear", got, want)
@@ -78,7 +94,7 @@ func TestListeningTCP(t *testing.T) {
 			if err := second.Close(); err != nil {
 				t.Fatalf("close: %v", err)
 			}
-			want = append(slices.Clone(base), first.Addr().(*net.TCPAddr).AddrPort())
+			want = append(slices.Clone(base), first.Addr().(*net.TCPAddr).AddrPort(), v6)
 			slices.SortFunc(want, netip.AddrPort.Compare)
 			if got := listening(t); !slices.Equal(got, want) {
 				t.Fatalf("after closing a listener, listening = %v, want %v", got, want)
