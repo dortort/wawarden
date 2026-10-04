@@ -17,10 +17,9 @@ func ParseAdminCredential(s string) (AdminCredential, error) {
 	if len(s) != hex.EncodedLen(sha256.Size) {
 		return AdminCredential{}, ErrAdminCredential
 	}
-	var c AdminCredential
-	if _, err := hex.Decode(c.sum[:], []byte(s)); err != nil {
+	var sum [sha256.Size]byte
+	if _, err := hex.Decode(sum[:], []byte(s)); err != nil {
 		return AdminCredential{}, ErrAdminCredential
 	}
-	c.ok = true
-	return c, nil
+	return AdminCredential{sum: sum, ok: true}, nil
 }
