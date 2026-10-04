@@ -157,8 +157,8 @@ release workflow, by CI and by anyone reproducing a release:
   index digest, and its `SHA256SUMS` must equal the `build` job's, which the
   `rebuild` job reproduced.
 - After building the binaries, the script runs `hack/licenses.sh`, which
-  collects the licence files of every module linked into them (see
-  [Licences](#licences)) into `dist/licenses`, and packs that directory into
+  collects the licence files of the Go standard library and of every module
+  linked into them (see [Licences](#licences)) into `dist/licenses`, and packs that directory into
   `wawarden_<version>_licenses.tar.gz` with `hack/tarball.go`. `SHA256SUMS`
   lists this archive next to the binaries, so every comparison of
   `SHA256SUMS` below covers it too.
@@ -199,7 +199,7 @@ both builds produced.
 |---|---|
 | Multi-arch image (`linux/amd64`, `linux/arm64`) | `ghcr.io/dortort/wawarden@sha256:<digest>`, also tagged `<version>`; the release notes state the index digest |
 | Binaries `wawarden_<version>_linux_amd64` and `wawarden_<version>_linux_arm64` | Release assets |
-| The licence files of every module linked into the binaries, `wawarden_<version>_licenses.tar.gz` | Release asset, and `/licenses` in the image |
+| The licence files of the Go standard library and of every module linked into the binaries, `wawarden_<version>_licenses.tar.gz` | Release asset, and `/licenses` in the image |
 | `SHA256SUMS` for the binaries and the licence archive | Release asset |
 | SPDX 2.3 SBOMs for the binaries, `wawarden_<version>_linux_<arch>.spdx.json` | Release assets, and attested to each binary in GitHub's attestation store |
 | Build provenance attestations (SLSA, via `actions/attest-build-provenance`) for the image index and for each binary | GitHub's attestation store; the image attestation is also pushed to the registry, and the binaries' Sigstore bundle is the release asset `wawarden_<version>_provenance.sigstore.json` |
@@ -220,18 +220,30 @@ released under the MIT licence. From M1 on, the image's
 annotation on the image index, set by `hack/repro-build.sh`, are
 `GPL-3.0-or-later`.
 
-From M1 on, the binaries link third-party Go modules, each under its own
-licence. Every release ships their licence texts:
+The binaries link the Go standard library, under Go's BSD-style licence and
+patent grant, and from M1 on third-party Go modules, each under its own
+licence. Every release ships their licence texts, and WaWarden's own:
 
 - `hack/licenses.sh` lists, with `go list -deps`, the modules whose packages are
   compiled into `./cmd/wawarden` for `linux/amd64` and `linux/arm64`, and copies
-  from the Go module cache every regular file at the root of each module whose
-  name starts with `LICENSE`, `LICENCE`, `COPYING`, `NOTICE`, `PATENTS` or
-  `UNLICENSE`, in any letter case, to
-  `dist/licenses/<module path>@<version>/`. Files get mode `0444`, directories
-  `0755`, and every timestamp is set to the commit time. The script stops when
-  a linked module ships none of these files. It can be run on its own; it
-  writes nothing outside `dist/licenses`.
+  every regular file at the root of each module whose name starts with
+  `LICENSE`, `LICENCE`, `COPYING`, `NOTICE`, `PATENTS` or `UNLICENSE`, in any
+  letter case, to `dist/licenses/<module path>@<version>/`: from the Go module
+  cache for the third-party modules, and from the repository root, without a
+  version, for WaWarden. The script stops when a linked module ships none of
+  these files.
+- The standard library's `LICENSE` and `PATENTS` are committed under
+  `hack/stdlib-licenses/<Go version>/`, because not every Go installation
+  carries them (Homebrew's does not). The script copies them to
+  `dist/licenses/std@<Go version>/` for the version that the `toolchain` line
+  of `go.mod` names, and stops when the local Go is another version, when that
+  directory is missing, or when either file differs from the one in the local
+  Go installation, where that one exists. A toolchain update therefore comes
+  with a new directory, copied from the new Go distribution, and the removal
+  of the old one.
+- Files get mode `0444`, directories `0755`, and every timestamp is set to the
+  commit time. The script can be run on its own; it writes nothing outside
+  `dist/licenses`.
 - The image carries that directory as `/licenses`.
 - `hack/tarball.go`, run with `go run`, packs the directory into
   `wawarden_<version>_licenses.tar.gz`: entries in lexical order, mode `0444`
@@ -409,7 +421,8 @@ remains.
 - [ ] Choose the version under [Versioning](#versioning) and check that the tag
       does not exist.
 - [ ] The build and rebuild jobs list `wawarden_<version>_licenses.tar.gz` in
-      identical `SHA256SUMS`, and it holds a directory for every module in
+      identical `SHA256SUMS`, and it holds a directory for the standard
+      library of the `go.mod` toolchain, for WaWarden and for every module in
       `go.mod` that the binaries link (see [Licences](#licences)).
 - [ ] Dispatch the workflow on `main`:
       `gh workflow run release.yml --ref main -f version=<version>`.

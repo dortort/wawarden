@@ -393,7 +393,7 @@ jobs:
             echo
             echo "## Licences"
             echo
-            echo "WaWarden is licensed under GPL-3.0-or-later. The licence, copying, notice and patents files of every module linked into the binaries are in \`wawarden_${VERSION}_licenses.tar.gz\`, which \`SHA256SUMS\` covers, and under \`/licenses\` in the image."
+            echo "WaWarden is licensed under GPL-3.0-or-later. The licence, copying, notice and patents files of the Go standard library and of every module linked into the binaries are in \`wawarden_${VERSION}_licenses.tar.gz\`, which \`SHA256SUMS\` covers, and under \`/licenses\` in the image."
             echo
             echo "## Reproduce"
             echo

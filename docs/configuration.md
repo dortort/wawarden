@@ -800,7 +800,7 @@ applies to release images:
 | Health check | `["/wawarden","healthcheck"]`, in exec form; the image declares no health check of its own |
 | Exposed ports | None declared |
 | Labels | `org.opencontainers.image.source`, `licenses`, `version`, `revision` |
-| Licences | `/licenses`: the licence files of every Go module linked into `/wawarden`, one directory per module and version; see [`RELEASING.md`](../RELEASING.md#licences) |
+| Licences | `/licenses`: the licence files of the Go standard library (`std@<Go version>`), of WaWarden and of every other Go module linked into `/wawarden`, one directory per module and version; see [`RELEASING.md`](../RELEASING.md#licences) |
 
 Notes:
 

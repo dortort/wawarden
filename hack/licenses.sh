@@ -14,15 +14,32 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 stamp=$(TZ=UTC git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd HEAD)
 
+toolchain=$(awk '$1 == "toolchain" { print $2 }' go.mod)
+[ -n "$toolchain" ] || die "go.mod has no toolchain directive"
+goversion=$(go env GOVERSION)
+[ "$goversion" = "$toolchain" ] || die "go.mod pins $toolchain but the local Go is $goversion"
+std=hack/stdlib-licenses/$toolchain
+goroot=$(go env GOROOT)
+for name in LICENSE PATENTS; do
+  [ -f "$std/$name" ] || die "$std/$name is missing: copy the $name file of the Go $toolchain distribution there"
+  if [ -f "$goroot/$name" ] && ! cmp -s "$goroot/$name" "$std/$name"; then
+    die "$std/$name differs from the $name file of the local Go"
+  fi
+done
+
 modules=$(
   for arch in "${arches[@]}"; do
     GOOS=linux GOARCH=$arch CGO_ENABLED=0 go list -mod=readonly -deps \
-      -f '{{with .Module}}{{if not .Main}}{{.Path}}@{{.Version}} {{.Dir}}{{end}}{{end}}' ./cmd/wawarden
+      -f '{{with .Module}}{{.Path}}{{if not .Main}}@{{.Version}}{{end}} {{.Dir}}{{end}}' ./cmd/wawarden
   done | LC_ALL=C sort -u
 )
 
 rm -rf "$out"
-mkdir -p "$out"
+mkdir -p "$out/std@$toolchain"
+for name in LICENSE PATENTS; do
+  cp "$std/$name" "$out/std@$toolchain/$name"
+  chmod 0444 "$out/std@$toolchain/$name"
+done
 count=0
 while read -r module dir; do
   [ -n "$module" ] || continue
@@ -45,4 +62,4 @@ done <<< "$modules"
 
 find "$out" -type d -exec chmod 0755 {} +
 find "$out" -exec touch -d "$stamp" {} +
-log "collected the licence files of $count modules into $out"
+log "collected the licence files of the $toolchain standard library and of $count modules into $out"
