@@ -112,6 +112,9 @@ jobs:
           go-version-file: go.mod
           cache: false
 
+      - name: Check the Go version
+        run: hack/check-go-version.sh
+
       - name: Install pinned buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
@@ -177,6 +180,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+
+      - name: Check the Go version
+        run: hack/check-go-version.sh
 
       - name: Install pinned buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -258,6 +264,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+
+      - name: Check the Go version
+        run: hack/check-go-version.sh
 
       - name: Install pinned buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1

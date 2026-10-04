@@ -369,7 +369,7 @@ Dependabot does not update the following, so they are bumped by hand:
 
 | Item | Where it is pinned |
 |---|---|
-| Go | The `go` and `toolchain` lines of `go.mod`. The workflows set up Go from `go.mod`, and `hack/repro-build.sh` requires exactly the `toolchain` version. |
+| Go | The `go` and `toolchain` lines of `go.mod`. The workflows set up Go from `go.mod`; every job that runs Go in `ci.yml`, `codeql.yml` and `release.yml` then runs `hack/check-go-version.sh`, which stops the job unless `go env GOVERSION` equals the `toolchain` version, and `hack/repro-build.sh` requires exactly that version too. |
 | golangci-lint | The `version` input of both `golangci/golangci-lint-action` steps in `.github/workflows/ci.yml`. |
 | govulncheck | The `go install golang.org/x/vuln/cmd/govulncheck@<version>` step in `.github/workflows/ci.yml` and in `.github/workflows/govulncheck-daily.yml`. |
 | buildx | `BUILDX_VERSION` in the `env` block of `.github/workflows/ci.yml` and of `.github/workflows/release.yml`. |
