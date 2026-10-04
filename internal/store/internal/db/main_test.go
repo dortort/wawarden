@@ -1,14 +1,17 @@
 package db
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +22,7 @@ import (
 
 const (
 	probeEnv    = "DBTEST_PROBE"
+	holdNFSEnv  = "DBTEST_HOLD_NFS"
 	probeFree   = 0
 	probeFailed = 2
 	probeBusy   = 3
@@ -28,7 +32,32 @@ func TestMain(m *testing.M) {
 	if path := os.Getenv(probeEnv); path != "" {
 		os.Exit(probe(path))
 	}
+	if dir := os.Getenv(holdNFSEnv); dir != "" {
+		os.Exit(holdWithProfileNFS(dir))
+	}
 	os.Exit(m.Run())
+}
+
+func holdWithProfileNFS(dir string) int {
+	logger, _ := newLogger()
+	d, err := Open(context.Background(), Archive, Options{DataDir: dir, UID: os.Geteuid(), Profile: NFS, Logger: logger})
+	if err != nil {
+		return probeFailed
+	}
+	defer func() { _ = d.Close() }()
+	in := bufio.NewScanner(os.Stdin)
+	if _, err := fmt.Fprintf(os.Stdout, "open ofd=%t local=%t\n", d.OFDLocking(), selectLocking(Local) == nil); err != nil || !in.Scan() {
+		return probeFailed
+	}
+	stray, err := os.Open(filepath.Join(dir, "archive.db")) //nolint:gosec // G304: the test's own database file
+	if err != nil || stray.Close() != nil {
+		return probeFailed
+	}
+	if _, err := fmt.Fprintln(os.Stdout, "stray closed"); err != nil {
+		return probeFailed
+	}
+	in.Scan()
+	return probeFree
 }
 
 func probe(path string) int {
