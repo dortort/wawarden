@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	_ "expvar"
 	"io"
 	"log/slog"
@@ -336,6 +337,53 @@ func TestShutdownWithARequestInFlight(t *testing.T) {
 	}
 	if err := wait(); err != nil {
 		t.Fatalf("Run = %v, want a clean shutdown once the in-flight request completed", err)
+	}
+}
+
+func TestShutdownIsBoundedByTheGracePeriod(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	a, logs := open(t, testConfig(t, ""), heldClient{entered: sync.OnceFunc(func() { close(entered) }), release: release})
+	a.grace = 100 * time.Millisecond
+	client := addr(t, a, "client")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := make(chan struct{})
+	var runErr error
+	go func() {
+		runErr = a.Run(ctx)
+		close(finished)
+	}()
+	t.Cleanup(func() {
+		close(release)
+		cancel()
+		<-finished
+	})
+
+	inflight := make(chan error, 1)
+	go func() {
+		_, err := do(t, http.MethodGet, client, "/v1/held", bearer(syntheticClientToken))
+		inflight <- err
+	}()
+	select {
+	case <-entered:
+	case err := <-inflight:
+		t.Fatalf("the request never reached the authenticator: %v", err)
+	}
+
+	cancel()
+	select {
+	case <-finished:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run still waits for a stuck request 10 s after shutdown began, want it to give up after its grace period")
+	}
+	if !errors.Is(runErr, context.DeadlineExceeded) {
+		t.Fatalf("Run = %v, want the expired grace period reported", runErr)
+	}
+	if err := <-inflight; err == nil {
+		t.Fatal("the stuck request completed although its connection was force-closed")
+	}
+	if stopped := logs.find("stopped"); len(stopped) != 1 || stopped[0]["level"] != "ERROR" {
+		t.Fatalf("stopped events = %v, want one at ERROR", stopped)
 	}
 }
 

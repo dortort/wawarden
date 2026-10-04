@@ -32,6 +32,7 @@ type App struct {
 	ready   atomic.Bool
 	serving *listeners.Set
 	health  *listeners.Set
+	grace   time.Duration
 
 	afterDrain func()
 }
@@ -59,7 +60,7 @@ func newApp(ctx context.Context, cfg config.Config, logger *slog.Logger, auth ap
 	reg.GaugeVec("wawarden_build_info", "Build metadata of the running binary.", "version", "revision", "dev").
 		With(info.Version, info.Revision, strconv.FormatBool(info.Dev)).Set(1)
 
-	a := &App{logger: logger}
+	a := &App{logger: logger, grace: shutdownGrace}
 	specs := []listeners.Spec{{
 		Name:    listenerClient,
 		Addr:    cfg.Listen,
@@ -124,11 +125,11 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	a.logger.Info("shutting down", slog.String("event", "shutdown_started"))
 
-	drained := shutdown(ctx, a.serving)
+	drained := a.shutdown(ctx, a.serving)
 	if a.afterDrain != nil {
 		a.afterDrain()
 	}
-	err := errors.Join(failure, drained, shutdown(ctx, a.health))
+	err := errors.Join(failure, drained, a.shutdown(ctx, a.health))
 	if err != nil {
 		a.logger.Error("stopped with errors", slog.String("event", "stopped"), slog.String("error", err.Error()))
 		return err
@@ -137,8 +138,8 @@ func (a *App) Run(ctx context.Context) error {
 	return nil
 }
 
-func shutdown(ctx context.Context, s *listeners.Set) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownGrace)
+func (a *App) shutdown(ctx context.Context, s *listeners.Set) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.grace)
 	defer cancel()
 	return s.Shutdown(ctx)
 }
