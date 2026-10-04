@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -184,6 +185,38 @@ func TestServeRefusal(t *testing.T) {
 			}
 			if rec.Level != "ERROR" || rec.Event != "startup_refused" || rec.Reason != tt.reason {
 				t.Fatalf("log = %+v, want an ERROR startup_refused line with reason %q", rec, tt.reason)
+			}
+		})
+	}
+}
+
+func TestServeRefusesRootUnlessAllowed(t *testing.T) {
+	saved := uids
+	t.Cleanup(func() { uids = saved })
+	uids = func() (int, int) { return 0, 0 }
+	notADirectory := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(notADirectory, nil, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	environ := []string{"WAWARDEN_DATA_DIR=" + notADirectory}
+	tests := []struct {
+		args   []string
+		reason string
+	}{
+		{args: nil, reason: "running_as_root"},
+		{args: []string{"serve"}, reason: "running_as_root"},
+		{args: []string{"--allow-root"}, reason: "data_dir_not_directory"},
+		{args: []string{"serve", "--allow-root"}, reason: "data_dir_not_directory"},
+	}
+	for _, tt := range tests {
+		t.Run(strings.Join(append([]string{"run"}, tt.args...), " "), func(t *testing.T) {
+			code, stdout, stderr := invoke(t, tt.args, environ)
+			var rec struct {
+				Event  string `json:"event"`
+				Reason string `json:"reason"`
+			}
+			if err := json.Unmarshal([]byte(stdout), &rec); err != nil || code != 2 || rec.Event != "startup_refused" || rec.Reason != tt.reason {
+				t.Fatalf("run(%q) as UID 0 = %d %q %q, want 2 with a startup_refused line for %s", tt.args, code, stdout, stderr, tt.reason)
 			}
 		})
 	}

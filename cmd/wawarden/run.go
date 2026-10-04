@@ -25,7 +25,10 @@ const usage = `usage:
 
 const healthcheckTimeout = 2 * time.Second
 
-var runApp = (*app.App).Run
+var (
+	runApp = (*app.App).Run
+	uids   func() (ruid, euid int)
+)
 
 func run(ctx context.Context, args, environ []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
@@ -58,7 +61,7 @@ func serve(ctx context.Context, args, environ []string, stdout, stderr io.Writer
 		return usageError(stderr)
 	}
 
-	cfg, refusal := config.Load(environ, config.Options{AllowRoot: *allowRoot})
+	cfg, refusal := config.Load(environ, config.Options{AllowRoot: *allowRoot, UIDs: uids})
 	if refusal != nil {
 		app.NewLogger(stdout, slog.LevelInfo).Error("startup refused",
 			slog.String("event", "startup_refused"), slog.String("reason", refusal.Reason), slog.String("error", refusal.Error()))
