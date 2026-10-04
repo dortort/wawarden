@@ -1,10 +1,13 @@
 // Package policy decides what an authenticated caller may do and mints the grants that prove it.
 package policy
 
-import "time"
+import (
+	"time"
+	"unique"
+)
 
 type CanonicalChat struct {
-	jid string
+	jid unique.Handle[string]
 	ok  bool
 }
 

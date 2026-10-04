@@ -557,12 +557,15 @@ func (f *sourceFile) mentionedType(e ast.Expr, names []string) (string, bool) {
 var valueTypes = set("bool", "string", "byte", "rune", "int", "int8", "int16", "int32", "int64",
 	"uint", "uint8", "uint16", "uint32", "uint64", "uintptr", "float32", "float64", "complex64", "complex128")
 
-func valueType(e ast.Expr) bool {
+func (f *sourceFile) valueType(e ast.Expr) bool {
 	switch t := e.(type) {
 	case *ast.Ident:
 		return valueTypes[t.Name]
 	case *ast.ArrayType:
-		return t.Len != nil && valueType(t.Elt)
+		return t.Len != nil && f.valueType(t.Elt)
+	case *ast.IndexExpr:
+		sel, p := f.ref(t.X)
+		return sel != nil && p == "unique" && sel.Sel.Name == "Handle"
 	}
 	return false
 }
@@ -613,7 +616,7 @@ func TestGrantSetFields(t *testing.T) {
 					t.Fatalf("policy.%s embeds a field: name it, so the grant-forging rule can confine it", ts.Name.Name)
 				}
 				for _, name := range field.Names {
-					if !valueType(field.Type) {
+					if !f.valueType(field.Type) {
 						fields[name.Name] = true
 					}
 				}

@@ -119,7 +119,7 @@ func TestDecideRead(t *testing.T) {
 			for _, chat := range knownChats {
 				_, w := want[chat]
 				if got := g.Allows(chat); got != w {
-					t.Fatalf("Allows(%s) = %v, want %v", chat.jid, got, w)
+					t.Fatalf("Allows(%s) = %v, want %v", chat.JID(), got, w)
 				}
 			}
 			if !tt.wantAll && !maps.Equal(g.Chats(), want) {
@@ -178,7 +178,7 @@ func TestDecideWrite(t *testing.T) {
 			for _, chat := range knownChats {
 				_, w := want[chat]
 				if got := g.Allows(chat); got != w {
-					t.Fatalf("Allows(%s) = %v, want %v", chat.jid, got, w)
+					t.Fatalf("Allows(%s) = %v, want %v", chat.JID(), got, w)
 				}
 			}
 		})
@@ -294,7 +294,7 @@ func TestZeroValueGrantsAreInvalid(t *testing.T) {
 	}
 	for _, chat := range chats {
 		if r.Allows(chat) || w.Allows(chat) {
-			t.Fatalf("a zero-value grant allows %q", chat.jid)
+			t.Fatalf("a zero-value grant allows %q", chat.JID())
 		}
 	}
 	if (AdminGrant{}).Valid() {
@@ -320,7 +320,7 @@ func TestGrantsWithoutTheOkFlagAllowNothing(t *testing.T) {
 			}
 			for _, chat := range chats {
 				if tt.g.Allows(chat) {
-					t.Fatalf("Allows(%q) = true", chat.jid)
+					t.Fatalf("Allows(%q) = true", chat.JID())
 				}
 			}
 		})
@@ -340,7 +340,7 @@ func TestGrantsWithoutTheOkFlagAllowNothing(t *testing.T) {
 			}
 			for _, chat := range chats {
 				if tt.g.Allows(chat) {
-					t.Fatalf("Allows(%q) = true", chat.jid)
+					t.Fatalf("Allows(%q) = true", chat.JID())
 				}
 			}
 		})

@@ -27,7 +27,7 @@ var bannedImports = set("net/http/pprof", "expvar", "net/http/cgi", "net/http/fc
 var apiDenied = []string{"database/sql", "html/template", "text/template", "modernc.org/sqlite", "go.mau.fi/whatsmeow", module + "/internal/store/ingest"}
 
 var policyAllowed = set("bytes", "cmp", "crypto/sha256", "crypto/subtle", "encoding/base64", "encoding/binary", "encoding/hex",
-	"errors", "hash/crc32", "iter", "maps", "slices", "sort", "strconv", "strings", "time", "unicode", "unicode/utf8")
+	"errors", "hash/crc32", "iter", "maps", "slices", "sort", "strconv", "strings", "time", "unicode", "unicode/utf8", "unique")
 
 var allowedModules []string
 
@@ -248,6 +248,7 @@ import (
 	"maps"
 	"slices"
 	"time"
+	"unique"
 )
 `},
 		{name: "a policy test imports the module", rel: "internal/policy/x_test.go", src: `package policy

@@ -1,6 +1,9 @@
 package policy
 
-import "strings"
+import (
+	"strings"
+	"unique"
+)
 
 const (
 	maxChatInput      = 128
@@ -43,7 +46,7 @@ func Normalize(s string) (CanonicalChat, bool) {
 	if !ok {
 		return CanonicalChat{}, false
 	}
-	return CanonicalChat{jid: user + "@" + server, ok: true}, true
+	return CanonicalChat{jid: unique.Make(user + "@" + server), ok: true}, true
 }
 
 func (c CanonicalChat) Valid() bool { return c.ok }
@@ -52,14 +55,15 @@ func (c CanonicalChat) JID() string {
 	if !c.ok {
 		return ""
 	}
-	return c.jid
+	return c.jid.Value()
 }
 
 func (c CanonicalChat) Kind() ChatKind {
 	if !c.ok {
 		return InvalidChat
 	}
-	switch c.jid[strings.LastIndexByte(c.jid, '@')+1:] {
+	jid := c.jid.Value()
+	switch jid[strings.LastIndexByte(jid, '@')+1:] {
 	case phoneServer:
 		return PhoneChat
 	case lidServer:

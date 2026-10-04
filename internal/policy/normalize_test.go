@@ -1,10 +1,15 @@
 package policy
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"unique"
 )
 
 var canonicalJID = regexp.MustCompile(`^(?:[0-9]{1,24}@(?:s\.whatsapp\.net|lid)|[0-9]{1,24}(?:-[0-9]{1,24})?@g\.us)$`)
@@ -218,11 +223,39 @@ func TestNormalizeGivesEveryFormOfAnIdentifierOneChat(t *testing.T) {
 func TestInvalidChatsExposeNothing(t *testing.T) {
 	for name, c := range map[string]CanonicalChat{
 		"zero value":                 {},
-		"identifier without ok flag": {jid: "15550100001@s.whatsapp.net"},
+		"identifier without ok flag": {jid: unique.Make("15550100001@s.whatsapp.net")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if c.Valid() || c.JID() != "" || c.Kind() != InvalidChat {
 				t.Fatalf("Valid() = %v, JID() = %q, Kind() = %d, want false, empty, %d", c.Valid(), c.JID(), c.Kind(), InvalidChat)
+			}
+		})
+	}
+}
+
+func TestPrintedChatsHideTheirIdentifier(t *testing.T) {
+	for _, jid := range []string{"15550100001@s.whatsapp.net", "100000000000001@lid", "120363000000000001@g.us", "15550100001-1600000000@g.us"} {
+		t.Run(jid, func(t *testing.T) {
+			c := mustNormalize(jid)
+			client := &Client{ID: "c1", Read: set(c), Write: set(c)}
+			var out []string
+			for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%X", "%d"} {
+				out = append(out, fmt.Sprintf(verb, c), fmt.Sprintf(verb, &c), fmt.Sprintf(verb, []CanonicalChat{c}), fmt.Sprintf(verb, client))
+			}
+			out = append(out, fmt.Sprint(c), fmt.Sprintln(c, &c), fmt.Errorf("chat %v", c).Error())
+			var logs bytes.Buffer
+			slog.New(slog.NewTextHandler(&logs, nil)).Info("read", "chat", c, "client", client)
+			slog.New(slog.NewJSONHandler(&logs, nil)).Info("read", "chat", c, "client", client)
+			encoded, err := json.Marshal(map[string]any{"chat": c, "chats": []CanonicalChat{c}})
+			if err != nil {
+				t.Fatalf("json.Marshal: %v", err)
+			}
+			out = append(out, logs.String(), string(encoded))
+			user, _, _ := strings.Cut(jid, "@")
+			for _, s := range out {
+				if strings.Contains(s, "@") || strings.Contains(s, user) {
+					t.Fatalf("printing a chat wrote its identifier %q: %s", jid, s)
+				}
 			}
 		})
 	}
