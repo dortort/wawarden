@@ -68,6 +68,10 @@ What works today:
 - Internally: the policy core that mints read, write and admin grants, route
   registration that requires a policy class, and architecture tests and lint rules
   that enforce both.
+- On `main`, ahead of the M1 release: a strict normaliser for WhatsApp chat
+  identifiers (phone-number users, LID users and groups), the only source of a
+  chat that a grant can allow, with a fuzz target. Nothing calls it yet. See the
+  [threat model](docs/threat-model.md#secure-by-construction), row 4.
 
 Planned:
 
