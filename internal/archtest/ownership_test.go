@@ -607,6 +607,21 @@ func f(s srv) {
 	_ = start
 }
 `},
+		{name: "ListenAndServe promoted through embedding", rel: "internal/app/x.go", want: 4, src: `package app
+
+import "net/http"
+
+type embedded struct{ *http.Server }
+
+type nested struct{ embedded }
+
+func f(e embedded, n *nested, anon struct{ *http.Server }) {
+	_ = e.ListenAndServe()
+	_ = n.ListenAndServeTLS("", "")
+	_ = n.embedded.ListenAndServe()
+	_ = anon.ListenAndServeTLS("", "")
+}
+`},
 		{name: "servers in listeners with a handler", rel: "internal/listeners/x.go", src: `package listeners
 
 import (
