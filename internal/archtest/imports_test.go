@@ -24,7 +24,7 @@ const (
 
 var bannedImports = set("net/http/pprof", "expvar", "net/http/cgi", "net/http/fcgi", "plugin", "unsafe", "C")
 
-var apiDenied = []string{"database/sql", "modernc.org/sqlite", "go.mau.fi/whatsmeow", module + "/internal/store/ingest"}
+var apiDenied = []string{"database/sql", "html/template", "text/template", "modernc.org/sqlite", "go.mau.fi/whatsmeow", module + "/internal/store/ingest"}
 
 var policyAllowed = set("bytes", "cmp", "crypto/sha256", "crypto/subtle", "encoding/base64", "encoding/binary", "encoding/hex",
 	"errors", "hash/crc32", "iter", "maps", "slices", "sort", "strconv", "strings", "time", "unicode", "unicode/utf8")
@@ -160,12 +160,14 @@ var fenceRule = rule{
 	name:  "import-fences",
 	check: checkFences,
 	cases: []snippet{
-		{name: "api imports past its fence", rel: "internal/api/x.go", want: 9, src: `package api
+		{name: "api imports past its fence", rel: "internal/api/x.go", want: 11, src: `package api
 
 import (
 	"database/sql"
 	"database/sql/driver"
+	"html/template"
 	"mime/multipart"
+	"text/template/parse"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
 	"modernc.org/sqlite"
@@ -193,6 +195,8 @@ import (
 import (
 	"database/sql"
 	"github.com/dortort/wawarden/internal/store/ingest"
+	"html/template"
+	"text/template"
 )
 `},
 		{name: "an api test", rel: "internal/api/x_test.go", src: `package api

@@ -26,6 +26,10 @@ linters:
           deny:
             - pkg: database/sql
               desc: internal/api reaches data only through internal/store/scoped
+            - pkg: html/template
+              desc: internal/api writes JSON only, and a template can call a Request method by name
+            - pkg: text/template
+              desc: internal/api writes JSON only, and a template can call a Request method by name
             - pkg: modernc.org/sqlite
               desc: the raw database handle lives in internal/store/internal/db
             - pkg: go.mau.fi/whatsmeow
