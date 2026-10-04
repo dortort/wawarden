@@ -1,0 +1,132 @@
+name: govulncheck-daily
+
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: govulncheck-daily
+  cancel-in-progress: false
+
+env:
+  GOTOOLCHAIN: local
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  scan:
+    name: Scan the latest release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      status: ${{ steps.scan.outputs.status }}
+      tag: ${{ steps.latest.outputs.tag }}
+    steps:
+      - name: Find the latest release tag
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // empty')
+          if [ -z "$tag" ]; then
+            echo "::notice::no release published yet; nothing to scan"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the release tag
+        if: steps.latest.outputs.tag != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ steps.latest.outputs.tag }}
+          persist-credentials: false
+
+      - name: Set up Go
+        if: steps.latest.outputs.tag != ''
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Install govulncheck
+        if: steps.latest.outputs.tag != ''
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+
+      - name: Run govulncheck
+        id: scan
+        if: steps.latest.outputs.tag != ''
+        run: |
+          if [ -f vendor/modules.txt ]; then
+            export GOFLAGS=-mod=vendor
+          fi
+          status=0
+          govulncheck ./... > "$RUNNER_TEMP/report.txt" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/report.txt"
+          case $status in
+            0) echo "status=clean" >> "$GITHUB_OUTPUT" ;;
+            3) echo "status=vulnerable" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::govulncheck failed with exit status $status"; exit "$status" ;;
+          esac
+
+      - name: Upload report
+        if: steps.scan.outputs.status != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: govulncheck-report
+          path: ${{ runner.temp }}/report.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  report:
+    name: Open, update or close the issue
+    needs: scan
+    if: needs.scan.outputs.status != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Download report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: govulncheck-report
+          path: ${{ runner.temp }}/report
+
+      - name: Open, update or close the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS: ${{ needs.scan.outputs.status }}
+          TAG: ${{ needs.scan.outputs.tag }}
+        run: |
+          label=govulncheck
+          title="govulncheck: reachable vulnerabilities in the latest release"
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          export GH_REPO=$GITHUB_REPOSITORY
+          gh label create "$label" --color B60205 --description "Reachable vulnerability in the latest release" 2> /dev/null || true
+          existing=$(gh issue list --label "$label" --state open --json number --jq '.[0].number // empty')
+          if [ "$STATUS" = clean ]; then
+            if [ -n "$existing" ]; then
+              gh issue close "$existing" --comment "govulncheck is clean for $TAG as of $(date -u +%F): $run_url"
+            fi
+            exit 0
+          fi
+          {
+            echo "govulncheck reports reachable vulnerabilities in release \`$TAG\`."
+            echo
+            echo "Last checked $(date -u +%FT%TZ): $run_url"
+            echo
+            echo '```text'
+            head -c 60000 "$RUNNER_TEMP/report/report.txt"
+            echo '```'
+          } > "$RUNNER_TEMP/body.md"
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh issue create --title "$title" --label "$label" --body-file "$RUNNER_TEMP/body.md"
+          fi
