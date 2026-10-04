@@ -82,8 +82,8 @@ func checkDecideAdmin(t *testing.T, tok string) {
 
 	configured := token.Hash(tok)
 	for i := range len(configured) {
-		for _, d := range "0123456789abcdef" {
-			if byte(d) == configured[i] {
+		for _, d := range []byte("0123456789abcdef") {
+			if d == configured[i] {
 				continue
 			}
 			nearMiss := mustCredential(t, configured[:i]+string(d)+configured[i+1:])
