@@ -41,8 +41,8 @@ It is not:
   `WAWARDEN_` variable it does not implement, a plaintext admin token, a
   non-loopback health address, running as root, or a data directory that is not
   private to the service's user.
-- **Browser-originated requests are refused.** Any request carrying an `Origin` or
-  `Sec-Fetch-Site` header gets `403`.
+- **Browser-originated requests are refused.** Any request to the client or admin
+  listener carrying an `Origin` or `Sec-Fetch-Site` header gets `403`.
 - **Your WhatsApp account is at risk.** See the residual risks in the
   [threat model](docs/threat-model.md#residual-risks).
 
@@ -53,7 +53,8 @@ WaWarden is at milestone **M0**, a scaffold. It does not connect to WhatsApp yet
 What works today:
 
 - `wawarden serve` validates its configuration, refuses to start on anything it
-  does not implement, and opens three listeners.
+  does not implement, and opens the client and health listeners, and the admin
+  listener when an admin token hash is configured.
 - The client listener has no routes and no client tokens yet: it refuses every
   request, with `401` for anything that reaches authentication.
 - The admin listener, opened only when an admin token hash is configured, serves
@@ -76,8 +77,12 @@ Planned:
 ## Quick start (M0)
 
 The commands below use the default ports `8080`, `8081` and `8082` on
-`127.0.0.1`. If one is taken, set `WAWARDEN_LISTEN`, `WAWARDEN_HEALTH_LISTEN` or
-`WAWARDEN_ADMIN_LISTEN`; see the [configuration reference](docs/configuration.md).
+`127.0.0.1`. If one is taken, choose other addresses with `WAWARDEN_LISTEN`,
+`WAWARDEN_HEALTH_LISTEN` or `WAWARDEN_ADMIN_LISTEN` (see the
+[configuration reference](docs/configuration.md)) and apply them to every command,
+not only `serve`: export the variables in the shell, so that `healthcheck` reads
+the same `WAWARDEN_HEALTH_LISTEN`, and change the ports in the `curl` URLs to
+match.
 
 ### From source
 
@@ -131,6 +136,7 @@ Content-Length: 24
 Content-Type: application/json; charset=utf-8
 Www-Authenticate: Bearer
 X-Content-Type-Options: nosniff
+Date: <date>
 
 {"error":"unauthorized"}
 ```
