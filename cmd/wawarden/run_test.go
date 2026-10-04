@@ -207,7 +207,7 @@ func TestServeAndHealthcheck(t *testing.T) {
 		"WAWARDEN_LISTEN=" + freeAddr(t),
 		"WAWARDEN_HEALTH_LISTEN=" + health,
 	}
-	healthEnv := []string{"WAWARDEN_HEALTH_LISTEN=" + health, "WAWARDEN_UNKNOWN=ignored", "HTTP_PROXY=http://127.0.0.1:9"}
+	healthEnv := []string{"WAWARDEN_HEALTH_LISTEN=" + health, "WAWARDEN_UNKNOWN=ignored"}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -229,22 +229,44 @@ func TestServeAndHealthcheck(t *testing.T) {
 	}
 }
 
-func TestHealthcheckFailures(t *testing.T) {
-	unavailable := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
+func serveStatus(t *testing.T, status int) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(status)
 	}))
-	t.Cleanup(unavailable.Close)
+	t.Cleanup(srv.Close)
+	return srv.Listener.Addr().String()
+}
+
+func TestHealthcheckFailures(t *testing.T) {
 	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/elsewhere", http.StatusFound)
+		if r.URL.Path == "/healthz" {
+			http.Redirect(w, r, "/elsewhere", http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(redirect.Close)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, redirect.URL+"/healthz", nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
+	resp, err := redirect.Client().Do(req)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.Request.URL.Path != "/elsewhere" {
+		t.Fatalf("a redirect-following client got %d from %s, so the redirect case proves nothing", resp.StatusCode, resp.Request.URL.Path)
+	}
 
 	tests := []struct {
 		name    string
 		environ []string
 	}{
-		{name: "503", environ: []string{"WAWARDEN_HEALTH_LISTEN=" + unavailable.Listener.Addr().String()}},
-		{name: "redirect", environ: []string{"WAWARDEN_HEALTH_LISTEN=" + redirect.Listener.Addr().String()}},
+		{name: "503", environ: []string{"WAWARDEN_HEALTH_LISTEN=" + serveStatus(t, http.StatusServiceUnavailable)}},
+		{name: "204", environ: []string{"WAWARDEN_HEALTH_LISTEN=" + serveStatus(t, http.StatusNoContent)}},
+		{name: "redirect to a 200", environ: []string{"WAWARDEN_HEALTH_LISTEN=" + redirect.Listener.Addr().String()}},
 		{name: "nothing listening", environ: []string{"WAWARDEN_HEALTH_LISTEN=" + freeAddr(t)}},
 		{name: "not loopback", environ: []string{"WAWARDEN_HEALTH_LISTEN=0.0.0.0:8081"}},
 		{name: "host name", environ: []string{"WAWARDEN_HEALTH_LISTEN=localhost:8081"}},
@@ -255,5 +277,40 @@ func TestHealthcheckFailures(t *testing.T) {
 				t.Fatalf("healthcheck = %d (%q), want 1 with a reason on stderr", code, stderr)
 			}
 		})
+	}
+}
+
+func TestHealthcheckGivesUpAfterTwoSeconds(t *testing.T) {
+	stalled := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-stalled:
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(stalled) })
+
+	type result struct {
+		code    int
+		stderr  string
+		elapsed time.Duration
+	}
+	finished := make(chan result, 1)
+	began := time.Now()
+	go func() {
+		code, _, stderr := invoke(t, []string{"healthcheck"}, []string{"WAWARDEN_HEALTH_LISTEN=" + srv.Listener.Addr().String()})
+		finished <- result{code, stderr, time.Since(began)}
+	}()
+	select {
+	case r := <-finished:
+		if r.code != 1 || !strings.Contains(r.stderr, "deadline exceeded") {
+			t.Fatalf("healthcheck against a stalled server = %d (%q), want 1 after its deadline", r.code, r.stderr)
+		}
+		if r.elapsed < 2*time.Second {
+			t.Fatalf("healthcheck gave up after %v, want its 2 s timeout", r.elapsed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("healthcheck is still waiting after 5 s, want it to give up after its 2 s timeout")
 	}
 }
