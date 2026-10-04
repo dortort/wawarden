@@ -29,7 +29,11 @@ func owned(uid int) func(fs.FileInfo) (int, bool) {
 }
 
 func testOptions() Options {
-	return Options{UID: func() int { return testUID }, FileOwner: owned(testUID)}
+	return Options{UIDs: uids(testUID, testUID), FileOwner: owned(testUID)}
+}
+
+func uids(ruid, euid int) func() (int, int) {
+	return func() (int, int) { return ruid, euid }
 }
 
 func environ(vars map[string]string) []string {
@@ -172,7 +176,9 @@ func TestRefusals(t *testing.T) {
 		{name: "upper-case log level", vars: map[string]string{envLogLevel: "INFO"}, reason: "log_level_invalid", variable: envLogLevel},
 		{name: "empty log level", vars: map[string]string{envLogLevel: ""}, reason: "log_level_invalid", variable: envLogLevel},
 
-		{name: "uid 0 without --allow-root", opts: func(o *Options) { o.UID = func() int { return 0 }; o.FileOwner = owned(0) }, reason: "running_as_root"},
+		{name: "uid 0 without --allow-root", opts: func(o *Options) { o.UIDs = uids(0, 0); o.FileOwner = owned(0) }, reason: "running_as_root"},
+		{name: "effective uid 0 without --allow-root", opts: func(o *Options) { o.UIDs = uids(testUID, 0); o.FileOwner = owned(0) }, reason: "running_as_root"},
+		{name: "real uid 0 without --allow-root", opts: func(o *Options) { o.UIDs = uids(0, testUID) }, reason: "running_as_root"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -274,6 +280,15 @@ func TestDataDirectoryRefusals(t *testing.T) {
 			}
 		})
 	}
+	t.Run("owned by the real user but not the effective one", func(t *testing.T) {
+		opts := testOptions()
+		opts.UIDs = uids(otherUID, testUID)
+		opts.FileOwner = owned(otherUID)
+		_, r := Load(environ(map[string]string{envDataDir: dirWithMode(t, 0o700)}), opts)
+		if r == nil || r.Reason != "data_dir_foreign_owner" {
+			t.Fatalf("Load = %v, want data_dir_foreign_owner", r)
+		}
+	})
 	t.Run("unknown owner", func(t *testing.T) {
 		opts := testOptions()
 		opts.FileOwner = func(fs.FileInfo) (int, bool) { return testUID, false }
@@ -308,8 +323,8 @@ func TestRealOwnershipAndUID(t *testing.T) {
 	if r != nil || cfg.DataDir != path {
 		t.Fatalf("Load = %+v, %v; want the private directory owned by the current user accepted", cfg, r)
 	}
-	if uid, ok := statOwner(mustLstat(t, path)); !ok || uid != os.Getuid() {
-		t.Fatalf("statOwner = %d, %v; want %d", uid, ok, os.Getuid())
+	if uid, ok := statOwner(mustLstat(t, path)); !ok || uid != os.Geteuid() {
+		t.Fatalf("statOwner = %d, %v; want %d", uid, ok, os.Geteuid())
 	}
 }
 
@@ -332,7 +347,11 @@ func TestAccepted(t *testing.T) {
 	}{
 		{
 			name: "uid 0 with --allow-root",
-			opts: func(o *Options) { o.UID = func() int { return 0 }; o.FileOwner = owned(0); o.AllowRoot = true },
+			opts: func(o *Options) { o.UIDs = uids(0, 0); o.FileOwner = owned(0); o.AllowRoot = true },
+		},
+		{
+			name: "data directory owned by the effective user",
+			opts: func(o *Options) { o.UIDs = uids(otherUID, testUID) },
 		},
 		{
 			name: "admin hash inline",

@@ -78,7 +78,7 @@ type Config struct {
 
 type Options struct {
 	AllowRoot bool
-	UID       func() int
+	UIDs      func() (ruid, euid int)
 	FileOwner func(fs.FileInfo) (uid int, ok bool)
 }
 
@@ -120,19 +120,19 @@ func Load(environ []string, opts Options) (Config, *Refusal) {
 	if cfg.LogLevel, r = logLevel(env); r != nil {
 		return Config{}, r
 	}
-	uid := os.Getuid
-	if opts.UID != nil {
-		uid = opts.UID
+	uids := processUIDs
+	if opts.UIDs != nil {
+		uids = opts.UIDs
 	}
-	current := uid()
-	if current == 0 && !opts.AllowRoot {
-		return Config{}, &Refusal{Reason: reasonRunningAsRoot, detail: "running as UID 0 needs the serve flag --allow-root"}
+	ruid, euid := uids()
+	if (ruid == 0 || euid == 0) && !opts.AllowRoot {
+		return Config{}, &Refusal{Reason: reasonRunningAsRoot, detail: "running with a real or effective UID of 0 needs the serve flag --allow-root"}
 	}
 	owner := statOwner
 	if opts.FileOwner != nil {
 		owner = opts.FileOwner
 	}
-	if cfg.DataDir, r = dataDirectory(env, current, owner); r != nil {
+	if cfg.DataDir, r = dataDirectory(env, euid, owner); r != nil {
 		return Config{}, r
 	}
 	return cfg, nil
@@ -313,6 +313,10 @@ func dataDirectory(env map[string]string, uid int, owner func(fs.FileInfo) (int,
 		return "", &Refusal{Reason: reasonDataDirPermissions, Variable: envDataDir, detail: "must have mode 0700: full access for its owner, none for group or others, and no setuid, setgid or sticky bit"}
 	}
 	return path, nil
+}
+
+func processUIDs() (ruid, euid int) {
+	return os.Getuid(), os.Geteuid()
 }
 
 func statOwner(fi fs.FileInfo) (int, bool) {
