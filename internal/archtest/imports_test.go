@@ -12,6 +12,7 @@ import (
 const (
 	apiDir      = "internal/api"
 	apiAdminDir = "internal/api/admin"
+	appDir      = "internal/app"
 	policyDir   = "internal/policy"
 )
 
@@ -148,6 +149,21 @@ import (
 	"github.com/dortort/wawarden/internal/token"
 )
 `},
+		{name: "listeners opened outside the app", rel: "cmd/wawarden/x.go", want: 2, src: `package main
+
+import (
+	"github.com/dortort/wawarden/internal/listeners"
+	"github.com/dortort/wawarden/internal/listeners/listenertest"
+)
+`},
+		{name: "the app opens the listeners", rel: "internal/app/x.go", src: `package app
+
+import "github.com/dortort/wawarden/internal/listeners"
+`},
+		{name: "a test inspects the listeners", rel: "internal/apiary/x_test.go", src: `package apiary
+
+import "github.com/dortort/wawarden/internal/listeners/listenertest"
+`},
 	},
 }
 
@@ -157,6 +173,9 @@ func checkFences(f *sourceFile) []string {
 	}
 	var out []string
 	for _, imp := range f.imports {
+		if within(imp.path, module+"/"+listenersDir) && f.dir != appDir && !within(f.dir, listenersDir) {
+			out = append(out, f.at(imp.node, "only %s may import %q, so the app's inventory names every listener", appDir, imp.path))
+		}
 		switch {
 		case within(f.dir, apiDir):
 			if slices.ContainsFunc(apiDenied, func(denied string) bool { return within(imp.path, denied) }) ||
