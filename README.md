@@ -193,11 +193,13 @@ The image runs as `65532:65532` with `serve` as its default command. `/data` is
 the only path the service writes and the only one that must be writable; a new
 named volume mounted there gets the right owner and mode. Run the container with
 a read-only root filesystem, as the example does with `--read-only`, so that
-`/data` is also the only writable path. Inside the container, a listener on `127.0.0.1` cannot be reached
-through a published port, so the example binds the client and admin listeners to
-`0.0.0.0` and publishes them on the host's loopback only. The service logs a
-`listener_not_loopback` warning for each of them, and other containers on the same
-Docker network can reach them. The image has no shell, so `docker run
+`/data` is also the only writable path.
+
+Inside the container, a listener on `127.0.0.1` cannot be reached through a
+published port, so the example binds the client and admin listeners to `0.0.0.0`
+and publishes them on the host's loopback only. The service logs a
+`listener_not_loopback` warning for each of them, and other containers on the
+same Docker network can reach them. The image has no shell, so `docker run
 --health-cmd` cannot run its health check; use the exec form
 `["/wawarden","healthcheck"]` in Compose or Kubernetes.
 [The configuration reference](docs/configuration.md#container-image) describes
