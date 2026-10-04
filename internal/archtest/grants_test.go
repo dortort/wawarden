@@ -22,6 +22,13 @@ var (
 	sealedTypes = append([]string{chatType}, grantTypes...)
 )
 
+var sealedFields = map[string][]string{
+	chatType:     {"jid", "ok"},
+	"ReadGrant":  {"client", "all", "chats", "ok"},
+	"WriteGrant": {"client", "chats", "allowFirstContact", "ok"},
+	"AdminGrant": {"ok"},
+}
+
 var grantSetFields = set("chats")
 
 var grantRule = rule{
@@ -89,7 +96,7 @@ func f(c *Client, gs []ReadGrant, x struct{ ok bool }) {
 	_ = (*AdminGrant)(nil)
 }
 `},
-		{name: "generic forms and ok pointers elsewhere in policy", rel: "internal/policy/grant.go", want: 7, src: `package policy
+		{name: "generic forms and ok pointers elsewhere in policy", rel: "internal/policy/grant.go", want: 8, src: `package policy
 
 type only interface{ ReadGrant }
 
@@ -119,7 +126,7 @@ func ptr(g *ReadGrant, flags []bool) {
 	_ = &flags[0]
 }
 `},
-		{name: "chat aliases, conversions, generics and ok assignments elsewhere in policy", rel: "internal/policy/chat.go", want: 7, src: `package policy
+		{name: "chat aliases, conversions, generics and ok assignments elsewhere in policy", rel: "internal/policy/chat.go", want: 8, src: `package policy
 
 type cc = CanonicalChat
 
@@ -273,6 +280,182 @@ func forge() []AdminGrant {
 	return []AdminGrant{g, mint[AdminGrant](), conv[AdminGrant](struct{ ok bool }{true}), struct{ ok bool }{true}}
 }
 `},
+		{name: "a look-alike chat written through a converted pointer", rel: "internal/policy/forge.go", want: 1, src: `package policy
+
+import "unique"
+
+type lookalike struct {
+	jid unique.Handle[string]
+	ok  bool
+}
+
+func ForgeChat(s string) CanonicalChat {
+	var c CanonicalChat
+	*(*lookalike)(&c) = lookalike{jid: unique.Make(s), ok: true}
+	return c
+}
+`},
+		{name: "a look-alike chat written by a generic helper", rel: "internal/policy/forge.go", want: 1, src: `package policy
+
+import "unique"
+
+type lookalike struct {
+	jid unique.Handle[string]
+	ok  bool
+}
+
+func put[T any](p *T, v T) { *p = v }
+
+func ForgeChat(s string) CanonicalChat {
+	var c CanonicalChat
+	put((*lookalike)(&c), lookalike{jid: unique.Make(s), ok: true})
+	return c
+}
+`},
+		{name: "a look-alike chat written by a pointer-receiver method", rel: "internal/policy/forge.go", want: 1, src: `package policy
+
+import "unique"
+
+type lookalike struct {
+	jid unique.Handle[string]
+	ok  bool
+}
+
+func (l *lookalike) fill(s string) { *l = lookalike{jid: unique.Make(s), ok: true} }
+
+func ForgeChat(s string) CanonicalChat {
+	var c CanonicalChat
+	(*lookalike)(&c).fill(s)
+	return c
+}
+`},
+		{name: "a generic look-alike chat written through a converted pointer", rel: "internal/policy/forge.go", want: 1, src: `package policy
+
+import "unique"
+
+type gen[T any] struct {
+	jid T
+	ok  bool
+}
+
+func ForgeChat(s string) CanonicalChat {
+	var c CanonicalChat
+	*(*gen[unique.Handle[string]])(&c) = gen[unique.Handle[string]]{jid: unique.Make(s), ok: true}
+	return c
+}
+`},
+		{name: "look-alike grants written through converted pointers", rel: "internal/policy/forge.go", want: 3, src: `package policy
+
+type okbit struct{ ok bool }
+
+type (
+	reader (struct {
+		client string
+		all    bool
+		chats  map[CanonicalChat]struct{}
+		ok     bool
+	})
+)
+
+func ForgeAdmin() AdminGrant {
+	var g AdminGrant
+	*(*okbit)(&g) = okbit{ok: true}
+	return g
+}
+
+func ForgeRead() ReadGrant {
+	var g ReadGrant
+	*(*reader)(&g) = reader{client: "x", all: true, ok: true}
+	return g
+}
+
+func ForgeWrite(c CanonicalChat) WriteGrant {
+	type writer struct {
+		client            string
+		chats             map[CanonicalChat]struct{}
+		allowFirstContact bool
+		ok                bool
+	}
+	var g WriteGrant
+	*(*writer)(&g) = writer{client: "x", chats: map[CanonicalChat]struct{}{c: {}}, ok: true}
+	return g
+}
+`},
+		{name: "look-alikes named like a chat or grant type", rel: "internal/policy/grant.go", want: 2, src: `package policy
+
+import "unique"
+
+type AdminGrant struct {
+	client string
+	all    bool
+	chats  map[CanonicalChat]struct{}
+	ok     bool
+}
+
+func forge(s string) {
+	type CanonicalChat struct {
+		jid unique.Handle[string]
+		ok  bool
+	}
+}
+`},
+		{name: "the chat and grant types and structs with other fields in policy", rel: "internal/policy/policy.go", src: `package policy
+
+import "unique"
+
+type CanonicalChat struct {
+	jid unique.Handle[string]
+	ok  bool
+}
+
+type ReadGrant struct {
+	client string
+	all    bool
+	chats  map[CanonicalChat]struct{}
+	ok     bool
+}
+
+type WriteGrant struct {
+	client            string
+	chats             map[CanonicalChat]struct{}
+	allowFirstContact bool
+	ok                bool
+}
+
+type AdminGrant struct {
+	ok bool
+}
+
+type (
+	swapped struct {
+		ok  bool
+		jid unique.Handle[string]
+	}
+	flags struct{ ok, set bool }
+	bare  struct{ jid unique.Handle[string] }
+	embed struct{ ok }
+	ok    bool
+)
+`},
+		{name: "look-alike types in a policy test", rel: "internal/policy/x_test.go", src: `package policy
+
+type okbit struct{ ok bool }
+
+func admin() AdminGrant {
+	var g AdminGrant
+	*(*okbit)(&g) = okbit{ok: true}
+	return g
+}
+`},
+		{name: "look-alike types outside policy", rel: "internal/api/x.go", src: `package api
+
+type okbit struct{ ok bool }
+
+type lookalike struct {
+	jid string
+	ok  bool
+}
+`},
 		{name: "declared struct types, empty structs and generics in policy", rel: "internal/policy/grant.go", src: `package policy
 
 type entry struct {
@@ -390,7 +573,7 @@ func Normalize(s string) (CanonicalChat, bool) {
 
 var _ = []CanonicalChat{{jid: "x", ok: true}}
 `},
-		{name: "aliases, conversions, field changes, generics and grants in normalize.go", rel: chatFile, want: 7, src: `package policy
+		{name: "aliases, conversions, field changes, generics and grants in normalize.go", rel: chatFile, want: 8, src: `package policy
 
 type cc = CanonicalChat
 
@@ -479,6 +662,16 @@ func checkGrants(f *sourceFile) []string {
 		}
 	}
 	declared := map[*ast.StructType]bool{}
+	topLevel := map[*ast.TypeSpec]bool{}
+	for _, decl := range f.file.Decls {
+		if gen, ok := decl.(*ast.GenDecl); ok {
+			for _, spec := range gen.Specs {
+				if ts, ok := spec.(*ast.TypeSpec); ok {
+					topLevel[ts] = true
+				}
+			}
+		}
+	}
 	settled := map[ast.Expr]bool{}
 	fieldWrites := func(exprs ...ast.Expr) {
 		for _, e := range exprs {
@@ -503,6 +696,9 @@ func checkGrants(f *sourceFile) []string {
 			}
 			if st, ok := ast.Unparen(n.Type).(*ast.StructType); ok && !n.Assign.IsValid() {
 				declared[st] = true
+				if name, ok := f.lookalike(st); ok && (n.Name.Name != name || !topLevel[n]) {
+					out = append(out, f.at(n, "type %s has the fields of policy.%s, so a pointer to one converts to a pointer to it, through which a whole value can be written", n.Name.Name, name))
+				}
 			}
 		case *ast.StructType:
 			if f.dir == policyDir && !declared[n] && n.Fields.NumFields() > 0 {
@@ -555,6 +751,27 @@ func checkGrants(f *sourceFile) []string {
 		return true
 	})
 	return out
+}
+
+func (f *sourceFile) lookalike(st *ast.StructType) (string, bool) {
+	if f.dir != policyDir {
+		return "", false
+	}
+	var names []string
+	for _, field := range st.Fields.List {
+		if len(field.Names) == 0 {
+			names = append(names, "")
+		}
+		for _, id := range field.Names {
+			names = append(names, id.Name)
+		}
+	}
+	for _, name := range sealedTypes {
+		if slices.Equal(names, sealedFields[name]) {
+			return name, true
+		}
+	}
+	return "", false
 }
 
 var mapMutators = map[string]map[string]bool{"maps": set("Copy", "DeleteFunc", "Insert")}
@@ -672,7 +889,7 @@ func TestChatFileDeclaresNormalize(t *testing.T) {
 	}
 }
 
-func TestGrantSetFields(t *testing.T) {
+func TestSealedTypeFields(t *testing.T) {
 	files, err := moduleFiles(os.DirFS(filepath.Join(moduleRoot(t), policyDir)))
 	if err != nil {
 		t.Fatalf("walk %s: %v", policyDir, err)
@@ -692,15 +909,20 @@ func TestGrantSetFields(t *testing.T) {
 			if !ok {
 				t.Fatalf("policy.%s is no longer a struct, so the grant-forging rule cannot read its fields: update it", ts.Name.Name)
 			}
+			var names []string
 			for _, field := range st.Fields.List {
 				if len(field.Names) == 0 {
 					t.Fatalf("policy.%s embeds a field: name it, so the grant-forging rule can confine it", ts.Name.Name)
 				}
 				for _, name := range field.Names {
+					names = append(names, name.Name)
 					if !f.valueType(field.Type) {
 						fields[name.Name] = true
 					}
 				}
+			}
+			if want := sealedFields[ts.Name.Name]; !slices.Equal(names, want) {
+				t.Fatalf("policy.%s declares the fields %q, but the grant-forging rule refuses types declared with the fields %q: they must match", ts.Name.Name, names, want)
 			}
 			return false
 		})
