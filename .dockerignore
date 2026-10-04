@@ -1,0 +1,3 @@
+*
+!dist/wawarden_*_linux_amd64
+!dist/wawarden_*_linux_arm64
