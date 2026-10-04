@@ -138,7 +138,6 @@ func TestUsageErrors(t *testing.T) {
 		{"admin", "init", "extra"},
 		{"admin", "status"},
 		{"version", "extra"},
-		{"healthcheck", "extra"},
 		{"serve", "extra"},
 		{"serve", "--bogus"},
 		{"--bogus"},
@@ -150,6 +149,13 @@ func TestUsageErrors(t *testing.T) {
 				t.Fatalf("run(%q) = %d %q %q, want 2 with usage on stderr", args, code, stdout, stderr)
 			}
 		})
+	}
+}
+
+func TestHealthcheckMisuseIsUnhealthy(t *testing.T) {
+	code, stdout, stderr := invoke(t, []string{"healthcheck", "extra"}, nil)
+	if code != 1 || stdout != "" || !strings.Contains(stderr, "usage:") {
+		t.Fatalf("healthcheck with an extra argument = %d %q %q, want 1 with usage on stderr: container runtimes reserve exit code 2", code, stdout, stderr)
 	}
 }
 

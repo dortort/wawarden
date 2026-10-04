@@ -81,7 +81,8 @@ func serve(ctx context.Context, args, environ []string, stdout, stderr io.Writer
 
 func healthcheck(ctx context.Context, args, environ []string, stderr io.Writer) int {
 	if len(args) > 0 {
-		return usageError(stderr)
+		_ = usageError(stderr)
+		return 1
 	}
 	addr, refusal := config.HealthListen(environ)
 	if refusal != nil {
