@@ -297,7 +297,7 @@ func checkGrants(f *sourceFile) []string {
 			out = append(out, f.at(lit, "policy.%s composite literal outside %s: grants are minted only by the Decide functions", name, grantFile))
 		}
 		if f.isType(typ, policyPath, chatType) && len(lit.Elts) > 0 {
-			out = append(out, f.at(lit, "policy.CanonicalChat composite literal with fields: no constructor exists in M0"))
+			out = append(out, f.at(lit, "policy.CanonicalChat composite literal with fields: a valid chat has no constructor, so only the zero value may be built"))
 		}
 	})
 	constraints := func(params *ast.FieldList) {
@@ -343,7 +343,7 @@ func checkGrants(f *sourceFile) []string {
 			switch {
 			case !ok:
 			case name == chatType:
-				out = append(out, f.at(n, "conversion to policy.CanonicalChat: no constructor exists in M0"))
+				out = append(out, f.at(n, "conversion to policy.CanonicalChat: a valid chat has no constructor, so none may be converted into one"))
 			case f.rel != grantFile:
 				out = append(out, f.at(n, "conversion to policy.%s outside %s: grants are minted only by the Decide functions", name, grantFile))
 			}

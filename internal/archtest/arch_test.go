@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -410,6 +411,8 @@ func TestModuleWalk(t *testing.T) {
 	}
 }
 
+var milestoneLabel = regexp.MustCompile(`\bM\d+\b`)
+
 func TestRuleCases(t *testing.T) {
 	seen := map[string]bool{}
 	for _, r := range rules {
@@ -427,8 +430,14 @@ func TestRuleCases(t *testing.T) {
 					if err != nil {
 						t.Fatalf("parse: %v", err)
 					}
-					if got := r.check(f); len(got) != c.want {
+					got := r.check(f)
+					if len(got) != c.want {
 						t.Fatalf("%d findings, want %d: %q", len(got), c.want, got)
+					}
+					for _, finding := range got {
+						if milestoneLabel.MatchString(finding) {
+							t.Errorf("finding %q names a milestone, which means nothing to a reader of this repository", finding)
+						}
 					}
 				})
 			}
