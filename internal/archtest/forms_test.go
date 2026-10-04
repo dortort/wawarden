@@ -48,13 +48,21 @@ func f(r *http.Request, v any) error {
 	return json.NewDecoder(r.Body).Decode(v)
 }
 `},
-		{name: "form parsing in an api test and outside api", rel: "internal/api/x_test.go", src: `package api
+		{name: "form parsing in a helper outside api", rel: "internal/httpx/x.go", want: 2, src: `package httpx
+
+import "net/http"
+
+func Parse(r *http.Request) error { return r.ParseForm() }
+
+func Value(r *http.Request) string { return r.PostFormValue("a") }
+`},
+		{name: "form parsing in tests", rel: "internal/api/x_test.go", src: `package api
 
 import "net/http"
 
 func f(r *http.Request) string { return r.FormValue("a") }
 `},
-		{name: "form parsing outside api", rel: "internal/apiary/x.go", src: `package apiary
+		{name: "form parsing in a test outside api", rel: "internal/httpx/x_test.go", src: `package httpx
 
 import "net/http"
 
@@ -64,13 +72,13 @@ func f(r *http.Request) error { return r.ParseForm() }
 }
 
 func checkFormParsing(f *sourceFile) []string {
-	if f.test || !within(f.dir, apiDir) {
+	if f.test {
 		return nil
 	}
 	var out []string
 	ast.Inspect(f.file, func(n ast.Node) bool {
 		if sel, ok := n.(*ast.SelectorExpr); ok && formParsers[sel.Sel.Name] {
-			out = append(out, f.at(sel, "%s names a net/http Request method that parses a form body: %s reads JSON bodies only", sel.Sel.Name, apiDir))
+			out = append(out, f.at(sel, "%s names a net/http Request method that parses a form body: only %s serves requests, and it reads JSON bodies only", sel.Sel.Name, apiDir))
 		}
 		return true
 	})
