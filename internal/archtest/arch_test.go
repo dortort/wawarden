@@ -272,6 +272,9 @@ func moduleRoot(t *testing.T) string {
 	return ""
 }
 
+var foreignSources = set(".c", ".cc", ".cpp", ".cxx", ".m", ".h", ".hh", ".hpp", ".hxx", ".f", ".F", ".for", ".f90",
+	".s", ".S", ".sx", ".swig", ".swigcxx", ".syso")
+
 func moduleFiles(fsys fs.FS) ([]*sourceFile, error) {
 	var files []*sourceFile
 	err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
@@ -292,6 +295,8 @@ func moduleFiles(fsys fs.FS) ([]*sourceFile, error) {
 				return fmt.Errorf("%s holds a nested module: a workspace or replace directive can build it in, and this walk does not read it", p)
 			}
 			return nil
+		case foreignSources[path.Ext(name)]:
+			return fmt.Errorf("%s is assembly, C or an object file: the go tool builds it in, and these rules read only Go", p)
 		case path.Ext(name) != ".go":
 			return nil
 		}
@@ -353,6 +358,10 @@ func TestModuleWalk(t *testing.T) {
 		"internal/a/a.go":                {Data: []byte("package a\n")},
 		"internal/a/a_test.go":           {Data: []byte("package a\n")},
 		"internal/a/notes.txt":           {Data: []byte("not go\n")},
+		"internal/a/README.md":           {Data: []byte("# a\n")},
+		".golangci.yml":                  {Data: []byte("version: \"2\"\n")},
+		"internal/a/testdata/asm.s":      {Data: []byte("TEXT ·f(SB),$0\n")},
+		"internal/a/_x_arm64.s":          {Data: []byte("TEXT ·f(SB),$0\n")},
 		"internal/a/testdata/fixture.go": {Data: []byte("package fixture\n")},
 		"vendor/example.com/v/v.go":      {Data: []byte("package v\n")},
 		".hidden/h.go":                   {Data: []byte("package h\n")},
@@ -378,6 +387,11 @@ func TestModuleWalk(t *testing.T) {
 		"a nested module":       {"nested/go.mod": {Data: []byte("module " + module + "/nested\n")}, "nested/n.go": {Data: []byte("package nested\n")}},
 		"a symlinked directory": {"internal/evil": {Data: []byte("../outside"), Mode: fs.ModeSymlink}},
 		"a symlinked Go file":   {"internal/a/b.go": {Data: []byte("a.go"), Mode: fs.ModeSymlink}},
+		"Go assembly":           {"internal/a/forge_arm64.s": {Data: []byte("TEXT ·Forge(SB),NOSPLIT,$0-1\n")}},
+		"preprocessed assembly": {"internal/a/forge_amd64.S": {Data: []byte("TEXT ·Forge(SB),NOSPLIT,$0-1\n")}},
+		"a system object":       {"internal/a/rsrc_windows.syso": {Data: []byte{0x7f, 'E', 'L', 'F'}}},
+		"C":                     {"internal/a/z.c": {Data: []byte("int z;\n")}},
+		"a C header":            {"internal/a/z.h": {Data: []byte("int z;\n")}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			tree := maps.Clone(fsys)
