@@ -266,9 +266,11 @@ func checkDotImports(f *sourceFile) []string {
 
 var socketOpeners = map[string]map[string]bool{
 	"net": set("Listen", "ListenConfig", "ListenIP", "ListenMulticastUDP", "ListenPacket", "ListenTCP", "ListenUDP",
-		"ListenUnix", "ListenUnixgram", "FileListener"),
+		"ListenUnix", "ListenUnixgram", "FileListener", "FilePacketConn"),
 	"crypto/tls":        set("Listen", "NewListener"),
 	"net/http/httptest": set("NewServer", "NewTLSServer", "NewUnstartedServer"),
+	"syscall": set("Socket", "Bind", "Listen", "Syscall", "Syscall6", "Syscall9", "RawSyscall", "RawSyscall6",
+		"AllThreadsSyscall", "AllThreadsSyscall6"),
 }
 
 var loopbackNetworks = set("tcp", "tcp4", "udp", "udp4")
@@ -278,6 +280,7 @@ import (
 	"crypto/tls"
 	"net"
 	"net/http/httptest"
+	"syscall"
 )
 
 var (
@@ -290,12 +293,23 @@ var (
 	_ = net.ListenUnix
 	_ = net.ListenUnixgram
 	_ = net.FileListener
+	_ = net.FilePacketConn
 	_ net.ListenConfig
 	_ = tls.Listen
 	_ = tls.NewListener
 	_ = httptest.NewServer
 	_ = httptest.NewTLSServer
 	_ = httptest.NewUnstartedServer
+	_ = syscall.Socket
+	_ = syscall.Bind
+	_ = syscall.Listen
+	_ = syscall.Syscall
+	_ = syscall.Syscall6
+	_ = syscall.Syscall9
+	_ = syscall.RawSyscall
+	_ = syscall.RawSyscall6
+	_ = syscall.AllThreadsSyscall
+	_ = syscall.AllThreadsSyscall6
 )
 `
 
@@ -303,8 +317,31 @@ var socketRule = rule{
 	name:  "sockets",
 	check: checkSockets,
 	cases: []snippet{
-		{name: "every opener outside listeners", rel: "internal/app/x.go", want: 15, src: "package app\n" + everySocketOpener},
-		{name: "every opener in a listeners subpackage", rel: "internal/listeners/sub/x.go", want: 15, src: "package sub\n" + everySocketOpener},
+		{name: "every opener outside listeners", rel: "internal/app/x.go", want: 26, src: "package app\n" + everySocketOpener},
+		{name: "every opener in a listeners subpackage", rel: "internal/listeners/sub/x.go", want: 26, src: "package sub\n" + everySocketOpener},
+		{name: "raw sockets in a test", rel: "internal/listeners/x_test.go", want: 4, src: `package listeners
+
+import sc "syscall"
+
+func f() {
+	fd, _ := sc.Socket(sc.AF_INET, sc.SOCK_STREAM, 0)
+	_ = sc.Bind(fd, &sc.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}})
+	_ = sc.Listen(fd, 1)
+	_, _, _ = sc.RawSyscall(sc.SYS_LISTEN, uintptr(fd), 1, 0)
+}
+`},
+		{name: "socket inspection outside listeners", rel: "internal/listeners/listenertest/x.go", src: `package listenertest
+
+import "syscall"
+
+func f(fd int) {
+	_, _ = syscall.GetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_TYPE)
+	_, _ = syscall.Getsockname(fd)
+	var lim syscall.Rlimit
+	_ = syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim)
+	syscall.Umask(0o077)
+}
+`},
 		{name: "every opener in listeners", rel: "internal/listeners/x.go", src: "package listeners\n" + everySocketOpener},
 		{name: "loopback and temporary unix listens in a test", rel: "internal/app/x_test.go", src: `package app
 
@@ -385,7 +422,7 @@ func checkSockets(f *sourceFile) []string {
 			if sel == nil || !socketOpeners[p][sel.Sel.Name] || vetted[sel] || f.test && p == "net/http/httptest" {
 				break
 			}
-			out = append(out, f.at(sel, "%s.%s opens a socket outside %s", p, sel.Sel.Name, listenersDir))
+			out = append(out, f.at(sel, "%s.%s can open a socket outside %s", p, sel.Sel.Name, listenersDir))
 		}
 		return true
 	})
