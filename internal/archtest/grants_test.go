@@ -13,6 +13,7 @@ import (
 const (
 	policyPath = module + "/" + policyDir
 	grantFile  = "internal/policy/decide.go"
+	chatFile   = "internal/policy/normalize.go"
 	chatType   = "CanonicalChat"
 )
 
@@ -305,6 +306,51 @@ func f(chats map[CanonicalChat]struct{}, flags []bool) {
 	}
 }
 `},
+		{name: "chats built by literals in normalize.go", rel: chatFile, src: `package policy
+
+func Normalize(s string) (CanonicalChat, bool) {
+	if s == "" {
+		return CanonicalChat{}, false
+	}
+	return CanonicalChat{jid: s, ok: true}, true
+}
+
+var _ = []CanonicalChat{{jid: "x", ok: true}}
+`},
+		{name: "aliases, conversions, field changes, generics and grants in normalize.go", rel: chatFile, want: 7, src: `package policy
+
+type cc = CanonicalChat
+
+type fake struct {
+	jid string
+	ok  bool
+}
+
+func Normalize(s string) (CanonicalChat, bool) {
+	var c CanonicalChat
+	c.jid = s
+	c.ok = true
+	_ = &c.ok
+	_ = CanonicalChat(fake{s, true})
+	_ = ReadGrant{ok: true}
+	return c, true
+}
+
+func chat[T interface{ CanonicalChat }]() T { return T{ok: true} }
+`},
+		{name: "chat literals in a file named like normalize.go", rel: "internal/policy/normalizer.go", want: 2, src: `package policy
+
+var (
+	_ = CanonicalChat{jid: "x", ok: true}
+	_ = map[CanonicalChat]bool{{ok: true}: true}
+)
+`},
+		{name: "chat literals in another package's normalize.go", rel: "internal/api/normalize.go", want: 1, src: `package api
+
+import "github.com/dortort/wawarden/internal/policy"
+
+var _ = policy.CanonicalChat{ok: true}
+`},
 		{name: "grants in a test", rel: "internal/api/x_test.go", src: `package api
 
 import "github.com/dortort/wawarden/internal/policy"
@@ -345,8 +391,8 @@ func checkGrants(f *sourceFile) []string {
 		if name, ok := f.policyType(typ, grantTypes); ok && f.rel != grantFile {
 			out = append(out, f.at(lit, "policy.%s composite literal outside %s: grants are minted only by the Decide functions", name, grantFile))
 		}
-		if f.isType(typ, policyPath, chatType) && len(lit.Elts) > 0 {
-			out = append(out, f.at(lit, "policy.CanonicalChat composite literal with fields: a valid chat has no constructor, so only the zero value may be built"))
+		if f.isType(typ, policyPath, chatType) && len(lit.Elts) > 0 && f.rel != chatFile {
+			out = append(out, f.at(lit, "policy.CanonicalChat composite literal with fields outside %s: a valid chat is built only by Normalize, so elsewhere only the zero value may be built", chatFile))
 		}
 	})
 	constraints := func(params *ast.FieldList) {
@@ -405,7 +451,7 @@ func checkGrants(f *sourceFile) []string {
 			switch {
 			case !ok:
 			case name == chatType:
-				out = append(out, f.at(n, "conversion to policy.CanonicalChat: a valid chat has no constructor, so none may be converted into one"))
+				out = append(out, f.at(n, "conversion to policy.CanonicalChat: a valid chat is built only by Normalize, with a literal, so none may be converted into one"))
 			case f.rel != grantFile:
 				out = append(out, f.at(n, "conversion to policy.%s outside %s: grants are minted only by the Decide functions", name, grantFile))
 			}
