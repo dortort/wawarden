@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"reflect"
 
 	"github.com/dortort/wawarden/internal/metrics"
 )
@@ -12,9 +13,12 @@ import (
 const jsonContentType = "application/json; charset=utf-8"
 
 var (
-	errNoResponse = errors.New("dto: no response to encode")
-	errNoRegistry = errors.New("dto: no metrics registry to encode")
+	errNoResponse      = errors.New("dto: no response to encode")
+	errNoRegistry      = errors.New("dto: no metrics registry to encode")
+	errForeignResponse = errors.New("dto: the response type is declared outside package dto")
 )
+
+var pkgPath = reflect.TypeFor[Error]().PkgPath()
 
 type Response interface {
 	encode() (contentType string, body []byte, err error)
@@ -23,6 +27,13 @@ type Response interface {
 func Encode(r Response) (contentType string, body []byte, err error) {
 	if r == nil {
 		return "", nil, errNoResponse
+	}
+	t := reflect.TypeOf(r)
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.PkgPath() != pkgPath {
+		return "", nil, errForeignResponse
 	}
 	return r.encode()
 }

@@ -85,6 +85,38 @@ func TestEncodeRefusesMissingContent(t *testing.T) {
 	}
 }
 
+type wrappedError struct {
+	dto.Error
+	Token string `json:"token"`
+}
+
+type wrappedPayload struct {
+	*dto.Prometheus
+}
+
+func TestEncodeRefusesTypesDeclaredOutsideDTO(t *testing.T) {
+	tests := []struct {
+		name     string
+		response dto.Response
+	}{
+		{name: "embedding a dto type", response: wrappedError{Error: dto.Error{Code: "not_found"}, Token: "synthetic"}},
+		{name: "embedding a pointer to a dto type", response: wrappedPayload{Prometheus: new(dto.Metrics(metrics.NewRegistry()))}},
+		{name: "unnamed struct embedding a dto type", response: struct{ dto.Health }{dto.Health{Status: "ok"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if contentType, body, err := dto.Encode(tt.response); err == nil {
+				t.Fatalf("Encode(%T) = %q, %q; want an error", tt.response, contentType, body)
+			}
+		})
+	}
+	for _, r := range append(samples(), &dto.Error{Code: "not_found"}) {
+		if _, _, err := dto.Encode(r); err != nil {
+			t.Fatalf("Encode(%T): %v", r, err)
+		}
+	}
+}
+
 func TestNoForbiddenKeyCanBeProduced(t *testing.T) {
 	visited := make(map[reflect.Type]bool)
 	for _, r := range samples() {
