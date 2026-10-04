@@ -75,7 +75,7 @@ What works today:
 - Also on `main`: `serve` creates a master key in the data directory on first
   start and refuses one that is not private to its user; every log line it writes
   passes through one writer that turns WhatsApp identifiers into pseudonyms keyed
-  by that key and drops lines carrying XML (see
+  by that key and drops lines carrying XML in the recognised shapes (see
   [logging](docs/configuration.md#pseudonyms-and-dropped-lines)). Internally:
   sanitisers for display text and terminal output, and a strict JSON decoder for
   request bodies, which no route uses yet.

@@ -26,15 +26,14 @@ const (
 )
 
 const (
-	xmlName      = `[A-Za-z_][\w:.-]*`
-	xmlSpace     = `(?:\s|\\+[nrt])+`
-	xmlAttribute = xmlSpace + xmlName + `\s*=\s*(?:\\?"[^"]*"|'[^']*')`
+	xmlName  = `[A-Za-z_][\w:.-]*`
+	xmlSpace = `(?:\s|\\+[nrt])+`
 )
 
 var (
 	jidPattern  = regexp.MustCompile(`(?i)[0-9a-z._:+-]+@(s\.whatsapp\.net|c\.us|lid|g\.us|broadcast|newsletter|hosted\.lid|hosted|bot|msgr|interop)(?:[^0-9a-z]|$)`)
 	userPattern = regexp.MustCompile(`[0-9][0-9._:-]*$`)
-	xmlPattern  = regexp.MustCompile(`</` + xmlName + `\s*>|<` + xmlName + `(?:` + xmlAttribute + `)*\s*/>|<` + xmlName + `(?:` + xmlAttribute + `)+\s*>|<!--|<!\[CDATA\[|<\?xml`)
+	xmlPattern  = regexp.MustCompile(`</` + xmlName + `\s*>|<` + xmlName + `\s*/>|<` + xmlName + xmlSpace + xmlName + `\s*=\s*\\?["']|<` + xmlName + `><[A-Za-z_/!?]|<!--|<!\[CDATA\[|<\?xml`)
 	escapedTag  = regexp.MustCompile(`\\+(u003[cCeE]|")`)
 )
 
