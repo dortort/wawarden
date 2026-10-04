@@ -134,6 +134,59 @@ func set(c *CanonicalChat, flags []bool) {
 	c.ok, _ = true, 0
 }
 `},
+		{name: "field changes elsewhere in policy", rel: "internal/policy/grant.go", want: 10, src: `package policy
+
+import m "maps"
+
+func (g *ReadGrant) widen(c CanonicalChat, more map[CanonicalChat]struct{}, counter *struct{ n int }) {
+	g.all = true
+	g.chats[c] = struct{}{}
+	(g.client) = "x"
+	p := &g.all
+	*p = true
+	m.Copy(g.chats, more)
+	delete(g.chats, c)
+	clear(g.chats)
+	for g.client = range map[string]bool{} {
+	}
+	counter.n++
+}
+
+func (g WriteGrant) add(c CanonicalChat) { g.chats[c] = struct{}{} }
+`},
+		{name: "field changes in decide.go and local changes elsewhere in policy", rel: grantFile, src: `package policy
+
+import "maps"
+
+func f(c *Client, more map[CanonicalChat]struct{}) ReadGrant {
+	g := ReadGrant{client: c.ID}
+	g.chats = maps.Clone(c.Read)
+	g.all = c.ReadAll
+	maps.Copy(g.chats, more)
+	delete(g.chats, CanonicalChat{})
+	return g
+}
+`},
+		{name: "local maps and package variables elsewhere in policy", rel: "internal/policy/admin.go", src: `package policy
+
+import (
+	"maps"
+	"time"
+)
+
+func f(set map[CanonicalChat]struct{}, more map[CanonicalChat]struct{}) {
+	out := make(map[CanonicalChat]struct{}, len(set))
+	for chat := range set {
+		out[chat] = struct{}{}
+	}
+	maps.Copy(out, more)
+	delete(out, CanonicalChat{})
+	time.Local = time.UTC
+	n := 0
+	n++
+	_ = &out
+}
+`},
 		{name: "generic forms outside policy", rel: "internal/api/x.go", want: 3, src: `package api
 
 import "github.com/dortort/wawarden/internal/policy"
@@ -257,10 +310,10 @@ func checkGrants(f *sourceFile) []string {
 			}
 		}
 	}
-	okFlags := func(exprs ...ast.Expr) {
+	fieldWrites := func(exprs ...ast.Expr) {
 		for _, e := range exprs {
-			if f.dir == policyDir && okFlag(e) {
-				out = append(out, f.at(e, "an ok flag set by assignment: build values that carry an ok flag whole, with a literal"))
+			if msg := f.fieldWrite(e); msg != "" {
+				out = append(out, f.at(e, "%s", msg))
 			}
 		}
 	}
@@ -283,6 +336,9 @@ func checkGrants(f *sourceFile) []string {
 				}
 			}
 		case *ast.CallExpr:
+			if f.mutatesMap(n) {
+				fieldWrites(n.Args[0])
+			}
 			name, ok := f.policyType(n.Fun, sealedTypes)
 			switch {
 			case !ok:
@@ -292,16 +348,18 @@ func checkGrants(f *sourceFile) []string {
 				out = append(out, f.at(n, "conversion to policy.%s outside %s: grants are minted only by the Decide functions", name, grantFile))
 			}
 		case *ast.UnaryExpr:
-			if n.Op == token.AND && f.dir == policyDir && okFlag(n.X) {
-				out = append(out, f.at(n, "the address of an ok flag taken: build values that carry an ok flag whole, with a literal"))
+			if n.Op == token.AND {
+				fieldWrites(n.X)
 			}
 		case *ast.AssignStmt:
 			if n.Tok != token.DEFINE {
-				okFlags(n.Lhs...)
+				fieldWrites(n.Lhs...)
 			}
+		case *ast.IncDecStmt:
+			fieldWrites(n.X)
 		case *ast.RangeStmt:
 			if n.Tok == token.ASSIGN {
-				okFlags(n.Key, n.Value)
+				fieldWrites(n.Key, n.Value)
 			}
 		}
 		return true
@@ -309,9 +367,35 @@ func checkGrants(f *sourceFile) []string {
 	return out
 }
 
-func okFlag(e ast.Expr) bool {
-	sel, ok := ast.Unparen(e).(*ast.SelectorExpr)
-	return ok && sel.Sel.Name == "ok"
+var mapMutators = map[string]map[string]bool{"maps": set("Copy", "DeleteFunc", "Insert")}
+
+func (f *sourceFile) fieldWrite(e ast.Expr) string {
+	if f.dir != policyDir {
+		return ""
+	}
+	if sel, ok := ast.Unparen(e).(*ast.SelectorExpr); ok && sel.Sel.Name == "ok" {
+		return "an ok flag set by assignment or through its address: build values that carry an ok flag whole, with a literal"
+	}
+	if index, ok := ast.Unparen(e).(*ast.IndexExpr); ok {
+		e = index.X
+	}
+	if sel, ok := ast.Unparen(e).(*ast.SelectorExpr); ok && f.rel != grantFile {
+		if s, _ := f.ref(sel); s == nil {
+			return "a field changed outside " + grantFile + ": package policy builds values whole, and only the Decide functions set a grant's fields"
+		}
+	}
+	return ""
+}
+
+func (f *sourceFile) mutatesMap(call *ast.CallExpr) bool {
+	if len(call.Args) == 0 {
+		return false
+	}
+	if id, ok := ast.Unparen(call.Fun).(*ast.Ident); ok {
+		return id.Name == "delete" || id.Name == "clear"
+	}
+	sel, p := f.ref(call.Fun)
+	return sel != nil && mapMutators[p][sel.Sel.Name]
 }
 
 func (f *sourceFile) policyType(e ast.Expr, names []string) (string, bool) {
