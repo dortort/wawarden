@@ -44,12 +44,11 @@ func (tx *Tx) LearnLID(lid, pn policy.CanonicalChat, source MappingSource, at ti
 	case at.IsZero():
 		return LIDResult{}, invalid("time")
 	}
-	mappedPN, err := tx.lookup(selectMappedPN, lid.JID())
-	if err != nil {
+	var mappedPN, mappedLID sql.NullString
+	if err := tx.q.QueryRowContext(tx.ctx, selectMappedPN, lid.JID()).Scan(&mappedPN); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return LIDResult{}, err
 	}
-	mappedLID, err := tx.lookup(selectMappedLID, pn.JID())
-	if err != nil {
+	if err := tx.q.QueryRowContext(tx.ctx, selectMappedLID, pn.JID()).Scan(&mappedLID); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return LIDResult{}, err
 	}
 	switch {
@@ -83,14 +82,6 @@ func (tx *Tx) LearnLID(lid, pn policy.CanonicalChat, source MappingSource, at ti
 		return LIDResult{}, err
 	}
 	return LIDResult{Outcome: LIDLearned}, nil
-}
-
-func (r *Reader) lookup(query, key string) (sql.NullString, error) {
-	var v sql.NullString
-	if err := r.q.QueryRowContext(r.ctx, query, key).Scan(&v); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return sql.NullString{}, err
-	}
-	return v, nil
 }
 
 func (r *Reader) chatState(c policy.CanonicalChat) (exists, messages bool, err error) {
