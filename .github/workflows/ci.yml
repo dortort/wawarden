@@ -113,6 +113,10 @@ jobs:
       - name: Require vendored modules once go.mod has requirements
         run: |
           requires=$(go mod edit -json | jq '.Require // [] | length')
+          if [[ ! $requires =~ ^[0-9]+$ ]]; then
+            echo "::error::cannot count the requirements in go.mod"
+            exit 1
+          fi
           if [ "$requires" -gt 0 ] && [ ! -f vendor/modules.txt ]; then
             echo "::error::go.mod has $requires requirement(s) but vendor/modules.txt is missing; run go mod vendor and commit vendor/"
             exit 1
