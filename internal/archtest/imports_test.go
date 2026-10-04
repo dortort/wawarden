@@ -1,8 +1,11 @@
 package archtest
 
 import (
+	"context"
+	"os/exec"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -166,20 +169,25 @@ func checkFences(f *sourceFile) []string {
 	return out
 }
 
-func standard(importPath string) bool {
-	first, _, _ := strings.Cut(importPath, "/")
-	return !strings.Contains(first, ".")
-}
+var standardLibrary = sync.OnceValues(func() (map[string]bool, error) {
+	out, err := exec.CommandContext(context.Background(), "go", "list", "std").Output()
+	if err != nil {
+		return nil, err
+	}
+	return set(strings.Fields(string(out))...), nil
+})
 
 var thirdPartyRule = rule{
 	name:  "third-party-imports",
 	check: thirdPartyImports(allowedModules),
 	cases: []snippet{
-		{name: "third-party imports", rel: "internal/app/x_test.go", want: 2, src: `package app
+		{name: "third-party imports", rel: "internal/app/x_test.go", want: 4, src: `package app
 
 import (
 	"golang.org/x/tools/go/packages"
 	"github.com/dortort/wawarden-fork/internal/policy"
+	"evil/pkg"
+	"fmtx"
 )
 `},
 		{name: "standard library and this module", rel: "internal/app/x.go", src: `package app
@@ -196,9 +204,13 @@ import (
 
 func thirdPartyImports(allowed []string) func(*sourceFile) []string {
 	return func(f *sourceFile) []string {
+		std, err := standardLibrary()
+		if err != nil {
+			return []string{f.at(f.file, "go list std: %v", err)}
+		}
 		var out []string
 		for _, imp := range f.imports {
-			if standard(imp.path) || within(imp.path, module) || slices.ContainsFunc(allowed, func(m string) bool { return within(imp.path, m) }) {
+			if std[imp.path] || within(imp.path, module) || slices.ContainsFunc(allowed, func(m string) bool { return within(imp.path, m) }) {
 				continue
 			}
 			out = append(out, f.at(imp.node, "%q is outside the standard library and this module, and not on the reviewed allow-list", imp.path))
