@@ -416,10 +416,13 @@ func TestInterruptedCallsKeepTheConnectionAndTheLock(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			opts, logs := testOptions(t)
-			opts.readTimeout, opts.writeTimeout = 100*time.Millisecond, 100*time.Millisecond
 			d := mustOpen(t, opts)
 			exec1(t, d, "CREATE TABLE t(x INTEGER)")
-			if err := tt.call(d, t.Context()); !errors.Is(err, context.DeadlineExceeded) {
+			read, write := d.readTimeout, d.writeTimeout
+			d.readTimeout, d.writeTimeout = 100*time.Millisecond, 100*time.Millisecond
+			err := tt.call(d, t.Context())
+			d.readTimeout, d.writeTimeout = read, write
+			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("the slow %s = %v, want its deadline exceeded", tt.name, err)
 			}
 			path := filepath.Join(opts.DataDir, "archive.db")
