@@ -63,7 +63,7 @@ Flags:
 
 | Flag | Default | Effect |
 |---|---|---|
-| `--allow-root` | off | Permits running with a real or effective user ID of 0. Without it, `serve` refuses to start as root (`running_as_root`). |
+| `--allow-root` | off | Permits running with a real or effective user ID of 0. Without it, `serve` refuses to start as root (`running_as_root`). With it, the [data directory](#data-directory) must still be owned by the effective user ID, so a root process needs one owned by root with mode `0700`. |
 
 Flags follow Go's `flag` package: `-allow-root`, `--allow-root` and
 `--allow-root=true` are equivalent. Any other flag or argument is a usage error.
@@ -516,4 +516,7 @@ Notes:
   host or container that can reach the container's address can reach the
   listener.
 - **Running as root.** When the runtime overrides the user to root, `serve`
-  refuses to start (`running_as_root`) unless it is given `--allow-root`.
+  refuses to start (`running_as_root`) unless it is given `--allow-root`. With
+  `--allow-root`, the data directory must be owned by root with mode `0700`.
+  The image's `/data`, and a named volume initialised from it, are owned by
+  `65532:65532`, so `serve` refuses them with `data_dir_foreign_owner`.
