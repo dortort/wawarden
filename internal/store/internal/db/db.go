@@ -90,6 +90,7 @@ type DB struct {
 	writeTimeout time.Duration
 	closed       atomic.Bool
 	backupPages  int32
+	newBackup    func(*keptConn, string) (stepper, error)
 	stepped      func()
 }
 
@@ -134,6 +135,7 @@ func Open(ctx context.Context, name Name, opts Options) (*DB, error) {
 		readTimeout:  opts.ReadTimeout,
 		writeTimeout: opts.writeTimeout,
 		backupPages:  backupPagesPerStep,
+		newBackup:    startBackup,
 	}
 	d.connector = newConnector(fileURI(path, opts.pragmas), verify(opts.busyTimeout), !opts.disposable, d.lost)
 	d.sql = sql.OpenDB(d.connector)

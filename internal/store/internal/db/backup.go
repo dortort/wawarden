@@ -22,6 +22,14 @@ type stepper interface {
 	Finish() error
 }
 
+func startBackup(kc *keptConn, dst string) (stepper, error) {
+	b, err := kc.NewBackup(dst)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
 func (d *DB) Backup(ctx context.Context, staging string, w io.Writer) error {
 	staging = filepath.Clean(staging)
 	if err := create(staging); err != nil {
@@ -62,7 +70,7 @@ func (d *DB) copyTo(ctx context.Context, dst string) error {
 		}
 		err := d.step(ctx, func(kc *keptConn) error {
 			if b == nil {
-				nb, err := kc.NewBackup(dst)
+				nb, err := d.newBackup(kc, dst)
 				if err != nil {
 					return err
 				}

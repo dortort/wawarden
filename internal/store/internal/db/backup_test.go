@@ -129,13 +129,56 @@ func TestBackupStopsWhenCancelled(t *testing.T) {
 	}
 }
 
-func TestBackupStepsRecoverPanics(t *testing.T) {
-	if err := safely(func() error { panic("synthetic panic") }); !errors.Is(err, errBackupPanicked) {
-		t.Fatalf("safely = %v, want errBackupPanicked", err)
+type panickingBackup struct{ inStep, inFinish bool }
+
+func (b panickingBackup) Step(int32) (bool, error) {
+	if b.inStep {
+		panic("synthetic step panic")
 	}
-	failure := errors.New("synthetic failure")
-	if err := safely(func() error { return failure }); !errors.Is(err, failure) {
-		t.Fatalf("safely = %v, want the step's own error", err)
+	return false, nil
+}
+
+func (b panickingBackup) Finish() error {
+	if b.inFinish {
+		panic("synthetic finish panic")
+	}
+	return nil
+}
+
+func TestBackupRecoversAPanic(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		b    panickingBackup
+	}{
+		{"in a step", panickingBackup{inStep: true}},
+		{"in finish", panickingBackup{inFinish: true}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			opts, _ := testOptions(t)
+			d := mustOpen(t, opts)
+			seed(t, d, 10)
+			d.newBackup = func(*keptConn, string) (stepper, error) { return tt.b, nil }
+			staging := filepath.Join(t.TempDir(), "staging")
+			var out bytes.Buffer
+			if err := d.Backup(t.Context(), staging, &out); !errors.Is(err, errBackupPanicked) {
+				t.Fatalf("Backup = %v, want errBackupPanicked", err)
+			}
+			if out.Len() != 0 {
+				t.Fatal("a backup that panicked wrote a copy")
+			}
+			if _, err := os.Lstat(staging); !errors.Is(err, fs.ErrNotExist) {
+				t.Fatalf("the staging copy is left behind: %v", err)
+			}
+			if !d.Healthy() || d.sql.Stats().OpenConnections != 1 {
+				t.Fatal("a backup that panicked changed the database's connection")
+			}
+			if got := probeFromAnotherProcess(t, filepath.Join(opts.DataDir, "archive.db")); got != probeBusy {
+				t.Fatalf("another process after a backup that panicked = %d, want busy", got)
+			}
+			if n := count(t, d, "SELECT count(*) FROM t"); n != 10 {
+				t.Fatalf("%d rows after a backup that panicked, want 10", n)
+			}
+		})
 	}
 }
 
