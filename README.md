@@ -95,7 +95,9 @@ match.
 
 You need git, curl and Go. The build uses the Go version on the `toolchain` line
 of `go.mod`; with its default settings, the `go` command (1.21 or later) downloads
-that version when the installed one is older.
+that version when the installed one is older. Dependencies are never vendored:
+once the module has any, the `go` command downloads them as well, through the Go
+module proxy by default, and checks each one against `go.sum`.
 
 ```sh
 git clone https://github.com/dortort/wawarden

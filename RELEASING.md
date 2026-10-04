@@ -114,16 +114,26 @@ The build is reproducible. `hack/repro-build.sh` is the single recipe used by th
 release workflow, by CI and by anyone reproducing a release:
 
 - Go binaries for `linux/amd64` and `linux/arm64`, built with `CGO_ENABLED=0`,
-  `-trimpath`, `-buildvcs=true` and an empty build ID, from the vendored modules
-  once the module has dependencies, with the toolchain named by the `toolchain`
-  line in `go.mod` (`GOTOOLCHAIN=local`): the script stops unless
-  `go env GOVERSION` equals that line. In `ci.yml`, `codeql.yml`,
-  `release.yml` and `govulncheck-daily.yml`, every job that runs Go also runs
-  `hack/check-go-version.sh` right after setting Go up, which makes the same
-  comparison in the job's own environment. The script accepts any `VERSION`
-  that is a valid image tag (CI builds with `VERSION=ci`); the version string
-  is injected at link time into `internal/buildinfo.Version`, and
+  `-trimpath`, `-buildvcs=true`, `-mod=readonly` and an empty build ID, with the
+  toolchain named by the `toolchain` line in `go.mod` (`GOTOOLCHAIN=local`): the
+  script stops unless `go env GOVERSION` equals that line. In `ci.yml`,
+  `codeql.yml`, `release.yml` and `govulncheck-daily.yml`, every job that runs
+  Go also runs `hack/check-go-version.sh` right after setting Go up, which makes
+  the same comparison in the job's own environment. The script accepts any
+  `VERSION` that is a valid image tag (CI builds with `VERSION=ci`); the version
+  string is injected at link time into `internal/buildinfo.Version`, and
   `wawarden version` prints it.
+- Modules are pinned by `go.sum` and never vendored. The script stops when
+  anything named `vendor` exists at the repository root, and builds with
+  `-mod=readonly`, which fails rather than change `go.mod` or `go.sum`. Once the
+  module has dependencies, a build downloads them through the Go module proxy,
+  or whatever `GOPROXY` names, and the go command checks each download against
+  its hash in `go.sum`; with default settings, it checks a new hash against the
+  Go checksum database (`sum.golang.org`) before adding it to `go.sum`. The CI
+  `modules` job and an architecture test also fail when anything named `vendor`
+  exists at the repository root, and another architecture test requires every
+  workflow that sets up Go to set `GOFLAGS=-mod=readonly` for all its jobs and
+  no other module mode.
 - Before packaging, the script checks each binary: its embedded build settings
   must show no `dev` tag, `vcs.revision` equal to the commit, `vcs.modified=false`,
   `CGO_ENABLED=0` and the right architecture; the binary must not contain the
@@ -309,7 +319,10 @@ You need:
   release's `.github/workflows/release.yml` (`BUILDX_VERSION`); rootless Docker
   and Podman have not been tested;
 - `jq` and `tar`. On macOS, the system `touch`, `shasum` and `sha256sum` are
-  enough; GNU coreutils are not needed.
+  enough; GNU coreutils are not needed;
+- once the release's `go.mod` requires any module, access to the Go module
+  proxy, or to whatever `GOPROXY` names: modules are not vendored, so the script
+  downloads them and the go command checks them against the release's `go.sum`.
 
 The script builds with its own temporary `docker-container` builder, created from
 the BuildKit image pinned in the script, so the default builder of your Docker
@@ -420,32 +433,37 @@ Dependabot does not update the following, so they are bumped by hand:
 
 For every update:
 
-- [ ] Once the module has dependencies, they are vendored: review the diff under
-      `vendor/`, not only `go.mod` and `go.sum`. The `modules` CI job fails when
-      `vendor/` does not match `go.mod`. For `go.mau.fi/whatsmeow`, read the
-      upstream commit log between the two versions and pay particular attention
-      to connection handling, the device store, sending, media download and
-      upload, pairing, and message decryption.
+- [ ] Review the upstream change, not only `go.mod` and `go.sum`. Modules are
+      not vendored, so the pull request's own diff shows only versions and
+      hashes. For a Dependabot pull request, read the release notes and
+      commits it links and the upstream diff between the two versions. For
+      `go.mau.fi/whatsmeow`, read the upstream commit log, the diffstat and the
+      diff of the watched paths that the bump workflow planned below puts into
+      the pull request, and pay particular attention to connection handling,
+      the device store, sending, media download and upload, pairing, and
+      message decryption.
 - [ ] Look for new modules, licence changes, `init` functions with side effects,
       new goroutines, new listeners and handlers registered on
       `http.DefaultServeMux`. The architecture and listener-inventory tests catch
       some of these, and a new module fails the architecture tests until it is
-      added to their allow-list; the review is the main defence.
-- [ ] `go mod verify` passes and `go mod vendor` leaves no diff.
+      added to one of their two reviewed lists: modules that source files may
+      import, and modules that `go.mod` may require only as indirect
+      requirements. The review is the main defence.
+- [ ] `go mod verify` passes and `go mod tidy -diff` prints nothing. The
+      `modules` CI job runs both, fails when anything named `vendor` exists at
+      the repository root, and builds with `-mod=readonly`.
 - [ ] `govulncheck` is clean.
 - [ ] A bump of Go, the base image, buildx or the BuildKit image changes the
       release digests. The reproducibility job must still produce identical
       results from two independent builds. For a base image bump, also verify the
       new digest's signature as documented by the distroless project.
 
-Planned for M1, when `go.mau.fi/whatsmeow` is added and vendored, and not present
-yet:
+Planned for M1, when `go.mau.fi/whatsmeow` is added, and not present yet:
 
 - `whatsmeow` has no tagged releases, so Dependabot cannot propose updates for it.
   A scheduled workflow of this repository, which can also be dispatched by hand,
-  will open a pull request pinning an exact commit as a pseudo-version, with the
-  upstream commit log and a diffstat in its description. It never merges, tags or
-  releases.
-- A CI check that flags every change under the vendored `whatsmeow` paths for
-  connections, the device store and media transfer (`socket/`, `store/`,
-  `send.go`, `download.go`, `upload.go`).
+  will open a pull request pinning an exact commit as a pseudo-version. Its
+  description will carry the upstream commit log, a diffstat and the diff of the
+  watched paths (`socket/`, `store/`, `send.go`, `download.go`, `upload.go`,
+  `message.go`, `pair*.go`, `handshake.go`, `msgsecret.go`, `appstate*`). It
+  never merges, tags or releases.
