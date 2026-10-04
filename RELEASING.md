@@ -34,7 +34,13 @@ of these endpoints answer only to repository administrators.
   prints `["branch:main"]`.
 - **`main` cannot be deleted or force-pushed.**
   `gh api repos/dortort/wawarden/rules/branches/main --jq '[.[].type]'` prints
-  `["deletion","non_fast_forward"]`.
+  `["deletion","non_fast_forward"]`. The rules come from the branch ruleset:
+  `gh api repos/dortort/wawarden/rulesets --jq '.[] | select(.target == "branch") | .id'`
+  prints its id, and
+  `gh api repos/dortort/wawarden/rulesets/<id> --jq '{enforcement, target, include: .conditions.ref_name.include, rules: [.rules[].type], bypass_actors}'`
+  prints
+  `{"bypass_actors":[],"enforcement":"active","include":["~DEFAULT_BRANCH"],"rules":["deletion","non_fast_forward"],"target":"branch"}`:
+  enforced, targeting the default branch, `main`, with no bypass actors.
 - **`v*` tags cannot be deleted or moved.**
   `gh api repos/dortort/wawarden/rulesets --jq '.[] | select(.target == "tag") | .id'`
   prints the tag ruleset's id, and
