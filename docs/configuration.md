@@ -33,6 +33,11 @@ with `unknown_variable`.
 | `WAWARDEN_SEND_PER_CLIENT_PER_MINUTE` | Per-client send rate limit | M3 |
 | `WAWARDEN_SEND_GLOBAL_PER_HOUR` | Global send rate limit | M3 |
 
+Further names are planned and not final yet: `WAWARDEN_UNSAFE_DEBUG` (M1), and
+`UNSAFE_` overrides of the rate-limit hard caps (M2 for read and search limits, M3
+for send limits). Any of them set as a `WAWARDEN_` variable is refused with
+`unknown_variable` until the release that implements it.
+
 `WAWARDEN_DEV_*` names are reserved for development builds; a release build
 refuses them with `dev_variable_in_release`. The current development build
 implements none of them either and refuses them with `unknown_variable`.
@@ -216,8 +221,10 @@ The checks run in this order:
 | 15 | `data_dir_foreign_owner` | `WAWARDEN_DATA_DIR` | The directory is not owned by the process's effective user ID. |
 | 16 | `data_dir_permissions` | `WAWARDEN_DATA_DIR` | The directory's mode is not exactly `0700`. |
 
-The data directory is created, when it is missing, only after checks 1 to 12
-pass, so a refused start leaves nothing behind.
+When the data directory is missing, it is created only after checks 1 to 12 pass,
+so a start refused by checks 1 to 12 leaves nothing behind. A refusal by a later
+check (on a filesystem that forces its own ownership or mode, for example), or a
+`startup_failed` exit, leaves the newly created empty directory in place.
 
 ## Data directory
 
@@ -299,6 +306,7 @@ Content-Length: 24
 Content-Type: application/json; charset=utf-8
 Www-Authenticate: Bearer
 X-Content-Type-Options: nosniff
+Date: <date>
 
 {"error":"unauthorized"}
 ```
@@ -351,9 +359,9 @@ process is up and its listeners are serving.
 
 ### Responses
 
-Every response from every listener carries `Cache-Control: no-store` and
-`X-Content-Type-Options: nosniff`, and none carries an `Access-Control-*` header.
-Error bodies are fixed JSON objects with
+Every response that the service's handlers write, on every listener, carries
+`Cache-Control: no-store` and `X-Content-Type-Options: nosniff`, and none carries
+an `Access-Control-*` header. Their error bodies are fixed JSON objects with
 `Content-Type: application/json; charset=utf-8`:
 
 | Body | Status |
@@ -366,6 +374,12 @@ Error bodies are fixed JSON objects with
 | `{"error":"internal_error"}` | `500`, when a handler fails or panics |
 
 Responses never echo request content, header values or tokens.
+
+Go's HTTP server answers some requests itself, before any handler runs: for
+example a request without a `Host` header (`400`), with headers over the 16 KiB
+limit (`431`), with an unsupported `Expect` header (`417`) or an unsupported
+protocol version (`505`). Those answers have a plain-text or empty body and do
+not carry the two headers above.
 
 ## Logging
 
@@ -403,7 +417,9 @@ variable only) and panic values (only their Go type and the stack). `error` text
 on `startup_failed` and `listener_failed` come from the operating system and can
 contain a listen address.
 
-The CLI writes to standard error only its usage text, `healthcheck` failures and
+The CLI writes to standard error only its usage text, the flag parser's one-line
+error for an unknown flag or an invalid flag value (it repeats the flag as typed,
+for example `flag provided but not defined: -nope`), `healthcheck` failures and
 the `admin init` reminder. The Go runtime writes crash output to standard error.
 
 ## Metrics
@@ -424,8 +440,11 @@ Panic names in M0: `api.client`, `api.admin` and `api.health` for the handlers;
 `listeners.client`, `listeners.admin`, `listeners.health`, `listeners.shutdown`
 and `signals` for goroutines.
 
-Metrics on standard output in embedded metric format (`WAWARDEN_METRICS_EMF`) are
-planned for M1.
+Anything that scrapes `/metrics` holds the full admin token, which from M1 can
+start pairing and from M2 can create clients. Treat a scrape configuration as
+holding the admin credential. Metrics on standard output in embedded metric format
+(`WAWARDEN_METRICS_EMF`), planned for M1, need no token; prefer them for alerting
+once they exist.
 
 ## Shutdown
 
@@ -447,8 +466,10 @@ at once.
 ## Container image
 
 Release images are published as `ghcr.io/dortort/wawarden` for `linux/amd64` and
-`linux/arm64`. Deploy them by digest; [`RELEASING.md`](../RELEASING.md) explains
-how to verify one. The image's contract:
+`linux/arm64`, by the release workflow only. Deploy them by digest;
+[`RELEASING.md`](../RELEASING.md) explains how to verify one. No image exists
+before the first release; until then, build from source. The contract below
+applies to release images:
 
 | Item | Value |
 |---|---|
