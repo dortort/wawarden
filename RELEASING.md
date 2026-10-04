@@ -166,14 +166,18 @@ Every `gh` command below needs an authenticated `gh` (`gh auth login`). The
 ```sh
 gh attestation verify oci://ghcr.io/dortort/wawarden@sha256:<digest> \
   --repo dortort/wawarden \
-  --signer-workflow dortort/wawarden/.github/workflows/release.yml@refs/heads/main
+  --cert-identity https://github.com/dortort/wawarden/.github/workflows/release.yml@refs/heads/main
 ```
 
 This checks that the image was built by `release.yml` running on `main` of this
-repository. Without the `@refs/heads/main` suffix, a run of the same workflow on
-any other branch would also be accepted. `gh` reads the registry with your
-existing registry login; run `docker login ghcr.io` first if verification cannot
-fetch the image.
+repository: `--cert-identity` compares the signing certificate's identity with
+the whole value, exactly. Do not replace it with `--signer-workflow`: `gh`
+matches that flag as a prefix, so `...@refs/heads/main` would also accept a run
+on a branch whose name starts with `main`, such as `main-x`. The binary and SBOM
+checks below use the same exact identity.
+
+`gh` reads the registry with your existing registry login; run
+`docker login ghcr.io` first if verification cannot fetch the image.
 
 Use the index digest. Attestations and the signature are attached to the
 multi-arch index, not to the per-platform manifests.
@@ -206,7 +210,7 @@ Then check the provenance of each binary:
 ```sh
 gh attestation verify wawarden_<version>_linux_<arch> \
   --repo dortort/wawarden \
-  --signer-workflow dortort/wawarden/.github/workflows/release.yml@refs/heads/main
+  --cert-identity https://github.com/dortort/wawarden/.github/workflows/release.yml@refs/heads/main
 ```
 
 `go version -m <binary>` prints the build settings embedded in a binary. A release
@@ -220,7 +224,7 @@ version and `dev build false`.
 ```sh
 gh attestation verify wawarden_<version>_linux_<arch> \
   --repo dortort/wawarden \
-  --signer-workflow dortort/wawarden/.github/workflows/release.yml@refs/heads/main \
+  --cert-identity https://github.com/dortort/wawarden/.github/workflows/release.yml@refs/heads/main \
   --predicate-type https://spdx.dev/Document/v2.3
 ```
 
