@@ -50,7 +50,7 @@ linters:
     forbidigo:
       analyze-types: true
       forbid:
-        - pattern: ^http\.(ListenAndServe|ListenAndServeTLS|Serve|ServeTLS|Handle|HandleFunc)$
+        - pattern: ^http\.(Serve|ServeTLS|Handle|HandleFunc)$
           pkg: ^net/http$
           msg: build an http.Server with timeouts and an explicit handler in internal/listeners
         - pattern: ^http\.DefaultServeMux$
@@ -59,8 +59,7 @@ linters:
         - pattern: ^http\.(DefaultClient|Get|Post|PostForm|Head)$
           pkg: ^net/http$
           msg: use an http.Client with a timeout and http.NewRequestWithContext
-        - pattern: ^http\.Server\.(ListenAndServe|ListenAndServeTLS)$
-          pkg: ^net/http$
+        - pattern: \.(ListenAndServe|ListenAndServeTLS)$
           msg: serve an internal/listeners listener with (*http.Server).Serve
         - pattern: ^net\.(Listen|ListenTCP|ListenUDP|ListenIP|ListenUnix|ListenUnixgram|ListenPacket|ListenMulticastUDP|FileListener|FilePacketConn)$
           pkg: ^net$
