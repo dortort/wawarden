@@ -1,4 +1,4 @@
-// Package api serves the client, admin and health HTTP surfaces, routing only through policy-classed registrations.
+// Package api serves the client and admin surfaces through policy-classed registrations, plus a fixed loopback health endpoint.
 package api
 
 import (
