@@ -217,16 +217,18 @@ var socketRule = rule{
 		{name: "every opener outside listeners", rel: "internal/app/x.go", want: 15, src: "package app\n" + everySocketOpener},
 		{name: "every opener in a listeners subpackage", rel: "internal/listeners/sub/x.go", want: 15, src: "package sub\n" + everySocketOpener},
 		{name: "every opener in listeners", rel: "internal/listeners/x.go", src: "package listeners\n" + everySocketOpener},
-		{name: "loopback listens in a test", rel: "internal/app/x_test.go", src: `package app
+		{name: "loopback and temporary unix listens in a test", rel: "internal/app/x_test.go", src: `package app
 
 import (
 	"context"
 	"crypto/tls"
 	"net"
 	"net/http/httptest"
+	"path/filepath"
+	"testing"
 )
 
-func f(ctx context.Context) {
+func f(ctx context.Context, t *testing.T) {
 	_, _ = (&net.ListenConfig{}).Listen(ctx, "tcp4", "127.0.0.1:0")
 	_, _ = (&net.ListenConfig{KeepAlive: -1}).ListenPacket(ctx, "udp4", "127.0.0.1:0")
 	_, _ = net.Listen("tcp", "127.0.0." + "1:0")
@@ -234,17 +236,28 @@ func f(ctx context.Context) {
 	_, _ = tls.Listen("tcp", "127.0.0.1:0", nil)
 	_ = httptest.NewServer(nil)
 	_ = httptest.NewUnstartedServer(nil)
+	_, _ = (&net.ListenConfig{}).Listen(t.Context(), "unix", filepath.Join(t.TempDir(), "s"))
+	_, _ = net.Listen("unix", filepath.Join(t.TempDir(), "a", "b"+".sock"))
 }
 `},
-		{name: "other listens in a test", rel: "internal/listeners/x_test.go", want: 9, src: `package listeners
+		{name: "other listens in a test", rel: "internal/listeners/x_test.go", want: 15, src: `package listeners
 
 import (
 	"context"
 	"crypto/tls"
 	"net"
+	"os"
+	"path/filepath"
+	"testing"
 )
 
-func f(ctx context.Context, addr string) {
+func f(ctx context.Context, t *testing.T, addr, name string) {
+	_, _ = net.Listen("unix", "/tmp/s")
+	_, _ = net.Listen("unix", filepath.Join(os.TempDir(), "s"))
+	_, _ = net.Listen("unix", filepath.Join(t.TempDir(), name))
+	_, _ = net.Listen("unix", filepath.Join(t.TempDir(t), "s"))
+	_, _ = net.Listen("unixpacket", filepath.Join(t.TempDir(), "s"))
+	_, _ = net.Listen("tcp", filepath.Join(t.TempDir(), "s"))
 	_, _ = net.Listen("tcp", "0.0.0.0:0")
 	_, _ = net.Listen("tcp", ":0")
 	_, _ = net.Listen("tcp6", "127.0.0.1:0")
@@ -274,8 +287,8 @@ func checkSockets(f *sourceFile) []string {
 			}
 			if opener, network, address := f.testListen(n); opener != nil {
 				vetted[opener] = true
-				if !loopbackListen(network, address) {
-					out = append(out, f.at(n, "a test may listen only on a constant 127.0.0.1 TCP or UDP address"))
+				if !f.unreachableListen(network, address) {
+					out = append(out, f.at(n, "a test may listen only on a constant 127.0.0.1 TCP or UDP address, or on a unix socket under t.TempDir()"))
 				}
 			}
 		case *ast.SelectorExpr:
@@ -321,9 +334,14 @@ func (f *sourceFile) testListen(call *ast.CallExpr) (opener *ast.SelectorExpr, n
 	return nil, nil, nil
 }
 
-func loopbackListen(network, address ast.Expr) bool {
+func (f *sourceFile) unreachableListen(network, address ast.Expr) bool {
 	n, ok := constString(network)
-	if !ok || !loopbackNetworks[n] {
+	switch {
+	case !ok:
+		return false
+	case n == "unix":
+		return f.underTempDir(address)
+	case !loopbackNetworks[n]:
 		return false
 	}
 	a, ok := constString(address)
@@ -332,6 +350,33 @@ func loopbackListen(network, address ast.Expr) bool {
 	}
 	host, _, err := net.SplitHostPort(a)
 	return err == nil && host == "127.0.0.1"
+}
+
+func (f *sourceFile) underTempDir(e ast.Expr) bool {
+	join, ok := ast.Unparen(e).(*ast.CallExpr)
+	if !ok || len(join.Args) < 2 {
+		return false
+	}
+	if sel, p := f.ref(join.Fun); sel == nil || p != "path/filepath" || sel.Sel.Name != "Join" {
+		return false
+	}
+	dir, ok := ast.Unparen(join.Args[0]).(*ast.CallExpr)
+	if !ok || len(dir.Args) != 0 {
+		return false
+	}
+	method, ok := ast.Unparen(dir.Fun).(*ast.SelectorExpr)
+	if !ok || method.Sel.Name != "TempDir" {
+		return false
+	}
+	if sel, _ := f.ref(method); sel != nil {
+		return false
+	}
+	for _, elem := range join.Args[1:] {
+		if _, ok := constString(elem); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 var muxRule = rule{
