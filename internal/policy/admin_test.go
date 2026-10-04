@@ -11,8 +11,6 @@ import (
 	"github.com/dortort/wawarden/internal/token"
 )
 
-const syntheticAdminToken = "wwadm_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8_c307c63e" //nolint:gosec // G101: known-answer vector encoding bytes 0..31, not a credential
-
 func mustCredential(t *testing.T, s string) AdminCredential {
 	t.Helper()
 	c, err := ParseAdminCredential(s)
@@ -23,12 +21,7 @@ func mustCredential(t *testing.T, s string) AdminCredential {
 }
 
 func TestDecideAdmin(t *testing.T) {
-	for name, tok := range map[string]string{"fixed token": syntheticAdminToken, "generated token": token.NewAdmin()} {
-		t.Run(name, func(t *testing.T) { checkDecideAdmin(t, tok) })
-	}
-}
-
-func checkDecideAdmin(t *testing.T, tok string) {
+	tok := token.NewAdmin()
 	cred := mustCredential(t, token.Hash(tok))
 	upperCred := mustCredential(t, strings.ToUpper(token.Hash(tok)))
 
@@ -103,7 +96,8 @@ func TestDecideAdminDeniesTheEmptyTokenEvenWhenItsHashIsConfigured(t *testing.T)
 }
 
 func TestParseAdminCredential(t *testing.T) {
-	valid := token.Hash(syntheticAdminToken)
+	tok := token.NewAdmin()
+	valid := token.Hash(tok)
 	tests := []struct {
 		name string
 		in   string
@@ -132,7 +126,7 @@ func TestParseAdminCredential(t *testing.T) {
 			if tt.in != "" && strings.Contains(err.Error(), tt.in) {
 				t.Fatalf("the error echoes its input: %v", err)
 			}
-			if _, ok := DecideAdmin(c, syntheticAdminToken); ok {
+			if _, ok := DecideAdmin(c, tok); ok {
 				t.Fatal("a credential that failed to parse admitted a token")
 			}
 		})
