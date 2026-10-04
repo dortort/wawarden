@@ -22,7 +22,7 @@ const (
 	policyDir   = "internal/policy"
 )
 
-var bannedImports = set("net/http/pprof", "expvar", "plugin", "unsafe", "C")
+var bannedImports = set("net/http/pprof", "expvar", "net/http/cgi", "net/http/fcgi", "plugin", "unsafe", "C")
 
 var apiDenied = []string{"database/sql", "modernc.org/sqlite", "go.mau.fi/whatsmeow", module + "/internal/store/ingest"}
 
@@ -35,11 +35,13 @@ var bannedImportRule = rule{
 	name:  "banned-imports",
 	check: checkBannedImports,
 	cases: []snippet{
-		{name: "every banned import in a test", rel: "internal/app/x_test.go", want: 5, src: `package app
+		{name: "every banned import in a test", rel: "internal/app/x_test.go", want: 7, src: `package app
 
 import (
 	"C"
 	_ "expvar"
+	"net/http/cgi"
+	"net/http/fcgi"
 	_ "net/http/pprof"
 	"plugin"
 	"unsafe"
@@ -53,6 +55,7 @@ import p "plugin"
 
 import (
 	"net/http"
+	"net/http/httputil"
 	"runtime/pprof"
 	"unicode/utf8"
 )
