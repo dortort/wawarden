@@ -12,11 +12,11 @@ import (
 	"testing"
 )
 
-func apiDeclarations(t *testing.T, root string) map[string]bool {
+func declarations(t *testing.T, root, dir string) map[string]bool {
 	t.Helper()
-	files, err := moduleFiles(os.DirFS(filepath.Join(root, apiDir)))
+	files, err := moduleFiles(os.DirFS(filepath.Join(root, dir)))
 	if err != nil {
-		t.Fatalf("walk %s: %v", apiDir, err)
+		t.Fatalf("walk %s: %v", dir, err)
 	}
 	declared := map[string]bool{}
 	for _, f := range files {
@@ -67,7 +67,7 @@ func receiverPrefix(d *ast.FuncDecl) string {
 
 func TestCompileTimeFirewalls(t *testing.T) {
 	root := moduleRoot(t)
-	declared := apiDeclarations(t, root)
+	declared := declarations(t, root, apiDir)
 	for _, name := range []string{"newRouter", "router", "router.mux", "router.read", "router.write", "router.admin"} {
 		if !declared[name] {
 			t.Fatalf("package api no longer declares %s, so the unexported mux fixtures prove nothing: update them", name)
