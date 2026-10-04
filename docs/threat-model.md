@@ -21,7 +21,7 @@ companion device and exposes that account to the owner's own agents and
 applications. Each client holds a bearer token that grants read access, write
 access or both, limited to an allowlist of chats.
 
-The process opens three listeners, all plain HTTP, and nothing else:
+The process opens at most three listeners, all plain HTTP, and nothing else:
 
 | Listener | Address | Serves | Status |
 |---|---|---|---|
@@ -271,7 +271,7 @@ fixture packages that must fail to compile with a specific error.
 | 6 | **DTO firewall.** Response bodies are types of `internal/api/dto`, built field by field. Every field of a database row struct carries `json:"-"`. | I-5 | Compile time (the response interface has an unexported method, so a type declared elsewhere cannot be returned; a fixture proves it) and a run-time check in the encoder; a test that fails if a response type can produce the keys `raw`, `media_meta`, `sender_alt`, `seq` or `token`; a reflection test over the row structs. | M0 for response types and the key test. M2 for the row structs. |
 | 7 | **Property tests.** Random archives (aliases, phone-number and LID pairs, revokes) crossed with random scopes, run through every scoped method and every MCP tool: every returned row is in scope, a revoked canary never appears in search or the change feed, and denied and missing responses are byte-identical. | I-1, I-3, I-4, I-8 | Property-based tests in CI. | M2 |
 | 8 | **Fuzzing.** The admin token syntax check (never panics; anything accepted has the generated form). `Normalize` (output server is one of `s.whatsapp.net`, `lid`, `g.us`; device 0; idempotent; never panics), cursor opening, the full-text query builder (never an unquoted operator), ingest of crafted protocol messages; idempotency keys. | I-1, I-3, I-7, I-9 | Go native fuzzing; seed corpora replay in every test run, and CI fuzzes every target for 60 seconds. | M0 for the admin token check. M2 for the others; M3 for idempotency keys. |
-| 9 | **`safego.Go` for every goroutine WaWarden starts.** It recovers a panic, logs the panic's type and stack (never its value) and counts it per goroutine name. WaWarden's HTTP handlers recover the same way and answer a fixed `500`. | I-5, I-9 | An architecture test rejects a `go` statement, and standard-library calls that start goroutines, outside `internal/safego`. | M0 |
+| 9 | **`safego.Go` for every goroutine WaWarden starts.** It recovers a panic, logs the panic's type and stack (never its value) and counts it per goroutine name. WaWarden's HTTP handlers recover the same way and answer a fixed `500`. | I-5, I-9 | An architecture test rejects, in non-test files outside `internal/safego`, a `go` statement, `time.AfterFunc`, `context.AfterFunc`, `runtime.AddCleanup`, `runtime.SetFinalizer`, and any method named `Go` or `RegisterOnShutdown`. Goroutines that other standard-library code starts internally, such as `http.Server`'s per-connection goroutines, are not covered by the test; the handlers that run on them recover as described. | M0 |
 | 10 | **Listener inventory.** Only `internal/listeners` opens sockets, only `internal/app` may use it, and only `internal/listeners` builds `http.Server` values, each with an explicit handler. `net.Listen` and related calls outside it, `http.ListenAndServe`, `http.Serve`, the package-level `http.Handle` and `http.HandleFunc`, and `http.DefaultServeMux` are banned, so a dependency that registers handlers on the default mux exposes nothing. | I-6 | `forbidigo` with type analysis and the architecture tests (static); a test that inspects the test process's open sockets and expects exactly the client, admin and health listeners; tests that `/debug/` paths answer `404` on every handler and on every live listener, with handlers registered on the default mux to prove the point. | M0 |
 | 11 | **Golden files for MCP tools.** Tool names, descriptions and input schemas are compile-time constants compared against committed golden files. | I-5 | Golden-file test. | M2 |
 | 12 | **Constant-time credential comparison.** The admin credential type cannot be compared with `==`, and the admin digest is compared only through `crypto/subtle`. | I-7 | Compile time (a fixture comparing two credentials fails to compile); an architecture test on comparisons in `internal/policy` and `internal/token`. | M0 |
@@ -324,8 +324,8 @@ from someone else's account cannot bind the gateway to that account.
 | The client and admin listeners bind to loopback (`127.0.0.1:8080`, `127.0.0.1:8082`) unless configured otherwise; a warning is logged at every start for each of them bound elsewhere (plain HTTP carries bearer tokens). The health listener defaults to `127.0.0.1:8081` and accepts only loopback addresses. | M0 |
 | The admin listener exists only when an admin token hash is configured. | M0 |
 | `umask 077` and the `single` traceback level are set by the first two statements of `main`, which an architecture test checks. | M0 |
-| HTTP servers have read-header, read, write and idle timeouts and a 16 KiB header limit; responses carry `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`, and no CORS headers. | M0 |
-| Requests carrying an `Origin` or `Sec-Fetch-Site` header are refused with `403`; `OPTIONS` is refused with `405`. | M0 |
+| HTTP servers have read-header, read, write and idle timeouts and a 16 KiB header limit; responses written by WaWarden's handlers carry `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`, and no CORS headers. Go's HTTP server answers malformed requests itself, before any handler runs, with a plain-text or empty error response without those headers. | M0 |
+| Requests to the client or admin listener carrying an `Origin` or `Sec-Fetch-Site` header are refused with `403`; `OPTIONS` on those listeners is refused with `405`. | M0 |
 | Every request on the client and admin listeners is authenticated before its body is read; error bodies are fixed strings that never echo the request. | M0 |
 | The container image runs as a non-root user (`65532:65532`) on a distroless static base with no shell, and works with a read-only root filesystem. | M0 |
 | The data directory is created with mode `0700`. | M0 |
@@ -376,7 +376,11 @@ These remain at v1.0, after every control above is in place.
   (M2). The token does not expire. As of M0, failed attempts are only counted;
   events and an audit trail arrive in M1 and M2 (see
   [The admin token](#the-admin-token)). Keep the admin listener reachable from
-  fewer places than the client listener.
+  fewer places than the client listener. Metrics are readable only with the admin
+  token, so a Prometheus scraper of `/metrics` holds the full admin credential,
+  and scrape configurations are often widely readable. Treat any scrape
+  configuration as holding the admin token, and prefer metrics on standard output
+  in embedded metric format (M1), which need no token, for alerting.
 - **The failed-authentication throttle does not limit guessing.** It changes the
   answer to failures beyond its budget and feeds a counter (M0); token entropy is
   what defeats guessing (see [Failed authentication](#failed-authentication)).
