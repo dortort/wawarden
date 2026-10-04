@@ -13,6 +13,28 @@ import (
 	"time"
 )
 
+func TestDefaults(t *testing.T) {
+	var o Options
+	defaults(&o)
+	for _, tt := range []struct {
+		name      string
+		got, want time.Duration
+	}{
+		{"read deadline", o.ReadTimeout, 2 * time.Second},
+		{"write deadline", o.writeTimeout, 10 * time.Second},
+		{"lock wait", o.acquireFor, 5 * time.Minute},
+		{"busy timeout", o.busyTimeout, 5 * time.Second},
+	} {
+		if tt.got != tt.want {
+			t.Errorf("default %s = %v, want %v", tt.name, tt.got, tt.want)
+		}
+	}
+	opts, _ := testOptions(t)
+	if d := mustOpen(t, opts); d.readTimeout != 2*time.Second || d.writeTimeout != 10*time.Second {
+		t.Errorf("an opened database has deadlines %v and %v, want 2s and 10s", d.readTimeout, d.writeTimeout)
+	}
+}
+
 func TestOpenAppliesAndVerifiesThePragmas(t *testing.T) {
 	opts, _ := testOptions(t)
 	d := mustOpen(t, opts)
