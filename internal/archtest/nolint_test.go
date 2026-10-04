@@ -7,15 +7,15 @@ import (
 )
 
 var (
-	nolintDirective = regexp.MustCompile(`(?i)^//\s*nolint(?::(\S*))?(?:\s|$)`)
-	guardLinters    = set("depguard", "forbidigo")
+	nolintDirective = regexp.MustCompile(`^nolint( |:|$)`)
+	silencedLinters = set("", "all", "depguard", "forbidigo")
 )
 
 var nolintRule = rule{
 	name:  "nolint",
 	check: checkNolint,
 	cases: []snippet{
-		{name: "bare and guard-silencing directives", rel: "internal/app/x_test.go", want: 8, src: `package app
+		{name: "bare and guard-silencing directives", rel: "internal/app/x_test.go", want: 14, src: `package app
 
 //nolint
 var a = 1
@@ -38,6 +38,23 @@ var g = 1 //nolint:gosec,forbidigo // reason
 
 //NOLINT:DEPGUARD
 var h = 1
+
+//nolint:gosec, depguard
+var i = 1
+
+//nolint:gosec ,depguard
+var j = 1
+
+var k = 1 //nolint:gosec,forbidigo// reason
+
+///nolint
+var l = 1
+
+// //nolint:depguard
+var m = 1
+
+//nolint:allx
+var n = 1
 `},
 		{name: "named directives and prose", rel: "internal/app/x.go", src: `package app
 
@@ -51,6 +68,11 @@ var c = 1
 
 /* nolint */
 var d = 1
+
+// nolint:gosec, errcheck // reason
+var e = 1
+
+var f = 1 //nolint:gosec// depguard and forbidigo are named only in the reason
 `},
 	},
 }
@@ -59,12 +81,13 @@ func checkNolint(f *sourceFile) []string {
 	var out []string
 	for _, group := range f.file.Comments {
 		for _, c := range group.List {
-			m := nolintDirective.FindStringSubmatch(c.Text)
-			if m == nil {
+			text := strings.ToLower(strings.TrimLeft(c.Text, "/ "))
+			if !nolintDirective.MatchString(text) {
 				continue
 			}
-			linters := strings.Split(strings.ToLower(m[1]), ",")
-			if m[1] == "" || slices.ContainsFunc(linters, func(l string) bool { return l == "all" || guardLinters[l] }) {
+			names, named := strings.CutPrefix(text, "nolint:")
+			names, _, _ = strings.Cut(names, "//")
+			if !named || strings.HasPrefix(names, "all") || slices.ContainsFunc(strings.Split(names, ","), func(l string) bool { return silencedLinters[strings.TrimSpace(l)] }) {
 				out = append(out, f.at(c, "a nolint directive must name its linters and may not silence depguard or forbidigo"))
 			}
 		}
