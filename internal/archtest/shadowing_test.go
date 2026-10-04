@@ -279,6 +279,30 @@ import (
 
 var _, _ = m.Clone[map[int]int], strings.Clone
 `},
+		{name: "names of major-version imports", rel: "internal/token/token.go", want: 2, src: `package token
+
+import (
+	"example.com/sqlite/v10"
+	"math/rand/v2"
+)
+
+func f() {
+	rand, sqlite := 0, 0
+	_, _ = rand, sqlite
+}
+`},
+		{name: "names of major-version imports with other names", rel: "internal/token/token.go", src: `package token
+
+import (
+	"example.com/lib/v1"
+	"math/rand/v2"
+)
+
+func f() {
+	v2, lib := rand.N(10), 0
+	_, _ = v2, lib
+}
+`},
 		{name: "a policy subpackage", rel: "internal/policy/sub/x.go", want: 1, src: `package sub
 
 func f() { delete := 0; _ = delete }

@@ -56,6 +56,8 @@ var rules = []rule{
 	credentialRule, preludeRule, secretComparisonRule, formRule, shadowRule,
 }
 
+var majorVersion = regexp.MustCompile(`^v([2-9]|[1-9][0-9]+)$`)
+
 func parseSource(rel string, src []byte) (*sourceFile, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, rel, src, parser.ParseComments|parser.SkipObjectResolution)
@@ -69,6 +71,9 @@ func parseSource(rel string, src []byte) (*sourceFile, error) {
 			return nil, err
 		}
 		name := path.Base(p)
+		if dir := path.Dir(p); dir != "." && majorVersion.MatchString(name) {
+			name = path.Base(dir)
+		}
 		if spec.Name != nil {
 			name = spec.Name.Name
 		}
