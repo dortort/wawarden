@@ -1,6 +1,9 @@
 package archtest
 
-import "go/ast"
+import (
+	"go/ast"
+	"go/token"
+)
 
 var handlerBuilders = map[string]map[string]bool{
 	"net/http": set("AllowQuerySemicolons", "CrossOriginProtection", "FileServer", "FileServerFS", "HandlerFunc", "MaxBytesHandler",
@@ -41,7 +44,7 @@ func f(h web.Handler, fn func(web.ResponseWriter, *web.Request)) {
 	_ = func() web.Handler { return nil }
 }
 `},
-		{name: "handlers built or swapped in listeners", rel: "internal/listeners/x.go", want: 5, src: `package listeners
+		{name: "handlers built or swapped in listeners", rel: "internal/listeners/x.go", want: 6, src: `package listeners
 
 import "net/http"
 
@@ -50,6 +53,8 @@ type Spec struct{ Handler http.Handler }
 func (s Spec) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.Handler.ServeHTTP(w, r) }
 
 func f(spec Spec, h http.Handler) []*http.Server {
+	srv := &http.Server{Handler: spec.Handler}
+	_ = &srv.Handler
 	return []*http.Server{
 		{Handler: http.TimeoutHandler(spec.Handler, 0, "")},
 		{Handler: h},
@@ -75,6 +80,21 @@ func f(d api.ClientDeps, h interface{ ServeHTTP() }, wrap func(any) any) []liste
 		{"health", s.Addr, api.NewHealthHandler(nil)},
 		{Name: "unset"},
 	}
+}
+`},
+		{name: "specs converted or changed through a pointer", rel: "internal/app/x.go", want: 4, src: `package app
+
+import (
+	"github.com/dortort/wawarden/internal/api"
+	"github.com/dortort/wawarden/internal/listeners"
+)
+
+func f(ready func() bool, local struct{ Name string }, p *struct{ Name string }) []listeners.Spec {
+	s := listeners.Spec{Name: "health", Handler: api.NewHealthHandler(ready)}
+	h := &s.Handler
+	*h = api.NewHealthHandler(ready)
+	_ = &(s.Handler)
+	return []listeners.Spec{s, listeners.Spec(local), *(*listeners.Spec)(p)}
 }
 `},
 		{name: "a handler built in an api subpackage", rel: "internal/api/dto/x.go", want: 1, src: `package dto
@@ -111,6 +131,7 @@ type Spec struct {
 }
 
 func f(spec Spec) *http.Server {
+	spec = Spec(spec)
 	return &http.Server{Handler: spec.Handler, ReadHeaderTimeout: 1}
 }
 `},
@@ -179,6 +200,14 @@ func checkHandlers(f *sourceFile) []string {
 				if sel, ok := ast.Unparen(lhs).(*ast.SelectorExpr); ok && sel.Sel.Name == "Handler" {
 					out = append(out, f.at(lhs, "Handler assigned after its listeners.Spec literal: set it only in the literal, to the result of an %s constructor", apiDir))
 				}
+			}
+		case *ast.UnaryExpr:
+			if sel, ok := ast.Unparen(n.X).(*ast.SelectorExpr); ok && n.Op == token.AND && sel.Sel.Name == "Handler" {
+				out = append(out, f.at(n, "the address of a Handler field taken outside %s, through which it could be changed after its literal", apiDir))
+			}
+		case *ast.CallExpr:
+			if f.isType(n.Fun, module+"/"+listenersDir, "Spec") && !within(f.dir, listenersDir) {
+				out = append(out, f.at(n, "conversion to listeners.Spec: build it with a literal whose Handler is the direct result of an %s constructor", apiDir))
 			}
 		}
 		return true
