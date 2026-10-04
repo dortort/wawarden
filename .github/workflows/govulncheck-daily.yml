@@ -51,6 +51,10 @@ jobs:
           go-version-file: go.mod
           cache: false
 
+      - name: Check the Go version
+        if: steps.latest.outputs.tag != ''
+        run: hack/check-go-version.sh
+
       - name: Install govulncheck
         if: steps.latest.outputs.tag != ''
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
