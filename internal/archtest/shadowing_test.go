@@ -225,6 +225,41 @@ func f[K comparable, V any]() {}
 
 type box[T any] struct{ v T }
 `},
+		{name: "receiver and method type parameters", rel: "internal/policy/decide.go", want: 5, src: `package policy
+
+import (
+	"crypto/subtle"
+	"maps"
+)
+
+type box[K comparable, V any] struct{}
+
+type one[T any] struct{}
+
+func (b box[len, V]) m() {}
+
+func (*box[maps, cap]) n() {}
+
+func (one[subtle]) o() {}
+
+func (b (*box[K, V])) p[copy any]() {}
+`},
+		{name: "receiver and method type parameters with other names", rel: "internal/policy/decide.go", src: `package policy
+
+import "crypto/subtle"
+
+type box[K comparable, V any] struct{}
+
+type one[T any] struct{}
+
+func (b box[K, V]) m() {}
+
+func (*box[_, _]) n() {}
+
+func (one[T]) o() bool { return subtle.ConstantTimeByteEq(1, 1) == 1 }
+
+func (b (*box[K, V])) p[E any]() {}
+`},
 		{name: "a policy subpackage", rel: "internal/policy/sub/x.go", want: 1, src: `package sub
 
 func f() { delete := 0; _ = delete }
@@ -306,6 +341,19 @@ func checkShadowing(f *sourceFile) []string {
 		case *ast.FuncDecl:
 			if n.Recv == nil {
 				declare(n.Name, "function")
+			} else {
+				for _, recv := range n.Recv.List {
+					typ := ast.Unparen(recv.Type)
+					if star, ok := typ.(*ast.StarExpr); ok {
+						typ = ast.Unparen(star.X)
+					}
+					switch t := typ.(type) {
+					case *ast.IndexExpr:
+						idents("receiver type parameter", t.Index)
+					case *ast.IndexListExpr:
+						idents("receiver type parameter", t.Indices...)
+					}
+				}
 			}
 			fields(n.Recv, "receiver")
 		case *ast.FuncType:
