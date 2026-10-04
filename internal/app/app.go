@@ -27,11 +27,18 @@ const (
 	shutdownGrace = 10 * time.Second
 )
 
+type listenerSet interface {
+	Inventory() []listeners.Bound
+	Serve()
+	Err() <-chan error
+	Shutdown(context.Context) error
+}
+
 type App struct {
 	logger  *slog.Logger
 	ready   atomic.Bool
-	serving *listeners.Set
-	health  *listeners.Set
+	serving listenerSet
+	health  listenerSet
 	grace   time.Duration
 
 	afterDrain func()
@@ -138,7 +145,7 @@ func (a *App) Run(ctx context.Context) error {
 	return nil
 }
 
-func (a *App) shutdown(ctx context.Context, s *listeners.Set) error {
+func (a *App) shutdown(ctx context.Context, s listenerSet) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.grace)
 	defer cancel()
 	return s.Shutdown(ctx)

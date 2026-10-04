@@ -387,6 +387,61 @@ func TestShutdownIsBoundedByTheGracePeriod(t *testing.T) {
 	}
 }
 
+type failingSet struct {
+	listenerSet
+	errs chan error
+}
+
+func (f failingSet) Err() <-chan error { return f.errs }
+
+func TestListenerFailureStopsTheApp(t *testing.T) {
+	tests := []struct {
+		name string
+		wrap func(*App, chan error)
+	}{
+		{name: "serving", wrap: func(a *App, errs chan error) { a.serving = failingSet{a.serving, errs} }},
+		{name: "health", wrap: func(a *App, errs chan error) { a.health = failingSet{a.health, errs} }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a, logs := open(t, testConfig(t, ""), noClients{})
+			health := addr(t, a, "health")
+			errs := make(chan error, 1)
+			tt.wrap(a, errs)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			finished := make(chan struct{})
+			var runErr error
+			go func() {
+				runErr = a.Run(ctx)
+				close(finished)
+			}()
+			t.Cleanup(func() {
+				cancel()
+				<-finished
+			})
+
+			logs.waitFor(t, "ready")
+			failure := errors.New("synthetic listener failure")
+			errs <- failure
+			select {
+			case <-finished:
+			case <-time.After(10 * time.Second):
+				t.Fatal("Run kept running after a listener failed")
+			}
+			if !errors.Is(runErr, failure) {
+				t.Fatalf("Run = %v, want the listener failure", runErr)
+			}
+			if failed := logs.find("listener_failed"); len(failed) != 1 || failed[0]["level"] != "ERROR" || failed[0]["error"] != failure.Error() {
+				t.Fatalf("listener_failed events = %v, want one at ERROR naming the failure", failed)
+			}
+			if _, err := do(t, http.MethodGet, health, "/healthz", nil); err == nil {
+				t.Fatal("the health listener still answers after Run returned")
+			}
+		})
+	}
+}
+
 func TestClientListenerRequiresAuthentication(t *testing.T) {
 	a, _, _ := start(t, testConfig(t, ""), noClients{})
 	client := addr(t, a, "client")
