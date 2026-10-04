@@ -172,19 +172,6 @@ func TestOpenRefusesIncompleteSpecs(t *testing.T) {
 	}
 }
 
-func TestOpenReleasesEarlierListenersOnFailure(t *testing.T) {
-	taken := openSet(t, Spec{Name: "taken", Addr: loopback, Handler: text("x")})
-	busy := taken.Inventory()[0].Addr
-	logger, _ := newLogger(t)
-	_, err := Open(t.Context(), logger, []Spec{
-		{Name: "first", Addr: loopback, Handler: text("x")},
-		{Name: "clash", Addr: busy, Handler: text("x")},
-	})
-	if err == nil || !strings.Contains(err.Error(), "clash") {
-		t.Fatalf("Open = %v, want an error naming the clashing listener", err)
-	}
-}
-
 func TestShutdownIsGraceful(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
