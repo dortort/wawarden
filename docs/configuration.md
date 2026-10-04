@@ -495,8 +495,9 @@ What is never logged: requests (there is no access log), request bodies, header
 values, tokens, failed authentications, the admin token's hash, the values of
 refused variables (a refusal names the variable only), panic values (only their
 Go type and the stack), the master key and the keys derived from it (only the key
-id), WhatsApp identifiers in their `user@server` form (they become pseudonyms) and
-lines carrying XML. The listen addresses are the only configuration values that
+id), WhatsApp identifiers in their `user@server` form when no letter or digit
+follows the server name (they become
+[pseudonyms](#pseudonyms-and-dropped-lines)) and lines carrying XML. The listen addresses are the only configuration values that
 are logged: the `listening` and `listener_not_loopback` events carry the bound
 address, and the `error` texts of `startup_failed` and `listener_failed` come
 from the operating system and can contain a listen address.
@@ -519,7 +520,7 @@ identifier is replaced by `jid:` and 8 lower-case hexadecimal digits. The shape 
 a run of letters, digits, `.`, `_`, `:`, `+` and `-`, then `@`, then one of the
 servers `s.whatsapp.net`, `c.us`, `lid`, `g.us`, `broadcast`, `newsletter`,
 `hosted`, `hosted.lid`, `bot`, `msgr` or `interop` in any letter case, followed by
-a character that is not a letter, digit or `_`, or by the end of the line. The
+a character that is not an ASCII letter or digit, or by the end of the line. The
 identifier is the longest ending of the run that starts with a digit and holds
 only digits, `.`, `_`, `:` and `-`, or the whole run when it has no such ending;
 what precedes it is kept, so `sender:15550100001@s.whatsapp.net` becomes
@@ -539,7 +540,9 @@ master key is the same.
   `someone@lid.example`, is replaced too. Go module paths such as
   `example.com/module@v1.2.3` are not.
 - Identifiers written another way are not recognised: a phone number on its own,
-  or a user and device number without `@` and a server.
+  a user and device number without `@` and a server, or an identifier whose
+  server name is followed directly by a letter or digit, such as
+  `15550100001@g.us2`.
 - Pseudonyms are 32 bits long, so two identifiers can share one; among some
   65,000 identifiers a shared pseudonym becomes likely.
 

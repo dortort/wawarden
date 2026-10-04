@@ -32,7 +32,7 @@ const (
 )
 
 var (
-	jidPattern  = regexp.MustCompile(`(?i)[0-9a-z._:+-]+@(s\.whatsapp\.net|c\.us|lid|g\.us|broadcast|newsletter|hosted\.lid|hosted|bot|msgr|interop)\b`)
+	jidPattern  = regexp.MustCompile(`(?i)[0-9a-z._:+-]+@(s\.whatsapp\.net|c\.us|lid|g\.us|broadcast|newsletter|hosted\.lid|hosted|bot|msgr|interop)(?:[^0-9a-z]|$)`)
 	userPattern = regexp.MustCompile(`[0-9][0-9._:-]*$`)
 	xmlPattern  = regexp.MustCompile(`</` + xmlName + `\s*>|<` + xmlName + `(?:` + xmlAttribute + `)*\s*/>|<` + xmlName + `(?:` + xmlAttribute + `)+\s*>|<!--|<!\[CDATA\[|<\?xml`)
 	escapedTag  = regexp.MustCompile(`\\+(u003[cCeE]|")`)
@@ -145,7 +145,7 @@ func (w *Writer) pseudonymise(line []byte) []byte {
 		}
 		out = append(out, line[last:start]...)
 		out = append(out, w.pseudonym(user, line[m[2]:m[3]])...)
-		last = m[1]
+		last = m[3]
 	}
 	return append(out, line[last:]...)
 }
