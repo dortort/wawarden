@@ -68,7 +68,7 @@ var (
 	_ = CanonicalChat{}
 )
 `},
-		{name: "aliases, conversions and ok assignments elsewhere in policy", rel: "internal/policy/grant.go", want: 9, src: `package policy
+		{name: "aliases, conversions and ok assignments elsewhere in policy", rel: "internal/policy/grant.go", want: 10, src: `package policy
 
 import "time"
 
@@ -119,7 +119,7 @@ func ptr(g *ReadGrant, flags []bool) {
 	_ = &flags[0]
 }
 `},
-		{name: "chat aliases, conversions, generics and ok assignments elsewhere in policy", rel: "internal/policy/chat.go", want: 6, src: `package policy
+		{name: "chat aliases, conversions, generics and ok assignments elsewhere in policy", rel: "internal/policy/chat.go", want: 7, src: `package policy
 
 type cc = CanonicalChat
 
@@ -142,7 +142,7 @@ func set(c *CanonicalChat, flags []bool) {
 	c.ok, _ = true, 0
 }
 `},
-		{name: "field changes elsewhere in policy", rel: "internal/policy/grant.go", want: 10, src: `package policy
+		{name: "field changes elsewhere in policy", rel: "internal/policy/grant.go", want: 11, src: `package policy
 
 import m "maps"
 
@@ -237,6 +237,79 @@ func f(set map[CanonicalChat]struct{}, more map[CanonicalChat]struct{}) {
 	_ = &out
 }
 `},
+		{name: "unnamed struct types that build a chat elsewhere in policy", rel: "internal/policy/chat.go", want: 4, src: `package policy
+
+import "unique"
+
+type raw = struct {
+	jid unique.Handle[string]
+	ok  bool
+}
+
+func mk[T ~struct{ jid unique.Handle[string]; ok bool }](s string) T { return T{jid: unique.Make(s), ok: true} }
+
+func fill[T ~raw](p *T, s string) { *p = T{jid: unique.Make(s), ok: true} }
+
+func conv[T ~struct{ jid unique.Handle[string]; ok bool }](s string) T { return T(raw{unique.Make(s), true}) }
+
+func forge(s string) []CanonicalChat {
+	var c CanonicalChat
+	fill(&c, s)
+	var d CanonicalChat = struct{ jid unique.Handle[string]; ok bool }{unique.Make(s), true}
+	return []CanonicalChat{c, d, mk[CanonicalChat](s), conv[CanonicalChat](s)}
+}
+`},
+		{name: "unnamed struct types that mint a grant elsewhere in policy", rel: "internal/policy/admin.go", want: 6, src: `package policy
+
+func mint[T ~struct{ ok bool }]() T { return T{ok: true} }
+
+func fill[T ~struct{ ok bool }](p *T) { *p = T{ok: true} }
+
+func conv[T ~struct{ ok bool }](x struct{ ok bool }) T { return T(x) }
+
+func forge() []AdminGrant {
+	var g AdminGrant
+	fill(&g)
+	return []AdminGrant{g, mint[AdminGrant](), conv[AdminGrant](struct{ ok bool }{true}), struct{ ok bool }{true}}
+}
+`},
+		{name: "declared struct types, empty structs and generics in policy", rel: "internal/policy/grant.go", src: `package policy
+
+type entry struct {
+	chat CanonicalChat
+	seen bool
+}
+
+type (
+	pair      (struct{ a, b int })
+	box[T any] struct{ v T }
+)
+
+func keys[K comparable, V any](m map[K]V) []K {
+	out := make([]K, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+func f(chats map[CanonicalChat]struct{}) {
+	chats[CanonicalChat{}] = struct{}{}
+	_ = entry{seen: true}
+	_ = pair{1, 2}
+	_ = box[int]{v: 1}
+	_ = keys(chats)
+}
+`},
+		{name: "unnamed struct types in a policy test", rel: "internal/policy/x_test.go", src: `package policy
+
+type raw = struct {
+	jid string
+	ok  bool
+}
+
+func f[T ~struct{ ok bool }](x struct{ ok bool }) T { return T(x) }
+`},
 		{name: "generic forms outside policy", rel: "internal/api/x.go", want: 3, src: `package api
 
 import "github.com/dortort/wawarden/internal/policy"
@@ -269,7 +342,7 @@ func f(h func(policy.ReadGrant), g *policy.ReadGrant) {
 	_ = &holder{}
 }
 `},
-		{name: "chats, aliases, generics and ok flags in decide.go", rel: grantFile, want: 9, src: `package policy
+		{name: "chats, aliases, generics and ok flags in decide.go", rel: grantFile, want: 10, src: `package policy
 
 type rg = ReadGrant
 
@@ -405,6 +478,7 @@ func checkGrants(f *sourceFile) []string {
 			}
 		}
 	}
+	declared := map[*ast.StructType]bool{}
 	settled := map[ast.Expr]bool{}
 	fieldWrites := func(exprs ...ast.Expr) {
 		for _, e := range exprs {
@@ -426,6 +500,13 @@ func checkGrants(f *sourceFile) []string {
 			constraints(n.TypeParams)
 			if name, ok := f.policyType(n.Type, sealedTypes); ok {
 				out = append(out, f.at(n, "type %s is declared from policy.%s, so its literals or conversions would forge one", n.Name.Name, name))
+			}
+			if st, ok := ast.Unparen(n.Type).(*ast.StructType); ok && !n.Assign.IsValid() {
+				declared[st] = true
+			}
+		case *ast.StructType:
+			if f.dir == policyDir && !declared[n] && n.Fields.NumFields() > 0 {
+				out = append(out, f.at(n, "a struct type with fields that is not the type of a type declaration: in package policy, a value of it is assignable to a grant or chat with the same fields, and a type parameter it constrains can build or convert to one"))
 			}
 		case *ast.FuncType:
 			constraints(n.TypeParams)
