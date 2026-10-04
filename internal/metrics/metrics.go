@@ -34,7 +34,6 @@ func NewRegistry() *Registry {
 type Counter struct{ n atomic.Uint64 }
 
 func (c *Counter) Inc()           { c.n.Add(1) }
-func (c *Counter) Add(n uint64)   { c.n.Add(n) }
 func (c *Counter) Value() uint64  { return c.n.Load() }
 func (c *Counter) format() string { return strconv.FormatUint(c.Value(), 10) }
 
@@ -43,15 +42,6 @@ type Gauge struct{ bits atomic.Uint64 }
 func (g *Gauge) Set(v float64)  { g.bits.Store(math.Float64bits(v)) }
 func (g *Gauge) Value() float64 { return math.Float64frombits(g.bits.Load()) }
 func (g *Gauge) format() string { return strconv.FormatFloat(g.Value(), 'g', -1, 64) }
-
-func (g *Gauge) Add(delta float64) {
-	for {
-		old := g.bits.Load()
-		if g.bits.CompareAndSwap(old, math.Float64bits(math.Float64frombits(old)+delta)) {
-			return
-		}
-	}
-}
 
 type CounterVec struct{ f *family }
 

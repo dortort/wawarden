@@ -3,6 +3,8 @@ package metrics_test
 import (
 	"errors"
 	"fmt"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -28,12 +30,16 @@ func TestExposition(t *testing.T) {
 	temperature := r.Gauge("wawarden_temperature", "A float gauge.")
 
 	panics.With("worker").Inc()
-	panics.With("api").Add(3)
+	for range 3 {
+		panics.With("api").Inc()
+	}
 	panics.With("worker").Inc()
 	build.With("v1.2.3", "abc123", "false").Set(1)
-	auth.Add(7)
+	for range 7 {
+		auth.Inc()
+	}
 	temperature.Set(-0.25)
-	temperature.Add(1)
+	temperature.Set(0.75)
 
 	want := `# HELP wawarden_auth_failures_total Failed client authentications, see C:\\docs\nsecond line.
 # TYPE wawarden_auth_failures_total counter
@@ -165,7 +171,7 @@ func TestConcurrentUpdates(t *testing.T) {
 			for range perWorker {
 				total.Inc()
 				byName.With(name).Inc()
-				level.Add(1)
+				level.Set(float64(w))
 			}
 		})
 	}
@@ -189,11 +195,30 @@ func TestConcurrentUpdates(t *testing.T) {
 			t.Fatalf("%s = %d, want %d", name, got, workers/4*perWorker)
 		}
 	}
-	if got := level.Value(); got != workers*perWorker {
-		t.Fatalf("level = %v, want %d", got, workers*perWorker)
+	if got := level.Value(); got != float64(int(got)) || got < 0 || got >= workers {
+		t.Fatalf("level = %v, want one of the values the workers set", got)
 	}
 	if out := exposition(t, r); !strings.Contains(out, fmt.Sprintf("wawarden_total %d\n", workers*perWorker)) {
 		t.Fatalf("exposition does not show the total:\n%s", out)
+	}
+}
+
+func TestSamplesExposeOnlyTheMethodsInUse(t *testing.T) {
+	tests := []struct {
+		typ  reflect.Type
+		want []string
+	}{
+		{typ: reflect.TypeFor[*metrics.Counter](), want: []string{"Inc", "Value"}},
+		{typ: reflect.TypeFor[*metrics.Gauge](), want: []string{"Set", "Value"}},
+	}
+	for _, tt := range tests {
+		var got []string
+		for m := range tt.typ.Methods() {
+			got = append(got, m.Name)
+		}
+		if !slices.Equal(got, tt.want) {
+			t.Errorf("%s exports %q, want %q: add a method together with its first caller", tt.typ, got, tt.want)
+		}
 	}
 }
 
