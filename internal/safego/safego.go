@@ -45,16 +45,13 @@ func Recover(name string) {
 }
 
 func report(name string, v any) {
-	if v == nil {
+	r := installed.Load()
+	if v == nil || r == nil {
 		return
 	}
 	stack := debug.Stack()
-	logger := slog.Default()
-	if r := installed.Load(); r != nil {
-		r.panics.With(name).Inc()
-		logger = r.logger
-	}
-	logger.Error("panic recovered",
+	r.panics.With(name).Inc()
+	r.logger.Error("panic recovered",
 		slog.String("event", "panic"),
 		slog.String("name", name),
 		slog.String("panic_type", fmt.Sprintf("%T", v)),
