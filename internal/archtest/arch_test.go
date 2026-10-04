@@ -53,7 +53,7 @@ type rule struct {
 var rules = []rule{
 	goroutineRule, netHTTPRule, dotImportRule, socketRule, muxRule, serverRule, handlerRule,
 	inListRule, bannedImportRule, reflectionRule, fenceRule, chatMethodRule, thirdPartyRule, hiddenPackageRule, nolintRule, generatedRule, wildcardRule,
-	credentialRule, preludeRule, secretComparisonRule, formRule, shadowRule, sealRule, keysDirectoryRule, standardLibraryOnlyRule, logHandlerRule,
+	credentialRule, preludeRule, secretComparisonRule, formRule, shadowRule, sealRule, keysDirectoryRule, standardLibraryOnlyRule, logHandlerRule, logOutputRule,
 }
 
 var majorVersion = regexp.MustCompile(`^v([2-9]|[1-9][0-9]+)$`)
