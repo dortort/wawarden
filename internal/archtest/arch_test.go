@@ -52,7 +52,7 @@ type rule struct {
 
 var rules = []rule{
 	goroutineRule, netHTTPRule, dotImportRule, socketRule, muxRule, serverRule, handlerRule,
-	inListRule, bannedImportRule, reflectionRule, fenceRule, grantRule, thirdPartyRule, hiddenPackageRule, nolintRule, generatedRule, wildcardRule,
+	inListRule, bannedImportRule, reflectionRule, fenceRule, grantRule, chatMethodRule, thirdPartyRule, hiddenPackageRule, nolintRule, generatedRule, wildcardRule,
 	credentialRule, preludeRule, secretComparisonRule, formRule, shadowRule,
 }
 
