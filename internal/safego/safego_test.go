@@ -123,7 +123,7 @@ func TestRecoverInHandler(t *testing.T) {
 	})
 
 	ok := httptest.NewRecorder()
-	handler.ServeHTTP(ok, httptest.NewRequest(http.MethodGet, "/fine", nil))
+	handler.ServeHTTP(ok, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/fine", nil))
 	if ok.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d", ok.Code, http.StatusNoContent)
 	}
@@ -134,7 +134,7 @@ func TestRecoverInHandler(t *testing.T) {
 	}
 
 	failed := httptest.NewRecorder()
-	handler.ServeHTTP(failed, httptest.NewRequest(http.MethodGet, "/panic", nil))
+	handler.ServeHTTP(failed, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/panic", nil))
 	if failed.Code != http.StatusInternalServerError || strings.Contains(failed.Body.String(), canary) {
 		t.Fatalf("response = %d %q, want 500 without the panic value", failed.Code, failed.Body.String())
 	}
