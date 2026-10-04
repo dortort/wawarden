@@ -20,6 +20,8 @@ const (
 	apiAdminDir = "internal/api/admin"
 	appDir      = "internal/app"
 	policyDir   = "internal/policy"
+	sealDir     = policyDir + "/internal/seal"
+	sealPath    = module + "/" + sealDir
 )
 
 var bannedImports = set("net/http/pprof", "expvar", "net/http/cgi", "net/http/fcgi", "plugin", "unsafe", "C")
@@ -251,6 +253,18 @@ import (
 	"unique"
 )
 `},
+		{name: "policy imports its seal package", rel: "internal/policy/x.go", src: `package policy
+
+import "github.com/dortort/wawarden/internal/policy/internal/seal"
+`},
+		{name: "the seal package imports I/O, package policy and itself", rel: "internal/policy/internal/seal/x.go", want: 3, src: `package seal
+
+import (
+	"fmt"
+	"github.com/dortort/wawarden/internal/policy"
+	"github.com/dortort/wawarden/internal/policy/internal/seal"
+)
+`},
 		{name: "a policy test imports the module", rel: "internal/policy/x_test.go", src: `package policy
 
 import (
@@ -295,8 +309,8 @@ func checkFences(f *sourceFile) []string {
 				out = append(out, f.at(imp.node, "%s may not import %q", apiDir, imp.path))
 			}
 		case within(f.dir, policyDir):
-			if !policyAllowed[imp.path] {
-				out = append(out, f.at(imp.node, "%s may import only the reviewed pure standard-library packages, not %q", policyDir, imp.path))
+			if !policyAllowed[imp.path] && (imp.path != sealPath || f.dir != policyDir) {
+				out = append(out, f.at(imp.node, "%s may import only the reviewed pure standard-library packages, and package policy also its seal package, not %q", policyDir, imp.path))
 			}
 		}
 	}

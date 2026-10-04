@@ -175,9 +175,9 @@ func checkSecretComparisons(f *sourceFile) []string {
 }
 
 func TestCredentialDigestFields(t *testing.T) {
-	declared := declarations(t, moduleRoot(t), policyDir)
+	declared := declarations(t, moduleRoot(t), sealDir)
 	if !declared["AdminCredential"] {
-		t.Fatal("package policy no longer declares AdminCredential, so the secret-comparisons rule guards no digest: update it")
+		t.Fatal("package seal no longer declares AdminCredential, so the secret-comparisons rule guards no digest: update it")
 	}
 	fields := map[string]bool{}
 	for name := range declared {

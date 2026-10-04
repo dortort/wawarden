@@ -3,13 +3,11 @@ package policy
 
 import (
 	"time"
-	"unique"
+
+	"github.com/dortort/wawarden/internal/policy/internal/seal"
 )
 
-type CanonicalChat struct {
-	jid unique.Handle[string]
-	ok  bool
-}
+type CanonicalChat = seal.Chat
 
 type Client struct {
 	ID                string

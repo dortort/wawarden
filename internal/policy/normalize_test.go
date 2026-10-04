@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"unique"
 )
 
 var canonicalJID = regexp.MustCompile(`^(?:[0-9]{1,24}@(?:s\.whatsapp\.net|lid)|[0-9]{1,24}(?:-[0-9]{1,24})?@g\.us)$`)
@@ -225,8 +224,7 @@ func TestNormalizeGivesEveryFormOfAnIdentifierOneChat(t *testing.T) {
 
 func TestInvalidChatsExposeNothing(t *testing.T) {
 	for name, c := range map[string]CanonicalChat{
-		"zero value":                 {},
-		"identifier without ok flag": {jid: unique.Make("15550100001@s.whatsapp.net")},
+		"zero value": {},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if c.Valid() || c.JID() != "" || c.Kind() != InvalidChat {

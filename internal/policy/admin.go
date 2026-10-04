@@ -8,6 +8,8 @@ import (
 	"errors"
 	"hash/crc32"
 	"strings"
+
+	"github.com/dortort/wawarden/internal/policy/internal/seal"
 )
 
 const (
@@ -17,11 +19,7 @@ const (
 
 var ErrAdminCredential = errors.New("policy: the admin credential must be a SHA-256 written as 64 hexadecimal characters")
 
-type AdminCredential struct {
-	_   [0]func() // incomparable, so == cannot stand in for crypto/subtle
-	sum [sha256.Size]byte
-	ok  bool
-}
+type AdminCredential = seal.AdminCredential
 
 func ParseAdminCredential(s string) (AdminCredential, error) {
 	if len(s) != hex.EncodedLen(sha256.Size) {
@@ -31,7 +29,7 @@ func ParseAdminCredential(s string) (AdminCredential, error) {
 	if _, err := hex.Decode(sum[:], []byte(s)); err != nil {
 		return AdminCredential{}, ErrAdminCredential
 	}
-	return AdminCredential{sum: sum, ok: true}, nil
+	return seal.NewAdminCredential(sum), nil
 }
 
 func wellFormedAdminToken(s string) bool {

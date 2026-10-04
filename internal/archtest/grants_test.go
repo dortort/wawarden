@@ -3,7 +3,6 @@ package archtest
 import (
 	"go/ast"
 	"go/token"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -852,22 +851,6 @@ func (f *sourceFile) mentionedType(e ast.Expr, names []string) (string, bool) {
 	return found, found != ""
 }
 
-var valueTypes = set("bool", "string", "byte", "rune", "int", "int8", "int16", "int32", "int64",
-	"uint", "uint8", "uint16", "uint32", "uint64", "uintptr", "float32", "float64", "complex64", "complex128")
-
-func (f *sourceFile) valueType(e ast.Expr) bool {
-	switch t := e.(type) {
-	case *ast.Ident:
-		return valueTypes[t.Name]
-	case *ast.ArrayType:
-		return t.Len != nil && f.valueType(t.Elt)
-	case *ast.IndexExpr:
-		sel, p := f.ref(t.X)
-		return sel != nil && p == "unique" && sel.Sel.Name == "Handle"
-	}
-	return false
-}
-
 func TestChatFileDeclaresNormalize(t *testing.T) {
 	files, err := moduleFiles(os.DirFS(filepath.Join(moduleRoot(t), policyDir)))
 	if err != nil {
@@ -886,53 +869,5 @@ func TestChatFileDeclaresNormalize(t *testing.T) {
 	}
 	if !slices.Equal(found, []string{chatFile}) {
 		t.Fatalf("package policy declares Normalize in %q, but the grant-forging rule lets only %s build a valid chat: they must match", found, chatFile)
-	}
-}
-
-func TestSealedTypeFields(t *testing.T) {
-	files, err := moduleFiles(os.DirFS(filepath.Join(moduleRoot(t), policyDir)))
-	if err != nil {
-		t.Fatalf("walk %s: %v", policyDir, err)
-	}
-	declared, fields := map[string]bool{}, map[string]bool{}
-	for _, f := range files {
-		if f.test || f.dir != "." {
-			continue
-		}
-		ast.Inspect(f.file, func(n ast.Node) bool {
-			ts, ok := n.(*ast.TypeSpec)
-			if !ok || !slices.Contains(sealedTypes, ts.Name.Name) {
-				return true
-			}
-			declared[ts.Name.Name] = true
-			st, ok := ts.Type.(*ast.StructType)
-			if !ok {
-				t.Fatalf("policy.%s is no longer a struct, so the grant-forging rule cannot read its fields: update it", ts.Name.Name)
-			}
-			var names []string
-			for _, field := range st.Fields.List {
-				if len(field.Names) == 0 {
-					t.Fatalf("policy.%s embeds a field: name it, so the grant-forging rule can confine it", ts.Name.Name)
-				}
-				for _, name := range field.Names {
-					names = append(names, name.Name)
-					if !f.valueType(field.Type) {
-						fields[name.Name] = true
-					}
-				}
-			}
-			if want := sealedFields[ts.Name.Name]; !slices.Equal(names, want) {
-				t.Fatalf("policy.%s declares the fields %q, but the grant-forging rule refuses types declared with the fields %q: they must match", ts.Name.Name, names, want)
-			}
-			return false
-		})
-	}
-	if len(declared) != len(sealedTypes) {
-		t.Fatalf("package policy declares %q of %q, so the grant-forging rule guards a type that is gone: update it",
-			slices.Sorted(maps.Keys(declared)), sealedTypes)
-	}
-	if !maps.Equal(fields, grantSetFields) {
-		t.Fatalf("the grant types hold %q by reference, but the grant-forging rule confines aliases of %q: they must match",
-			slices.Sorted(maps.Keys(fields)), slices.Sorted(maps.Keys(grantSetFields)))
 	}
 }

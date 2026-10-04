@@ -2,19 +2,20 @@ package policy
 
 import (
 	"crypto/sha256"
-	"crypto/subtle"
 	"time"
+
+	"github.com/dortort/wawarden/internal/policy/internal/seal"
 )
 
 func DecideRead(c *Client, now time.Time) (ReadGrant, bool) {
 	if !live(c, now) {
 		return ReadGrant{}, false
 	}
-	g := ReadGrant{client: c.ID, all: c.ReadAll, ok: true}
+	var chats map[CanonicalChat]struct{}
 	if !c.ReadAll {
-		g.chats = validChats(c.Read)
+		chats = validChats(c.Read)
 	}
-	return g, true
+	return seal.NewReadGrant(c.ID, c.ReadAll, chats), true
 }
 
 func DecideWrite(c *Client, now time.Time) (WriteGrant, bool) {
@@ -25,18 +26,14 @@ func DecideWrite(c *Client, now time.Time) (WriteGrant, bool) {
 	if len(chats) == 0 {
 		return WriteGrant{}, false
 	}
-	return WriteGrant{client: c.ID, chats: chats, allowFirstContact: c.AllowFirstContact, ok: true}, true
+	return seal.NewWriteGrant(c.ID, chats, c.AllowFirstContact), true
 }
 
 func DecideAdmin(cred AdminCredential, presented string) (AdminGrant, bool) {
-	if !cred.ok || !wellFormedAdminToken(presented) {
+	if !wellFormedAdminToken(presented) || !seal.MatchAdminCredential(cred, sha256.Sum256([]byte(presented))) {
 		return AdminGrant{}, false
 	}
-	sum := sha256.Sum256([]byte(presented))
-	if subtle.ConstantTimeCompare(sum[:], cred.sum[:]) != 1 {
-		return AdminGrant{}, false
-	}
-	return AdminGrant{ok: true}, true
+	return seal.NewAdminGrant(), true
 }
 
 func live(c *Client, now time.Time) bool {
@@ -46,7 +43,7 @@ func live(c *Client, now time.Time) bool {
 func validChats(set map[CanonicalChat]struct{}) map[CanonicalChat]struct{} {
 	out := make(map[CanonicalChat]struct{}, len(set))
 	for chat := range set {
-		if chat.ok {
+		if chat.Valid() {
 			out[chat] = struct{}{}
 		}
 	}
