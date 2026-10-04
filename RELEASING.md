@@ -447,6 +447,12 @@ Dependabot (`.github/dependabot.yml`) opens pull requests every week for:
 It proposes an upstream release only once it is three days old. **Nothing is
 merged automatically.** Each pull request is reviewed and merged by hand.
 
+Dependabot never proposes `modernc.org/libc` on its own. The SQLite driver,
+`modernc.org/sqlite`, requires exactly the libc version its own `go.mod`
+names, so libc moves only when a driver update raises it. An architecture test
+fails when the libc version in `go.mod` differs from the one the driver's
+`go.mod` requires.
+
 Dependabot does not update the following, so they are bumped by hand:
 
 | Item | Where it is pinned |

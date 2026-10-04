@@ -9,6 +9,9 @@ updates:
       default-days: 3
     commit-message:
       prefix: "build(deps)"
+    ignore:
+      # modernc.org/sqlite requires exactly the libc its own go.mod names, so libc moves only with it.
+      - dependency-name: "modernc.org/libc"
 
   - package-ecosystem: "github-actions"
     directory: "/"
