@@ -320,6 +320,66 @@ func checkFences(f *sourceFile) []string {
 	return out
 }
 
+var standardLibraryOnly = []string{"internal/keys", "internal/logx", "internal/sanitize"}
+
+var standardLibraryOnlyRule = rule{
+	name:  "standard-library-only",
+	check: checkStandardLibraryOnly,
+	cases: []snippet{
+		{name: "module and third-party imports in a confined package", rel: "internal/logx/x.go", want: 3, src: `package logx
+
+import (
+	"log/slog"
+
+	"example.com/redact"
+	"github.com/dortort/wawarden/internal/keys"
+	"github.com/dortort/wawarden/internal/policy"
+)
+`},
+		{name: "a module import in a confined package's subpackage", rel: "internal/keys/sub/x.go", want: 1, src: `package sub
+
+import "github.com/dortort/wawarden/internal/token"
+`},
+		{name: "standard-library imports in a confined package", rel: "internal/sanitize/x.go", src: `package sanitize
+
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
+`},
+		{name: "module imports in a confined package's test", rel: "internal/logx/x_test.go", src: `package logx
+
+import (
+	"github.com/dortort/wawarden/internal/policy"
+	"github.com/dortort/wawarden/internal/token"
+)
+`},
+		{name: "module imports outside the confined packages", rel: "internal/logxtra/x.go", src: `package logxtra
+
+import "github.com/dortort/wawarden/internal/keys"
+`},
+	},
+}
+
+func checkStandardLibraryOnly(f *sourceFile) []string {
+	i := slices.IndexFunc(standardLibraryOnly, func(dir string) bool { return within(f.dir, dir) })
+	if f.test || i < 0 {
+		return nil
+	}
+	std, err := standardLibrary()
+	if err != nil {
+		return []string{f.at(f.file, "go list std: %v", err)}
+	}
+	var out []string
+	for _, imp := range f.imports {
+		if !std[imp.path] {
+			out = append(out, f.at(imp.node, "%s may import only the standard library, not %q", standardLibraryOnly[i], imp.path))
+		}
+	}
+	return out
+}
+
 var standardLibrary = sync.OnceValues(func() (map[string]bool, error) {
 	out, err := exec.CommandContext(context.Background(), "go", "list", "std").Output()
 	if err != nil {

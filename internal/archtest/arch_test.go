@@ -53,7 +53,7 @@ type rule struct {
 var rules = []rule{
 	goroutineRule, netHTTPRule, dotImportRule, socketRule, muxRule, serverRule, handlerRule,
 	inListRule, bannedImportRule, reflectionRule, fenceRule, chatMethodRule, thirdPartyRule, hiddenPackageRule, nolintRule, generatedRule, wildcardRule,
-	credentialRule, preludeRule, secretComparisonRule, formRule, shadowRule, sealRule,
+	credentialRule, preludeRule, secretComparisonRule, formRule, shadowRule, sealRule, keysDirectoryRule, standardLibraryOnlyRule, logHandlerRule,
 }
 
 var majorVersion = regexp.MustCompile(`^v([2-9]|[1-9][0-9]+)$`)
@@ -333,10 +333,13 @@ func TestArchitecture(t *testing.T) {
 		"cmd/wawarden/main.go",
 		"internal/api/register.go",
 		"internal/archtest/arch_test.go",
+		"internal/keys/keys.go",
 		"internal/listeners/listeners.go",
+		"internal/logx/logx.go",
 		"internal/policy/decide.go",
 		"internal/policy/internal/seal/seal.go",
 		"internal/safego/safego.go",
+		"internal/sanitize/sanitize.go",
 	} {
 		if !walked[rel] {
 			t.Fatalf("the walk missed %s, so every rule would pass on it vacuously", rel)
@@ -352,6 +355,11 @@ func TestArchitecture(t *testing.T) {
 			return !f.test && f.dir == dir && slices.ContainsFunc(f.imports, func(imp importSpec) bool { return imp.path == "reflect" })
 		}) {
 			t.Errorf("the reflect allow-list names %s, where no non-test file imports reflect", dir)
+		}
+	}
+	for _, dir := range standardLibraryOnly {
+		if !slices.ContainsFunc(files, func(f *sourceFile) bool { return !f.test && f.dir == dir }) {
+			t.Errorf("the standard-library-only list names %s, where the walk found no non-test file", dir)
 		}
 	}
 	for _, r := range rules {

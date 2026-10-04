@@ -52,6 +52,15 @@ linters:
           deny:
             - pkg: mime/multipart
               desc: only internal/api serves requests, and it reads JSON bodies only
+        standard-library-only:
+          list-mode: strict
+          files:
+            - ${base-path}/internal/keys/**
+            - ${base-path}/internal/logx/**
+            - ${base-path}/internal/sanitize/**
+            - "!$test"
+          allow:
+            - $gostd
         no-default-mux-registrars:
           files:
             - $all
