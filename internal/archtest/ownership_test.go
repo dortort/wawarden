@@ -770,6 +770,29 @@ func f(h http.Handler, ln net.Listener) error {
 	return srv.Serve(ln)
 }
 `},
+		{name: "a Handler set after the literal in listeners", rel: "internal/listeners/x.go", want: 3, src: `package listeners
+
+import "net/http"
+
+type spec struct{ Handler http.Handler }
+
+func f(h http.Handler, s *spec) *http.Server {
+	srv := &http.Server{Handler: h}
+	srv.Handler = nil
+	(srv.Handler), _ = h, 0
+	s.Handler = h
+	return srv
+}
+`},
+		{name: "Handler fields read in listeners and set in a test", rel: "internal/listeners/x_test.go", src: `package listeners
+
+import "net/http"
+
+func f(srv *http.Server) http.Handler {
+	srv.Handler = http.NotFoundHandler()
+	return srv.Handler
+}
+`},
 		{name: "server pointers in a test", rel: "internal/app/x_test.go", src: `package app
 
 import "net/http"
@@ -800,6 +823,15 @@ func checkServers(f *sourceFile) []string {
 		case *ast.CompositeLit:
 			if sel, _ := f.ref(n.Type); sel != nil {
 				pointerOrLiteral[sel] = true
+			}
+		case *ast.AssignStmt:
+			if f.test || f.dir != listenersDir {
+				break
+			}
+			for _, lhs := range n.Lhs {
+				if sel, ok := ast.Unparen(lhs).(*ast.SelectorExpr); ok && sel.Sel.Name == "Handler" {
+					out = append(out, f.at(lhs, "Handler assigned after the http.Server literal, where it can become nil and serve http.DefaultServeMux: set it only in the literal"))
+				}
 			}
 		case *ast.SelectorExpr:
 			if n.Sel.Name == "ListenAndServe" || n.Sel.Name == "ListenAndServeTLS" {
