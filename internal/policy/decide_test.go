@@ -10,13 +10,11 @@ import (
 var (
 	now        = time.Date(2026, 1, 2, 3, 4, 5, 6, time.UTC)
 	future     = now.Add(90 * 24 * time.Hour)
-	chatA      = testChat("chat-a")
-	chatB      = testChat("chat-b")
-	chatC      = testChat("chat-c")
+	chatA      = mustNormalize("15550100001@s.whatsapp.net")
+	chatB      = mustNormalize("100000000000001@lid")
+	chatC      = mustNormalize("120363000000000001@g.us")
 	knownChats = []CanonicalChat{chatA, chatB, chatC}
 )
-
-func testChat(jid string) CanonicalChat { return CanonicalChat{jid: jid, ok: true} }
 
 func set(chats ...CanonicalChat) map[CanonicalChat]struct{} {
 	s := make(map[CanonicalChat]struct{}, len(chats))
