@@ -489,8 +489,8 @@ applies to release images:
 | Binary | `/wawarden`, mode `0555` |
 | Entrypoint and command | `ENTRYPOINT ["/wawarden"]`, `CMD ["serve"]`; pass another subcommand as the command, for example `admin init` |
 | User | `65532:65532` |
-| Writable path | `/data` only: an empty directory owned by `65532:65532` with mode `0700`; mount a volume there |
-| Root filesystem | Can be mounted read-only; the service writes nothing outside the data directory |
+| Writable path | `/data`, the only path the service writes and the only one that must be writable: an empty directory owned by `65532:65532` with mode `0700`; mount a volume there |
+| Root filesystem | Mount it read-only (`docker run --read-only`, or `readOnlyRootFilesystem: true` in Kubernetes) so that `/data` is also the only writable path; the service writes nothing outside the data directory |
 | Health check | `["/wawarden","healthcheck"]`, in exec form; the image declares no health check of its own |
 | Exposed ports | None declared |
 | Labels | `org.opencontainers.image.source`, `licenses`, `version`, `revision` |
