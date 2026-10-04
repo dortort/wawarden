@@ -117,12 +117,13 @@ release workflow, by CI and by anyone reproducing a release:
   `-trimpath`, `-buildvcs=true` and an empty build ID, from the vendored modules
   once the module has dependencies, with the toolchain named by the `toolchain`
   line in `go.mod` (`GOTOOLCHAIN=local`): the script stops unless
-  `go env GOVERSION` equals that line. In `ci.yml`, `codeql.yml` and
-  `release.yml`, every job that runs Go also runs `hack/check-go-version.sh`
-  right after setting Go up, which makes the same comparison in the job's own
-  environment. The script accepts any `VERSION` that is a valid image tag (CI
-  builds with `VERSION=ci`); the version string is injected at link time into
-  `internal/buildinfo.Version`, and `wawarden version` prints it.
+  `go env GOVERSION` equals that line. In `ci.yml`, `codeql.yml`,
+  `release.yml` and `govulncheck-daily.yml`, every job that runs Go also runs
+  `hack/check-go-version.sh` right after setting Go up, which makes the same
+  comparison in the job's own environment. The script accepts any `VERSION`
+  that is a valid image tag (CI builds with `VERSION=ci`); the version string
+  is injected at link time into `internal/buildinfo.Version`, and
+  `wawarden version` prints it.
 - Before packaging, the script checks each binary: its embedded build settings
   must show no `dev` tag, `vcs.revision` equal to the commit, `vcs.modified=false`,
   `CGO_ENABLED=0` and the right architecture; the binary must not contain the
@@ -391,7 +392,7 @@ Dependabot does not update the following, so they are bumped by hand:
 
 | Item | Where it is pinned |
 |---|---|
-| Go | The `go` and `toolchain` lines of `go.mod`. The workflows set up Go from `go.mod`; every job that runs Go in `ci.yml`, `codeql.yml` and `release.yml` then runs `hack/check-go-version.sh`, which stops the job unless `go env GOVERSION` equals the `toolchain` version, and `hack/repro-build.sh` requires exactly that version too. Dependabot proposes no Go release, but a module update it proposes can raise the `go` line when the new version needs a newer Go; review such a pull request as a Go bump. |
+| Go | The `go` and `toolchain` lines of `go.mod`. The workflows set up Go from `go.mod`; every job that runs Go in `ci.yml`, `codeql.yml`, `release.yml` and `govulncheck-daily.yml` then runs `hack/check-go-version.sh`, which stops the job unless `go env GOVERSION` equals the `toolchain` version, and `hack/repro-build.sh` requires exactly that version too. Dependabot proposes no Go release, but a module update it proposes can raise the `go` line when the new version needs a newer Go; review such a pull request as a Go bump. |
 | golangci-lint | The `version` input of both `golangci/golangci-lint-action` steps in `.github/workflows/ci.yml`. |
 | govulncheck | The `go install golang.org/x/vuln/cmd/govulncheck@<version>` step in `.github/workflows/ci.yml` and in `.github/workflows/govulncheck-daily.yml`. |
 | buildx | `BUILDX_VERSION` in the `env` block of `.github/workflows/ci.yml` and of `.github/workflows/release.yml`. |
