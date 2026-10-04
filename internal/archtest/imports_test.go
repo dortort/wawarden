@@ -457,6 +457,37 @@ func TestNoVendorDirectory(t *testing.T) {
 	}
 }
 
+func TestWorkflowsUseReadOnlyModules(t *testing.T) {
+	root := os.DirFS(moduleRoot(t))
+	workflows, err := fs.Glob(root, ".github/workflows/*")
+	if err != nil {
+		t.Fatalf("list workflows: %v", err)
+	}
+	checked := 0
+	for _, name := range workflows {
+		data, err := fs.ReadFile(root, name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		config := string(data)
+		if !strings.Contains(config, "actions/setup-go@") {
+			continue
+		}
+		checked++
+		if got, _ := yamlValue(config, "env", "GOFLAGS"); got != "-mod=readonly" {
+			t.Errorf("%s: env.GOFLAGS is %q, want -mod=readonly, so that no job builds from a vendor directory", name, got)
+		}
+		for i, line := range strings.Split(config, "\n") {
+			if strings.Contains(strings.ReplaceAll(line, "-mod=readonly", ""), "-mod=") || strings.Contains(line, "GOFLAGS") && strings.TrimSpace(line) != "GOFLAGS: -mod=readonly" {
+				t.Errorf("%s:%d: %q may set a module mode other than -mod=readonly", name, i+1, strings.TrimSpace(line))
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no workflow sets up Go, so this check passes vacuously")
+	}
+}
+
 var hiddenPackageRule = rule{
 	name:  "hidden-packages",
 	check: checkHiddenPackages,
