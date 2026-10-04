@@ -48,6 +48,26 @@ func DecideAdmin(cred AdminCredential, presented string) (AdminGrant, bool) {
 	return AdminGrant{ok: stored == sum}, true
 }
 `},
+		{name: "a partial digest compared through crypto/subtle", rel: "internal/policy/decide.go", want: 4, src: `package policy
+
+import (
+	"crypto/sha256"
+	"crypto/subtle"
+)
+
+func DecideAdmin(cred AdminCredential, presented string) (AdminGrant, bool) {
+	sum := sha256.Sum256([]byte(presented))
+	for i := 1; i <= len(sum); i++ {
+		if subtle.ConstantTimeCompare(sum[:i], cred.sum[:i]) != 1 {
+			return AdminGrant{}, false
+		}
+	}
+	ok := subtle.ConstantTimeCompare(sum[:1:1], cred.sum[0:1:1]) == 1 &&
+		subtle.ConstantTimeCompare(sum[1:], cred.sum[1:]) == 1 &&
+		subtle.ConstantTimeCompare(sum[:], (cred.sum[:len(sum)])) == 1
+	return AdminGrant{ok: ok}, true
+}
+`},
 		{name: "variable-time equality helpers in token", rel: "internal/token/x.go", want: 10, src: `package token
 
 import (
@@ -131,7 +151,7 @@ func checkSecretComparisons(f *sourceFile) []string {
 			}
 			for _, arg := range n.Args {
 				arg = ast.Unparen(arg)
-				if s, ok := arg.(*ast.SliceExpr); ok {
+				if s, ok := arg.(*ast.SliceExpr); ok && s.Low == nil && s.High == nil && s.Max == nil {
 					arg = ast.Unparen(s.X)
 				}
 				if field, ok := arg.(*ast.SelectorExpr); ok {
@@ -146,7 +166,7 @@ func checkSecretComparisons(f *sourceFile) []string {
 				break
 			}
 			if credentialDigestFields[n.Sel.Name] && !constantTime[n] {
-				out = append(out, f.at(n, "the admin credential's digest is read outside crypto/subtle.ConstantTimeCompare, where it could be compared in variable time"))
+				out = append(out, f.at(n, "the admin credential's digest is read other than whole, as an argument of crypto/subtle.ConstantTimeCompare, where it could be compared in variable time"))
 			}
 		}
 		return true
