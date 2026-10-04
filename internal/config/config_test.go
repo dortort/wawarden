@@ -143,6 +143,8 @@ func TestRefusals(t *testing.T) {
 		{name: "token instead of hash", vars: map[string]string{envAdminHash: token.NewAdmin()}, reason: "admin_hash_invalid", variable: envAdminHash},
 		{name: "bad hash in file", vars: map[string]string{envAdminHashFile: writeFile(t, "not-a-hash\n")}, reason: "admin_hash_invalid", variable: envAdminHashFile},
 		{name: "empty hash file", vars: map[string]string{envAdminHashFile: writeFile(t, "")}, reason: "admin_hash_invalid", variable: envAdminHashFile},
+		{name: "garbage beyond the hash file size limit", vars: map[string]string{envAdminHashFile: writeFile(t, validHash+strings.Repeat(" ", 5000)+"trailing-garbage")}, reason: "admin_hash_invalid", variable: envAdminHashFile},
+		{name: "hash file one byte over the size limit", vars: map[string]string{envAdminHashFile: writeFile(t, validHash+strings.Repeat(" ", maxHashFileBytes+1-len(validHash)))}, reason: "admin_hash_invalid", variable: envAdminHashFile},
 		{name: "missing hash file", vars: map[string]string{envAdminHashFile: missing}, reason: "admin_hash_file_unreadable", variable: envAdminHashFile},
 		{name: "hash file is a directory", vars: map[string]string{envAdminHashFile: t.TempDir()}, reason: "admin_hash_file_unreadable", variable: envAdminHashFile},
 		{name: "both hash sources", vars: map[string]string{envAdminHash: validHash, envAdminHashFile: writeFile(t, validHash)}, reason: "admin_hash_sources_conflict", variable: envAdminHashFile},
@@ -285,6 +287,18 @@ func TestAccepted(t *testing.T) {
 		{
 			name: "admin hash from a file with surrounding whitespace",
 			vars: map[string]string{envAdminHashFile: writeFile(t, "\n  "+token.Hash(adminToken)+" \r\n")},
+			check: func(t *testing.T, c Config) {
+				if c.AdminCredential == nil {
+					t.Fatal("the admin listener is disabled")
+				}
+				if _, ok := policy.DecideAdmin(*c.AdminCredential, adminToken); !ok {
+					t.Fatal("the configured hash does not admit its token")
+				}
+			},
+		},
+		{
+			name: "hash file padded to the size limit",
+			vars: map[string]string{envAdminHashFile: writeFile(t, token.Hash(adminToken)+strings.Repeat("\n", maxHashFileBytes-len(validHash)))},
 			check: func(t *testing.T, c Config) {
 				if c.AdminCredential == nil {
 					t.Fatal("the admin listener is disabled")

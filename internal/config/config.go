@@ -220,9 +220,13 @@ func adminCredential(env map[string]string) (*policy.AdminCredential, *Refusal) 
 	}
 	cred, err := policy.ParseAdminCredential(value)
 	if err != nil {
-		return nil, &Refusal{Reason: reasonAdminHashInvalid, Variable: variable, detail: "must be a SHA-256 written as 64 hexadecimal characters"}
+		return nil, invalidHash(variable)
 	}
 	return &cred, nil
+}
+
+func invalidHash(variable string) *Refusal {
+	return &Refusal{Reason: reasonAdminHashInvalid, Variable: variable, detail: "must be a SHA-256 written as 64 hexadecimal characters"}
 }
 
 func readHashFile(path string) (string, *Refusal) {
@@ -234,9 +238,12 @@ func readHashFile(path string) (string, *Refusal) {
 		return "", unreadable(err)
 	}
 	defer func() { _ = f.Close() }()
-	b, err := io.ReadAll(io.LimitReader(f, maxHashFileBytes))
+	b, err := io.ReadAll(io.LimitReader(f, maxHashFileBytes+1))
 	if err != nil {
 		return "", unreadable(err)
+	}
+	if len(b) > maxHashFileBytes {
+		return "", invalidHash(envAdminHashFile)
 	}
 	return strings.TrimSpace(string(b)), nil
 }
