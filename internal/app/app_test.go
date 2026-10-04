@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	_ "expvar"
 	"io"
+	"log/slog"
 	"net/http"
 	_ "net/http/pprof" //nolint:gosec // registers the profiling routes on the default mux so the tests can prove no listener serves them
 	"net/netip"
@@ -492,8 +493,13 @@ func TestDevBuildWarns(t *testing.T) {
 }
 
 func TestLoggerWritesUTCJSON(t *testing.T) {
+	at := time.Date(2026, time.January, 2, 3, 4, 5, 6_000_000, time.FixedZone("synthetic", -4*60*60))
+	record := slog.NewRecord(at, slog.LevelInfo, "message", 0)
+	record.AddAttrs(slog.String("event", "probe"))
 	var buf bytes.Buffer
-	NewLogger(&buf, nil).Info("message", "event", "probe")
+	if err := NewLogger(&buf, nil).Handler().Handle(t.Context(), record); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
 	var rec struct {
 		Time  string `json:"time"`
 		Event string `json:"event"`
@@ -502,10 +508,7 @@ func TestLoggerWritesUTCJSON(t *testing.T) {
 		t.Fatalf("not JSON: %v: %q", err, buf.String())
 	}
 	ts, err := time.Parse(time.RFC3339Nano, rec.Time)
-	if err != nil || !strings.HasSuffix(rec.Time, "Z") || rec.Event != "probe" {
-		t.Fatalf("record = %+v (%v), want a UTC timestamp and the event attribute", rec, err)
-	}
-	if _, offset := ts.Zone(); offset != 0 {
-		t.Fatalf("timestamp offset = %d", offset)
+	if err != nil || !strings.HasSuffix(rec.Time, "Z") || !ts.Equal(at) || rec.Event != "probe" {
+		t.Fatalf("record = %+v (%v), want %v written in UTC and the event attribute", rec, err, at)
 	}
 }
