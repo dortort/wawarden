@@ -16,7 +16,8 @@ var bannedImports = set("net/http/pprof", "expvar", "plugin", "unsafe", "C")
 
 var apiDenied = []string{"database/sql", "modernc.org/sqlite", "go.mau.fi/whatsmeow", module + "/internal/store/ingest"}
 
-var policyDenied = set("net", "net/http", "os", "os/exec", "database/sql", "io/fs")
+var policyAllowed = set("bytes", "cmp", "crypto/sha256", "crypto/subtle", "encoding/hex", "errors", "iter", "maps", "slices",
+	"sort", "strconv", "strings", "time", "unicode", "unicode/utf8")
 
 var allowedModules []string
 
@@ -98,17 +99,28 @@ import (
 
 import "database/sql"
 `},
-		{name: "policy imports I/O and non-standard packages", rel: "internal/policy/x.go", want: 8, src: `package policy
+		{name: "policy imports I/O and non-standard packages", rel: "internal/policy/x.go", want: 19, src: `package policy
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"database/sql/driver"
 	"example.com/lib"
+	"fmt"
 	"github.com/dortort/wawarden/internal/token"
 	"io/fs"
+	"io/ioutil"
+	"log"
+	"log/syslog"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/smtp"
 	"os"
 	"os/exec"
+	"os/signal"
+	"os/user"
+	"syscall"
 )
 `},
 		{name: "policy imports pure standard packages", rel: "internal/policy/x.go", src: `package policy
@@ -116,8 +128,10 @@ import (
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
+	"errors"
 	"maps"
-	"net/netip"
+	"slices"
 	"time"
 )
 `},
@@ -144,8 +158,8 @@ func checkFences(f *sourceFile) []string {
 				out = append(out, f.at(imp.node, "%s may not import %q", apiDir, imp.path))
 			}
 		case within(f.dir, policyDir):
-			if !standard(imp.path) || policyDenied[imp.path] {
-				out = append(out, f.at(imp.node, "%s may import only pure standard-library packages, not %q", policyDir, imp.path))
+			if !policyAllowed[imp.path] {
+				out = append(out, f.at(imp.node, "%s may import only the reviewed pure standard-library packages, not %q", policyDir, imp.path))
 			}
 		}
 	}
