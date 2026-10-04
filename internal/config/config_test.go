@@ -118,6 +118,10 @@ func TestRefusals(t *testing.T) {
 		{name: "url", vars: map[string]string{envListen: "http://127.0.0.1:8080"}, reason: "listen_address_invalid", variable: envListen},
 		{name: "unbracketed ipv6", vars: map[string]string{envListen: "::1:8080"}, reason: "listen_address_invalid", variable: envListen},
 		{name: "empty", vars: map[string]string{envListen: ""}, reason: "listen_address_invalid", variable: envListen},
+		{name: "zoned ipv6", vars: map[string]string{envListen: "[::1%lo0]:9000", envHealthListen: "[::1]:9000"}, reason: "listen_address_invalid", variable: envListen},
+		{name: "zoned mapped ipv4", vars: map[string]string{envListen: "[::ffff:127.0.0.1%lo0]:8080"}, reason: "listen_address_invalid", variable: envListen},
+		{name: "admin zoned link-local", vars: map[string]string{envAdminListen: "[fe80::1%en0]:8082"}, reason: "listen_address_invalid", variable: envAdminListen},
+		{name: "health zoned", vars: map[string]string{envHealthListen: "[::1%lo0]:8081"}, reason: "listen_address_invalid", variable: envHealthListen},
 		{name: "admin host name", vars: map[string]string{envAdminListen: "localhost:8082"}, reason: "listen_address_invalid", variable: envAdminListen},
 		{name: "admin port 0", vars: map[string]string{envAdminListen: "127.0.0.1:0"}, reason: "listen_address_invalid", variable: envAdminListen},
 		{name: "health host name", vars: map[string]string{envHealthListen: "localhost:8081"}, reason: "listen_address_invalid", variable: envHealthListen},
@@ -436,6 +440,7 @@ func TestHealthListen(t *testing.T) {
 		{name: "ignores every other variable", env: []string{"WAWARDEN_UNKNOWN=x", envPlaintextAdmin + "=x", envListen + "=bad"}, want: netip.MustParseAddrPort("127.0.0.1:8081")},
 		{name: "not loopback", env: []string{envHealthListen + "=0.0.0.0:8081"}, reason: "health_address_not_loopback"},
 		{name: "invalid", env: []string{envHealthListen + "=localhost:8081"}, reason: "listen_address_invalid"},
+		{name: "zoned", env: []string{envHealthListen + "=[::1%lo0]:8081"}, reason: "listen_address_invalid"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

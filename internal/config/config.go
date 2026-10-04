@@ -185,8 +185,8 @@ func checkNames(env map[string]string) *Refusal {
 
 func listenAddress(env map[string]string, name, fallback string) (netip.AddrPort, *Refusal) {
 	ap, err := netip.ParseAddrPort(lookup(env, name, fallback))
-	if err != nil || ap.Port() == 0 {
-		return netip.AddrPort{}, &Refusal{Reason: reasonListenAddressInvalid, Variable: name, detail: "must be an IP literal and a port from 1 to 65535"}
+	if err != nil || ap.Port() == 0 || ap.Addr().Zone() != "" {
+		return netip.AddrPort{}, &Refusal{Reason: reasonListenAddressInvalid, Variable: name, detail: "must be an IP literal without a zone and a port from 1 to 65535"}
 	}
 	return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port()), nil
 }
