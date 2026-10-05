@@ -13,11 +13,12 @@ import (
 )
 
 const (
-	maxAttempts   = 3
-	retryBase     = time.Second
-	sweepInterval = time.Minute
-	sweepBatch    = 100
-	spaceInterval = 30 * time.Second
+	maxMessageBytes = 512 << 10
+	maxAttempts     = 3
+	retryBase       = time.Second
+	sweepInterval   = time.Minute
+	sweepBatch      = 100
+	spaceInterval   = 30 * time.Second
 )
 
 type pipeline struct {
@@ -79,6 +80,10 @@ func (p *pipeline) accept(ev Event) bool {
 	var chat string
 	switch e := ev.(type) {
 	case Message:
+		if e.size() > maxMessageBytes {
+			p.counts.dropped.With(dropTooLarge).Inc()
+			return true
+		}
 		chat = e.Chat
 	case Group:
 		chat = e.Chat

@@ -17,6 +17,7 @@ const (
 	dropAdminUnknown = "admin_unknown"
 	dropOwnerUnknown = "owner_unknown"
 	dropNotPaired    = "not_paired"
+	dropTooLarge     = "too_large"
 
 	refusedBacklog = "backlog_full"
 	refusedPaused  = "paused"

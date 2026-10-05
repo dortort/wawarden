@@ -27,7 +27,25 @@ func encodePayload(ev Event) ([]byte, error) {
 	default:
 		return nil, errPayload
 	}
-	return json.Marshal(env)
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(env); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
+}
+
+func (m Message) size() int {
+	n := len(m.Chat) + len(m.ID) + len(m.Sender) + len(m.SenderAlt) + len(m.RecipientAlt) + len(m.Addressing) +
+		len(m.PushName) + len(m.Kind) + len(m.Text) + len(m.MediaType)
+	if m.Target != nil {
+		n += len(m.Target.RemoteJID) + len(m.Target.ID) + len(m.Target.Participant)
+	}
+	if m.Reply != nil {
+		n += len(m.Reply.ID) + len(m.Reply.Participant) + len(m.Reply.RemoteJID) + len(m.Reply.Text)
+	}
+	return n
 }
 
 func decodePayload(b []byte) (Event, error) {

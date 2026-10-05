@@ -162,8 +162,10 @@ These are stated so that nobody relies on WaWarden for them:
    file is deleted once the blob is processed or quarantined, and each start of
    the engine deletes any such file that a crash left behind. Live traffic waits
    in a durable inbox and is acknowledged only once written, so a full inbox or a
-   paused ingest makes WhatsApp deliver it again instead of losing it. These
-   rules are tested with plain-data events in the engine core; decoding real
+   paused ingest makes WhatsApp deliver it again instead of losing it; a
+   message whose identifiers, push name, text and quoted text add up to more
+   than 512 KiB is dropped before it is written, which bounds the memory one
+   message takes. These rules are tested with plain-data events in the engine core; decoding real
    protocol messages into those events, and rejecting another account before a
    pairing is saved, belong to the adapter (M1).
 5. **Service to clients (M2).** Message text, contact names and group subjects are

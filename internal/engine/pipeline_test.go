@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -35,6 +36,69 @@ func TestPayloadRoundTrip(t *testing.T) {
 	}
 	if _, err := encodePayload(Connected{}); err == nil {
 		t.Fatal("a connection event was encoded as an inbox payload")
+	}
+}
+
+func TestPayloadKeepsMarkupAsIs(t *testing.T) {
+	if b := mustPayload(t, dm("M1", alice, "<b>&amp;</b>")); !bytes.Contains(b, []byte(`"text":"<b>&amp;</b>"`)) {
+		t.Fatalf("the payload escapes markup, which multiplies its size: %s", b)
+	}
+}
+
+const messageMemoryBound = 48 << 20
+
+func TestMessageMemoryBoundIsTheDocumentedOne(t *testing.T) {
+	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "configuration.md"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	flat := strings.Join(strings.Fields(string(doc)), " ")
+	for _, want := range []string{
+		fmt.Sprintf("add up to more than %d KiB", maxMessageBytes>>10),
+		fmt.Sprintf("allocates at most %d MiB", messageMemoryBound>>20),
+	} {
+		if !strings.Contains(flat, want) {
+			t.Errorf("docs/configuration.md does not state %q", want)
+		}
+	}
+}
+
+func TestAMessageAtTheCapStaysWithinTheMemoryBound(t *testing.T) {
+	for _, unit := range []string{"a", "<", "\x01", "\xff", " "} {
+		r := newPipeRig(t)
+		m := dm("M1", alice, "")
+		m.Text = strings.Repeat(unit, (maxMessageBytes-m.size())/len(unit))
+		alloc := allocated(t, func() {
+			if !r.p.accept(m) {
+				t.Errorf("%q: a message at the cap was refused", unit)
+			}
+			r.drain()
+		})
+		r.must(alice, "M1", alice)
+		if alloc > messageMemoryBound {
+			t.Errorf("%q: accepting and applying a message at the cap allocated %d KiB, over the documented bound", unit, alloc>>10)
+		}
+	}
+}
+
+func TestAMessageOverTheCapIsDropped(t *testing.T) {
+	r := newPipeRig(t)
+	long := strings.Repeat("x", maxMessageBytes)
+	quoting := dm("M1", alice, "short")
+	quoting.Reply = &Reply{ID: "M0", Text: long}
+	named := dm("M2", alice, "short")
+	named.PushName = long
+	for _, m := range []Message{dm("M3", alice, long), quoting, named} {
+		if !r.p.accept(m) {
+			t.Fatal("a message over the cap was refused instead of dropped")
+		}
+	}
+	if r.dropped(dropTooLarge) != 3 {
+		t.Fatalf("too_large drops %v, want 3", r.dropped(dropTooLarge))
+	}
+	db := r.inspect()
+	if n := query[int](t, db, "SELECT count(*) FROM inbox"); n != 0 {
+		t.Fatalf("%d inbox rows for messages over the cap", n)
 	}
 }
 

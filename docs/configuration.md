@@ -534,7 +534,12 @@ user, a LID user or a group (status updates, broadcast lists, newsletters and
 every other kind) is acknowledged and dropped before it reaches the inbox. So
 is every message, group change and history-sync notification that arrives
 while the engine is `unpaired`, such as from an account that
-[pairing](#pairing) rejected (`not_paired`).
+[pairing](#pairing) rejected (`not_paired`), and every message whose
+identifiers, push name, text and quoted text add up to more than 512 KiB
+(`too_large`). Accepting and applying one message therefore allocates at most
+48 MiB of Go memory, besides SQLite's own; only text made of control characters
+comes near that, because the inbox writes each of them as six bytes, while
+ordinary text needs about a seventh of it.
 
 One worker applies the inbox in order. It records each attempt in the archive
 before applying the row, then applies the row and removes it from the inbox in
@@ -951,7 +956,7 @@ has none, so it serves none of them:
 | `wawarden_paired` | gauge | | `1` while a device is paired, `0` otherwise. |
 | `wawarden_connected` | gauge | | `1` while the engine is `connected`, `0` otherwise. |
 | `wawarden_messages_ingested_total` | counter | | Messages, reactions and poll votes stored in the archive, live and from history. |
-| `wawarden_ingest_dropped_total` | counter | `reason` | Events dropped by an [ingest rule](#ingest) or a [history-sync](#history-sync) check: `chat_rejected`, `sender_rejected`, `invalid`, `unknown_kind`, `no_target`, `foreign_reference`, `target_unknown`, `target_kind`, `stale_edit`, `not_original_sender`, `not_admin`, `admin_unknown`, `owner_unknown`, `not_paired`, `history_not_primary`. |
+| `wawarden_ingest_dropped_total` | counter | `reason` | Events dropped by an [ingest rule](#ingest) or a [history-sync](#history-sync) check: `chat_rejected`, `sender_rejected`, `invalid`, `unknown_kind`, `no_target`, `foreign_reference`, `target_unknown`, `target_kind`, `stale_edit`, `not_original_sender`, `not_admin`, `admin_unknown`, `owner_unknown`, `not_paired`, `too_large`, `history_not_primary`. |
 | `wawarden_ingest_refused_total` | counter | `reason` | Events left unacknowledged so that WhatsApp delivers them again: `backlog_full`, `paused`, `store_error`. |
 | `wawarden_ingest_quarantined_total` | counter | `queue` | Inbox rows (`inbox`) and history blobs (`history`) quarantined. |
 | `wawarden_rekey_conflicts_total` | counter | `conflict` | LID mappings refused, by conflict as in `rekey_conflict`. |
