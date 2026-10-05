@@ -424,6 +424,41 @@ func TestFixtureLIDLearnedFromServerAssertedAlternates(t *testing.T) {
 	}
 }
 
+func TestFixtureRecipientAltIsLearnedOnlyFromTheOwnersMessages(t *testing.T) {
+	r := newPipeRig(t)
+	m := dm("M1", aliceLID, "incoming")
+	m.RecipientAlt = owner
+	r.ingest(m)
+	r.must(aliceLID, "M1", aliceLID)
+	db := r.inspect()
+	if n := query[int](t, db, "SELECT count(*) FROM lid_map"); n != 0 {
+		t.Fatalf("%d mappings learned from the recipient alternate of an incoming message", n)
+	}
+}
+
+func TestFixtureAGroupKeyNamingTheOwnerIsForeign(t *testing.T) {
+	r := newPipeRig(t)
+	r.ingest(inGroup("M1", alice, "kept"))
+	r.ingest(change(KindRevoke, group, "M2", alice, Key{RemoteJID: owner, FromMe: true, ID: "M1"}))
+	if f := r.must(group, "M1", alice); f.Revoked || f.Text != "kept" || r.dropped(dropForeign) != 1 {
+		t.Fatalf("a group key naming the owner was followed: %+v, foreign drops %v", f, r.dropped(dropForeign))
+	}
+}
+
+func TestFixtureEditAfterARevokeIsDroppedOnce(t *testing.T) {
+	r := newPipeRig(t)
+	r.ingest(dm("M1", alice, "revoked first"), change(KindRevoke, alice, "M2", alice, Key{FromMe: true, ID: "M1"}))
+	edit := change(KindEdit, alice, "M3", alice, Key{FromMe: true, ID: "M1"})
+	edit.Timestamp, edit.Text = epoch.Add(2*time.Minute), "edited after the revoke"
+	r.ingest(edit)
+	if f := r.must(alice, "M1", alice); !f.Revoked || f.Text != "" {
+		t.Fatalf("after the edit %+v", f)
+	}
+	if r.dropped(dropTargetKind) != 1 || len(r.logs.events("ingest_failed")) != 0 || len(r.alerts("quarantine")) != 0 || len(r.clock.slept()) != 0 {
+		t.Fatalf("target kind drops %v, failures %d, quarantines %d, waits %v", r.dropped(dropTargetKind), len(r.logs.events("ingest_failed")), len(r.alerts("quarantine")), r.clock.slept())
+	}
+}
+
 func TestFixtureRekeyConflictIsRefused(t *testing.T) {
 	r := newPipeRig(t)
 	first := dm("M1", aliceLID, "mapped")
