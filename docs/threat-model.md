@@ -177,7 +177,8 @@ These are stated so that nobody relies on WaWarden for them:
    edit only when its type is set, because the type's zero value means revoke;
    it passes identifiers with their device parts for the engine to strip; it
    reads history rows under their conversation's chat, never under a row's own
-   key, keeps an edit row's identifier, and decodes blobs with a protobuf
+   key, keeps an edit row's identifier there and in the messages the owner's
+   phone sends again on request, and decodes blobs with a protobuf
    recursion limit; and before the library saves a pairing it refuses an account
    other than `WAWARDEN_OWNER_PHONE`, so nothing of a foreign account is stored.
    QR codes, which carry the device's pairing secret, are dropped where they
