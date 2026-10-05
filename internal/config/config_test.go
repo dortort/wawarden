@@ -152,7 +152,7 @@ func TestRefusals(t *testing.T) {
 		{name: "plaintext token file is unknown", vars: map[string]string{"WAWARDEN_ADMIN_TOKEN_FILE": "/run/secrets/token"}, reason: "unknown_variable", variable: "WAWARDEN_ADMIN_TOKEN_FILE"},
 		{name: "plaintext admin token", vars: map[string]string{"WAWARDEN_ADMIN_TOKEN": "wwadm_synthetic"}, reason: "plaintext_admin_token", variable: "WAWARDEN_ADMIN_TOKEN"},
 		{name: "plaintext admin token before unknown names", vars: map[string]string{"WAWARDEN_AAA": "x", "WAWARDEN_ADMIN_TOKEN": ""}, reason: "plaintext_admin_token", variable: "WAWARDEN_ADMIN_TOKEN"},
-		{name: "dev variable", vars: map[string]string{"WAWARDEN_DEV_FAKE_ENGINE": "1"}, reason: devVariableReason, variable: "WAWARDEN_DEV_FAKE_ENGINE"},
+		{name: "dev variable", vars: map[string]string{"WAWARDEN_DEV_X": "1"}, reason: devVariableReason, variable: "WAWARDEN_DEV_X"},
 		{name: "dev variable before unknown names", vars: map[string]string{"WAWARDEN_AAA": "x", "WAWARDEN_DEV_X": ""}, reason: devVariableReason, variable: firstOfDevAndUnknown},
 
 		{name: "traceback all", vars: map[string]string{"GOTRACEBACK": "all"}, reason: "traceback_level_unsafe", variable: "GOTRACEBACK"},
@@ -788,6 +788,7 @@ func TestRefusalsNeverEchoValues(t *testing.T) {
 		{envLogLevel: secret},
 		{envPlaintextAdmin: secret},
 		{"WAWARDEN_DEV_X": secret},
+		{"WAWARDEN_DEV_FAKE_ENGINE": secret},
 		{"WAWARDEN_UNKNOWN": secret},
 		{"GOTRACEBACK": secret},
 		{envStorageProfile: secret},

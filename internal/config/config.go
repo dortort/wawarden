@@ -132,6 +132,7 @@ type Config struct {
 	MetricsEMF      bool
 	Notify          Notify
 	BackupRecipient string
+	Dev             Dev
 }
 
 type Notify struct {
@@ -209,6 +210,9 @@ func Load(environ []string, opts Options) (Config, *Refusal) {
 		return Config{}, r
 	}
 	if cfg.BackupRecipient, r = backupRecipient(env); r != nil {
+		return Config{}, r
+	}
+	if cfg.Dev, r = devSettings(env); r != nil {
 		return Config{}, r
 	}
 	uids := processUIDs
