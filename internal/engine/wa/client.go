@@ -21,6 +21,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dortort/wawarden/internal/engine"
+	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/safego"
 )
@@ -57,7 +58,8 @@ type Options struct {
 	Devices         Devices
 	OwnerPhone      string
 	HistoryMaxBytes int64
-	Logger          *slog.Logger
+	Writer          *logx.Writer
+	LogLevel        slog.Level
 	Alerts          *slog.Logger
 	UnsafeDebug     time.Duration
 }
@@ -99,21 +101,22 @@ func New(opts Options) (*Client, error) {
 }
 
 func newClient(opts Options, dial dialFunc, download downloader, now func() time.Time) (*Client, error) {
-	if opts.Device == nil || opts.Devices == nil || opts.Logger == nil || opts.Alerts == nil ||
+	if opts.Device == nil || opts.Devices == nil || opts.Writer == nil || opts.Alerts == nil ||
 		opts.HistoryMaxBytes <= 0 || opts.HistoryMaxBytes > engine.MaxHistoryMaxBytes {
 		return nil, errOptions
 	}
 	configureDevice()
 	owner, _ := policy.OwnerDigits(opts.OwnerPhone)
+	gate := newDebugGate(opts.UnsafeDebug, now, opts.Alerts)
 	c := &Client{
 		devices:  opts.Devices,
 		owner:    owner,
 		max:      opts.HistoryMaxBytes,
-		log:      logger{out: opts.Logger, module: "whatsmeow", gate: newDebugGate(opts.UnsafeDebug, now, opts.Alerts)},
+		log:      newLibraryLogger(opts.Writer, opts.LogLevel, "whatsmeow", gate),
 		http:     newHTTPClients(dial, opts.HistoryMaxBytes+mediaOverhead),
 		download: download,
 	}
-	routeSignalLogs(logger{out: opts.Logger, module: "libsignal", gate: c.log.gate})
+	routeSignalLogs(newLibraryLogger(opts.Writer, opts.LogLevel, "libsignal", gate))
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.installLocked(opts.Device)

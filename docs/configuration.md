@@ -1062,7 +1062,8 @@ text beyond 1 KiB is cut at the last white space before that limit and ends in
 identifier is cut in half; a text without white space in its first 1 KiB becomes
 `[truncated]`. Finally the writer pseudonymises identifiers and drops lines
 carrying XML, such as the library's dumps of protocol stanzas, as for any other
-line. Its error, warning and information lines follow `WAWARDEN_LOG_LEVEL`.
+line. Its error, warning and information lines follow `WAWARDEN_LOG_LEVEL`,
+during a `WAWARDEN_UNSAFE_DEBUG` window too.
 
 Its debug output is discarded at every log level unless `WAWARDEN_UNSAFE_DEBUG`
 opens a window, in minutes, at the start. During the window the library's debug

@@ -26,6 +26,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dortort/wawarden/internal/engine"
+	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/safego"
 	"github.com/dortort/wawarden/internal/store/session"
@@ -71,10 +72,10 @@ func pairedDevice() *store.Device {
 
 func newRig(t *testing.T, device *store.Device, configure ...func(*Options)) *rig {
 	t.Helper()
-	logger, logs := newLogger(slog.LevelDebug)
+	w, logs := newWriter()
 	alerts, alertLogs := newLogger(slog.LevelWarn)
 	r := &rig{devices: &freshDevices{}, logs: logs, alerts: alertLogs, ack: true}
-	opts := Options{Device: device, Devices: r.devices, OwnerPhone: ownerPhone, HistoryMaxBytes: 1 << 20, Logger: logger, Alerts: alerts}
+	opts := Options{Device: device, Devices: r.devices, OwnerPhone: ownerPhone, HistoryMaxBytes: 1 << 20, Writer: w, LogLevel: slog.LevelDebug, Alerts: alerts}
 	for _, fn := range configure {
 		fn(&opts)
 	}
@@ -112,12 +113,12 @@ func (r *rig) dispatch(evt any) bool {
 }
 
 func TestNewRefusesIncompleteOptions(t *testing.T) {
-	logger, _ := newLogger(slog.LevelInfo)
-	full := Options{Device: &store.Device{}, Devices: &freshDevices{}, HistoryMaxBytes: 1, Logger: logger, Alerts: logger}
+	w, _ := newWriter()
+	full := Options{Device: &store.Device{}, Devices: &freshDevices{}, HistoryMaxBytes: 1, Writer: w, Alerts: logx.New(w, slog.LevelWarn)}
 	for name, change := range map[string]func(*Options){
 		"no device":          func(o *Options) { o.Device = nil },
 		"no device source":   func(o *Options) { o.Devices = nil },
-		"no logger":          func(o *Options) { o.Logger = nil },
+		"no log writer":      func(o *Options) { o.Writer = nil },
 		"no alert logger":    func(o *Options) { o.Alerts = nil },
 		"no history cap":     func(o *Options) { o.HistoryMaxBytes = 0 },
 		"a history cap over": func(o *Options) { o.HistoryMaxBytes = engine.MaxHistoryMaxBytes + 1 },
@@ -385,7 +386,8 @@ func TestALoggedOutDeviceIsReplacedByAFreshOneBeforeTheNextConnection(t *testing
 }
 
 func TestLogoutRemovesTheLocalDeviceWhenTheServerCannotBeReached(t *testing.T) {
-	logger, _ := newLogger(slog.LevelInfo)
+	w, _ := newWriter()
+	logger := logx.New(w, slog.LevelInfo)
 	sess, err := session.Open(t.Context(), session.Options{DataDir: t.TempDir(), UID: os.Geteuid(), Profile: "local", Logger: logger})
 	if err != nil {
 		t.Fatalf("session.Open: %v", err)
@@ -408,7 +410,7 @@ func TestLogoutRemovesTheLocalDeviceWhenTheServerCannotBeReached(t *testing.T) {
 		t.Fatalf("the saved device was not read back: %v", err)
 	}
 	alerts, _ := newLogger(slog.LevelWarn)
-	c, err := newClient(Options{Device: stored, Devices: sess, OwnerPhone: ownerPhone, HistoryMaxBytes: 1 << 20, Logger: logger, Alerts: alerts}, refusingDial(t), noDownload, time.Now)
+	c, err := newClient(Options{Device: stored, Devices: sess, OwnerPhone: ownerPhone, HistoryMaxBytes: 1 << 20, Writer: w, Alerts: alerts}, refusingDial(t), noDownload, time.Now)
 	if err != nil {
 		t.Fatalf("newClient: %v", err)
 	}

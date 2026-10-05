@@ -15,6 +15,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dortort/wawarden/internal/engine"
+	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/store/ingest"
@@ -37,13 +38,14 @@ type wired struct {
 func wireEngine(t *testing.T) *wired {
 	t.Helper()
 	dir := t.TempDir()
-	logger, logs := newLogger(slog.LevelInfo)
+	w, logs := newWriter()
+	logger := logx.New(w, slog.LevelInfo)
 	archive, err := ingest.Open(t.Context(), ingest.Options{DataDir: dir, UID: os.Geteuid(), Profile: ingest.ProfileLocal, Logger: logger})
 	if err != nil {
 		t.Fatalf("ingest.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = archive.Close() })
-	c, err := newClient(Options{Device: pairedDevice(), Devices: &freshDevices{}, OwnerPhone: ownerPhone, HistoryMaxBytes: 1 << 20, Logger: logger, Alerts: logger}, refusingDial(t), noDownload, time.Now)
+	c, err := newClient(Options{Device: pairedDevice(), Devices: &freshDevices{}, OwnerPhone: ownerPhone, HistoryMaxBytes: 1 << 20, Writer: w, LogLevel: slog.LevelInfo, Alerts: logger}, refusingDial(t), noDownload, time.Now)
 	if err != nil {
 		t.Fatalf("newClient: %v", err)
 	}

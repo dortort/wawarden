@@ -41,10 +41,15 @@ func (l *logBuffer) events(name string) []map[string]any {
 	return out
 }
 
-func newLogger(level slog.Level) (*slog.Logger, *logBuffer) {
+func newWriter() (*logx.Writer, *logBuffer) {
 	buf := &logBuffer{}
 	w := logx.NewWriter(buf)
 	w.SetKey(bytes.Repeat([]byte{7}, 32))
+	return w, buf
+}
+
+func newLogger(level slog.Level) (*slog.Logger, *logBuffer) {
+	w, buf := newWriter()
 	return logx.New(w, level), buf
 }
 

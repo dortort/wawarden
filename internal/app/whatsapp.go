@@ -20,13 +20,9 @@ func openWhatsApp(ctx context.Context, cfg config.Config, out *logx.Writer, logg
 	if err != nil {
 		return engineParts{}, errors.Join(err, store.Close())
 	}
-	level := cfg.LogLevel
-	if cfg.UnsafeDebug > 0 {
-		level = slog.LevelDebug
-	}
 	client, err := wa.New(wa.Options{
 		Device: device, Devices: store, OwnerPhone: cfg.OwnerPhone, HistoryMaxBytes: cfg.HistoryMaxBytes,
-		Logger: logx.New(out, level), Alerts: alerts, UnsafeDebug: cfg.UnsafeDebug,
+		Writer: out, LogLevel: cfg.LogLevel, Alerts: alerts, UnsafeDebug: cfg.UnsafeDebug,
 	})
 	if err != nil {
 		return engineParts{}, errors.Join(err, store.Close())

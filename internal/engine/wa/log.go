@@ -11,6 +11,8 @@ import (
 
 	signallog "go.mau.fi/libsignal/logger"
 	waLog "go.mau.fi/whatsmeow/util/log"
+
+	"github.com/dortort/wawarden/internal/logx"
 )
 
 const (
@@ -52,33 +54,39 @@ func (g *debugGate) on() bool {
 
 type logger struct {
 	out    *slog.Logger
+	debug  *slog.Logger
 	module string
 	gate   *debugGate
 }
 
 var _ waLog.Logger = logger{}
 
-func (l logger) Errorf(msg string, args ...any) { l.write(slog.LevelError, msg, args) }
-func (l logger) Warnf(msg string, args ...any)  { l.write(slog.LevelWarn, msg, args) }
-func (l logger) Infof(msg string, args ...any)  { l.write(slog.LevelInfo, msg, args) }
+func newLibraryLogger(w *logx.Writer, level slog.Level, module string, gate *debugGate) logger {
+	return logger{out: logx.New(w, level), debug: logx.New(w, slog.LevelDebug), module: module, gate: gate}
+}
+
+func (l logger) Errorf(msg string, args ...any) { l.write(l.out, slog.LevelError, msg, args) }
+func (l logger) Warnf(msg string, args ...any)  { l.write(l.out, slog.LevelWarn, msg, args) }
+func (l logger) Infof(msg string, args ...any)  { l.write(l.out, slog.LevelInfo, msg, args) }
 
 func (l logger) Debugf(msg string, args ...any) {
 	if l.gate.on() {
-		l.write(slog.LevelDebug, msg, args)
+		l.write(l.debug, slog.LevelDebug, msg, args)
 	}
 }
 
 func (l logger) Sub(module string) waLog.Logger {
-	return logger{out: l.out, module: l.module + "/" + module, gate: l.gate}
+	l.module += "/" + module
+	return l
 }
 
-func (l logger) write(level slog.Level, format string, args []any) {
+func (l logger) write(out *slog.Logger, level slog.Level, format string, args []any) {
 	ctx := context.Background()
-	if !l.out.Enabled(ctx, level) {
+	if !out.Enabled(ctx, level) {
 		return
 	}
 	detail := clip(maskNumbers(fmt.Sprintf(format, args...)))
-	l.out.LogAttrs(ctx, level, "protocol library log", slog.String("event", "whatsmeow_log"), slog.String("module", l.module), slog.String("detail", detail))
+	out.LogAttrs(ctx, level, "protocol library log", slog.String("event", "whatsmeow_log"), slog.String("module", l.module), slog.String("detail", detail))
 }
 
 var (
@@ -105,7 +113,7 @@ func (signalLogger) Error(caller, msg string)   { signalLine(slog.LevelError, ca
 
 func signalLine(level slog.Level, caller, msg string) {
 	if l := signalOut.Load(); l != nil {
-		l.write(level, "%s: %s", []any{caller, msg})
+		l.write(l.out, level, "%s: %s", []any{caller, msg})
 	}
 }
 

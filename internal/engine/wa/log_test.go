@@ -32,14 +32,10 @@ func (c *fakeClock) advance(d time.Duration) {
 
 func newAdapterLogger(t *testing.T, debug time.Duration) (logger, *logBuffer, *logBuffer, *fakeClock) {
 	t.Helper()
-	level := slog.LevelInfo
-	if debug > 0 {
-		level = slog.LevelDebug
-	}
-	out, logs := newLogger(level)
+	w, logs := newWriter()
 	alerts, alertLogs := newLogger(slog.LevelWarn)
 	clock := &fakeClock{now: time.Date(2026, 10, 4, 9, 0, 0, 0, time.UTC)}
-	return logger{out: out, module: "whatsmeow", gate: newDebugGate(debug, clock.Now, alerts)}, logs, alertLogs, clock
+	return newLibraryLogger(w, slog.LevelInfo, "whatsmeow", newDebugGate(debug, clock.Now, alerts)), logs, alertLogs, clock
 }
 
 func TestLibraryLogsReachTheScrubbingWriter(t *testing.T) {
@@ -141,12 +137,25 @@ func TestUnsafeDebugLogsABannerAndRevertsByItself(t *testing.T) {
 	}
 }
 
+func TestADebugWindowLeavesTheOtherLibraryLinesAtTheOperatorsLevel(t *testing.T) {
+	r := newRig(t, pairedDevice(), func(o *Options) { o.LogLevel, o.UnsafeDebug = slog.LevelWarn, time.Minute })
+	l := r.c.log.Sub("Client")
+	l.Infof("synthetic information")
+	l.Warnf("synthetic warning")
+	l.Debugf("synthetic debug")
+	lines := r.logs.events("whatsmeow_log")
+	if len(lines) != 2 || lines[0]["level"] != "WARN" || lines[1]["level"] != "DEBUG" || lines[1]["detail"] != "synthetic debug" {
+		t.Fatalf("lines %v, want the warning and the debug line, and no information line below the operator's level", lines)
+	}
+}
+
 func TestLibraryLinesBelowTheLevelAreNotFormatted(t *testing.T) {
-	out, logs := newLogger(slog.LevelError)
+	w, logs := newWriter()
 	alerts, _ := newLogger(slog.LevelWarn)
-	l := logger{out: out, module: "whatsmeow", gate: newDebugGate(0, time.Now, alerts)}
+	l := newLibraryLogger(w, slog.LevelError, "whatsmeow", newDebugGate(0, time.Now, alerts))
 	l.Infof("%v", panicking{})
 	l.Warnf("%v", panicking{})
+	l.Debugf("%v", panicking{})
 	if logs.String() != "" {
 		t.Fatalf("lines below the level were written: %q", logs.String())
 	}
