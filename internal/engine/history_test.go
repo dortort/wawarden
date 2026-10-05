@@ -13,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/dortort/wawarden/internal/store/ingest"
 )
 
 type fakeDecoder struct {
@@ -211,8 +213,75 @@ func TestHistoryIsDurableBeforeItsReceipt(t *testing.T) {
 	r.notify(HistoryRef{ID: "HS1"})
 	r.drainHistory()
 	r.must(alice, "D1", alice)
-	if want := []string{"write", "sync_file", "close", "rename HS1.part HS1.bin", "sync_dir", "ack"}; !slices.Equal(*steps, want) {
+	if want := []string{"write", "sync_file", "close", "rename HS1.part HS1.bin", "sync_dir", "ack", "sync_dir"}; !slices.Equal(*steps, want) {
 		t.Fatalf("steps %v, want %v", *steps, want)
+	}
+	if names := r.historyFiles(); len(names) != 0 {
+		t.Fatalf("history files after processing: %v", names)
+	}
+}
+
+func (r *histRig) historyFiles() []string {
+	r.t.Helper()
+	entries, err := os.ReadDir(filepath.Join(r.opts.DataDir, "history"))
+	if err != nil {
+		r.t.Fatalf("ReadDir: %v", err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+func (r *histRig) downloaded(id string) {
+	r.t.Helper()
+	r.client.blobs[id] = []byte("synthetic compressed " + id)
+	r.notify(HistoryRef{ID: id})
+	if _, err := r.h.load(r.t.Context(), id, HistoryRef{ID: id}); err != nil {
+		r.t.Fatalf("download %s: %v", id, err)
+	}
+}
+
+func TestCleanKeepsOnlyTheFilesOfPendingBlobs(t *testing.T) {
+	r := newHistRig(t)
+	r.online.Store(true)
+	for _, id := range []string{"HS1", "HS2", "HS3"} {
+		r.downloaded(id)
+	}
+	r.write(func(tx *ingest.Tx) error {
+		if err := tx.MarkBlobProcessed("HS1", epoch); err != nil {
+			return err
+		}
+		return tx.QuarantineBlob("HS2")
+	})
+	for _, name := range []string{"HS3.part", "HS9.part", "bad id!.bin", "notes.txt"} {
+		if err := os.WriteFile(filepath.Join(r.opts.DataDir, "history", name), []byte("synthetic"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	steps := r.trace()
+	r.h.clean(t.Context())
+	if names := r.historyFiles(); !slices.Equal(names, []string{"HS3.bin", "HS3.part", "notes.txt"}) {
+		t.Fatalf("history files %v, want only the pending blob's and the unrelated file", names)
+	}
+	if !slices.Equal(*steps, []string{"sync_dir"}) {
+		t.Fatalf("steps %v, want one directory sync", *steps)
+	}
+}
+
+func TestQuarantineDeletesTheDownloadedBlob(t *testing.T) {
+	r := newHistRig(t)
+	r.online.Store(true)
+	r.client.blobs["HS1"] = r.blob("synthetic undecodable", History{})
+	r.decoder.err = errors.New("synthetic: malformed history")
+	r.notify(HistoryRef{ID: "HS1"})
+	r.drainHistory()
+	if r.counter("wawarden_ingest_quarantined_total", "queue", "history") != 1 || r.client.count("download:HS1") != 1 {
+		t.Fatalf("calls %v: want one download and a quarantine", r.client.history())
+	}
+	if names := r.historyFiles(); len(names) != 0 {
+		t.Fatalf("history files after the quarantine: %v", names)
 	}
 }
 

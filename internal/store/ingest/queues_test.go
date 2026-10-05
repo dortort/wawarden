@@ -157,6 +157,17 @@ func TestHistoryBlobs(t *testing.T) {
 	if left := pending(); len(left) != 1 || left[0].ID != "blob-a" {
 		t.Fatalf("pending blobs %+v, want only blob-a", left)
 	}
+	for id, want := range map[string]bool{"blob-a": true, "blob-b": false, "blob-c": false, "blob-z": false} {
+		var got bool
+		read(t, s, func(r *Reader) error {
+			var err error
+			got, err = r.BlobPending(id)
+			return err
+		})
+		if got != want {
+			t.Errorf("BlobPending(%q) = %v, want %v", id, got, want)
+		}
+	}
 	for name, call := range map[string]func(*Tx) error{
 		"process a quarantined blob":  func(tx *Tx) error { return tx.MarkBlobProcessed("blob-c", epoch) },
 		"process a processed blob":    func(tx *Tx) error { return tx.MarkBlobProcessed("blob-b", epoch) },
@@ -168,13 +179,14 @@ func TestHistoryBlobs(t *testing.T) {
 		}
 	}
 	for name, call := range map[string]func(*Tx) error{
-		"an id with a path":   func(tx *Tx) error { _, err := tx.RecordBlob("../keys", []byte("x"), epoch); return err },
-		"an empty id":         func(tx *Tx) error { _, err := tx.RecordBlob("", []byte("x"), epoch); return err },
-		"an empty reference":  func(tx *Tx) error { _, err := tx.RecordBlob("blob-d", nil, epoch); return err },
-		"no time":             func(tx *Tx) error { _, err := tx.RecordBlob("blob-d", []byte("x"), time.Time{}); return err },
-		"no processing time":  func(tx *Tx) error { return tx.MarkBlobProcessed("blob-a", time.Time{}) },
-		"an overlong id":      func(tx *Tx) error { _, err := tx.RecordBlob(strings.Repeat("a", 129), []byte("x"), epoch); return err },
-		"a non-positive list": func(tx *Tx) error { _, err := tx.PendingBlobs(0); return err },
+		"an id with a path":        func(tx *Tx) error { _, err := tx.RecordBlob("../keys", []byte("x"), epoch); return err },
+		"an empty id":              func(tx *Tx) error { _, err := tx.RecordBlob("", []byte("x"), epoch); return err },
+		"an empty reference":       func(tx *Tx) error { _, err := tx.RecordBlob("blob-d", nil, epoch); return err },
+		"no time":                  func(tx *Tx) error { _, err := tx.RecordBlob("blob-d", []byte("x"), time.Time{}); return err },
+		"no processing time":       func(tx *Tx) error { return tx.MarkBlobProcessed("blob-a", time.Time{}) },
+		"an overlong id":           func(tx *Tx) error { _, err := tx.RecordBlob(strings.Repeat("a", 129), []byte("x"), epoch); return err },
+		"a non-positive list":      func(tx *Tx) error { _, err := tx.PendingBlobs(0); return err },
+		"a pending id with a path": func(tx *Tx) error { _, err := tx.BlobPending("../keys"); return err },
 	} {
 		if err := s.Write(t.Context(), "test.blob", call); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s = %v, want ErrInvalid", name, err)

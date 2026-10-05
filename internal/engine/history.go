@@ -264,13 +264,70 @@ func (h *historian) ack(ctx context.Context, id string, ref HistoryRef) {
 	h.acked[id] = true
 }
 
+func (h *historian) kept(err error) {
+	h.p.logger.Warn("removing a history file failed", slog.String("event", "history_file_kept"), slog.String("error_type", fmt.Sprintf("%T", err)))
+}
+
 func (h *historian) remove(id string) {
+	removed := false
 	for _, suffix := range []string{blobFileSuffix, partialSuffix} {
-		if err := os.Remove(h.path(id, suffix)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			h.p.logger.Warn("removing a history file failed", slog.String("event", "history_file_kept"), slog.String("error_type", fmt.Sprintf("%T", err)))
+		switch err := os.Remove(h.path(id, suffix)); {
+		case err == nil:
+			removed = true
+		case !errors.Is(err, fs.ErrNotExist):
+			h.kept(err)
+		}
+	}
+	if removed {
+		if err := h.fsyncDir(h.dir); err != nil {
+			h.kept(err)
 		}
 	}
 	delete(h.acked, id)
+}
+
+func (h *historian) clean(ctx context.Context) {
+	entries, err := os.ReadDir(h.dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		h.kept(err)
+		return
+	}
+	removed := false
+	for _, e := range entries {
+		id, ok := strings.CutSuffix(e.Name(), blobFileSuffix)
+		if !ok {
+			id, ok = strings.CutSuffix(e.Name(), partialSuffix)
+		}
+		if !ok {
+			continue
+		}
+		var pending bool
+		err := h.p.archive.Read(ctx, "engine.history_clean", func(r *ingest.Reader) error {
+			var err error
+			pending, err = r.BlobPending(id)
+			return err
+		})
+		if err != nil && !errors.Is(err, ingest.ErrInvalid) {
+			h.kept(err)
+			continue
+		}
+		if pending {
+			continue
+		}
+		if err := os.Remove(filepath.Join(h.dir, e.Name())); err != nil {
+			h.kept(err)
+			continue
+		}
+		removed = true
+	}
+	if removed {
+		if err := h.fsyncDir(h.dir); err != nil {
+			h.kept(err)
+		}
+	}
 }
 
 func (h *historian) quarantine(ctx context.Context, id string, attempts int) {

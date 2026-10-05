@@ -135,6 +135,23 @@ func TestEnginePausesAndResumesWithTheFreeSpace(t *testing.T) {
 	}
 }
 
+func TestEngineStartDeletesHistoryLeftByACrash(t *testing.T) {
+	r := newHistRig(t)
+	r.online.Store(true)
+	r.downloaded("HS1")
+	r.downloaded("HS2")
+	r.write(func(tx *ingest.Tx) error {
+		if err := tx.MarkBlobProcessed("HS1", epoch); err != nil {
+			return err
+		}
+		return tx.QuarantineBlob("HS2")
+	})
+	e := newEngine(t, r)
+	e.Start(t.Context(), MaxRecentStarts+1)
+	t.Cleanup(func() { _ = e.Stop(context.Background()) })
+	eventually(t, "the start deletes the plaintext of settled blobs", func() bool { return len(r.historyFiles()) == 0 })
+}
+
 func TestEngineSweepsExpiredMessages(t *testing.T) {
 	r := newHistRig(t)
 	m := dm("M1", alice, "expired already")

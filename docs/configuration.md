@@ -303,7 +303,7 @@ creates the [master key](#master-key) when it is missing and opens the
 [message archive](#message-archive), `archive.db`. The
 [engine](#whatsapp-engine) creates `history/` with mode `0700` when it first
 downloads a [history-sync blob](#history-sync), and keeps each blob there as
-`history/<id>.bin`, mode `0600`, only until it is processed; this build has no
+`history/<id>.bin`, mode `0600`, only until it is processed or quarantined; this build has no
 engine, so it writes nothing but the master key and the archive. Nothing creates
 `backups/` yet. Later in M1 the directory also holds the WhatsApp session. It must be on a writable, persistent filesystem that supports
 hard links and that only the service's user can read.
@@ -595,8 +595,11 @@ than `WAWARDEN_HISTORY_MAX_BYTES` of output, decodes it, and applies it with
 the rules above in transactions of 100 messages, with origin `history`; group
 subjects and members, push names and LID mappings in the blob are stored too.
 It then marks the blob processed, which also removes its record's download
-reference and inline content, and deletes its file. Blobs not yet processed are
-taken up again at the next start. After three failed attempts, attempts cut
+reference and inline content, deletes its file and flushes the directory. Blobs
+not yet processed are taken up again at the next start, and each start of the
+engine first deletes every `history/<id>.bin` and `history/<id>.part` whose blob
+is not waiting to be processed, such as a file that a crash left behind after
+its blob was marked processed or quarantined. After three failed attempts, attempts cut
 short by a crash or a stop included, a blob is quarantined: its reference and
 files are deleted and `quarantine` is logged at every log level with `queue`
 `history`.
@@ -810,7 +813,7 @@ So are the engine's alerts, which an operator must see: `engine_absent`,
 | `free_space_unknown` | `WARN` | `error_type` | The free space of the data directory could not be read. |
 | `index_rewrite_pending` | `WARN` | `operation` | A change committed, but the full-text index rewrite it requires failed; it stays due and runs at the next start. |
 | `history_ack_failed` | `WARN` | `error_type` | Sending the history receipt failed; the blob is processed anyway. |
-| `history_file_kept` | `WARN` | `error_type` | A history file could not be deleted. |
+| `history_file_kept` | `WARN` | `error_type` | A history file could not be deleted, or the directory could not be flushed after a deletion. The next start of the engine deletes a file whose blob is no longer waiting. |
 | `expiry_sweep_failed` | `WARN` | `error_type` | Removing the text of expired messages failed; the sweep runs again a minute later. |
 
 What is never logged: requests (there is no access log), request bodies, header

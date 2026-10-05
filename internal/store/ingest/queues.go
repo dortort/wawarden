@@ -37,6 +37,7 @@ const (
 	quarantineInbox   = "UPDATE inbox SET quarantined = 1, payload = NULL WHERE seq = ?"
 	insertBlob        = "INSERT INTO history_blobs (id, received_at, ref) VALUES (?, ?, ?) ON CONFLICT (id) DO NOTHING"
 	selectPending     = "SELECT id, received_at, ref, attempts FROM history_blobs WHERE processed_at IS NULL AND quarantined = 0 ORDER BY received_at, id LIMIT ?"
+	selectBlobPending = "SELECT EXISTS (SELECT 1 FROM history_blobs WHERE id = ? AND processed_at IS NULL AND quarantined = 0)"
 	bumpBlobAttempt   = "UPDATE history_blobs SET attempts = attempts + 1 WHERE id = ? AND processed_at IS NULL AND quarantined = 0 RETURNING attempts"
 	markBlobProcessed = "UPDATE history_blobs SET processed_at = ?, ref = NULL WHERE id = ? AND processed_at IS NULL AND quarantined = 0"
 	quarantineBlob    = "UPDATE history_blobs SET quarantined = 1, ref = NULL WHERE id = ? AND processed_at IS NULL"
@@ -119,6 +120,15 @@ func (r *Reader) PendingBlobs(limit int) ([]Blob, error) {
 		out = append(out, b)
 	}
 	return out, errors.Join(rows.Err(), rows.Close())
+}
+
+func (r *Reader) BlobPending(id string) (bool, error) {
+	if !blobID.MatchString(id) {
+		return false, invalid("history blob id")
+	}
+	var pending bool
+	err := r.q.QueryRowContext(r.ctx, selectBlobPending, id).Scan(&pending)
+	return pending, err
 }
 
 func (tx *Tx) RecordBlobAttempt(id string) (int, error) {

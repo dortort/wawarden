@@ -153,7 +153,9 @@ These are stated so that nobody relies on WaWarden for them:
    (device 0); blobs are downloaded through a size cap, persisted before the
    receipt and before parsing, decompressed under the same cap, and quarantined
    after three failed attempts, so a poison payload is set aside rather than
-   replayed forever; inbox rows are quarantined the same way. Live traffic waits
+   replayed forever; inbox rows are quarantined the same way. A blob's plaintext
+   file is deleted once the blob is processed or quarantined, and each start of
+   the engine deletes any such file that a crash left behind. Live traffic waits
    in a durable inbox and is acknowledged only once written, so a full inbox or a
    paused ingest makes WhatsApp deliver it again instead of losing it. These
    rules are tested with plain-data events in the engine core; decoding real

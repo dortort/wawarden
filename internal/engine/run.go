@@ -81,6 +81,7 @@ func (e *Engine) dispatch(ev Event) bool {
 
 func (e *Engine) loop(ctx context.Context) {
 	defer close(e.done)
+	e.hist.clean(ctx)
 	clock := e.pipe.clock
 	nextSweep, nextSpace := clock.Now(), clock.Now().Add(spaceInterval)
 	for ctx.Err() == nil {
