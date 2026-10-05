@@ -378,6 +378,22 @@ func TestOpenGivesUpOnTheLock(t *testing.T) {
 	}
 }
 
+func TestOpenGivesUpOnTheLockWhenItsWaitEndsBeforeAnAttempt(t *testing.T) {
+	opts, _ := testOptions(t)
+	shortTimeouts(&opts)
+	mustOpen(t, opts)
+	waiter := opts
+	waiter.acquireFor = time.Nanosecond
+	d, err := Open(t.Context(), Archive, waiter)
+	if err == nil {
+		_ = d.Close()
+		t.Fatal("Open succeeded while another connection held the lock")
+	}
+	if want := "db: archive.db is still locked by another process after 1ns"; err.Error() != want {
+		t.Fatalf("Open = %q, want %q: the end of the lock wait is not a stop signal", err, want)
+	}
+}
+
 func TestOpenStopsWaitingWhenCancelled(t *testing.T) {
 	opts, _ := testOptions(t)
 	shortTimeouts(&opts)

@@ -288,6 +288,8 @@ func (d *DB) acquire(ctx context.Context, within, base time.Duration) error {
 		switch {
 		case err == nil:
 			return nil
+		case ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded):
+			return fmt.Errorf("db: %s is still locked by another process after %v", d.name.file(), within)
 		case !busy(err):
 			return fmt.Errorf("db: open %s: %w", d.name.file(), err)
 		case !warned:
