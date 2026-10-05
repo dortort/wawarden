@@ -298,10 +298,14 @@ func (s *supervisor) refresh(ctx context.Context, gen uint64, outdated bool) {
 		delay *= 2
 	}
 	s.mu.Lock()
-	if s.gen == gen {
+	gaveUp := s.gen == gen
+	if gaveUp {
 		s.setLocked(StateDisconnected, ReasonOutdated)
 	}
 	s.mu.Unlock()
+	if gaveUp {
+		s.client.Disconnect()
+	}
 }
 
 func (s *supervisor) refreshed(gen uint64) {

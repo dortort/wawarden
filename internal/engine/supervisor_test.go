@@ -155,6 +155,7 @@ func TestVersionRefreshRetriesThenStaysOutdated(t *testing.T) {
 	if h.client.count("connect") != 0 || h.client.count("set_version") != 0 {
 		t.Fatalf("calls %v, want none", h.client.history())
 	}
+	h.disconnectedLast()
 	if a := h.alerts("disconnected"); len(a) != 1 || a[0]["reason"] != "outdated" || a[0]["level"] != "WARN" {
 		t.Fatalf("disconnected alerts %v", a)
 	}
@@ -186,6 +187,14 @@ func TestOutdatedClientRefusesTheSameOrALowerVersion(t *testing.T) {
 	h.want(StateDisconnected, ReasonOutdated)
 	if h.client.count("set_version") != 0 || h.client.Version() != current {
 		t.Fatalf("calls %v, version %v", h.client.history(), h.client.Version())
+	}
+	h.disconnectedLast()
+}
+
+func (h *supRig) disconnectedLast() {
+	h.t.Helper()
+	if calls := h.client.history(); len(calls) == 0 || calls[len(calls)-1] != "disconnect" {
+		h.t.Fatalf("calls %v: a client left outdated must end disconnected, so that nothing reconnects it behind the supervisor", calls)
 	}
 }
 
@@ -343,6 +352,7 @@ func TestOutdatedWhileConnectingRefreshesTheVersion(t *testing.T) {
 			if v.count() != 5 || h.client.count("connect") != 1 || h.client.count("set_version") != 0 {
 				t.Fatalf("%d fetches, calls %v", v.count(), h.client.history())
 			}
+			h.disconnectedLast()
 			if a := h.alerts("disconnected"); len(a) != 1 || a[0]["reason"] != string(ReasonOutdated) {
 				t.Fatalf("disconnected alerts %v", a)
 			}
@@ -1200,8 +1210,8 @@ func TestReconnectAfterAFailedStartTakesAnEqualVersion(t *testing.T) {
 		t.Fatalf("Reconnect = %v", err)
 	}
 	h.steps()
-	if got := h.client.history(); !slices.Equal(got, []string{"connect"}) {
-		t.Fatalf("calls %v, want one connect with the current version", got)
+	if got := h.client.history(); !slices.Equal(got, []string{"disconnect", "connect"}) {
+		t.Fatalf("calls %v, want the disconnect of the failed start, then one connect with the current version", got)
 	}
 	h.deliver(Connected{})
 	h.want(StateConnected, "")

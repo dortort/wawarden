@@ -543,8 +543,9 @@ but `shutdown` also logs `disconnected` at every log level. The gauges
   takes a newer version, keeps its own when the fetched one is equal, never takes
   an older one, and changes the version only while disconnected. When WhatsApp
   reports the client as outdated, the engine fetches again the same way and then
-  needs a strictly newer version. When no fetch succeeds, it stays in
-  `disconnected` with reason `outdated`, and an explicit reconnect fetches again
+  needs a strictly newer version. When no fetch succeeds, it closes the
+  protocol library's connection, so that nothing reconnects behind it, and
+  stays in `disconnected` with reason `outdated`; an explicit reconnect fetches again
   before it connects, with the same need: a strictly newer version after
   WhatsApp reported the client as outdated, an equal one too after the fetches
   at the start failed, for example because the network was not up yet.
