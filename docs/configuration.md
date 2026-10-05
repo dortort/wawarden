@@ -629,12 +629,15 @@ device is deleted.
 
 ### Ingest
 
-Each message and each group change that WhatsApp delivers is first written to
-the archive's inbox, in the same file as the archive, and only then
-acknowledged. The engine refuses to write one when the inbox already holds 5,000
-rows that wait to be applied, when ingest is [paused](#free-space), or when the
-write fails; each case counts in `wawarden_ingest_refused_total`, and a refused
-message is lost (see [Delivery](#delivery)). Traffic of a chat that is not a phone-number
+Each message that WhatsApp delivers is first written to the archive's inbox, in
+the same file as the archive, and only then acknowledged. Each group change is
+written to the inbox too, but the protocol library acknowledges it as it
+arrives, before the engine has written it (see [Delivery](#delivery)). The
+engine refuses to write a message or a group change when the inbox already
+holds 5,000 rows that wait to be applied, when ingest is
+[paused](#free-space), or when the write fails; each case counts in
+`wawarden_ingest_refused_total`, and a refused message or group change is lost
+(see [Delivery](#delivery)). Traffic of a chat that is not a phone-number
 user, a LID user or a group (status updates, broadcast lists, newsletters and
 every other kind) is acknowledged and dropped before it reaches the inbox. So
 is every message, group change and history-sync notification that arrives
