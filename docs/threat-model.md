@@ -531,9 +531,10 @@ These remain at v1.0, after every control above is in place.
   belongs to that number; until then, and whenever `WAWARDEN_OWNER_PHONE` is
   unset, such edits, revocations, reactions and replies are dropped or stored
   without their reference (M1, on `main`).
-- **Stops count as attempts.** A history blob whose processing is cut short by a
-  stop or a crash three times is quarantined like a failing one, and its
-  messages do not reach the archive (M1, on `main`).
+- **Crashes count as attempts.** A history blob whose processing is cut short
+  by a crash three times is quarantined like a failing one: the batches it had
+  applied before each crash stay in the archive, and its remaining messages do
+  not reach it. A graceful stop gives its attempt back (M1, on `main`).
 - **An interrupted revoke.** A crash in the middle of a revoke, an edit or an
   expiry rolls it back, so the old text is in the database again until the
   change is applied again, and the journal keeps the pre-image until the next

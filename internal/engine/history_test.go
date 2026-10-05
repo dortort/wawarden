@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"compress/zlib"
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/dortort/wawarden/internal/store/ingest"
 )
@@ -639,6 +641,82 @@ func TestBlobQuarantineAfterThreeFailures(t *testing.T) {
 	db := r.inspect()
 	if got := query[string](t, db, "SELECT group_concat(attempts || quarantined, ',') FROM history_blobs"); got != "31,31" {
 		t.Fatalf("blob rows %q", got)
+	}
+}
+
+type tickingClock struct{ *fakeClock }
+
+func (c tickingClock) Now() time.Time {
+	c.advance(spaceInterval)
+	return c.fakeClock.Now()
+}
+
+type crashingDecoder struct{}
+
+func (crashingDecoder) Decode([]byte) (History, error) {
+	runtime.Goexit()
+	return History{}, nil
+}
+
+func TestAStopGivesItsHistoryAttemptBackAndACrashDoesNot(t *testing.T) {
+	r := newHistRig(t)
+	msgs := make([]Message, 450)
+	for i := range msgs {
+		msgs[i] = Message{ID: fmt.Sprintf("S%03d", i), Sender: alice, Timestamp: epoch, Kind: KindText, Text: "history"}
+	}
+	r.notify(HistoryRef{ID: "HS1", Inline: r.blob("synthetic stopped blob", History{Conversations: []Conversation{{Chat: alice, Messages: msgs}}})})
+	r.p.clock = tickingClock{r.clock}
+	blob := func() string {
+		var pending []ingest.Blob
+		if err := r.archive.Read(t.Context(), "test.pending", func(rd *ingest.Reader) error {
+			var err error
+			pending, err = rd.PendingBlobs(pendingWindow)
+			return err
+		}); err != nil {
+			t.Fatalf("Read: %v", err)
+		}
+		if len(pending) != 1 {
+			return "not pending"
+		}
+		return fmt.Sprintf("attempts %d", pending[0].Attempts)
+	}
+	for stop := range 3 {
+		ctx, cancel := context.WithCancel(t.Context())
+		checks := 0
+		r.p.space = func() (ingest.Space, error) {
+			if checks++; checks == 4 {
+				cancel()
+			}
+			return ingest.Space{}, nil
+		}
+		r.h.drain(ctx)
+		cancel()
+		if got := blob(); got != "attempts 0" {
+			t.Fatalf("after stop %d the blob is %s, want pending with attempts 0", stop+1, got)
+		}
+	}
+	if _, ok := r.find(alice, "S199", alice); !ok {
+		t.Fatal("the batches committed before the stop are not stored")
+	}
+	if _, ok := r.find(alice, "S200", alice); ok {
+		t.Fatal("a batch after the stop was applied")
+	}
+	r.h.decoder = crashingDecoder{}
+	crashes(t, r.drainHistory)
+	if got := blob(); got != "attempts 1" {
+		t.Fatalf("after a crash the blob is %s, want pending with attempts 1", got)
+	}
+	r.h.decoder = r.decoder
+	r.drainHistory()
+	for _, m := range msgs {
+		r.must(alice, m.ID, alice)
+	}
+	if len(r.alerts("quarantine")) != 0 {
+		t.Fatalf("quarantine alerts %v", r.alerts("quarantine"))
+	}
+	db := r.inspect()
+	if got := query[string](t, db, "SELECT attempts || ' ' || quarantined || ' ' || (processed_at IS NOT NULL) FROM history_blobs"); got != "2 0 1" {
+		t.Fatalf("blob row %q, want processed after the crash's attempt and its own", got)
 	}
 }
 

@@ -649,9 +649,11 @@ engine first deletes every `history/<id>.bin` and `history/<id>.part` whose blob
 is not waiting to be processed, such as a file that a crash left behind after
 its blob was marked processed or quarantined. An attempt that panics while it
 downloads, decodes or applies a blob fails like any other. After three failed attempts, attempts cut
-short by a crash or a stop included, a blob is quarantined: its reference and
+short by a crash included, a blob is quarantined: its reference and
 files are deleted and `quarantine` is logged at every log level with `queue`
-`history`.
+`history`. A graceful stop that interrupts a blob gives its attempt back, like
+a [pause](#free-space): the blob stays waiting and is applied from its start at
+the next start, keeping the batches it had already applied.
 
 The engine processes one blob at a time. Reading a downloaded blob from
 `history/` and decompressing it, which it does in two passes so that it can

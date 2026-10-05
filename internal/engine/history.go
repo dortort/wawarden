@@ -157,11 +157,11 @@ func (h *historian) process(ctx context.Context, b ingest.Blob) {
 		return
 	}
 	err := guarded("engine.ingest", func() error { return h.ingest(ctx, b) })
-	if errors.Is(err, errPaused) {
-		h.release(run, b.ID)
+	if err == nil {
 		return
 	}
-	if err == nil || ctx.Err() != nil {
+	if errors.Is(err, errPaused) || ctx.Err() != nil {
+		h.release(run, b.ID)
 		return
 	}
 	p.logger.Warn("processing a history blob failed", slog.String("event", "ingest_failed"), slog.String("queue", queueHistory), slog.Int("attempt", attempts), slog.String("error_type", fmt.Sprintf("%T", err)))
@@ -174,7 +174,7 @@ func (h *historian) process(ctx context.Context, b ingest.Blob) {
 
 func (h *historian) release(ctx context.Context, id string) {
 	if err := h.p.write(ctx, "engine.history_release", func(tx *ingest.Tx) error { return tx.ReleaseBlobAttempt(id) }); err != nil {
-		h.p.logger.Warn("giving back a paused history attempt failed", slog.String("event", "ingest_failed"), slog.String("queue", queueHistory), slog.String("error_type", fmt.Sprintf("%T", err)))
+		h.p.logger.Warn("giving back an interrupted history attempt failed", slog.String("event", "ingest_failed"), slog.String("queue", queueHistory), slog.String("error_type", fmt.Sprintf("%T", err)))
 	}
 }
 
