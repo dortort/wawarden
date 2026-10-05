@@ -27,6 +27,10 @@ const (
 
 	defaultAdminAddr = "http://127.0.0.1:8082"
 
+	flagTokenFile    = "token-file"
+	flagTokenStdin   = "token-stdin"
+	flagTokenCommand = "token-command"
+
 	exitFailed  = 1
 	exitUsage   = 2
 	exitToken   = 3
@@ -46,23 +50,25 @@ func adminCall(ctx context.Context, command string, args, environ []string, stdi
 	flags.SetOutput(stderr)
 	flags.Usage = func() {}
 	addr := flags.String("addr", defaultAdminAddr, "the admin listener's URL")
-	file := flags.String("token-file", "", "read the admin token from this file")
-	fromStdin := flags.Bool("token-stdin", false, "read the admin token from standard input")
-	tokenCommand := flags.String("token-command", "", "run this command, without a shell, and read the admin token from its output")
+	file := flags.String(flagTokenFile, "", "read the admin token from this file")
+	fromStdin := flags.Bool(flagTokenStdin, false, "read the admin token from standard input")
+	tokenCommand := flags.String(flagTokenCommand, "", "run this command, without a shell, and read the admin token from its output")
 	if err := flags.Parse(args); err != nil || flags.NArg() > 0 {
 		return usageError(stderr)
 	}
-	sources := 0
+	var sources []string
 	flags.Visit(func(f *flag.Flag) {
-		if f.Name == "token-file" || f.Name == "token-command" {
-			sources++
+		if f.Name == flagTokenFile || f.Name == flagTokenCommand || f.Name == flagTokenStdin && *fromStdin {
+			sources = append(sources, f.Name)
 		}
 	})
-	if *fromStdin {
-		sources++
-	}
-	if sources != 1 {
+	if len(sources) != 1 {
 		_, _ = fmt.Fprintln(stderr, "admin: give exactly one of --token-file, --token-stdin and --token-command")
+		return usageError(stderr)
+	}
+	source := sources[0]
+	if source == flagTokenFile && *file == "" || source == flagTokenCommand && *tokenCommand == "" {
+		_, _ = fmt.Fprintf(stderr, "admin: --%s needs a value\n", source)
 		return usageError(stderr)
 	}
 	base, plain, err := adminURL(*addr)
@@ -75,12 +81,12 @@ func adminCall(ctx context.Context, command string, args, environ []string, stdi
 	}
 
 	var secret string
-	switch {
-	case *fromStdin:
+	switch source {
+	case flagTokenStdin:
 		secret, err = tokenFromStdin(stdin)
-	case *tokenCommand != "":
+	case flagTokenCommand:
 		secret, err = tokenFromCommand(ctx, *tokenCommand, environ)
-	default:
+	case flagTokenFile:
 		secret, err = tokenFromFile(*file)
 	}
 	if err != nil {

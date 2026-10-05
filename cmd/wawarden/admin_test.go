@@ -206,6 +206,19 @@ func TestAdminUsageErrors(t *testing.T) {
 	}
 }
 
+func TestAdminEmptyTokenSourcesAreUsageErrors(t *testing.T) {
+	secret := token.NewAdmin()
+	for _, tt := range []struct{ arg, want string }{
+		{"--token-file=", "admin: --token-file needs a value\n"},
+		{"--token-command=", "admin: --token-command needs a value\n"},
+	} {
+		code, stdout, stderr := invokeWith(t, []string{"admin", "status", tt.arg}, nil, strings.NewReader(secret))
+		if code != exitUsage || stdout != "" || !strings.HasPrefix(stderr, tt.want+"usage:") || strings.Contains(stderr, secret) {
+			t.Errorf("admin status %q = %d %q %q, want 2 with %q and the usage", tt.arg, code, stdout, stderr, tt.want)
+		}
+	}
+}
+
 func TestAdminReadsNoCredentialFromTheEnvironment(t *testing.T) {
 	secret := token.NewAdmin()
 	f, addr := newFakeListener(t, http.StatusOK, statusBody)
