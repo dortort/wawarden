@@ -289,3 +289,29 @@ func TestInboxNeverHoldsDroppedTraffic(t *testing.T) {
 		t.Fatal("a dropped status update was written to the archive")
 	}
 }
+
+func TestLogsAndMetricsCarryNoContent(t *testing.T) {
+	r := newPipeRig(t)
+	canary, name := "canary text that must stay in the archive", "Canary Push Name"
+	first := dm("M1", aliceLID, canary)
+	first.PushName, first.SenderAlt = name, alice
+	conflict := dm("M2", aliceLID, canary)
+	conflict.PushName, conflict.SenderAlt = name, bob
+	r.appendRaw([]byte(`{"v":1,"message":{"chat":"` + alice + `","text":"` + canary + `","ts":"poison"}}`))
+	r.ingest(first, conflict, text("status@broadcast", "S1", carol, canary), dm("bad id", alice, canary))
+	r.p.sweep(t.Context())
+	var metrics bytes.Buffer
+	if err := r.reg.WriteText(&metrics); err != nil {
+		t.Fatalf("WriteText: %v", err)
+	}
+	if len(r.alerts("quarantine")) != 1 || len(r.alerts("rekey_conflict")) != 1 {
+		t.Fatalf("the scenario did not raise its alerts: %s", r.logs)
+	}
+	for _, out := range []string{r.logs.String(), metrics.String()} {
+		for _, secret := range []string{canary, name, "15550100001", "15550100002", "15550100003", "100000000000001"} {
+			if bytes.Contains([]byte(out), []byte(secret)) {
+				t.Fatalf("%q reached the logs or the metrics:\n%s", secret, out)
+			}
+		}
+	}
+}
