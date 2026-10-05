@@ -498,8 +498,9 @@ but `shutdown` also logs `disconnected` at every log level. The gauges
   that; a successful connection resets it. Only the connection being opened
   counts: a late report that the dropped connection came up changes nothing, and
   a drop reported while a connection is being opened is followed by another
-  attempt. A version fetch or a connection attempt that panics fails like any
-  other.
+  attempt. An explicit reconnect while the engine is `connecting` closes the
+  connection being opened and opens a new one without waiting. A version fetch
+  or a connection attempt that panics fails like any other.
 - **Stops that wait for the operator.** When another client replaces the session
   (`replaced`), WhatsApp bans the account temporarily (`temporary_ban`), a
   connection token cannot be refreshed (`cat_refresh`) or WhatsApp refuses the

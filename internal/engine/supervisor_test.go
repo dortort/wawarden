@@ -739,6 +739,49 @@ func TestReconnect(t *testing.T) {
 	}
 }
 
+func TestReconnectWhileConnectingReplacesTheConnection(t *testing.T) {
+	t.Run("waiting for Connected", func(t *testing.T) {
+		h := newSupRig(t)
+		h.client.oneSocket = true
+		h.versions(versionResult{v: current})
+		h.s.begin(t.Context(), 1)
+		h.steps()
+		h.want(StateConnecting, "")
+		if err := h.s.reconnect(); err != nil {
+			t.Fatalf("Reconnect = %v", err)
+		}
+		h.steps()
+		h.deliver(Connected{})
+		h.want(StateConnected, "")
+		if got := h.client.history(); !slices.Equal(got, []string{"connect", "disconnect", "connect"}) {
+			t.Fatalf("calls %v, want the first connection closed before the second", got)
+		}
+		if h.counter("wawarden_connected") != 1 {
+			t.Fatal("the Connected gauge is not 1")
+		}
+	})
+	t.Run("while dialing", func(t *testing.T) {
+		h := newSupRig(t)
+		h.client.oneSocket = true
+		var once sync.Once
+		h.client.onConnect = func() {
+			once.Do(func() {
+				if err := h.s.reconnect(); err != nil {
+					t.Errorf("Reconnect = %v", err)
+				}
+			})
+		}
+		h.versions(versionResult{v: current})
+		h.s.begin(t.Context(), 1)
+		h.steps()
+		h.deliver(Connected{})
+		h.want(StateConnected, "")
+		if got := h.client.history(); !slices.Equal(got, []string{"connect", "disconnect", "disconnect", "connect"}) {
+			t.Fatalf("calls %v, want the dial that lost its race closed before the next", got)
+		}
+	})
+}
+
 func TestReconnectAfterAFailedStartTakesAnEqualVersion(t *testing.T) {
 	h := newSupRig(t)
 	h.versions(versionResult{err: errors.New("synthetic: offline")})

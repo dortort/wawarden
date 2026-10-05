@@ -365,7 +365,7 @@ func (s *supervisor) connect(ctx context.Context, gen uint64, attempt int) {
 	err := guarded("engine.supervisor", func() error { return s.client.Connect(ctx) })
 	s.mu.Lock()
 	superseded := s.gen != gen
-	stale := superseded && err == nil && s.state == StateDisconnected
+	stale := superseded && err == nil && s.state != StateConnected
 	dropped, early := !superseded && s.dropped, !superseded && s.early
 	if !superseded {
 		s.dialing, s.dropped, s.early = false, false, false
@@ -585,29 +585,49 @@ func (s *supervisor) pair(ctx context.Context) (string, error) {
 func (s *supervisor) reconnect() error {
 	paired, foreign := s.device()
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	redial, err := s.reconnectLocked(paired, foreign)
+	gen := s.gen
+	s.mu.Unlock()
+	if !redial {
+		return err
+	}
+	s.client.Disconnect()
+	s.mu.Lock()
+	if s.gen == gen {
+		s.next, s.attempt = connect, 0
+		s.wake()
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *supervisor) reconnectLocked(paired, foreign bool) (redial bool, err error) {
 	switch {
 	case s.reason == ReasonShutdown:
-		return ErrStopped
+		return false, ErrStopped
 	case s.rejected:
-		return ErrNotPaired
+		return false, ErrNotPaired
 	case s.state == StateDisconnected && s.reason == ReasonOutdated:
 		s.setLocked(StateConnecting, "")
 		// s.outdated still holds the mode of the refresh that failed.
 		s.next = refresh
+		s.wake()
+		return false, nil
 	case !paired:
-		return ErrNotPaired
+		return false, ErrNotPaired
 	case foreign:
 		if s.rejectLocked(stageStoredDevice) {
 			s.startLogout(s.ctx)
 		}
-		return ErrNotPaired
+		return false, ErrNotPaired
 	case s.state == StateConnected:
-		return ErrAlreadyConnected
-	default:
+		return false, ErrAlreadyConnected
+	case s.state == StateConnecting:
 		s.setLocked(StateConnecting, "")
-		s.next, s.attempt = connect, 0
+		return true, nil
 	}
+	s.setLocked(StateConnecting, "")
+	s.next, s.attempt = connect, 0
 	s.wake()
-	return nil
+	return false, nil
 }

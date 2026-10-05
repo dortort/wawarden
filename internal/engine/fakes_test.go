@@ -167,6 +167,7 @@ type fakeClient struct {
 	version     Version
 	connectErrs []error
 	logoutErrs  []error
+	oneSocket   bool
 	pairErr     error
 	calls       []string
 	handler     func(Event) bool
@@ -193,6 +194,11 @@ func (f *fakeClient) record(call string) {
 
 func (f *fakeClient) Connect(context.Context) error {
 	f.mu.Lock()
+	if f.oneSocket && f.connected {
+		f.record("connect_while_connected")
+		f.mu.Unlock()
+		return errors.New("synthetic: websocket is already connected")
+	}
 	f.record("connect")
 	var err error
 	if len(f.connectErrs) > 0 {
