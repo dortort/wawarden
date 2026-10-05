@@ -300,9 +300,11 @@ mechanisms that enforce them.
 - **I-7 No plaintext credentials in the service.** The admin credential is
   configured as a hash; client tokens are stored as hashes.
 - **I-8 Deletions are honoured on disk.** Once the write that revokes, edits or
-  expires a message has returned without error, neither the old text nor any of
-  its trigrams (the three-character runs the full-text index stores) is in the
-  database, its journal or the full-text index, page keys included. Backups, a
+  expires a message has returned without error, the message's row no longer
+  holds its old text, and neither that text nor any of its trigrams (the
+  three-character runs the full-text index stores) is in the database, its
+  journal or the full-text index, page keys included, unless a message that
+  remains in the archive holds the same text or trigram. Backups, a
   page key that holds less than a whole trigram, a trigram left by a stop or
   a failure between the deletion and the index rewrite it requires, and a
   revocation or edit that arrives before history sync has stored its target are
@@ -457,7 +459,9 @@ These remain at v1.0, after every control above is in place.
   when the dependency is added).
 - **Deletion residuals.** Backups taken before a message was revoked, edited or
   expired keep its old text until they leave retention. Filesystem blocks,
-  snapshots and storage-level copies are outside the service's control. The
+  snapshots and storage-level copies are outside the service's control. A
+  trigram of the old text that a remaining message also holds stays in the
+  full-text index, because that message still needs it. The
   full-text index finds a term through page keys, and a key can be a prefix of
   the first term of its page: the index rewrite runs only for a key that is a
   whole trigram of the old text, so a key holding its first one or two
