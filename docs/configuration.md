@@ -600,9 +600,12 @@ taken once no history blob is waiting to be processed (a
 [quarantined](#history-sync) blob does not count) and 10 minutes have passed
 since the later of that moment and the arrival of the latest history blob. A
 successful backup is recorded as `backup_taken_at`, and no further backup is
-taken for that device. When the device is no longer paired, both keys are
-cleared, so the next paired device is backed up once in turn. A failed backup
-reports `backup_failed` and is tried again only after the next start.
+taken for that device. When a check finds the device no longer paired, or the
+engine has reported an unpairing since the previous check (a device unpaired
+and paired again between two checks), both keys are cleared, so the next paired
+device is backed up once in turn, without a restart. A failed backup reports
+`backup_failed` and is tried again only after the next start, or for the next
+paired device.
 
 **How.** Each database is copied online, in steps of 256 pages on its own
 connection, each step bound by the 10-second write deadline, so ingest goes on
