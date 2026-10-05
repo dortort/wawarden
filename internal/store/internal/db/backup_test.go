@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -16,6 +17,13 @@ func seed(t *testing.T, d *DB, rows int) {
 	t.Helper()
 	exec1(t, d, "CREATE TABLE t(seq INTEGER PRIMARY KEY, body BLOB NOT NULL) STRICT")
 	exec1(t, d, "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < ?) INSERT INTO t(body) SELECT randomblob(2000) FROM c", rows)
+}
+
+func into(w io.Writer) func(string, int64, io.Reader) error {
+	return func(_ string, _ int64, r io.Reader) error {
+		_, err := io.Copy(w, r)
+		return err
+	}
 }
 
 func openCopy(t *testing.T, data []byte) *sql.DB {
@@ -48,8 +56,17 @@ func TestBackupCopiesInStepsWhileWritesContinue(t *testing.T) {
 	}
 	staging := filepath.Join(t.TempDir(), "staging")
 	var out bytes.Buffer
-	if err := d.Backup(t.Context(), staging, &out); err != nil {
+	var name string
+	var size int64
+	if err := d.Backup(t.Context(), staging, func(n string, s int64, r io.Reader) error {
+		name, size = n, s
+		_, err := io.Copy(&out, r)
+		return err
+	}); err != nil {
 		t.Fatalf("Backup: %v", err)
+	}
+	if name != "archive.db" || size != int64(out.Len()) || size == 0 {
+		t.Fatalf("the copy was handed over as %q of %d bytes, and %d bytes were read: want archive.db and its exact size", name, size, out.Len())
 	}
 	if steps < 2 {
 		t.Fatalf("the backup paused %d times between steps, want several, or this test proves nothing", steps)
@@ -88,7 +105,7 @@ func TestBackupStagesPrivatelyAndNeverOverwrites(t *testing.T) {
 		}
 	}
 	var out bytes.Buffer
-	if err := d.Backup(t.Context(), staging, &out); err != nil {
+	if err := d.Backup(t.Context(), staging, into(&out)); err != nil {
 		t.Fatalf("Backup: %v", err)
 	}
 	if mode != 0o600 {
@@ -98,7 +115,7 @@ func TestBackupStagesPrivatelyAndNeverOverwrites(t *testing.T) {
 		t.Fatalf("the staging directory held %v during the backup, want only the staging copy and no journal", siblings)
 	}
 	writeFile(t, staging, 0o600)
-	if err := d.Backup(t.Context(), staging, &out); err == nil || !strings.Contains(err.Error(), "staging") {
+	if err := d.Backup(t.Context(), staging, into(&out)); err == nil || !strings.Contains(err.Error(), "staging") {
 		t.Fatalf("Backup over an existing file = %v, want a refusal", err)
 	}
 	if _, err := os.Lstat(staging); err != nil {
@@ -115,7 +132,7 @@ func TestBackupStopsWhenCancelled(t *testing.T) {
 	d.stepped = cancel
 	staging := filepath.Join(t.TempDir(), "staging")
 	var out bytes.Buffer
-	if err := d.Backup(ctx, staging, &out); !errors.Is(err, context.Canceled) {
+	if err := d.Backup(ctx, staging, into(&out)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Backup = %v, want the cancellation", err)
 	}
 	if out.Len() != 0 {
@@ -160,7 +177,7 @@ func TestBackupRecoversAPanic(t *testing.T) {
 			d.newBackup = func(*keptConn, string) (stepper, error) { return tt.b, nil }
 			staging := filepath.Join(t.TempDir(), "staging")
 			var out bytes.Buffer
-			if err := d.Backup(t.Context(), staging, &out); !errors.Is(err, errBackupPanicked) {
+			if err := d.Backup(t.Context(), staging, into(&out)); !errors.Is(err, errBackupPanicked) {
 				t.Fatalf("Backup = %v, want errBackupPanicked", err)
 			}
 			if out.Len() != 0 {
@@ -191,7 +208,7 @@ func TestBackupReportsAFailedWrite(t *testing.T) {
 	d := mustOpen(t, opts)
 	seed(t, d, 10)
 	staging := filepath.Join(t.TempDir(), "staging")
-	if err := d.Backup(t.Context(), staging, failingWriter{}); err == nil {
+	if err := d.Backup(t.Context(), staging, into(failingWriter{})); err == nil {
 		t.Fatal("Backup hid a failed write")
 	}
 	if _, err := os.Lstat(staging); !errors.Is(err, fs.ErrNotExist) {

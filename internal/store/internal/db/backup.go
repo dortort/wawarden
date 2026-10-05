@@ -30,7 +30,7 @@ func startBackup(kc *keptConn, dst string) (stepper, error) {
 	return b, nil
 }
 
-func (d *DB) Backup(ctx context.Context, staging string, w io.Writer) error {
+func (d *DB) Backup(ctx context.Context, staging string, write func(name string, size int64, r io.Reader) error) error {
 	staging = filepath.Clean(staging)
 	if err := create(staging); err != nil {
 		return fmt.Errorf("db: backup: create the staging copy: %s", cause(err))
@@ -44,7 +44,11 @@ func (d *DB) Backup(ctx context.Context, staging string, w io.Writer) error {
 		return fmt.Errorf("db: backup: open the staging copy: %s", cause(err))
 	}
 	defer func() { _ = f.Close() }()
-	if _, err := io.Copy(w, f); err != nil {
+	fi, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("db: backup: inspect the staging copy: %s", cause(err))
+	}
+	if err := write(d.name.file(), fi.Size(), io.LimitReader(f, fi.Size())); err != nil {
 		return fmt.Errorf("db: backup: write the copy: %w", err)
 	}
 	return nil

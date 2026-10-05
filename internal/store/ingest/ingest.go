@@ -76,8 +76,8 @@ func (s *Store) OFDLocking() bool { return s.db.OFDLocking() }
 
 func (s *Store) Admin() *admin.Reader { return s.admin }
 
-func (s *Store) Backup(ctx context.Context, staging string, w io.Writer) error {
-	return s.db.Backup(ctx, staging, w)
+func (s *Store) Backup(ctx context.Context, staging string, write func(name string, size int64, r io.Reader) error) error {
+	return s.db.Backup(ctx, staging, write)
 }
 
 type Reader struct {

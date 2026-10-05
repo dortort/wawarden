@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"path/filepath"
 	"testing"
 	"time"
@@ -278,7 +279,13 @@ func TestBackupThroughTheStore(t *testing.T) {
 	s := openStore(t)
 	insert(t, s, textMessage(t, alice, "M1", alice, "backed up"))
 	var out bytes.Buffer
-	if err := s.Backup(t.Context(), filepath.Join(t.TempDir(), "staging"), &out); err != nil || !bytes.HasPrefix(out.Bytes(), []byte("SQLite format 3\x00")) {
-		t.Fatalf("Backup = %v, %d bytes", err, out.Len())
+	var name string
+	err := s.Backup(t.Context(), filepath.Join(t.TempDir(), "staging"), func(n string, _ int64, r io.Reader) error {
+		name = n
+		_, err := io.Copy(&out, r)
+		return err
+	})
+	if err != nil || name != "archive.db" || !bytes.HasPrefix(out.Bytes(), []byte("SQLite format 3\x00")) {
+		t.Fatalf("Backup = %v, %q of %d bytes", err, name, out.Len())
 	}
 }
