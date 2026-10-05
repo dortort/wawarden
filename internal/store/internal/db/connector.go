@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"sync"
+	"time"
 
 	"modernc.org/sqlite"
 )
@@ -30,6 +31,7 @@ type connector struct {
 	mu        sync.Mutex
 	connected bool
 	lost      bool
+	released  chan struct{}
 }
 
 func newConnector(dsn string, hook func(sqlite.ExecQuerierContext) error, keepAlive bool, onLost func()) *connector {
@@ -63,7 +65,31 @@ func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
 	if !c.keepAlive {
 		return full, nil
 	}
-	return &keptConn{driverConn: full}, nil
+	released := make(chan struct{})
+	c.released = released
+	return &keptConn{driverConn: full, release: sync.OnceFunc(func() { close(released) })}, nil
+}
+
+func (c *connector) awaitRelease(timeout time.Duration) bool {
+	c.mu.Lock()
+	released := c.released
+	c.mu.Unlock()
+	if released == nil {
+		return true
+	}
+	select {
+	case <-released:
+		return true
+	default:
+	}
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case <-released:
+		return true
+	case <-t.C:
+		return false
+	}
 }
 
 func (c *connector) Driver() driver.Driver { return c.drv }
@@ -75,7 +101,15 @@ func (c *connector) lostConnection() bool {
 }
 
 // keptConn stays valid after an interrupted statement: the driver would otherwise discard it, and closing the connection releases the exclusive lock.
-type keptConn struct{ driverConn }
+type keptConn struct {
+	driverConn
+	release func()
+}
+
+func (k *keptConn) Close() error {
+	defer k.release()
+	return k.driverConn.Close()
+}
 
 func (k *keptConn) IsValid() bool { return true }
 

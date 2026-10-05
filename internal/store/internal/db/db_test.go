@@ -317,6 +317,57 @@ func TestTheProbeSeesTheLock(t *testing.T) {
 	}
 }
 
+func holdConnection(t *testing.T, d *DB) (release func(), done <-chan error) {
+	t.Helper()
+	inside, released, result := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		result <- d.Read(context.Background(), "test.held", func(context.Context, Querier) error {
+			close(inside)
+			<-released
+			return nil
+		})
+	}()
+	<-inside
+	return sync.OnceFunc(func() { close(released) }), result
+}
+
+func TestCloseReturnsOnceTheLockIsReleased(t *testing.T) {
+	opts, _ := testOptions(t)
+	d := mustOpen(t, opts)
+	release, done := holdConnection(t, d)
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		release()
+	}()
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := probeFromThisProcess(t, filepath.Join(opts.DataDir, "archive.db")); got != probeFree {
+		t.Fatalf("another connection of this process probing the database right after Close = %d, want free", got)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("the call that held the connection = %v", err)
+	}
+}
+
+func TestCloseGivesUpOnAConnectionThatStaysInUse(t *testing.T) {
+	opts, _ := testOptions(t)
+	d := mustOpen(t, opts)
+	d.closeWait = 50 * time.Millisecond
+	release, done := holdConnection(t, d)
+	defer release()
+	if err := d.Close(); !errors.Is(err, errStillHeld) {
+		t.Fatalf("Close while a call holds the connection = %v, want errStillHeld", err)
+	}
+	release()
+	if err := <-done; err != nil {
+		t.Fatalf("the call that held the connection = %v", err)
+	}
+	if got := probeFromThisProcess(t, filepath.Join(opts.DataDir, "archive.db")); got != probeFree {
+		t.Fatalf("probing the database once the call ended = %d, want free", got)
+	}
+}
+
 func TestOpenWaitsForTheLock(t *testing.T) {
 	opts, _ := testOptions(t)
 	shortTimeouts(&opts)

@@ -57,6 +57,7 @@ const (
 	defaultReadTimeout    = 2 * time.Second
 	defaultWriteTimeout   = 10 * time.Second
 	defaultRewriteTimeout = 5 * time.Minute
+	defaultCloseWait      = time.Second
 	maxGoroutineDump      = 32 << 10
 	sqliteBusy            = 5
 )
@@ -99,6 +100,7 @@ type DB struct {
 	readTimeout    time.Duration
 	writeTimeout   time.Duration
 	rewriteTimeout time.Duration
+	closeWait      time.Duration
 	closed         atomic.Bool
 	backupPages    int32
 	newBackup      func(*keptConn, string) (stepper, error)
@@ -146,6 +148,7 @@ func Open(ctx context.Context, name Name, opts Options) (*DB, error) {
 		readTimeout:    opts.ReadTimeout,
 		writeTimeout:   opts.WriteTimeout,
 		rewriteTimeout: opts.RewriteTimeout,
+		closeWait:      defaultCloseWait,
 		backupPages:    backupPagesPerStep,
 		newBackup:      startBackup,
 	}
@@ -339,7 +342,11 @@ func (d *DB) Close() error {
 	if d.closed.Swap(true) {
 		return nil
 	}
-	return d.sql.Close()
+	err := d.sql.Close()
+	if !d.connector.awaitRelease(d.closeWait) {
+		return errors.Join(err, errStillHeld)
+	}
+	return err
 }
 
 func (d *DB) Healthy() bool { return !d.closed.Load() && !d.connector.lostConnection() }
@@ -405,7 +412,10 @@ func (d *DB) within(ctx context.Context, op string, timeout time.Duration, fn fu
 	return err
 }
 
-var errClosed = errors.New("db: the database is closed")
+var (
+	errClosed    = errors.New("db: the database is closed")
+	errStillHeld = errors.New("db: the connection that holds the lock was still in use when the database was closed")
+)
 
 func goroutineDump() string {
 	var b bytes.Buffer

@@ -1251,11 +1251,15 @@ the events under [Logging](#logging):
 3. The [WhatsApp engine](#whatsapp-engine) disconnects from WhatsApp and its
    workers stop after the row or batch in hand.
 4. The [archive](#message-archive) and the [device store](#device-store) are
-   closed, which releases their locks.
+   closed, which releases their locks. Each waits up to 1 second for a call
+   still in progress to give its connection back, then closes it.
 5. The health listener stops.
 
-One grace period of 10 seconds bounds the whole shutdown. When it runs out, the
-remaining connections are closed and `serve` exits `1`; otherwise it exits `0`.
+One grace period of 10 seconds bounds the whole shutdown, apart from those waits
+of up to 1 second for each database. When it runs out, the remaining
+connections are closed and `serve` exits `1`; otherwise it exits `0`. A
+database whose connection a call still held after its wait is reported in the
+`stopped` event and makes `serve` exit `1` too.
 Give the process more than 10 seconds between the stop signal and a forced kill;
 Docker's default stop timeout is exactly 10 seconds.
 
