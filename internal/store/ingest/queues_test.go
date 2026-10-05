@@ -253,6 +253,23 @@ func TestSyncStateAndTheRestartCounter(t *testing.T) {
 	}
 }
 
+func TestStartsLaterThanTheClockAreForgotten(t *testing.T) {
+	s := openStore(t)
+	for range 5 {
+		if _, err := s.RecordStart(t.Context(), epoch); err != nil {
+			t.Fatalf("RecordStart: %v", err)
+		}
+	}
+	for i, back := range []time.Duration{24 * time.Hour, 23 * time.Hour, time.Hour, time.Minute} {
+		if n, err := s.RecordStart(t.Context(), epoch.Add(-back)); err != nil || n != 1 {
+			t.Fatalf("start %d, %v before the five, counts %d recent starts, %v; want 1", i+1, back, n, err)
+		}
+	}
+	if n, err := s.RecordStart(t.Context(), epoch); err != nil || n != 2 {
+		t.Fatalf("a start back at the time of the five counts %d recent starts, %v; want 2", n, err)
+	}
+}
+
 func TestFreeSpaceFloorHasHysteresis(t *testing.T) {
 	const floor = 1000
 	for _, tt := range []struct {

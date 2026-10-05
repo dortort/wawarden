@@ -486,7 +486,10 @@ but `shutdown` also logs `disconnected` at every log level. The gauges
 - **Restart budget.** When the archive has recorded more than 5 starts in the
   last ten minutes, this one included (`recent_starts` in `archive_opened`), the
   engine starts in `disconnected` with reason `restart_budget` and makes no
-  connection, so that a crash loop does not become a reconnect storm.
+  connection, so that a crash loop does not become a reconnect storm. A start
+  recorded at a later time than the current one, as after the system clock was
+  set back, is forgotten, so it cannot hold the engine in `restart_budget`
+  until the clock catches up.
 - **Protocol version.** Otherwise the engine first fetches the current WhatsApp
   Web version, at most four times: once, then after 1, 2 and 4 seconds. It
   takes a newer version, keeps its own when the fetched one is equal, never takes

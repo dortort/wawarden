@@ -66,10 +66,10 @@ func (s *Store) RecordStart(ctx context.Context, now time.Time) (int, error) {
 		if err != nil {
 			return err
 		}
-		cutoff := ms(now.Add(-RestartWindow))
+		cutoff, at := ms(now.Add(-RestartWindow)), ms(now)
 		kept := []string{}
 		for _, t := range starts {
-			if t > cutoff {
+			if t > cutoff && t <= at {
 				kept = append(kept, strconv.FormatInt(t, 10))
 			}
 		}
