@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -210,9 +211,10 @@ func render(v any) (s string) {
 			s = typeName(v)
 		}
 	}()
+	if b := reflect.ValueOf(v); b.Kind() == reflect.Slice && b.Type().Elem().Kind() == reflect.Uint8 {
+		return fmt.Sprintf("[%d bytes]", b.Len())
+	}
 	switch x := v.(type) {
-	case []byte:
-		return fmt.Sprintf("[%d bytes]", len(x))
 	case error:
 		return x.Error()
 	case fmt.Stringer:

@@ -24,6 +24,7 @@ import (
 const (
 	canaryUser = "15550100042"
 	canary     = canaryUser + "@s.whatsapp.net"
+	secretText = "synthetic secret message text"
 )
 
 var (
@@ -443,6 +444,14 @@ func (*failure) Error() string { panic(canary) }
 
 type blob []byte
 
+type stringBytes []byte
+
+func (b stringBytes) String() string { return string(b) }
+
+type errorBytes []byte
+
+func (b errorBytes) Error() string { return string(b) }
+
 type holder struct {
 	Chat string
 	Data []byte
@@ -497,7 +506,11 @@ func TestAttributesRenderFailClosed(t *testing.T) {
 		{name: "map", value: map[string]string{"chat": canary}, want: "[map[string]string]"},
 		{name: "slice of strings", value: []string{canary}, want: "[[]string]"},
 		{name: "array of bytes", value: [4]byte{1, 2, 3, 4}, want: "[[4]uint8]"},
-		{name: "named byte slice", value: blob(canary), want: "[logx.blob]"},
+		{name: "named byte slice", value: blob(canary), want: "[26 bytes]"},
+		{name: "raw JSON", value: json.RawMessage(`{"text":"synthetic secret"}`), want: "[27 bytes]"},
+		{name: "raw JSON holding an identifier", value: json.RawMessage(`"` + canary + `"`), want: "[28 bytes]"},
+		{name: "byte slice with a String method", value: stringBytes(canary), want: "[26 bytes]"},
+		{name: "byte slice with an Error method", value: errorBytes(canary), want: "[26 bytes]"},
 		{name: "policy chat", value: chat, want: "[seal.Chat]"},
 		{name: "pointer to policy chat", value: &chat, want: "[*seal.Chat]"},
 		{name: "Stringer that panics", value: &panicky{}, want: "[*logx.panicky]"},
@@ -545,7 +558,8 @@ func TestTheCanaryNeverReachesTheOutput(t *testing.T) {
 		canary, []byte(canary), errors.New(canary), err, stringer{canary}, holder{Chat: canaryUser, Data: []byte(canary)},
 		&holder{Chat: canaryUser}, map[string]any{"phone": canaryUser}, []any{canaryUser}, chat, &chat,
 		valuer{slog.StringValue(canary)}, valuer{slog.GroupValue(slog.String(canary, canary))},
-		valuer{slog.AnyValue(holder{Chat: canaryUser})}, json.RawMessage(canary), blob(canary),
+		valuer{slog.AnyValue(holder{Chat: canaryUser})}, json.RawMessage(`{"text":"` + secretText + `","phone":"` + canaryUser + `"}`), blob(canary),
+		stringBytes(secretText), errorBytes(secretText),
 		&panicky{}, &failure{}, [1]string{canaryUser},
 	}
 	values = append(values, grants(t, chat)...)
@@ -563,7 +577,7 @@ func TestTheCanaryNeverReachesTheOutput(t *testing.T) {
 		t.Fatalf("direct write: %v", err)
 	}
 	text := out.String()
-	if strings.Contains(text, canaryUser) || strings.Contains(text, "whatsapp.net\"") || strings.Contains(text, base64.StdEncoding.EncodeToString([]byte(canary))[:12]) {
+	if strings.Contains(text, canaryUser) || strings.Contains(text, secretText) || strings.Contains(text, "whatsapp.net\"") || strings.Contains(text, base64.StdEncoding.EncodeToString([]byte(canary))[:12]) {
 		t.Fatalf("the canary reached the output:\n%s", text)
 	}
 	for line := range strings.Lines(text) {
