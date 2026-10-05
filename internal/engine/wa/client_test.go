@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -143,29 +144,30 @@ func TestTheClientIsBuiltForASupervisedDesktopCompanion(t *testing.T) {
 		t.Error("full sync is not required")
 	}
 	built := r.c.current()
-	checkClientSettings(t, "the built client", built)
+	checkClientSettings(t, "the built client", built, r.c.http)
 	cli, _, cancel := r.c.prepare()
 	cancel()
 	if cli != built {
 		t.Fatal("a connection without a stale device replaced the client")
 	}
-	checkClientSettings(t, "the client prepared for a connection", cli)
+	checkClientSettings(t, "the client prepared for a connection", cli, r.c.http)
 	r.dispatch(&events.LoggedOut{Reason: events.ConnectFailureLoggedOut})
 	fresh, _, cancel := r.c.prepare()
 	cancel()
 	if fresh == built || fresh != r.c.current() {
 		t.Fatal("a logged-out device was not replaced before the next connection")
 	}
-	checkClientSettings(t, "the client that replaced a logged-out device", fresh)
+	checkClientSettings(t, "the client that replaced a logged-out device", fresh, r.c.http)
 	unpaired := newRig(t, &store.Device{})
-	checkClientSettings(t, "the client of an unpaired device", unpaired.c.current())
+	checkClientSettings(t, "the client of an unpaired device", unpaired.c.current(), unpaired.c.http)
 	if unpaired.c.Paired() || unpaired.c.Account() != "" {
 		t.Fatalf("an unpaired device reports Paired %v, Account %q", unpaired.c.Paired(), unpaired.c.Account())
 	}
 }
 
-func checkClientSettings(t *testing.T, which string, cli *whatsmeow.Client) {
+func checkClientSettings(t *testing.T, which string, cli *whatsmeow.Client, h httpClients) {
 	t.Helper()
+	checkHTTPClients(t, which, cli, h)
 	for name, bad := range map[string]bool{
 		"auto-reconnect is on":                          cli.EnableAutoReconnect,
 		"initial auto-reconnect is on":                  cli.InitialAutoReconnect,
@@ -195,6 +197,19 @@ func checkClientSettings(t *testing.T, which string, cli *whatsmeow.Client) {
 	}
 }
 
+func checkHTTPClients(t *testing.T, which string, cli *whatsmeow.Client, h httpClients) bool {
+	t.Helper()
+	ok := true
+	v := reflect.ValueOf(cli).Elem()
+	for field, want := range map[string]*http.Client{"preLoginHTTP": h.websocket, "websocketHTTP": h.websocket, "mediaHTTP": h.media} {
+		if f := v.FieldByName(field); !f.IsValid() || f.Kind() != reflect.Pointer || f.Pointer() != reflect.ValueOf(want).Pointer() {
+			t.Errorf("%s: the protocol library's %s is not the adapter's HTTP client, so it could take a proxy from the environment, wait without a limit and dial past the test guard", which, field)
+			ok = false
+		}
+	}
+	return ok
+}
+
 func TestEveryHTTPClientIsBoundedAndIgnoresTheProxyEnvironment(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:9")
 	t.Setenv("HTTP_PROXY", "http://127.0.0.1:9")
@@ -220,16 +235,22 @@ func TestEveryHTTPClientIsBoundedAndIgnoresTheProxyEnvironment(t *testing.T) {
 }
 
 func TestNoTestBinaryReachesTheNetworkThroughTheClient(t *testing.T) {
-	r := newRig(t, pairedDevice())
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	err := r.c.Connect(ctx)
-	if !errors.Is(err, errOffline) {
-		t.Fatalf("Connect = %v, want the offline refusal", err)
-	}
-	r.c.Disconnect()
-	if err := r.c.AckHistory(ctx, engine.HistoryRef{ID: "3EB0SYNTHETIC"}); err == nil {
-		t.Fatal("a history receipt was sent without a connection")
+	for name, device := range map[string]*store.Device{"a paired device": pairedDevice(), "an unpaired device": {}} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t, device)
+			if !checkHTTPClients(t, "the client", r.c.current(), r.c.http) {
+				t.Fatal("the client would not connect through the adapter's guarded transports")
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			if err := r.c.Connect(ctx); !errors.Is(err, errOffline) {
+				t.Fatalf("Connect = %v, want the offline refusal", err)
+			}
+			r.c.Disconnect()
+			if err := r.c.AckHistory(ctx, engine.HistoryRef{ID: "3EB0SYNTHETIC"}); err == nil {
+				t.Fatal("a history receipt was sent without a connection")
+			}
+		})
 	}
 }
 
