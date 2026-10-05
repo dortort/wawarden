@@ -1,0 +1,301 @@
+name: bump-whatsmeow
+
+on:
+  schedule:
+    - cron: '41 5 * * 1'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Upstream commit of go.mau.fi/whatsmeow (7 to 40 lowercase hex characters) or "latest"'
+        required: true
+        default: latest
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: bump-whatsmeow
+  cancel-in-progress: false
+
+env:
+  GOFLAGS: -mod=readonly
+  GOPROXY: https://proxy.golang.org
+  GOTOOLCHAIN: local
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  prepare:
+    name: Resolve, describe, build and test the bump
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      old: ${{ steps.resolve.outputs.old }}
+      new: ${{ steps.resolve.outputs.new }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Check the Go version
+        run: hack/check-go-version.sh
+
+      - name: Resolve the target through the module proxy
+        id: resolve
+        env:
+          TARGET: ${{ inputs.target || 'latest' }}
+        run: |
+          module=go.mau.fi/whatsmeow
+          pseudo='^v[0-9]+\.[0-9]+\.[0-9]+-([0-9A-Za-z.-]*\.)?[0-9]{14}-[0-9a-f]{12}$'
+          if [ "$TARGET" != latest ] && [[ ! "$TARGET" =~ ^[0-9a-f]{7,40}$ ]]; then
+            echo "::error::the target must be latest or an upstream commit of 7 to 40 lowercase hex characters"
+            exit 1
+          fi
+          old=$(go list -m -f '{{.Version}}' "$module")
+          new=$(go list -m -f '{{.Version}}' "$module@$TARGET")
+          for version in "$old" "$new"; do
+            if [[ ! "$version" =~ $pseudo ]]; then
+              echo "::error::$module $version is not a pseudo-version; this workflow pins untagged upstream commits only"
+              exit 1
+            fi
+          done
+          if [ "$TARGET" != latest ] && [[ "${new##*-}" != "${TARGET:0:12}"* ]]; then
+            echo "::error::the module proxy resolved $TARGET to $new, another commit"
+            exit 1
+          fi
+          if [ "$old" = "$new" ]; then
+            echo "::notice::go.mod already pins $module $new; nothing to do"
+            exit 0
+          fi
+          echo "::notice::bumping $module from $old to $new"
+          {
+            echo "old=$old"
+            echo "new=$new"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Update go.mod and go.sum
+        if: steps.resolve.outputs.new != ''
+        env:
+          NEW: ${{ steps.resolve.outputs.new }}
+        run: |
+          go get "go.mau.fi/whatsmeow@$NEW"
+          go mod tidy
+          go mod verify
+          if [ "$(go list -m -f '{{.Version}}' go.mau.fi/whatsmeow)" != "$NEW" ]; then
+            echo "::error::go.mod does not pin go.mau.fi/whatsmeow $NEW after go get and go mod tidy"
+            exit 1
+          fi
+          changed=$(git status --porcelain --untracked-files=all)
+          if [ "$changed" != "$(printf ' M go.mod\n M go.sum')" ]; then
+            echo "::error::the update changed more than go.mod and go.sum"
+            echo "$changed"
+            exit 1
+          fi
+          git diff -- go.mod
+
+      - name: Describe the upstream change
+        if: steps.resolve.outputs.new != ''
+        env:
+          OLD: ${{ steps.resolve.outputs.old }}
+          NEW: ${{ steps.resolve.outputs.new }}
+        run: |
+          module=go.mau.fi/whatsmeow
+          upstream=https://github.com/tulir/whatsmeow
+          watched=(socket store send.go download.go upload.go message.go 'pair*.go' handshake.go msgsecret.go 'appstate*')
+          limit=60000
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          work=$RUNNER_TEMP/describe
+          out=$RUNNER_TEMP/bump
+          mkdir -p "$work" "$out"
+
+          fence() {
+            { grep -oE '`+' "$1" || true; } | awk '{ if (length($0) > n) n = length($0) } END { n = n >= 3 ? n + 1 : 3; while (n-- > 0) printf "`" }'
+          }
+          block() {
+            local f
+            f=$(fence "$2")
+            printf '%s%s\n' "$f" "$1"
+            cat "$2"
+            printf '%s\n' "$f"
+          }
+          shorten() {
+            head -n 200 "$1" | cut -c -200 > "$2"
+          }
+
+          git clone --quiet --filter=blob:none --no-checkout "$upstream.git" "$work/upstream"
+          old_commit=$(git -C "$work/upstream" rev-parse --verify "${OLD##*-}^{commit}")
+          new_commit=$(git -C "$work/upstream" rev-parse --verify "${NEW##*-}^{commit}")
+          git -C "$work/upstream" log --oneline --no-decorate --abbrev=12 "$old_commit..$new_commit" > "$work/log.full"
+          if git -C "$work/upstream" merge-base --is-ancestor "$old_commit" "$new_commit"; then
+            lineage="descends from the pinned commit"
+          else
+            lineage="does **not** descend from the pinned commit"
+          fi
+          git -C "$work/upstream" log --oneline --no-decorate --abbrev=12 "$new_commit..$old_commit" > "$work/dropped.full"
+
+          git init --quiet --bare "$work/sources.git"
+          trees=()
+          for version in "$OLD" "$NEW"; do
+            dir=$(go mod download -json "$module@$version" | jq -r .Dir)
+            GIT_INDEX_FILE=$work/sources.index git -C "$dir" --git-dir="$work/sources.git" --work-tree=. add --all --force
+            trees+=("$(GIT_INDEX_FILE=$work/sources.index git --git-dir="$work/sources.git" write-tree)")
+            rm "$work/sources.index"
+          done
+          git --git-dir="$work/sources.git" diff --stat=120 --stat-count=100 "${trees[@]}" > "$work/stat.txt"
+          git --git-dir="$work/sources.git" diff "${trees[@]}" -- "${watched[@]}" > "$out/watched-paths.diff"
+          git diff -U0 -- go.mod > "$work/gomod.diff"
+          cp go.mod go.sum "$out/"
+
+          shorten "$work/log.full" "$work/log.txt"
+          shorten "$work/dropped.full" "$work/dropped.txt"
+          {
+            printf "Pins \`%s\` to \`%s\`; \`main\` pins \`%s\`.\n\n" "$module" "$NEW" "$OLD"
+            printf -- '- Upstream: %s/compare/%s...%s. The new commit %s.\n' "$upstream" "$old_commit" "$new_commit" "$lineage"
+            printf -- "- Opened by the \`bump-whatsmeow\` workflow (%s, [run %s](%s)), which never merges. That run passed \`go mod tidy\`, \`go mod verify\`, \`go build\` for the release and \`dev\` tag sets, and \`hack/offline-test.sh\`, which runs the whole suite, release and dev builds, in a container without a network, before it opened or updated this pull request.\n" "$GITHUB_EVENT_NAME" "$GITHUB_RUN_ID" "$run_url"
+            printf -- '- CI does not start on its own for a pull request that the workflow token opened or updated: a maintainer starts it with **Approve workflows to run** in the merge box. RELEASING.md, under The whatsmeow bump workflow, gives the review.\n\n'
+            printf "### Upstream commits\n\n\`git log --oneline %s..%s\`: %d commits, newest first" "${OLD##*-}" "${NEW##*-}" "$(($(wc -l < "$work/log.full")))"
+            if ! cmp -s "$work/log.full" "$work/log.txt"; then
+              printf '; at most 200 shown, each cut at 200 characters'
+            fi
+            printf '.\n\n'
+            block text "$work/log.txt"
+            if [ -s "$work/dropped.full" ]; then
+              printf "\n### Commits of the pinned version that the new one drops\n\n\`git log --oneline %s..%s\`: %d commits.\n\n" "${NEW##*-}" "${OLD##*-}" "$(($(wc -l < "$work/dropped.full")))"
+              block text "$work/dropped.txt"
+            fi
+            printf '\n### Diffstat\n\nBetween the module sources of the two versions as the Go module proxy serves them, at most 100 files listed:\n\n'
+            block text "$work/stat.txt"
+            printf '\n### go.mod\n\n'
+            block diff "$work/gomod.diff"
+            printf "\n### Watched paths\n\nThe full diff between the module sources of the two versions under \`socket/\`, \`store/\`, \`send.go\`, \`download.go\`, \`upload.go\`, \`message.go\`, \`pair*.go\`, \`handshake.go\`, \`msgsecret.go\` and \`appstate*\`.\n\n"
+          } > "$work/head.md"
+
+          size=$(($(wc -c < "$out/watched-paths.diff")))
+          room=$((limit - $(wc -c < "$work/head.md") - 1000))
+          if [ "$size" -eq 0 ]; then
+            note='No watched path changed.'
+            : > "$work/shown.diff"
+          elif [ "$size" -le "$room" ]; then
+            note=''
+            cp "$out/watched-paths.diff" "$work/shown.diff"
+          else
+            LC_ALL=C awk -v max="$room" '{ n += length($0) + 1; if (n > max) exit; print }' "$out/watched-paths.diff" > "$work/shown.diff"
+            note="Truncated to fit GitHub's limit on a pull request description: the first $(($(wc -c < "$work/shown.diff"))) of $size bytes are shown, cut at a line. The complete diff is \`watched-paths.diff\` in the artifact \`whatsmeow-bump\` of [run $GITHUB_RUN_ID]($run_url)."
+          fi
+          {
+            cat "$work/head.md"
+            if [ -n "$note" ]; then
+              printf '%s\n\n' "$note"
+            fi
+            if [ -s "$work/shown.diff" ]; then
+              block diff "$work/shown.diff"
+            fi
+          } > "$out/body.md"
+          if [ "$(($(wc -c < "$out/body.md")))" -gt 65536 ]; then
+            echo "::error::the pull request description exceeds GitHub's limit of 65536 characters"
+            exit 1
+          fi
+
+      - name: Upload the bump
+        if: steps.resolve.outputs.new != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: whatsmeow-bump
+          path: ${{ runner.temp }}/bump
+          if-no-files-found: error
+
+      - name: Build
+        if: steps.resolve.outputs.new != ''
+        run: |
+          go build ./...
+          go build -tags dev ./...
+
+      - name: Test without a network
+        if: steps.resolve.outputs.new != ''
+        run: hack/offline-test.sh
+
+  propose:
+    name: Open or update the pull request
+    needs: prepare
+    if: github.ref == 'refs/heads/main' && needs.prepare.outputs.new != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download the bump
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: whatsmeow-bump
+          path: ${{ runner.temp }}/bump
+
+      - name: Push the branch and open or update the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OLD: ${{ needs.prepare.outputs.old }}
+          NEW: ${{ needs.prepare.outputs.new }}
+        run: |
+          branch=bump/whatsmeow
+          bot_email='41898282+github-actions[bot]@users.noreply.github.com'
+          pseudo='^v[0-9]+\.[0-9]+\.[0-9]+-([0-9A-Za-z.-]*\.)?[0-9]{14}-[0-9a-f]{12}$'
+          body=$RUNNER_TEMP/bump/body.md
+          if [[ ! "$OLD" =~ $pseudo || ! "$NEW" =~ $pseudo ]]; then
+            echo "::error::the prepare job handed over versions that are not pseudo-versions"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/bump/go.mod" "$RUNNER_TEMP/bump/go.sum" .
+          if [ "$(git status --porcelain --untracked-files=all)" != "$(printf ' M go.mod\n M go.sum')" ] ||
+            ! awk -v v="$NEW" '$1 == "go.mau.fi/whatsmeow" && $2 == v { found = 1 } END { exit !found }' go.mod; then
+            echo "::error::the bump must change only go.mod and go.sum, and go.mod must pin go.mau.fi/whatsmeow $NEW"
+            exit 1
+          fi
+          title="build(deps): bump go.mau.fi/whatsmeow from ${OLD##*-} to ${NEW##*-}"
+          git config user.name 'github-actions[bot]'
+          git config user.email "$bot_email"
+          git switch --quiet --create "$branch"
+          git commit --quiet --message "$title" --message "Pins go.mau.fi/whatsmeow to $NEW; main pinned $OLD." -- go.mod go.sum
+
+          export GH_REPO=$GITHUB_REPOSITORY
+          gh auth setup-git
+          remote=$(git ls-remote origin "refs/heads/$branch" | cut -f1)
+          if [ -n "$remote" ]; then
+            git fetch --quiet --no-tags origin "+refs/heads/$branch:refs/remotes/origin/$branch"
+            others=$(git log --format='%ae%n%ce' "$GITHUB_SHA..refs/remotes/origin/$branch" | { grep -vxF "$bot_email" || true; })
+            if [ -n "$others" ]; then
+              echo "::error::$branch holds commits that this workflow did not make; merge or close its pull request and delete the branch"
+              exit 1
+            fi
+          fi
+          if [ -n "$remote" ] && git diff --quiet "refs/remotes/origin/$branch" HEAD -- go.mod go.sum; then
+            echo "::notice::$branch already pins go.mau.fi/whatsmeow $NEW"
+          else
+            git push --quiet --force-with-lease="refs/heads/$branch:$remote" origin "HEAD:refs/heads/$branch"
+          fi
+
+          number=$(gh pr list --head "$branch" --base main --state open --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --title "$title" --body-file "$body"
+          elif ! gh pr create --base main --head "$branch" --title "$title" --body-file "$body"; then
+            echo "GitHub refused to open the pull request. Open it from $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/main...$branch?expand=1 with \`body.md\` from the artifact \`whatsmeow-bump\` as its description; RELEASING.md, under The whatsmeow bump workflow, names the setting this needs." >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::GitHub refused to open the pull request; the run summary links the pushed branch"
+            exit 1
+          fi
