@@ -4,14 +4,17 @@ This is the authoritative reference for configuring and running WaWarden. It
 describes the current build on `main`: milestone **M0**, plus the parts of milestone
 **M1** merged so far, which are the [master key](#master-key), the pseudonyms and
 dropped lines in the [logs](#pseudonyms-and-dropped-lines), the
-[request-body decoder](#request-bodies), which no route uses yet, the
-[message archive](#message-archive), the [device store](#device-store) and the
+[request-body decoder](#request-bodies), the
+[message archive](#message-archive), the [device store](#device-store), the
 [WhatsApp engine](#whatsapp-engine) with its adapter to the WhatsApp protocol
-library. `serve` runs the engine, but the admin route that starts pairing arrives
-later in M1: until then a service without a paired device makes no connection to
-WhatsApp and writes no WhatsApp traffic to the archive. Everything listed here is
-implemented, and nothing else is. Settings planned for later milestones are
-listed under [Reserved names](#reserved-names) and are refused by this build.
+library, the [admin routes](#admin-routes) with the
+[admin commands](#admin-status-admin-pair-and-admin-reconnect) that call them,
+[notifications](#notifications) and
+[metrics in embedded metric format](#embedded-metric-format). A service without
+a paired device makes no connection to WhatsApp until `wawarden admin pair`
+requests pairing. Everything listed here is implemented, and nothing else is.
+Settings planned for later milestones are listed under
+[Reserved names](#reserved-names) and are refused by this build.
 
 ## Unknown variables stop the service
 
@@ -35,7 +38,6 @@ with `unknown_variable`.
 | Variable | Planned purpose | Becomes valid in |
 |---|---|---|
 | `WAWARDEN_BACKUP_AGE_RECIPIENT` | The age recipient that backups are encrypted to | M1 |
-| `WAWARDEN_METRICS_EMF` | `1` writes metrics as embedded-metric-format lines on standard output | M1 |
 | `WAWARDEN_SEND_PER_CLIENT_PER_MINUTE` | Per-client send rate limit | M3 |
 | `WAWARDEN_SEND_GLOBAL_PER_HOUR` | Global send rate limit | M3 |
 
@@ -55,6 +57,8 @@ wawarden [serve] [--allow-root]  run the gateway (the default)
 wawarden healthcheck             exit 0 only when the local /healthz answers 200
 wawarden version                 print the version and build flavour
 wawarden admin init              generate an admin token and its SHA-256
+wawarden admin status|pair|reconnect [--addr URL] --token-file PATH | --token-stdin | --token-command COMMAND
+                                 call the admin listener (default --addr http://127.0.0.1:8082)
 ```
 
 ### `serve`
@@ -124,17 +128,69 @@ listener accepts only tokens of exactly this form; see
 The shell, not WaWarden, creates the file when you redirect this output; set a
 restrictive `umask` or write it into a private directory.
 
-Other `admin` subcommands (`status`, `pair` and `reconnect` in M1, client
-management in M2, `backfill` in M3) do not exist in this build and are usage
-errors.
+The other `admin` subcommands of this build call the admin listener; see
+below. Client management (M2) and `backfill` (M3) do not exist in this build and
+are usage errors.
+
+### `admin status`, `admin pair` and `admin reconnect`
+
+These commands are HTTP clients of the [admin listener](#admin-routes). Each
+makes one request with the admin token and prints the answer:
+
+| Command | Request | Prints on standard output |
+|---|---|---|
+| `admin status` | `GET /admin/v1/status` | One `key: value` line each for `state`, `reason` (`none` when empty), `paired`, `chats`, `messages`, `history blobs pending`, `history blobs quarantined`, `inbox backlog`, `inbox quarantined`, `last ingest` (`never` before the first message) and `version`. |
+| `admin pair` | `POST /admin/v1/pair` with the body `{}` | `pairing code: <code>`. Standard error says where to enter it on the phone: Linked devices, Link a device, then Link with phone number instead. |
+| `admin reconnect` | `POST /admin/v1/reconnect` with the body `{}` | `reconnect requested` |
+
+Flags:
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--addr URL` | `http://127.0.0.1:8082` | The admin listener's URL: `http` or `https`, with a host, without credentials, a query or a fragment. A path is kept, so a reverse proxy can serve the listener under a prefix. With `http` and a host that is neither `localhost` nor a loopback address, the command warns on standard error that the token crosses the network unencrypted, and goes on. |
+| `--token-file PATH` | | Reads the token from a file. Symbolic links are followed; the file must be a regular file of at most 4096 bytes. |
+| `--token-stdin` | off | Reads the token from standard input, at most 4096 bytes. Refused when standard input is a terminal or another character device: pipe the token in instead of typing it. |
+| `--token-command COMMAND` | | Runs `COMMAND` and reads the token from its standard output, for example `--token-command 'op read op://vault/wawarden/token'`. |
+
+Give exactly one of `--token-file`, `--token-stdin` and `--token-command`. The
+token is never taken from a command-line argument or an environment variable,
+and the commands read no `WAWARDEN_` variable, so they can run in the same
+environment as `serve`. White space around the token is removed; what remains
+must have the exact form `admin init` prints, or the command stops before it
+sends anything. No error message repeats the file's content or the command's
+output.
+
+The token command is split into words without a shell: single and double
+quotes group words, and a backslash outside single quotes escapes the next
+character. For a pipeline, name a shell yourself (`sh -c '...'`); the
+container image has none. The command runs with standard input and standard
+error connected to nothing, so run it by hand to see why it fails; with every
+`WAWARDEN_` variable removed from its environment; in its own process group,
+which is killed once it has finished; for at most 30 seconds; and its output is
+capped at 4096 bytes. A command that leaves a process holding its output open
+fails after 2 seconds.
+
+The HTTP client ignores the proxy variables, follows no redirect (a redirect
+is reported as an unexpected answer), uses TLS 1.2 or later for `https`, gives
+up after 40 seconds, and reads at most 64 KiB of an answer. Everything it prints
+from an answer, a refusal's code included, passes through a terminal sanitiser
+that replaces every control, format, line-separator and paragraph-separator
+character and every invalid byte with U+FFFD, so an answer cannot move the
+cursor, rewrite the screen, set a link or write the clipboard.
+
+A refusal prints `admin <command>: refused with <code> (HTTP <status>)` on
+standard error; see the [exit codes](#exit-codes).
 
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
-| `0` | `serve` stopped cleanly after `SIGTERM` or `SIGINT`; `healthcheck` got `200`; `version` and `admin init` printed their output. |
-| `1` | `serve` failed after its configuration was accepted: the [archive](#message-archive) or the [device store](#device-store) could not be opened or its lock was not acquired within five minutes, the device store could not be brought up to date, or a listener could not be opened (`startup_failed`), a listener failed while running (`listener_failed`), or shutdown ended with errors, for example when the grace period ran out. `healthcheck` failed for any reason, including extra arguments. `version` or `admin init` could not write to standard output. |
-| `2` | `serve` refused to start (`startup_refused`, see [Startup refusals](#startup-refusals)). Or a usage error: an unknown subcommand, or an unknown flag or extra argument given to `serve`, `version` or `admin`; the usage text goes to standard error. |
+| `0` | `serve` stopped cleanly after `SIGTERM` or `SIGINT`; `healthcheck` got `200`; `version` and `admin init` printed their output; `admin status`, `pair` or `reconnect` got `200` and printed the answer. |
+| `1` | `serve` failed after its configuration was accepted: the [archive](#message-archive) or the [device store](#device-store) could not be opened or its lock was not acquired within five minutes, the device store could not be brought up to date, or a listener could not be opened (`startup_failed`), a listener failed while running (`listener_failed`), or shutdown ended with errors, for example when the grace period ran out. `healthcheck` failed for any reason, including extra arguments. `version` or `admin init` could not write to standard output. An admin command's request failed: no connection, no answer within 40 seconds, an answer over 64 KiB or not in the expected shape, a redirect, or any status other than those of codes `0`, `4` and `5`, such as `engine_unavailable` (`503`), `pair_failed` (`502`) or `internal_error` (`500`). |
+| `2` | `serve` refused to start (`startup_refused`, see [Startup refusals](#startup-refusals)). Or a usage error: an unknown subcommand, or an unknown flag or extra argument given to `serve`, `version` or `admin`, an admin command without exactly one token source, or an invalid `--addr`; the usage text goes to standard error. |
+| `3` | An admin command could not use its token: the file or standard input could not be read, held more than 4096 bytes or was a terminal; the token command could not start, failed, timed out, left a process holding its output or printed more than 4096 bytes; or what it read is not an admin token. Nothing was sent. |
+| `4` | The admin listener refused the token: `401` (`unauthorized`), or `429` with `too_many_requests` (the failure budget is spent, see [Failed authentication](#failed-authentication)). |
+| `5` | The service refused the operation in its current state: `409` (`already_paired`, `already_connected`, `not_paired`, `owner_phone_missing` or `owner_mismatch`) or `429` with `rate_limited`; see [Admin routes](#admin-routes). |
 
 `healthcheck` never exits `2`, because container runtimes reserve that code in
 health checks. A process stopped by a second signal during shutdown ends with
@@ -158,6 +214,10 @@ These are all the variables this build reads.
 | `WAWARDEN_OWNER_PHONE` | unset | The phone number of the WhatsApp account that WaWarden may link to, in E.164 form: `+`, then 7 to 15 digits, the first not `0`, and nothing else (no spaces or separators), for example `+15550100001`. Unset, the service starts but refuses to pair; see [Pairing](#pairing). | `owner_phone_invalid` |
 | `WAWARDEN_HISTORY_MAX_BYTES` | `33554432` (32 MiB) | The largest history-sync blob, in bytes, before and after decompression: a number in decimal digits from `1` to `268435456` (256 MiB), with no sign, unit, separator or white space. The memory that history sync needs grows with it; see [History sync](#history-sync). | `history_max_bytes_invalid` |
 | `WAWARDEN_UNSAFE_DEBUG` | unset | A window, in minutes, during which the protocol library's debug output is logged: a number in decimal digits from `1` to `60`. Unset, that output is discarded at every log level. See [Protocol library logs](#protocol-library-logs) before setting it. | `unsafe_debug_invalid` |
+| `WAWARDEN_METRICS_EMF` | unset | `1` writes [metrics in embedded metric format](#embedded-metric-format) on standard output; `0` or unset writes none. | `metrics_emf_invalid` |
+| `WAWARDEN_NOTIFY_URL` | unset | The [webhook](#webhook) that receives every notification event: an `https` URL with a host, optionally a port, a path and a query, without credentials or a fragment. Treat it as a secret when its path or query holds one; the service never logs it. Unset, events go to standard output only. | `notify_url_invalid` |
+| `WAWARDEN_NOTIFY_SECRET_FILE` | unset | A path to the webhook's signing secret, required with `WAWARDEN_NOTIFY_URL` and refused without it: a regular file (symbolic links are followed) with no write permission for its group and no permission at all for others (`0400`, `0440`, `0600` and `0640` pass; `0644` and `0444` do not), of at most 4096 bytes, holding at least 32 bytes apart from surrounding white space. Generate one with `openssl rand -hex 32`. | `notify_url_missing`, `notify_secret_missing`, `notify_secret_unreadable`, `notify_secret_permissions`, `notify_secret_invalid` |
+| `WAWARDEN_NOTIFY_ALLOW_PRIVATE` | unset | `1` lets the webhook reach loopback, private (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`) and shared (`100.64.0.0/10`, which mesh VPNs use) addresses; `0` or unset refuses them. Only with `WAWARDEN_NOTIFY_URL`. | `notify_allow_private_invalid`, `notify_url_missing` |
 
 Rules that apply to all of them:
 
@@ -239,56 +299,64 @@ The checks run in this order:
 | 14 | `owner_phone_invalid` | `WAWARDEN_OWNER_PHONE` | The value is set but is not an E.164 number: `+` and 7 to 15 digits, the first not `0`. |
 | 15 | `history_max_bytes_invalid` | `WAWARDEN_HISTORY_MAX_BYTES` | The value is not a number of bytes in decimal digits from 1 to 268435456. |
 | 16 | `unsafe_debug_invalid` | `WAWARDEN_UNSAFE_DEBUG` | The value is not a number of minutes in decimal digits from 1 to 60. |
-| 17 | `running_as_root` | none | The real or the effective user ID is 0 and `--allow-root` was not given. |
-| 18 | `data_dir_unusable` | `WAWARDEN_DATA_DIR` | The directory does not exist and cannot be created, or cannot be inspected; the path is empty. |
-| 19 | `data_dir_not_directory` | `WAWARDEN_DATA_DIR` | The path is not a directory, or its last component is a symbolic link. |
-| 20 | `data_dir_foreign_owner` | `WAWARDEN_DATA_DIR` | The directory is not owned by the process's effective user ID. |
-| 21 | `data_dir_permissions` | `WAWARDEN_DATA_DIR` | The directory's mode is not exactly `0700`. |
-| 22 | `history_dir_unusable` | none; the error names `history/` | `history` exists in the data directory but cannot be inspected. |
-| 23 | `history_dir_not_directory` | none; the error names `history/` | `history` exists but is not a directory, or is a symbolic link. |
-| 24 | `history_dir_foreign_owner` | none; the error names `history/` | `history` is not owned by the process's effective user ID. |
-| 25 | `history_dir_permissions` | none; the error names `history/` | The mode of `history` is not exactly `0700`. |
-| 26 | `backups_dir_unusable` | none; the error names `backups/` | `backups` exists in the data directory but cannot be inspected. |
-| 27 | `backups_dir_not_directory` | none; the error names `backups/` | `backups` exists but is not a directory, or is a symbolic link. |
-| 28 | `backups_dir_foreign_owner` | none; the error names `backups/` | `backups` is not owned by the process's effective user ID. |
-| 29 | `backups_dir_permissions` | none; the error names `backups/` | The mode of `backups` is not exactly `0700`. |
-| 30 | `keys_dir_unusable` | none; the error names `keys/` | `keys` in the data directory does not exist and cannot be created, or cannot be inspected. |
-| 31 | `keys_dir_not_directory` | none; the error names `keys/` | `keys` is not a directory, or is a symbolic link. |
-| 32 | `keys_dir_foreign_owner` | none; the error names `keys/` | `keys` is not owned by the process's effective user ID. |
-| 33 | `keys_dir_permissions` | none; the error names `keys/` | The mode of `keys` is not exactly `0700`. |
-| 34 | `master_key_unusable` | none; the error names `keys/master` | `keys/master` does not exist and cannot be created, or cannot be inspected, opened or read. |
-| 35 | `master_key_not_regular` | none; the error names `keys/master` | `keys/master` is not a regular file: a symbolic link (even to a valid key), a directory or a named pipe, for example. |
-| 36 | `master_key_foreign_owner` | none; the error names `keys/master` | `keys/master` is not owned by the process's effective user ID. |
-| 37 | `master_key_permissions` | none; the error names `keys/master` | `keys/master` grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 38 | `master_key_size` | none; the error names `keys/master` | `keys/master` does not hold exactly 32 bytes. |
-| 39 | `storage_filesystem_unknown` | none | The filesystem of the data directory cannot be inspected (`statfs`). |
-| 40 | `storage_network_filesystem` | none | The storage profile is `local` and the data directory is on a network filesystem; see [Storage profiles](#storage-profiles). |
-| 41 | `archive_db_unusable` | none; the error names `archive.db` | `archive.db` does not exist and cannot be created, or cannot be inspected. |
-| 42 | `archive_db_not_regular` | none; the error names `archive.db` | `archive.db` is not a regular file: a symbolic link or a directory, for example. |
-| 43 | `archive_db_foreign_owner` | none; the error names `archive.db` | `archive.db` is not owned by the process's effective user ID. |
-| 44 | `archive_db_permissions` | none; the error names `archive.db` | `archive.db` grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 45 | `archive_journal_unusable` | none; the error names `archive.db-journal` | `archive.db-journal` exists but cannot be inspected. |
-| 46 | `archive_journal_not_regular` | none; the error names `archive.db-journal` | `archive.db-journal` exists but is not a regular file. |
-| 47 | `archive_journal_foreign_owner` | none; the error names `archive.db-journal` | `archive.db-journal` is not owned by the process's effective user ID. |
-| 48 | `archive_journal_permissions` | none; the error names `archive.db-journal` | `archive.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 49 | `storage_ofd_unavailable` | none | On Linux, the storage profile is `local` and the kernel or the data directory's filesystem refused open-file-description locks; see [Storage profiles](#storage-profiles). |
-| 50 | `archive_schema_newer` | none; the error names `archive.db` | The archive's schema version is newer than this build knows: a newer release wrote it. |
-| 51 | `session_db_unusable` | none; the error names `session.db` | `session.db` does not exist and cannot be created, or cannot be inspected. |
-| 52 | `session_db_not_regular` | none; the error names `session.db` | `session.db` is not a regular file: a symbolic link or a directory, for example. |
-| 53 | `session_db_foreign_owner` | none; the error names `session.db` | `session.db` is not owned by the process's effective user ID. |
-| 54 | `session_db_permissions` | none; the error names `session.db` | `session.db` grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 55 | `session_journal_unusable` | none; the error names `session.db-journal` | `session.db-journal` exists but cannot be inspected. |
-| 56 | `session_journal_not_regular` | none; the error names `session.db-journal` | `session.db-journal` exists but is not a regular file. |
-| 57 | `session_journal_foreign_owner` | none; the error names `session.db-journal` | `session.db-journal` is not owned by the process's effective user ID. |
-| 58 | `session_journal_permissions` | none; the error names `session.db-journal` | `session.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 17 | `metrics_emf_invalid` | `WAWARDEN_METRICS_EMF` | The value is not `0` or `1`. |
+| 18 | `notify_url_invalid` | `WAWARDEN_NOTIFY_URL` | The value is not an `https` URL with a host, or it holds credentials or a fragment. |
+| 19 | `notify_allow_private_invalid` | `WAWARDEN_NOTIFY_ALLOW_PRIVATE` | The value is not `0` or `1`. |
+| 20 | `notify_url_missing` | `WAWARDEN_NOTIFY_SECRET_FILE`, else `WAWARDEN_NOTIFY_ALLOW_PRIVATE` | That variable is set without `WAWARDEN_NOTIFY_URL`. |
+| 21 | `notify_secret_missing` | `WAWARDEN_NOTIFY_SECRET_FILE` | `WAWARDEN_NOTIFY_URL` is set without a secret file. |
+| 22 | `notify_secret_unreadable` | `WAWARDEN_NOTIFY_SECRET_FILE` | The file cannot be opened or read, or is not a regular file. |
+| 23 | `notify_secret_permissions` | `WAWARDEN_NOTIFY_SECRET_FILE` | The file grants write permission to its group or any permission to others. |
+| 24 | `notify_secret_invalid` | `WAWARDEN_NOTIFY_SECRET_FILE` | The file holds more than 4096 bytes, or less than 32 bytes apart from surrounding white space. |
+| 25 | `running_as_root` | none | The real or the effective user ID is 0 and `--allow-root` was not given. |
+| 26 | `data_dir_unusable` | `WAWARDEN_DATA_DIR` | The directory does not exist and cannot be created, or cannot be inspected; the path is empty. |
+| 27 | `data_dir_not_directory` | `WAWARDEN_DATA_DIR` | The path is not a directory, or its last component is a symbolic link. |
+| 28 | `data_dir_foreign_owner` | `WAWARDEN_DATA_DIR` | The directory is not owned by the process's effective user ID. |
+| 29 | `data_dir_permissions` | `WAWARDEN_DATA_DIR` | The directory's mode is not exactly `0700`. |
+| 30 | `history_dir_unusable` | none; the error names `history/` | `history` exists in the data directory but cannot be inspected. |
+| 31 | `history_dir_not_directory` | none; the error names `history/` | `history` exists but is not a directory, or is a symbolic link. |
+| 32 | `history_dir_foreign_owner` | none; the error names `history/` | `history` is not owned by the process's effective user ID. |
+| 33 | `history_dir_permissions` | none; the error names `history/` | The mode of `history` is not exactly `0700`. |
+| 34 | `backups_dir_unusable` | none; the error names `backups/` | `backups` exists in the data directory but cannot be inspected. |
+| 35 | `backups_dir_not_directory` | none; the error names `backups/` | `backups` exists but is not a directory, or is a symbolic link. |
+| 36 | `backups_dir_foreign_owner` | none; the error names `backups/` | `backups` is not owned by the process's effective user ID. |
+| 37 | `backups_dir_permissions` | none; the error names `backups/` | The mode of `backups` is not exactly `0700`. |
+| 38 | `keys_dir_unusable` | none; the error names `keys/` | `keys` in the data directory does not exist and cannot be created, or cannot be inspected. |
+| 39 | `keys_dir_not_directory` | none; the error names `keys/` | `keys` is not a directory, or is a symbolic link. |
+| 40 | `keys_dir_foreign_owner` | none; the error names `keys/` | `keys` is not owned by the process's effective user ID. |
+| 41 | `keys_dir_permissions` | none; the error names `keys/` | The mode of `keys` is not exactly `0700`. |
+| 42 | `master_key_unusable` | none; the error names `keys/master` | `keys/master` does not exist and cannot be created, or cannot be inspected, opened or read. |
+| 43 | `master_key_not_regular` | none; the error names `keys/master` | `keys/master` is not a regular file: a symbolic link (even to a valid key), a directory or a named pipe, for example. |
+| 44 | `master_key_foreign_owner` | none; the error names `keys/master` | `keys/master` is not owned by the process's effective user ID. |
+| 45 | `master_key_permissions` | none; the error names `keys/master` | `keys/master` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 46 | `master_key_size` | none; the error names `keys/master` | `keys/master` does not hold exactly 32 bytes. |
+| 47 | `storage_filesystem_unknown` | none | The filesystem of the data directory cannot be inspected (`statfs`). |
+| 48 | `storage_network_filesystem` | none | The storage profile is `local` and the data directory is on a network filesystem; see [Storage profiles](#storage-profiles). |
+| 49 | `archive_db_unusable` | none; the error names `archive.db` | `archive.db` does not exist and cannot be created, or cannot be inspected. |
+| 50 | `archive_db_not_regular` | none; the error names `archive.db` | `archive.db` is not a regular file: a symbolic link or a directory, for example. |
+| 51 | `archive_db_foreign_owner` | none; the error names `archive.db` | `archive.db` is not owned by the process's effective user ID. |
+| 52 | `archive_db_permissions` | none; the error names `archive.db` | `archive.db` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 53 | `archive_journal_unusable` | none; the error names `archive.db-journal` | `archive.db-journal` exists but cannot be inspected. |
+| 54 | `archive_journal_not_regular` | none; the error names `archive.db-journal` | `archive.db-journal` exists but is not a regular file. |
+| 55 | `archive_journal_foreign_owner` | none; the error names `archive.db-journal` | `archive.db-journal` is not owned by the process's effective user ID. |
+| 56 | `archive_journal_permissions` | none; the error names `archive.db-journal` | `archive.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 57 | `storage_ofd_unavailable` | none | On Linux, the storage profile is `local` and the kernel or the data directory's filesystem refused open-file-description locks; see [Storage profiles](#storage-profiles). |
+| 58 | `archive_schema_newer` | none; the error names `archive.db` | The archive's schema version is newer than this build knows: a newer release wrote it. |
+| 59 | `session_db_unusable` | none; the error names `session.db` | `session.db` does not exist and cannot be created, or cannot be inspected. |
+| 60 | `session_db_not_regular` | none; the error names `session.db` | `session.db` is not a regular file: a symbolic link or a directory, for example. |
+| 61 | `session_db_foreign_owner` | none; the error names `session.db` | `session.db` is not owned by the process's effective user ID. |
+| 62 | `session_db_permissions` | none; the error names `session.db` | `session.db` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 63 | `session_journal_unusable` | none; the error names `session.db-journal` | `session.db-journal` exists but cannot be inspected. |
+| 64 | `session_journal_not_regular` | none; the error names `session.db-journal` | `session.db-journal` exists but is not a regular file. |
+| 65 | `session_journal_foreign_owner` | none; the error names `session.db-journal` | `session.db-journal` is not owned by the process's effective user ID. |
+| 66 | `session_journal_permissions` | none; the error names `session.db-journal` | `session.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
 
-When the data directory is missing, it is created only after checks 1 to 17 pass,
-so a start refused by checks 1 to 17 leaves nothing behind. `history/` and
+When the data directory is missing, it is created only after checks 1 to 25 pass,
+so a start refused by checks 1 to 25 leaves nothing behind. `history/` and
 `backups/` are checked only when they exist; `serve` itself creates neither (see
 [Data directory](#data-directory)). `keys/` and the master key are created, when
-missing, only after checks 18 to 29 pass, an empty `archive.db` only after
-checks 18 to 40 pass, and an empty `session.db` only once the archive is open.
-Checks 51 to 58 run on `session.db` after the archive is open; the
+missing, only after checks 26 to 37 pass, an empty `archive.db` only after
+checks 26 to 48 pass, and an empty `session.db` only once the archive is open.
+Checks 59 to 66 run on `session.db` after the archive is open; the
 [storage profile](#storage-profiles) is checked again for it, which passes once it
 passed for the archive. A refusal by a later check (on a filesystem that forces
 its own ownership or mode, for example), or a `startup_failed` exit, leaves what
@@ -312,7 +380,7 @@ The data directory is `WAWARDEN_DATA_DIR`, by default `/data`.
 
 The checks run once, at start. When they exist, `history/` and `backups/` in the
 data directory must also be directories, not symbolic links, owned by the
-effective user ID with mode exactly `0700` (refusals 22 to 29). Then `serve`
+effective user ID with mode exactly `0700` (refusals 30 to 37). Then `serve`
 creates the [master key](#master-key) when it is missing and opens the
 [message archive](#message-archive), `archive.db`, and the
 [device store](#device-store), `session.db`. The
@@ -331,7 +399,7 @@ Kubernetes `fsGroup`, make the directory fail the mode check.
 bytes. Right after the data directory checks, `serve`:
 
 1. creates `keys/` with mode `0700` when it does not exist;
-2. checks `keys/` (refusals 30 to 33): a directory, not a symbolic link, owned by
+2. checks `keys/` (refusals 38 to 41): a directory, not a symbolic link, owned by
    the effective user ID, with mode exactly `0700`;
 3. when `keys/master` does not exist, writes 32 bytes from the operating system's
    cryptographic random source to a new temporary file `keys/.master-<random>`
@@ -339,7 +407,7 @@ bytes. Right after the data directory checks, `serve`:
    the temporary name and flushes the directory. When two processes start at once,
    the second link fails, and both use the key that was linked first. An existing
    key is never replaced;
-4. checks `keys/master` (refusals 34 to 38): a regular file, not a symbolic link,
+4. checks `keys/master` (refusals 42 to 46): a regular file, not a symbolic link,
    owned by the effective user ID, without any permission for group or others and
    without the setuid, setgid or sticky bit, holding exactly 32 bytes. Mode `0600`
    and mode `0400` are both accepted.
@@ -352,7 +420,7 @@ only the derived keys:
 |---|---|---|
 | `key-id` | 4 bytes | The key id: logged as 8 hexadecimal digits in the `keys_loaded` event, so that log lines can be grouped by the key their pseudonyms were made with. |
 | `log-redact` | 32 bytes | The key of the [log pseudonyms](#pseudonyms-and-dropped-lines). |
-| `chat-hmac` | 32 bytes | Derived but not used yet; it is reserved for the chat references in notification events (M1). |
+| `chat-hmac` | 32 bytes | Derived but not used: no [notification event](#notifications) of this build names a chat. It is reserved for chat references in events and audit records. |
 
 Apart from the log pseudonyms, the key id is the only value derived from the
 master key that the service writes out. No key reaches a log, an event, a
@@ -377,10 +445,10 @@ paired.
 Right after the master key, `serve`:
 
 1. checks the data directory's filesystem against the
-   [storage profile](#storage-profiles) (refusals 39 and 40);
+   [storage profile](#storage-profiles) (refusals 47 and 48);
 2. creates `archive.db` empty with mode `0600` when it does not exist, and
-   refuses (41 to 44) one that is not a regular file, belongs to another user,
-   or grants any access to group or others; then refuses (45 to 48) an
+   refuses (49 to 52) one that is not a regular file, belongs to another user,
+   or grants any access to group or others; then refuses (53 to 56) an
    `archive.db-journal` that exists and fails the same checks;
 3. opens one connection and reads back every setting it applies, refusing the
    connection on any difference: foreign keys on, the rollback journal in
@@ -395,9 +463,9 @@ Right after the master key, `serve`:
    then exits `1` with `startup_failed`. A stop signal ends the wait within one
    busy timeout and also exits `1`. On Linux, profile `local` takes it with
    open-file-description locks, and a kernel or filesystem that refuses them
-   is refused in turn (49) instead of falling back to classic locks;
+   is refused in turn (57) instead of falling back to classic locks;
 5. brings the schema up to date (an archive written by a newer release is
-   refused, 50), completes a rewrite of the full-text index that a stop or a
+   refused, 58), completes a rewrite of the full-text index that a stop or a
    failed rewrite left due (see below) and logs `archive_opened`.
 
 The connection that holds the lock is the only one the service ever opens to
@@ -447,7 +515,7 @@ linked device that the WhatsApp protocol library (`go.mau.fi/whatsmeow`) keeps,
 in its own tables, through the same SQLite engine. Right after the archive,
 `serve` opens it with every step the archive gets: the storage profile is
 checked, the file is created empty with mode `0600` when it does not exist, the
-file and its journal must pass refusals 51 to 58, the connection reads back the
+file and its journal must pass refusals 59 to 66, the connection reads back the
 same fixed settings and takes the same exclusive lock, kept the same way, with
 `db_lock_wait` naming `session` and `db_lost` too. Then the protocol library
 brings its tables up to date, within one minute. A store written by a newer
@@ -494,8 +562,9 @@ history-sync notification and leaves them unacknowledged, which loses them (see
 [Delivery](#delivery)), and applies nothing from its inbox or from history sync;
 a blob that the pause
 interrupts stays waiting without using an attempt and is applied from its start
-once ingest resumes. Pausing logs `ingest_paused` at every log level
-and resuming logs `ingest_resumed`. With profile `nfs` the floor
+once ingest resumes. Pausing reports the
+[notification event](#notifications) `ingest_paused`, and resuming logs
+`ingest_resumed`. With profile `nfs` the floor
 never applies, because a network filesystem such as Amazon EFS grows on demand;
 watch its own capacity metrics instead.
 
@@ -508,9 +577,11 @@ It talks to WhatsApp through an adapter over the WhatsApp protocol library,
 [device store](#device-store).
 
 Without a paired device the engine makes no connection of any kind, not even
-the version fetch below: it stays `unpaired` and logs `unpaired` once, at every
-log level. The admin route that starts pairing arrives later in M1, so until
-then a service without a paired device stays idle.
+the version fetch below: it stays `unpaired` and reports the
+[notification event](#notifications) `unpaired` once, until
+`wawarden admin pair` requests [pairing](#pairing). It reports `unpaired` again
+whenever a paired device is lost, for example when WhatsApp logs it out or a
+rejected device is logged out.
 
 A disconnection never stops the process, and `/healthz` does not depend on the
 engine: an unpaired or disconnected engine still answers `200`.
@@ -525,7 +596,7 @@ engine: an unpaired or disconnected engine still answers `200`.
 | `disconnected` | The engine is not connected and does not reconnect on its own. The reason is one of `outdated`, `replaced`, `logged_out`, `temporary_ban`, `cat_refresh`, `connect_failure`, `restart_budget`, `owner_mismatch` or `shutdown`. |
 
 Every change is logged as `engine_state`; entering `disconnected` for any reason
-but `shutdown` also logs `disconnected` at every log level. The gauges
+but `shutdown` also reports the notification event `disconnected`. The gauges
 `wawarden_paired` and `wawarden_connected` follow the state.
 
 - **Restart budget.** When the archive has recorded more than 5 starts in the
@@ -570,34 +641,40 @@ but `shutdown` also logs `disconnected` at every log level. The gauges
   (`replaced`), WhatsApp bans the account temporarily (`temporary_ban`), a
   connection token cannot be refreshed (`cat_refresh`) or WhatsApp refuses the
   connection (`connect_failure`), the engine disconnects and waits for an
-  explicit reconnect. When WhatsApp logs the device out (`logged_out`), it waits
-  for pairing. A connection event that arrives late, after one of these, changes
-  nothing. The admin routes that request a reconnect or pairing arrive later in
-  M1.
+  explicit reconnect (`wawarden admin reconnect`). When WhatsApp logs the
+  device out (`logged_out`), it waits for pairing (`wawarden admin pair`). A
+  connection event that arrives late, after one of these, changes nothing.
 
 ### Pairing
 
-Pairing links a new device by the code WhatsApp shows on the owner's phone. It
-is refused while a device is paired, while `WAWARDEN_OWNER_PHONE` is unset, and
-after three attempts within the last hour. The engine connects, waits up to 30
-seconds for WhatsApp to offer a login session, and asks for a code for the
-number in `WAWARDEN_OWNER_PHONE` and no other, as a `Chrome (Linux)` device with
-a notification on the phone. WhatsApp also sends login QR codes, which the
-adapter drops at once without keeping them. The pairing code goes to the caller
-only and is never logged. Before the protocol library saves anything, the
+Pairing links a new device by a code that the owner enters on the phone.
+`wawarden admin pair` requests it through the [admin route](#admin-routes)
+`POST /admin/v1/pair`. It is refused while a device is paired
+(`already_paired`), while `WAWARDEN_OWNER_PHONE` is unset
+(`owner_phone_missing`), and after three attempts within the last hour
+(`rate_limited`); a refused or failed request counts as an attempt once it
+passed the first two checks. The engine connects, waits up to 30 seconds for
+WhatsApp to offer a login session, and asks for a code for the number in
+`WAWARDEN_OWNER_PHONE` and no other, as a `Chrome (Linux)` device with a
+notification on the phone. The route gives the engine 25 seconds in all, so
+that its answer leaves before the listener's 30-second write timeout; a code
+that does not arrive in time fails the request with `pair_failed`. WhatsApp
+also sends login QR codes, which the adapter drops at once without keeping
+them. The pairing code goes to the caller only: it is never logged, counted,
+kept or put into an event. Before the protocol library saves anything, the
 adapter refuses an account whose number is not exactly the one in
 `WAWARDEN_OWNER_PHONE`: the library sends WhatsApp a pairing error and stores
-nothing, and the engine logs `pair_rejected` with `stage` `before_save`; it
+nothing, and the engine reports `pair_rejected` with `stage` `before_save`; it
 takes that report only while no device is stored, so one that arrives late
 cannot unpair the owner's device. When pairing fails in the library for another
 reason, such as an answer from WhatsApp that fails its checks, a device that
 cannot be saved or a confirmation that cannot be sent, the library closes the
 connection and the engine returns to `unpaired`; the next pairing request
 connects again with a fresh device. When pairing completes, the linked account must have
-the number in `WAWARDEN_OWNER_PHONE`; otherwise the engine logs
-`pair_rejected` at every log level with `stage` `after_pairing`, stays
-`unpaired` and logs the new device out. A logout that fails is logged as
-`logout_failed` at every log level and tried again after the same delays as a
+the number in `WAWARDEN_OWNER_PHONE`; otherwise the engine reports
+`pair_rejected` with `stage` `after_pairing`, stays
+`unpaired` and logs the new device out. A logout that fails is reported as
+`logout_failed` and tried again after the same delays as a
 [reconnection](#engine-states), until it succeeds or the device is gone. Until
 then the engine never connects the device, an explicit reconnect included, and
 drops what its connection delivers before it is written (see
@@ -612,7 +689,7 @@ an explicit reconnect, also one from `outdated` or
 logged. When it is not, as for a device whose logout failed before the process
 stopped, or when `WAWARDEN_OWNER_PHONE` names another number than the one that
 was paired, the engine stays `disconnected` with reason `owner_mismatch` and
-logs `disconnected` at every log level. It refuses an explicit reconnect, drops what
+reports `disconnected`. It refuses an explicit reconnect (`owner_mismatch`), drops what
 a connection would deliver, and does not log the device out, because the cause
 can be a mistake in the configuration as well as another account: correct
 `WAWARDEN_OWNER_PHONE` or remove the stored device, then restart the service.
@@ -658,8 +735,8 @@ one transaction, so that a row is applied once even when the process stops in
 between. A failed attempt, an attempt that panics included, is retried after 1
 and then 2 seconds; after three failed attempts, attempts cut short by a crash
 included, the row is quarantined:
-its content is removed, the row stays as a record, and `quarantine` is logged at
-every log level with `queue` `inbox`. A row whose content the archive refuses,
+its content is removed, the row stays as a record, and the notification event
+`quarantine` is reported with `queue` `inbox`. A row whose content the archive refuses,
 such as a message identifier with spaces, is dropped at once.
 
 The rules the worker applies, each counted in `wawarden_ingest_dropped_total`
@@ -706,8 +783,8 @@ Further, the worker:
   identifiers WhatsApp's servers attach to live messages and from history sync,
   and re-keys a direct chat from the number to the LID. A mapping that
   contradicts one already learned, or that would merge two chats that both hold
-  messages, is refused, counted in `wawarden_rekey_conflicts_total` and logged
-  as `rekey_conflict` at every log level.
+  messages, is refused, counted in `wawarden_rekey_conflicts_total` and
+  reported as the [notification event](#notifications) `rekey_conflict`.
 
 ### Delivery
 
@@ -772,8 +849,8 @@ is not waiting to be processed, such as a file that a crash left behind after
 its blob was marked processed or quarantined. An attempt that panics while it
 downloads, decodes or applies a blob fails like any other. After three failed attempts, attempts cut
 short by a crash included, a blob is quarantined: its reference and
-files are deleted and `quarantine` is logged at every log level with `queue`
-`history`. A graceful stop that interrupts a blob gives its attempt back, like
+files are deleted and the [notification event](#notifications) `quarantine` is
+reported with `queue` `history`. A graceful stop that interrupts a blob gives its attempt back, like
 a [pause](#free-space): the blob stays waiting and is applied from its start at
 the next start, keeping the batches it had already applied.
 
@@ -827,7 +904,7 @@ public internet.
 | Listener | Address | Opened | Serves |
 |---|---|---|---|
 | `client` | `WAWARDEN_LISTEN`, default `127.0.0.1:8080` | Always | The client API. M0 has no client routes and no client tokens: every request is refused. |
-| `admin` | `WAWARDEN_ADMIN_LISTEN`, default `127.0.0.1:8082` | Only when an admin token hash is configured | `GET /metrics` with the admin token. |
+| `admin` | `WAWARDEN_ADMIN_LISTEN`, default `127.0.0.1:8082` | Only when an admin token hash is configured | `GET /metrics` and the [admin routes](#admin-routes) `GET /admin/v1/status`, `POST /admin/v1/pair` and `POST /admin/v1/reconnect`, all with the admin token. |
 | `health` | `WAWARDEN_HEALTH_LISTEN`, default `127.0.0.1:8081`, loopback only | Always | `GET /healthz`, without authentication. |
 
 Every start logs a `listening` event for each listener with its bound address,
@@ -840,10 +917,12 @@ headers, 15 seconds to read the whole request, 30 seconds to write the response,
 60 seconds of idle time on a kept-alive connection, and 16 KiB of request
 headers.
 
-Outbound, the service connects only to WhatsApp, and only while a device is
+Outbound, the service connects to WhatsApp, and only while a device is
 paired or pairing was requested: the websocket at `web.whatsapp.com`, the
 version fetch from the same host, and history downloads from the media hosts
-WhatsApp names. Each connection is made directly: the proxy variables
+WhatsApp names. Its only other outbound connections go to the
+[webhook](#webhook), when `WAWARDEN_NOTIFY_URL` is set. Each connection to
+WhatsApp is made directly: the proxy variables
 (`HTTPS_PROXY`, `HTTP_PROXY`) are ignored, every step has a timeout (10 seconds to
 connect and for the TLS handshake, 20 seconds for response headers; the
 websocket's opening 30 seconds, a version fetch 20 seconds and a download 2
@@ -903,13 +982,56 @@ A string that is not in this form is refused even when its SHA-256 matches the
 configured hash. Configuring the hash of anything other than a generated token
 therefore leaves the admin listener unusable.
 
-The admin listener serves one route, `GET /metrics` (Go's router also answers
-`HEAD` on it); see [Metrics](#metrics).
+The admin listener serves `GET /metrics` (Go's router also answers `HEAD` on
+it; see [Metrics](#metrics)) and the admin routes below.
+
+#### Admin routes
+
+Each route answers JSON with `Cache-Control: no-store`. Every call of a `POST`
+route that passes authentication, whatever its outcome, reports the
+[notification event](#notifications) `admin_mutation` with the route's action
+and its outcome: `ok` or the error code it answered.
+
+| Route | Request body | Answer |
+|---|---|---|
+| `GET /admin/v1/status` | none | `200` with the fixed object below. |
+| `POST /admin/v1/pair` | exactly `{}`, see [Request bodies](#request-bodies) | `200` `{"code":"<pairing code>"}`; see [Pairing](#pairing). |
+| `POST /admin/v1/reconnect` | exactly `{}` | `200` `{"status":"accepted"}`: the engine connects again at once, after an explicit reconnect as described under [Engine states](#engine-states). |
+
+The status object carries no identifier, name or text:
+
+```json
+{"state":"connected","reason":"","paired":true,"counts":{"chats":12,"messages":3456,"history_blobs_pending":0,"history_blobs_quarantined":0,"inbox_backlog":0,"inbox_quarantined":0},"last_ingest_at":"2026-10-05T08:00:00Z","version":"v0.2.0"}
+```
+
+| Key | Content |
+|---|---|
+| `state`, `reason` | The [engine state](#engine-states); `reason` is empty unless the state is `disconnected`. |
+| `paired` | Whether a device is stored. |
+| `counts` | Chats and messages in the archive; history blobs waiting to be processed and quarantined; inbox rows waiting to be applied and quarantined. |
+| `last_ingest_at` | When the engine last stored a message, in UTC to the second, or `null` before the first. |
+| `version` | The build's version, as `wawarden version` prints it. |
+
+The routes refuse with fixed codes:
+
+| Answer | Route | When |
+|---|---|---|
+| `409` `{"error":"already_paired"}` | pair | A device is stored. |
+| `409` `{"error":"owner_phone_missing"}` | pair | `WAWARDEN_OWNER_PHONE` is unset. |
+| `429` `{"error":"rate_limited"}` | pair | Three pairing attempts were made in the last hour. |
+| `502` `{"error":"pair_failed"}` | pair | Connecting or requesting the code failed, or no code arrived within 25 seconds. |
+| `409` `{"error":"already_connected"}` | reconnect | The engine is connected. |
+| `409` `{"error":"not_paired"}` | reconnect | No device is stored, or the stored device was rejected and is being logged out. |
+| `409` `{"error":"owner_mismatch"}` | reconnect | The stored device's number is not `WAWARDEN_OWNER_PHONE`; see [Pairing](#pairing). |
+| `503` `{"error":"engine_unavailable"}` | all three | The engine has stopped because the service is shutting down. |
+| `500` `{"error":"internal_error"}` | all three | Anything else, such as an archive read that failed; the cause is never sent. |
 
 #### Failed authentication
 
 The client listener and the admin listener each count failed authentications, in
-`wawarden_auth_failures_total` and `wawarden_admin_auth_failures_total`. Each
+`wawarden_auth_failures_total` and `wawarden_admin_auth_failures_total`; the
+admin listener's also report the [notification event](#notifications)
+`admin_auth_failure`, at most once a minute. Each
 also has one failure budget shared by all callers: 30 failures, refilled at one
 per second up to 30. While the budget is empty, failures are answered `429`
 instead of `401`.
@@ -921,12 +1043,14 @@ does not slow down guessing: what protects the admin token against guessing is i
 256 random bits. Anyone who can reach a listener can keep its budget empty, after
 which a caller presenting a wrong token sees `429` rather than `401`.
 
-Failed authentications are counted, not logged.
+Failed authentications are counted, and those of the admin listener reported
+in `admin_auth_failure` events, which carry a count and nothing about the
+requests.
 
 #### Request bodies
 
-No route in this build reads a request body; the admin routes that will (`pair`
-and `reconnect`, M1) and later client routes decode it with one decoder. Only a
+The admin routes `pair` and `reconnect` read their body, which must be the empty
+object `{}`, and later client routes will read theirs, with one decoder. Only a
 route handler can call it, so it runs only after authentication and after the
 route's grant was decided. It answers with a fixed error and reads no further when:
 
@@ -968,7 +1092,8 @@ an `Access-Control-*` header. Their error bodies are fixed JSON objects with
 | `{"error":"not_found"}` | `404` |
 | `{"error":"method_not_allowed"}` | `405` |
 | `{"error":"internal_error"}` | `500`, when a handler fails or panics |
-| `{"error":"unsupported_media_type"}`, `{"error":"body_too_large"}`, `{"error":"invalid_body"}` | `415`, `413`, `400`, from a route that reads a body (none in this build); see [Request bodies](#request-bodies) |
+| `{"error":"unsupported_media_type"}`, `{"error":"body_too_large"}`, `{"error":"invalid_body"}` | `415`, `413`, `400`, from a route that reads a body (`pair` and `reconnect`); see [Request bodies](#request-bodies) |
+| `{"error":"already_paired"}`, `{"error":"already_connected"}`, `{"error":"not_paired"}`, `{"error":"owner_phone_missing"}`, `{"error":"owner_mismatch"}`, `{"error":"rate_limited"}`, `{"error":"pair_failed"}`, `{"error":"engine_unavailable"}` | `409`, `429`, `502` or `503`, from the [admin routes](#admin-routes) |
 
 Responses never echo request content, header values or tokens.
 
@@ -995,10 +1120,10 @@ the setting. The `startup_refused` line is written before the configuration is
 accepted. The `dev_build` and `listener_not_loopback` warnings are written at
 every level, `error` included, because they are the only signal that a
 development binary is running or that a listener is reachable beyond loopback.
-So are the engine's alerts, which an operator must see: `unpaired`,
-`disconnected`, `pair_rejected`, `logout_failed`, `quarantine`,
-`rekey_conflict` and `ingest_paused`, and the `unsafe_debug` and
-`unsafe_debug_ended` notices of a [debug window](#protocol-library-logs).
+So are the [notification events](#notifications), which an operator must see,
+the `notify_failed` warning, and the `unsafe_debug` and `unsafe_debug_ended`
+notices of a [debug window](#protocol-library-logs). Lines in
+[embedded metric format](#embedded-metric-format) have none of the four keys.
 
 | Event | Level | Other keys | Written when |
 |---|---|---|---|
@@ -1021,20 +1146,20 @@ So are the engine's alerts, which an operator must see: `unpaired`,
 | `db_deadline` | `ERROR` | `database`, `operation`, `timeout_ms`, `goroutines` | A read of the archive ran beyond 2 seconds, a write beyond 10 or a rewrite of its full-text index beyond 5 minutes; the call is interrupted and fails. `operation` names the call in the code, and `goroutines` holds the goroutine profile of the process (function names and source positions, cut at 32 KiB). |
 | `db_lost` | `ERROR` | `database` | The connection that held the lock of the archive or the device store is gone, and the service refuses to open another; `/healthz` answers `503` from then on. |
 | `log_dropped` | `WARN` | `reason`: `xml` or `too_long` | Replaces a line that carried XML (`xml`) or was longer than 65,536 bytes (`too_long`); see [Pseudonyms and dropped lines](#pseudonyms-and-dropped-lines). It is written in place of a line that passed the log level, whatever that line's level was. |
-| `unpaired` | `WARN`, at every log level | | The engine starts without a paired device, so it makes no connection until pairing is requested; logged once, when the service is ready to serve. |
+| `unpaired` | `WARN`, at every log level | | A [notification event](#notifications). |
 | `engine_state` | `INFO` | `state`, `reason` | The [engine's state](#engine-states) changed; `reason` is empty unless the state is `disconnected`. |
-| `disconnected` | `WARN`, at every log level | `reason` | The engine entered `disconnected` for any reason but `shutdown`. |
+| `disconnected` | `WARN`, at every log level | `reason` | A [notification event](#notifications). |
 | `version_updated` | `INFO` | `version` | The engine took a newer WhatsApp Web version, such as `2.3000.1027000000`. |
 | `version_refresh_failed` | `WARN` | `attempt` | A version fetch failed or returned no usable version. |
 | `connect_failed` | `WARN` | `attempt`, `error_type` | A connection attempt failed; the engine retries. `error_type` is the Go type of the error, never its text. |
 | `pairing_started` | `INFO` | | A pairing attempt passed the refusals above. The code is never logged. |
 | `pair_failed` | `WARN` | `error_type` | Connecting or requesting the pairing code failed. |
-| `pair_rejected` | `WARN`, at every log level | `stage`: `before_save` or `after_pairing` | Pairing linked or tried to link an account other than the owner's; see [Pairing](#pairing). |
-| `logout_failed` | `WARN`, at every log level | `attempt`, `error_type` | Logging out a rejected device failed; the engine tries again. |
+| `pair_rejected` | `WARN`, at every log level | `stage` | A [notification event](#notifications). |
+| `logout_failed` | `WARN`, at every log level | `attempt`, `error_type` | A [notification event](#notifications). |
 | `ingest_failed` | `WARN` | `queue`: `inbox` or `history`, `attempt` when an attempt failed, `error_type` | Reading, applying or quarantining an inbox row or a history blob failed. |
-| `quarantine` | `WARN`, at every log level | `queue`, `attempts` | An inbox row or a history blob was quarantined after three failed attempts. |
-| `rekey_conflict` | `WARN`, at every log level | `conflict`: `mapping_contradicts`, `both_chats_have_messages` or `message_collision` | A LID mapping was refused; the event that carried it is still applied. |
-| `ingest_paused` | `WARN`, at every log level | `free_bytes`, `floor_bytes` | The data directory fell below its [free-space floor](#free-space). |
+| `quarantine` | `WARN`, at every log level | `queue`, `attempts` | A [notification event](#notifications). |
+| `rekey_conflict` | `WARN`, at every log level | `conflict` | A [notification event](#notifications). |
+| `ingest_paused` | `WARN`, at every log level | `free_bytes`, `floor_bytes` | A [notification event](#notifications). |
 | `ingest_resumed` | `INFO` | `free_bytes`, `floor_bytes` | The free space reached 1.25 times the floor again. |
 | `free_space_unknown` | `WARN` | `error_type` | The free space of the data directory could not be read. |
 | `index_rewrite_pending` | `WARN` | `operation` | A change committed, but the full-text index rewrite it requires failed; it stays due and runs at the next start. |
@@ -1044,9 +1169,14 @@ So are the engine's alerts, which an operator must see: `unpaired`,
 | `whatsmeow_log` | the line's own: `ERROR`, `WARN`, `INFO`, or `DEBUG` in a debug window | `module`, `detail` | A log line of the protocol library; see [Protocol library logs](#protocol-library-logs). |
 | `unsafe_debug` | `WARN`, at every log level | `minutes`, `until` | `WAWARDEN_UNSAFE_DEBUG` opened a debug window at the start. |
 | `unsafe_debug_ended` | `WARN`, at every log level | | The debug window has passed, and the protocol library's debug output is discarded again. Logged at the first debug line after the window. |
+| `admin_mutation` | `INFO`, at every log level | `action`, `outcome` | A [notification event](#notifications). |
+| `admin_auth_failure` | `WARN`, at every log level | `count` | A [notification event](#notifications). |
+| `notify_failed` | `WARN`, at every log level | `attempts`, `reason`, `status` | The [webhook](#webhook) did not take an event, which is dropped. |
+| `emf_failed` | `WARN` | `error_type` | Writing the [embedded-metric-format](#embedded-metric-format) lines failed. |
 
 What is never logged: requests (there is no access log), request bodies, header
-values, tokens, failed authentications, the admin token's hash, the values of
+values, tokens, failed authentications other than the count in
+`admin_auth_failure`, the admin token's hash, the webhook's URL and secret, the values of
 refused variables (a refusal names the variable only), panic values (only their
 Go type and the stack), the master key and the keys derived from it (only the key
 id), pairing codes and pairing QR codes, message text and push names (the engine logs states, reasons,
@@ -1061,8 +1191,12 @@ from the operating system and can contain a listen address.
 
 The CLI writes to standard error only its usage text, the flag parser's one-line
 error for an unknown flag or an invalid flag value (it repeats the flag as typed,
-for example `flag provided but not defined: -nope`), `healthcheck` failures and
-the `admin init` reminder. The Go runtime writes crash output to standard error.
+for example `flag provided but not defined: -nope`), `healthcheck` failures,
+the `admin init` reminder, and the fixed messages of the
+[admin commands](#admin-status-admin-pair-and-admin-reconnect): their warning
+about plain HTTP, the reason a token could not be used, the reason a request
+failed, a refusal's code and status, and the hint where to enter a pairing
+code. The Go runtime writes crash output to standard error.
 
 ### Protocol library logs
 
@@ -1179,18 +1313,133 @@ does; an error or a value with a
 line, and every other value as its Go type in brackets, such as `[seal.Chat]`,
 never as its content.
 
+## Notifications
+
+The service reports what an operator must act on as notification events. Each
+event is one JSON line on standard output, written through the same writer as
+every other line and at every log level, with the `event` key and a fixed set of
+other keys; when `WAWARDEN_NOTIFY_URL` is set, the same event is also posted to
+the [webhook](#webhook).
+
+| Event | Level | Other keys | Reported when |
+|---|---|---|---|
+| `unpaired` | `WARN` | | The engine starts without a paired device, so it makes no connection until pairing is requested, or a paired device is lost: WhatsApp logged it out, or a rejected device was logged out. |
+| `disconnected` | `WARN` | `reason` | The engine entered `disconnected` for any reason but `shutdown`; `reason` as under [Engine states](#engine-states). |
+| `pair_rejected` | `WARN` | `stage`: `before_save`, `after_pairing` | Pairing linked or tried to link an account other than the owner's; see [Pairing](#pairing). |
+| `logout_failed` | `WARN` | `attempt`, `error_type` | Logging out a rejected device failed; the engine tries again. `error_type` is the Go type of the error. |
+| `quarantine` | `WARN` | `queue`: `inbox`, `history`; `attempts` | An inbox row or a history blob was set aside after three failed attempts. |
+| `rekey_conflict` | `WARN` | `conflict`: `mapping_contradicts`, `both_chats_have_messages`, `message_collision` | A LID mapping was refused; the event that carried it is still applied. |
+| `ingest_paused` | `WARN` | `free_bytes`, `floor_bytes` | The data directory fell below its [free-space floor](#free-space). |
+| `admin_mutation` | `INFO` | `action`: `pair`, `reconnect`; `outcome` | A `POST` [admin route](#admin-routes) was called with the admin token; `outcome` is `ok` or the error code it answered, such as `already_paired` or `invalid_body`. |
+| `admin_auth_failure` | `WARN` | `count` | Authentication failed on the admin listener. The first failure is reported at once with `count` `1`; further failures within the next minute are held back, and reported together once the minute has passed, within ten seconds, or at shutdown. `count` is the number of failures since the previous `admin_auth_failure`. |
+
+No event carries an identifier, a name, message text, a token, a key or a
+pairing code. Every value is a number or a fixed code: a value that is not a
+lower-case code of at most 64 characters (or, for `error_type`, a Go type name)
+is written as `invalid`. For example:
+
+```json
+{"time":"2026-10-05T08:12:40.002931604Z","level":"WARN","msg":"the engine is disconnected from WhatsApp","event":"disconnected","reason":"replaced"}
+{"time":"2026-10-05T08:15:02.518840121Z","level":"INFO","msg":"an admin route that changes the service's state was called","event":"admin_mutation","action":"reconnect","outcome":"ok"}
+```
+
+### Webhook
+
+With `WAWARDEN_NOTIFY_URL` and `WAWARDEN_NOTIFY_SECRET_FILE` set, every
+notification event is also sent as `POST` to that URL, with this body, the
+line's event and other keys plus an `id` and the `time`:
+
+```json
+{"id":"evt_5f0c2a9de1b34c7a8e6f1d2c3b4a5968","event":"disconnected","time":"2026-10-05T08:12:40.002931604Z","reason":"replaced"}
+```
+
+and these headers:
+
+| Header | Value |
+|---|---|
+| `Content-Type` | `application/json` |
+| `User-Agent` | `wawarden` |
+| `WaWarden-Event-Id` | The event's id, `evt_` and 32 hexadecimal digits, the same on every attempt. |
+| `WaWarden-Timestamp` | The time of this attempt, in Unix seconds. |
+| `WaWarden-Signature` | `v1=` and the lower-case hexadecimal HMAC-SHA256, keyed with the secret, of the event id, `.`, the timestamp, `.` and the body's bytes. Each attempt is signed again. |
+
+The secret is the content of `WAWARDEN_NOTIFY_SECRET_FILE` without surrounding
+white space. It is read once, at start, and never logged.
+
+**Verifying a delivery.** A receiver should, before it acts on a request:
+
+1. read the body as raw bytes, before parsing it;
+2. refuse the request when `WaWarden-Timestamp` is more than 5 minutes away from
+   its own clock;
+3. compute `v1=` and the hexadecimal HMAC-SHA256 of
+   `<WaWarden-Event-Id>.<WaWarden-Timestamp>.<body>` with the shared secret, and
+   compare it, in constant time, with each comma-separated value of
+   `WaWarden-Signature`, accepting the request when one matches;
+4. answer `2xx`, and ignore an event id it has already handled: a retry, or a
+   delivery whose answer was lost, carries the same id.
+
+For example, in Python:
+
+```python
+import hashlib, hmac, time
+
+def verified(secret: bytes, headers, body: bytes) -> bool:
+    event_id, timestamp = headers["WaWarden-Event-Id"], headers["WaWarden-Timestamp"]
+    if abs(time.time() - int(timestamp)) > 300:
+        return False
+    signed = f"{event_id}.{timestamp}.".encode() + body
+    expected = "v1=" + hmac.new(secret, signed, hashlib.sha256).hexdigest()
+    return any(hmac.compare_digest(expected, v.strip()) for v in headers["WaWarden-Signature"].split(","))
+```
+
+**Delivery.** Events wait in a queue of 64 for one sender, so that a slow or
+failing receiver never holds up the engine, the admin routes or shutdown; an
+event that finds the queue full is dropped. Each attempt:
+
+- connects directly, ignoring the proxy variables, with TLS 1.2 or later, and
+  follows no redirect: a `3xx` answer is a failure;
+- has 5 seconds to connect and for the TLS handshake, 10 seconds for the
+  answer's headers and 15 seconds in all; at most 4096 bytes of the answer are
+  read, and none of it is logged;
+- succeeds on any `2xx`. A network error, `408`, `425`, `429` or a `5xx` is
+  tried again, up to 5 attempts in all, after a delay that starts at about a
+  second and doubles, randomised to between half and all of it, or after the
+  answer's `Retry-After` in seconds, at most a minute. Any other answer is
+  final.
+
+Before it connects, the sender checks the address it resolved. It always
+refuses link-local addresses (`169.254.0.0/16`, `fe80::/10`, which hold the
+cloud metadata and container credential endpoints), the metadata addresses
+`fd00:ec2::254`, `100.100.100.200` and `192.0.0.192`, multicast, broadcast,
+reserved and unspecified addresses; it refuses loopback, private and shared
+(`100.64.0.0/10`) addresses unless `WAWARDEN_NOTIFY_ALLOW_PRIVATE` is `1`. A
+refused destination is not tried again. The check runs on every connection,
+after name resolution, so a name that resolves to a refused address is refused
+too.
+
+An event that was not delivered is counted in `wawarden_notify_dropped_total`,
+with `reason` `queue_full`, `failed` (after its last attempt, or a final answer
+or refused destination, logged as `notify_failed` with `attempts`, `reason`:
+`destination_refused`, `http_status` or `network_error`, and `status`, `0`
+without an answer) or `shutdown`. At shutdown the sender delivers what is
+queued within the [grace period](#shutdown), then gives up on the rest.
+
 ## Metrics
 
-Metrics are served only on the admin listener, at `GET /metrics`, with the admin
-token: without an admin hash there is no way to read them. The format is the
-Prometheus text exposition format 0.0.4
+Metrics are served on the admin listener, at `GET /metrics`, with the admin
+token. The format is the Prometheus text exposition format 0.0.4
 (`Content-Type: text/plain; version=0.0.4; charset=utf-8`), sorted by metric name.
+With `WAWARDEN_METRICS_EMF=1` the main ones are also written on standard output
+in [embedded metric format](#embedded-metric-format), which needs no token.
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
 | `wawarden_auth_failures_total` | counter | | Failed authentications on the client listener, including those answered `429`. |
 | `wawarden_admin_auth_failures_total` | counter | | Failed authentications on the admin listener, including those answered `429`. |
+| `wawarden_policy_denials_total` | counter | | Client requests that the client's grant did not allow. Always `0` in this build, which has no client tokens. |
+| `wawarden_sends_rejected_total` | counter | | Sends refused by a scope, a budget or a rate limit. Always `0` in this build, which does not send. |
 | `wawarden_panics_total` | counter | `name` | Panics recovered, by handler or goroutine name. Absent until the first panic. |
+| `wawarden_notify_dropped_total` | counter | `reason` | Notification events the [webhook](#webhook) did not deliver: `queue_full`, `failed`, `shutdown`. |
 | `wawarden_build_info` | gauge | `version`, `revision`, `dev` | Always `1`; the labels describe the running binary. |
 
 The [WhatsApp engine](#whatsapp-engine) adds these:
@@ -1218,45 +1467,52 @@ caller gave up, `wa.keepalive`, which closes a connection whose keepalives
 failed or that WhatsApp asked to log in again, and `wa.event` for a panic while
 it translates one of the protocol library's events or the engine handles it,
 which refuses the event. Other code on goroutines that the protocol library
-starts itself is not covered: a panic there ends the process.
+starts itself is not covered: a panic there ends the process. The notifier adds
+`notify.flush` and `notify.webhook`, and the embedded-metric-format writer
+`metrics.emf`.
 
-Anything that scrapes `/metrics` holds the full admin token, which from M1 can
-start pairing and from M2 can create clients. Treat a scrape configuration as
-holding the admin credential. Metrics on standard output in embedded metric format
-(`WAWARDEN_METRICS_EMF`), planned for M1, need no token; prefer them for alerting
-once they exist.
+Anything that scrapes `/metrics` holds the full admin token, which can also
+start pairing, ask for a reconnect and read the status, and from M2 create
+clients. Treat a scrape configuration as holding the admin credential, and
+prefer the embedded-metric-format lines, which need no token, for alerting.
 
-### Reserved metric and event names
+### Embedded metric format
 
-**Not in this build.** These names are reserved for later milestones; the M0
-binary emits none of them. Deployments may prepare alarms on them, but nothing
-matches until the release that brings them.
+With `WAWARDEN_METRICS_EMF=1`, the service writes metrics in CloudWatch's
+[embedded metric format](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Embedded_Metric_Format_Specification.html)
+on standard output, through the same writer as every other line: every 60
+seconds after the start, and once more at shutdown, after the engine has
+stopped. Each time it writes one line in namespace `WaWarden` without
+dimensions (`"Dimensions":[[]]`) that carries all eight metrics, zero when
+nothing changed:
 
-Metrics in embedded metric format on standard output, namespace `WaWarden`,
-written every 60 seconds when `WAWARDEN_METRICS_EMF` is `1`:
+| Metric | Unit | Value | Source |
+|---|---|---|---|
+| `Paired` | `None` | The current `0` or `1` | `wawarden_paired` |
+| `Connected` | `None` | The current `0` or `1`; the line at shutdown reports `0` | `wawarden_connected` |
+| `MessagesIngested` | `Count` | Since the previous line | `wawarden_messages_ingested_total` |
+| `PolicyDenials` | `Count` | Since the previous line | `wawarden_policy_denials_total` |
+| `Panics` | `Count` | Since the previous line, all names together | `wawarden_panics_total` |
+| `SendsRejected` | `Count` | Since the previous line | `wawarden_sends_rejected_total` |
+| `AuthFailures` | `Count` | Since the previous line | `wawarden_auth_failures_total` |
+| `AdminAuthFailures` | `Count` | Since the previous line | `wawarden_admin_auth_failures_total` |
 
-| Metric | Planned for |
-|---|---|
-| `Paired` | M1 |
-| `Connected` | M1 |
-| `MessagesIngested` | M1 |
-| `PolicyDenials` | M2 |
-| `Panics` | M1 |
-| `SendsRejected` | M3 |
-| `AuthFailures` | M1 |
-| `AdminAuthFailures` | M1 |
+```json
+{"AdminAuthFailures":0,"AuthFailures":0,"Connected":1,"MessagesIngested":42,"Paired":1,"Panics":1,"PolicyDenials":0,"SendsRejected":0,"_aws":{"Timestamp":1791201600000,"CloudWatchMetrics":[{"Namespace":"WaWarden","Dimensions":[[]],"Metrics":[{"Name":"Paired","Unit":"None"},{"Name":"Connected","Unit":"None"},{"Name":"MessagesIngested","Unit":"Count"},{"Name":"PolicyDenials","Unit":"Count"},{"Name":"Panics","Unit":"Count"},{"Name":"SendsRejected","Unit":"Count"},{"Name":"AuthFailures","Unit":"Count"},{"Name":"AdminAuthFailures","Unit":"Count"}]}]}}
+```
 
-Any of these metrics that is also broken down by a label, for example `Panics`
-by goroutine name, is also emitted as a dimensionless total under the same name,
-so an alarm can match it without dimensions.
+A metric that also has a label, in this build `Panics` by `name`, is
+additionally written, for each label value whose count grew, in a line of its
+own with that label as its only dimension. The dimensionless line holds the
+total, and no line carries the metric twice, so an alarm without dimensions
+matches the total:
 
-Events on standard output, as single-line JSON objects with an `event` field like
-the events under [Logging](#logging):
+```json
+{"Panics":1,"_aws":{"Timestamp":1791201600000,"CloudWatchMetrics":[{"Namespace":"WaWarden","Dimensions":[["name"]],"Metrics":[{"Name":"Panics","Unit":"Count"}]}]},"name":"engine.ingest"}
+```
 
-| Event | Planned for |
-|---|---|
-| `admin_mutation` | M1 |
-| `admin_auth_failure` | M1 |
+These lines have no `time`, `level`, `msg` or `event` key. The first line counts
+from the start of the process; a restart starts the counts again.
 
 ## Shutdown
 
@@ -1267,10 +1523,15 @@ the events under [Logging](#logging):
    flight are allowed to finish.
 3. The [WhatsApp engine](#whatsapp-engine) disconnects from WhatsApp and its
    workers stop after the row or batch in hand.
-4. The [archive](#message-archive) and the [device store](#device-store) are
+4. With `WAWARDEN_METRICS_EMF=1`, the last
+   [embedded-metric-format](#embedded-metric-format) lines are written.
+5. Held-back admin authentication failures are reported as
+   `admin_auth_failure`, and the [webhook](#webhook) delivers what is queued;
+   whatever remains when the grace period runs out is dropped and counted.
+6. The [archive](#message-archive) and the [device store](#device-store) are
    closed, which releases their locks. Each waits up to 1 second for a call
    still in progress to give its connection back, then closes it.
-5. The health listener stops.
+7. The health listener stops.
 
 One grace period of 10 seconds bounds the whole shutdown, apart from those waits
 of up to 1 second for each database. When it runs out, the remaining
