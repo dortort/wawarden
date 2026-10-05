@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"strconv"
 	"strings"
 	"sync"
@@ -133,6 +134,15 @@ func TestEveryDialThePackageBuildsRefusesInATestBinary(t *testing.T) {
 	}
 	if got, err := newVersions(newTransport(dialled)).Latest(t.Context()); !errors.Is(err, errVersionFetch) || !got.IsZero() {
 		t.Errorf("a version source over another dial = %v, %v, want errVersionFetch", got, err)
+	}
+}
+
+func TestAVersionSourceWithoutItsClientFetchesNothing(t *testing.T) {
+	ctx := httptrace.WithClientTrace(t.Context(), &httptrace.ClientTrace{GetConn: func(string) {
+		t.Fatal("a version source without its client asked for a connection")
+	}})
+	if got, err := new(Versions).Latest(ctx); !errors.Is(err, errVersionFetch) || !got.IsZero() {
+		t.Fatalf("Latest = %v, %v, want errVersionFetch", got, err)
 	}
 }
 

@@ -31,6 +31,9 @@ func newVersions(rt http.RoundTripper) *Versions {
 }
 
 func (v *Versions) Latest(ctx context.Context) (engine.Version, error) {
+	if v.client == nil {
+		return engine.Version{}, errVersionFetch
+	}
 	got, err := whatsmeow.GetLatestVersion(ctx, v.client)
 	if err != nil || got == nil {
 		return engine.Version{}, errVersionFetch
