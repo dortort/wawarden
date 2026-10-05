@@ -193,22 +193,32 @@ func TestAdminUsageErrors(t *testing.T) {
 		{"admin", "status", "--token-file", file, "--addr", "127.0.0.1:8082"},
 		{"admin", "status", "--token-file", file, "--addr", "http:///admin"},
 		{"admin", "unpair", "--token-file", file, "--addr", addr},
+		{"admin", "status", "--token-stdin=" + secret},
+		{"admin", "status", "-=" + secret},
+		{"admin", "status", "--" + secret},
+		{"admin", "status", "--addr", addr, "--token-file", file, "--" + secret + "=x"},
+		{"admin", "status", "--addr", addr, "--token-file", file, secret},
 	} {
 		t.Run(strings.Join(args[1:], " "), func(t *testing.T) {
 			code, stdout, stderr := invokeWith(t, args, nil, strings.NewReader(secret))
 			if code != exitUsage || stdout != "" || !strings.Contains(stderr, "usage:") {
 				t.Fatalf("run(%q) = %d %q %q, want 2 with usage on stderr", args, code, stdout, stderr)
 			}
-			if strings.Contains(stderr, "password") || strings.Contains(stderr, "token=x") {
-				t.Fatalf("stderr %q repeats the address", stderr)
+			if strings.Contains(stderr, "password") || strings.Contains(stderr, "token=x") || strings.Contains(stderr, secret) || strings.Contains(stderr, "wwadm_") {
+				t.Fatalf("stderr %q repeats an argument", stderr)
 			}
 		})
 	}
 }
 
-func TestAdminEmptyTokenSourcesAreUsageErrors(t *testing.T) {
+func TestAdminFlagErrorsNameOnlyTheFlag(t *testing.T) {
 	secret := token.NewAdmin()
 	for _, tt := range []struct{ arg, want string }{
+		{"--token-stdin=" + secret, "admin: --token-stdin is not given as it must be\n"},
+		{"--token-file", "admin: --token-file is not given as it must be\n"},
+		{"--addr", "admin: --addr is not given as it must be\n"},
+		{"--" + secret, "admin: an argument is not a flag of this command\n"},
+		{"-=" + secret, "admin: an argument is not a flag of this command\n"},
 		{"--token-file=", "admin: --token-file needs a value\n"},
 		{"--token-command=", "admin: --token-command needs a value\n"},
 	} {

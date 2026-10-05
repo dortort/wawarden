@@ -47,13 +47,18 @@ var errAnswerTooLarge = errors.New("the answer is larger than 65536 bytes")
 
 func adminCall(ctx context.Context, command string, args, environ []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("admin "+command, flag.ContinueOnError)
-	flags.SetOutput(stderr)
+	flags.SetOutput(io.Discard)
 	flags.Usage = func() {}
 	addr := flags.String("addr", defaultAdminAddr, "the admin listener's URL")
 	file := flags.String(flagTokenFile, "", "read the admin token from this file")
 	fromStdin := flags.Bool(flagTokenStdin, false, "read the admin token from standard input")
 	tokenCommand := flags.String(flagTokenCommand, "", "run this command, without a shell, and read the admin token from its output")
-	if err := flags.Parse(args); err != nil || flags.NArg() > 0 {
+	if err := flags.Parse(args); err != nil {
+		_, _ = fmt.Fprintln(stderr, "admin:", flagProblem(flags, err))
+		return usageError(stderr)
+	}
+	if flags.NArg() > 0 {
+		_, _ = fmt.Fprintln(stderr, "admin: the command takes no arguments besides its flags")
 		return usageError(stderr)
 	}
 	var sources []string
@@ -107,6 +112,16 @@ func adminCall(ctx context.Context, command string, args, environ []string, stdi
 		return exitFailed
 	}
 	return 0
+}
+
+func flagProblem(flags *flag.FlagSet, err error) string {
+	problem := "an argument is not a flag of this command"
+	flags.VisitAll(func(f *flag.Flag) {
+		if text := err.Error(); strings.HasSuffix(text, " -"+f.Name) || strings.Contains(text, " -"+f.Name+":") {
+			problem = "--" + f.Name + " is not given as it must be"
+		}
+	})
+	return problem
 }
 
 func adminURL(raw string) (*url.URL, bool, error) {
