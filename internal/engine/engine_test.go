@@ -173,8 +173,14 @@ func TestADecoderPanicIsAFailedAttemptAndIngestGoesOn(t *testing.T) {
 	if err := e.Stop(t.Context()); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
-	if a := r.alerts("quarantine"); a[0]["queue"] != "history" || a[0]["attempts"] != float64(3) || len(r.logs.events("ingest_failed")) != 3 {
-		t.Fatalf("quarantine alerts %v, failures %d", a, len(r.logs.events("ingest_failed")))
+	attempts := 0
+	for _, f := range r.logs.events("ingest_failed") {
+		if f["queue"] == "history" && f["attempt"] != nil {
+			attempts++
+		}
+	}
+	if a := r.alerts("quarantine"); a[0]["queue"] != "history" || a[0]["attempts"] != float64(3) || attempts != 3 {
+		t.Fatalf("quarantine alerts %v, failed attempts %d", a, attempts)
 	}
 	if r.counter("wawarden_panics_total", "name", "engine.ingest") != 3 {
 		t.Fatalf("panics counted %v, want 3", r.counter("wawarden_panics_total", "name", "engine.ingest"))
