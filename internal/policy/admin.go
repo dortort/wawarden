@@ -32,7 +32,7 @@ func ParseAdminCredential(s string) (AdminCredential, error) {
 	return seal.NewAdminCredential(sum), nil
 }
 
-func wellFormedAdminToken(s string) bool {
+func WellFormedAdminToken(s string) bool {
 	i := strings.LastIndexByte(s, '_')
 	if i < 0 {
 		return false

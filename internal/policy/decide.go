@@ -30,7 +30,7 @@ func DecideWrite(c *Client, now time.Time) (WriteGrant, bool) {
 }
 
 func DecideAdmin(cred AdminCredential, presented string) (AdminGrant, bool) {
-	if !wellFormedAdminToken(presented) || !seal.MatchAdminCredential(cred, sha256.Sum256([]byte(presented))) {
+	if !WellFormedAdminToken(presented) || !seal.MatchAdminCredential(cred, sha256.Sum256([]byte(presented))) {
 		return AdminGrant{}, false
 	}
 	return seal.NewAdminGrant(), true

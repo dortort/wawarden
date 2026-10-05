@@ -19,7 +19,7 @@ func main() {
 		<-ctx.Done()
 		stop()
 	})
-	code := run(ctx, os.Args[1:], os.Environ(), os.Stdout, os.Stderr)
+	code := run(ctx, os.Args[1:], os.Environ(), os.Stdin, os.Stdout, os.Stderr)
 	stop()
 	os.Exit(code)
 }

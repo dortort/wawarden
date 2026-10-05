@@ -72,7 +72,7 @@ func (o *output) waitFor(t *testing.T, event string) map[string]any {
 func invoke(t *testing.T, args, environ []string) (int, string, string) {
 	t.Helper()
 	stdout, stderr := newOutput(), newOutput()
-	code := run(t.Context(), args, environ, stdout, stderr)
+	code := run(t.Context(), args, environ, strings.NewReader(""), stdout, stderr)
 	return code, stdout.String(), stderr.String()
 }
 
@@ -277,7 +277,7 @@ func TestServeKeysItsOutputWithTheMasterKey(t *testing.T) {
 		"WAWARDEN_HEALTH_LISTEN=" + freeAddr(t),
 	}
 	stdout = newOutput()
-	if code := run(t.Context(), []string{"serve", "--allow-root"}, environ, stdout, newOutput()); code != 0 {
+	if code := run(t.Context(), []string{"serve", "--allow-root"}, environ, nil, stdout, newOutput()); code != 0 {
 		t.Fatalf("serve = %d, want 0; stdout %q", code, stdout.String())
 	}
 	master, refusal := keys.Load(data, os.Geteuid())
@@ -404,7 +404,7 @@ func TestServeAndHealthcheck(t *testing.T) {
 	defer cancel()
 	stdout, stderr := newOutput(), newOutput()
 	exited := make(chan int, 1)
-	go func() { exited <- run(ctx, []string{"serve", "--allow-root"}, environ, stdout, stderr) }()
+	go func() { exited <- run(ctx, []string{"serve", "--allow-root"}, environ, nil, stdout, stderr) }()
 	stdout.waitFor(t, "ready")
 
 	if code, _, stderrText := invoke(t, []string{"healthcheck"}, healthEnv); code != 0 {

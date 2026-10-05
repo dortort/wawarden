@@ -55,7 +55,7 @@ var rules = []rule{
 	inListRule, bannedImportRule, reflectionRule, fenceRule, chatMethodRule, thirdPartyRule, hiddenPackageRule, nolintRule, generatedRule, wildcardRule,
 	credentialRule, preludeRule, secretComparisonRule, formRule, shadowRule, sealRule, keysDirectoryRule, standardLibraryOnlyRule, logHandlerRule, logOutputRule,
 	confinementRule, databaseFileRule, constantSQLRule, sqliteStatementRule, protocolCallRule, offlineTestRule, rawHandleRule,
-	notifyEventRule,
+	notifyEventRule, execRule,
 }
 
 var majorVersion = regexp.MustCompile(`^v([2-9]|[1-9][0-9]+)$`)
@@ -333,6 +333,7 @@ func TestArchitecture(t *testing.T) {
 	}
 	for _, rel := range []string{
 		"cmd/wawarden/main.go",
+		"cmd/wawarden/tokencommand.go",
 		"internal/api/register.go",
 		"internal/archtest/arch_test.go",
 		"internal/engine/engine.go",

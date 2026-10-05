@@ -104,6 +104,14 @@ linters:
           deny:
             - pkg: go.mau.fi/libsignal
               desc: internal/engine/wa uses only the signal library's logger package, to route its lines through the scrubbing writer
+        process-execution:
+          files:
+            - $all
+            - "!$test"
+            - "!${base-path}/cmd/wawarden/tokencommand.go"
+          deny:
+            - pkg: os/exec
+              desc: only the admin CLI's token command, in cmd/wawarden/tokencommand.go, runs another program
         no-multipart:
           files:
             - $all

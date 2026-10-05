@@ -186,13 +186,13 @@ func TestParseAdminCredential(t *testing.T) {
 
 func TestWellFormedAdminTokenAcceptsKnownAndGeneratedTokens(t *testing.T) {
 	for name, tok := range knownAdminTokens() {
-		if !adminFormat.MatchString(tok) || !wellFormedAdminToken(tok) {
-			t.Fatalf("%s %q: wellFormedAdminToken() = false", name, tok)
+		if !adminFormat.MatchString(tok) || !WellFormedAdminToken(tok) {
+			t.Fatalf("%s %q: WellFormedAdminToken() = false", name, tok)
 		}
 	}
 	for range 2000 {
-		if tok := token.NewAdmin(); !wellFormedAdminToken(tok) {
-			t.Fatalf("wellFormedAdminToken(%q) = false for a generated token", tok)
+		if tok := token.NewAdmin(); !WellFormedAdminToken(tok) {
+			t.Fatalf("WellFormedAdminToken(%q) = false for a generated token", tok)
 		}
 	}
 }
@@ -209,8 +209,8 @@ func TestWellFormedAdminTokenRejectsEverySingleCharacterChange(t *testing.T) {
 					continue
 				}
 				mutated := tok[:i] + string([]byte{byte(b)}) + tok[i+1:]
-				if wellFormedAdminToken(mutated) {
-					t.Fatalf("wellFormedAdminToken accepted %q, which differs from %q at byte %d", mutated, tok, i)
+				if WellFormedAdminToken(mutated) {
+					t.Fatalf("WellFormedAdminToken accepted %q, which differs from %q at byte %d", mutated, tok, i)
 				}
 			}
 		}
@@ -252,8 +252,8 @@ func TestWellFormedAdminTokenRejects(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if wellFormedAdminToken(tt.in) {
-				t.Fatalf("wellFormedAdminToken(%q) = true, want false", tt.in)
+			if WellFormedAdminToken(tt.in) {
+				t.Fatalf("WellFormedAdminToken(%q) = true, want false", tt.in)
 			}
 		})
 	}
@@ -277,18 +277,18 @@ func FuzzWellFormedAdminToken(f *testing.F) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
-		if !wellFormedAdminToken(s) {
+		if !WellFormedAdminToken(s) {
 			return
 		}
 		if !adminFormat.MatchString(s) {
-			t.Fatalf("wellFormedAdminToken accepted %q, which does not match %s", s, adminFormat)
+			t.Fatalf("WellFormedAdminToken accepted %q, which does not match %s", s, adminFormat)
 		}
 		secret, err := base64.RawURLEncoding.Strict().DecodeString(s[len("wwadm_") : len(s)-9])
 		if err != nil || len(secret) != adminSecretSize {
-			t.Fatalf("wellFormedAdminToken accepted %q, whose secret does not decode to %d bytes", s, adminSecretSize)
+			t.Fatalf("WellFormedAdminToken accepted %q, whose secret does not decode to %d bytes", s, adminSecretSize)
 		}
 		if got := adminTokenFor([adminSecretSize]byte(secret)); got != s {
-			t.Fatalf("wellFormedAdminToken accepted %q, but its canonical form is %q", s, got)
+			t.Fatalf("WellFormedAdminToken accepted %q, but its canonical form is %q", s, got)
 		}
 	})
 }

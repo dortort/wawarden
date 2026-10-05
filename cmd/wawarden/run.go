@@ -24,6 +24,8 @@ const usage = `usage:
   wawarden healthcheck             exit 0 only when the local /healthz answers 200
   wawarden version                 print the version and build flavour
   wawarden admin init              generate an admin token and its SHA-256
+  wawarden admin status|pair|reconnect [--addr URL] --token-file PATH | --token-stdin | --token-command COMMAND
+                                   call the admin listener (default --addr http://127.0.0.1:8082)
 `
 
 const healthcheckTimeout = 2 * time.Second
@@ -33,7 +35,7 @@ var (
 	uids   func() (ruid, euid int)
 )
 
-func run(ctx context.Context, args, environ []string, stdout, stderr io.Writer) int {
+func run(ctx context.Context, args, environ []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
 		return serve(ctx, args, environ, stdout, stderr)
 	}
@@ -45,14 +47,14 @@ func run(ctx context.Context, args, environ []string, stdout, stderr io.Writer) 
 	case "version":
 		return version(args[1:], stdout, stderr)
 	case "admin":
-		return admin(args[1:], stdout, stderr)
+		return admin(ctx, args[1:], environ, stdin, stdout, stderr)
 	}
 	return usageError(stderr)
 }
 
 func usageError(stderr io.Writer) int {
 	_, _ = io.WriteString(stderr, usage)
-	return 2
+	return exitUsage
 }
 
 func serve(ctx context.Context, args, environ []string, stdout, stderr io.Writer) int {
@@ -148,10 +150,23 @@ func version(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func admin(args []string, stdout, stderr io.Writer) int {
-	if len(args) != 1 || args[0] != "init" {
+func admin(ctx context.Context, args, environ []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
 		return usageError(stderr)
 	}
+	switch args[0] {
+	case "init":
+		if len(args) != 1 {
+			return usageError(stderr)
+		}
+		return adminInit(stdout, stderr)
+	case commandStatus, commandPair, commandReconnect:
+		return adminCall(ctx, args[0], args[1:], environ, stdin, stdout, stderr)
+	}
+	return usageError(stderr)
+}
+
+func adminInit(stdout, stderr io.Writer) int {
 	secret := token.NewAdmin()
 	if _, err := fmt.Fprintf(stdout, "token: %s\nsha256: %s\n", secret, token.Hash(secret)); err != nil {
 		return 1
