@@ -170,20 +170,43 @@ func TestInvalidContentIsDroppedWithoutRetries(t *testing.T) {
 	}
 }
 
-func (r *pipeRig) attempt() int {
+func (r *pipeRig) crashBeforeApply() {
+	r.t.Helper()
+	r.p.beforeApply = func(int64) { panic("synthetic crash between the attempt and the apply") }
+	defer func() {
+		if recover() == nil {
+			r.t.Fatal("the worker did not reach the apply")
+		}
+	}()
+	r.drain()
+}
+
+func (r *pipeRig) inboxAttempts() int {
 	r.t.Helper()
 	var attempts int
-	r.write(func(tx *ingest.Tx) error {
-		var item ingest.InboxItem
-		var ok bool
-		var err error
-		if item, ok, err = tx.NextInbox(); err != nil || !ok {
-			r.t.Fatalf("NextInbox: %v, %v", ok, err)
+	if err := r.archive.Read(r.t.Context(), "test.inbox_attempts", func(rd *ingest.Reader) error {
+		item, ok, err := rd.NextInbox()
+		if err == nil && !ok {
+			r.t.Error("the inbox is empty")
 		}
-		attempts, err = tx.RecordInboxAttempt(item.Seq)
+		attempts = item.Attempts
 		return err
-	})
+	}); err != nil {
+		r.t.Fatalf("Read: %v", err)
+	}
 	return attempts
+}
+
+func TestTheAttemptIsCommittedBeforeTheApply(t *testing.T) {
+	r := newPipeRig(t)
+	r.deliver(dm("M1", alice, "applied after its attempt is recorded"))
+	var seen []int
+	r.p.beforeApply = func(int64) { seen = append(seen, r.inboxAttempts()) }
+	r.drain()
+	if !slices.Equal(seen, []int{1}) {
+		t.Fatalf("attempts recorded before the apply: %v, want [1]", seen)
+	}
+	r.must(alice, "M1", alice)
 }
 
 func TestCrashBetweenAttemptAndApplyReplaysOnce(t *testing.T) {
@@ -193,12 +216,12 @@ func TestCrashBetweenAttemptAndApplyReplaysOnce(t *testing.T) {
 	edit.Text = "edited once"
 	r.deliver(orig, edit)
 	for crash := 1; crash <= 2; crash++ {
-		if got := r.attempt(); got != crash {
-			t.Fatalf("attempt %d recorded as %d", crash, got)
+		r.crashBeforeApply()
+		r.restart()
+		if got := r.inboxAttempts(); got != crash {
+			t.Fatalf("after crash %d the row records %d attempts", crash, got)
 		}
-		r.reopen()
 	}
-	r.restart()
 	r.drain()
 	if f := r.must(alice, "M1", alice); f.Text != "edited once" {
 		t.Fatalf("after the replay %+v", f)
@@ -215,16 +238,19 @@ func TestThreeCrashesQuarantine(t *testing.T) {
 	r := newPipeRig(t)
 	r.deliver(dm("M1", alice, "crashes the process"))
 	for range maxAttempts {
-		r.attempt()
-		r.reopen()
+		r.crashBeforeApply()
+		r.restart()
 	}
-	r.restart()
 	r.drain()
 	if _, ok := r.find(alice, "M1", alice); ok {
 		t.Fatal("a row that crashed three times was applied a fourth time")
 	}
 	if a := r.alerts("quarantine"); len(a) != 1 || a[0]["attempts"] != float64(3) {
 		t.Fatalf("quarantine alerts %v", a)
+	}
+	db := r.inspect()
+	if got := query[string](t, db, "SELECT quarantined || ' ' || (payload IS NULL) FROM inbox"); got != "1 1" {
+		t.Fatalf("quarantined row = %q, want quarantined and no payload", got)
 	}
 }
 

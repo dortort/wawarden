@@ -30,6 +30,8 @@ type pipeline struct {
 	kick    chan struct{}
 	paused  atomic.Bool
 	ctx     context.Context
+
+	beforeApply func(seq int64)
 }
 
 func newPipeline(o Options) *pipeline {
@@ -160,6 +162,9 @@ func (p *pipeline) process(ctx context.Context, item ingest.InboxItem) {
 	if attempts > maxAttempts {
 		p.quarantine(run, item.Seq, attempts-1)
 		return
+	}
+	if p.beforeApply != nil {
+		p.beforeApply(item.Seq)
 	}
 	out, err := p.apply(run, item)
 	switch {
