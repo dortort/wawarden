@@ -44,32 +44,34 @@ const (
 )
 
 const (
-	defaultBusyTimeout  = 5 * time.Second
-	defaultAcquireFor   = 5 * time.Minute
-	defaultRetryBase    = 500 * time.Millisecond
-	maxRetryWait        = 15 * time.Second
-	defaultReadTimeout  = 2 * time.Second
-	defaultWriteTimeout = 10 * time.Second
-	maxGoroutineDump    = 32 << 10
-	sqliteBusy          = 5
+	defaultBusyTimeout    = 5 * time.Second
+	defaultAcquireFor     = 5 * time.Minute
+	defaultRetryBase      = 500 * time.Millisecond
+	maxRetryWait          = 15 * time.Second
+	defaultReadTimeout    = 2 * time.Second
+	defaultWriteTimeout   = 10 * time.Second
+	defaultRewriteTimeout = 5 * time.Minute
+	maxGoroutineDump      = 32 << 10
+	sqliteBusy            = 5
 )
 
 type Options struct {
-	DataDir     string
-	UID         int
-	Profile     Profile
-	Logger      *slog.Logger
-	ReadTimeout time.Duration
+	DataDir        string
+	UID            int
+	Profile        Profile
+	Logger         *slog.Logger
+	ReadTimeout    time.Duration
+	WriteTimeout   time.Duration
+	RewriteTimeout time.Duration
 
-	owner        func(fs.FileInfo) (int, bool)
-	statfs       func(string, *syscall.Statfs_t) error
-	busyTimeout  time.Duration
-	acquireFor   time.Duration
-	retryBase    time.Duration
-	writeTimeout time.Duration
-	pragmas      []string
-	disposable   bool
-	ofdEnabled   func() bool
+	owner       func(fs.FileInfo) (int, bool)
+	statfs      func(string, *syscall.Statfs_t) error
+	busyTimeout time.Duration
+	acquireFor  time.Duration
+	retryBase   time.Duration
+	pragmas     []string
+	disposable  bool
+	ofdEnabled  func() bool
 }
 
 type Refusal struct {
@@ -80,20 +82,21 @@ type Refusal struct {
 func (r *Refusal) Error() string { return "db: " + r.detail }
 
 type DB struct {
-	name         Name
-	path         string
-	dir          string
-	sql          *sql.DB
-	connector    *connector
-	logger       *slog.Logger
-	profile      Profile
-	statfs       func(string, *syscall.Statfs_t) error
-	readTimeout  time.Duration
-	writeTimeout time.Duration
-	closed       atomic.Bool
-	backupPages  int32
-	newBackup    func(*keptConn, string) (stepper, error)
-	stepped      func()
+	name           Name
+	path           string
+	dir            string
+	sql            *sql.DB
+	connector      *connector
+	logger         *slog.Logger
+	profile        Profile
+	statfs         func(string, *syscall.Statfs_t) error
+	readTimeout    time.Duration
+	writeTimeout   time.Duration
+	rewriteTimeout time.Duration
+	closed         atomic.Bool
+	backupPages    int32
+	newBackup      func(*keptConn, string) (stepper, error)
+	stepped        func()
 }
 
 type Querier interface {
@@ -128,16 +131,17 @@ func Open(ctx context.Context, name Name, opts Options) (*DB, error) {
 		return nil, err
 	}
 	d := &DB{
-		name:         name,
-		path:         path,
-		dir:          dir,
-		logger:       opts.Logger,
-		profile:      opts.Profile,
-		statfs:       opts.statfs,
-		readTimeout:  opts.ReadTimeout,
-		writeTimeout: opts.writeTimeout,
-		backupPages:  backupPagesPerStep,
-		newBackup:    startBackup,
+		name:           name,
+		path:           path,
+		dir:            dir,
+		logger:         opts.Logger,
+		profile:        opts.Profile,
+		statfs:         opts.statfs,
+		readTimeout:    opts.ReadTimeout,
+		writeTimeout:   opts.WriteTimeout,
+		rewriteTimeout: opts.RewriteTimeout,
+		backupPages:    backupPagesPerStep,
+		newBackup:      startBackup,
 	}
 	d.connector = newConnector(fileURI(path, opts.pragmas), verify(opts.busyTimeout), !opts.disposable, d.lost)
 	d.sql = sql.OpenDB(d.connector)
@@ -173,8 +177,11 @@ func defaults(o *Options) {
 	if o.ReadTimeout == 0 {
 		o.ReadTimeout = defaultReadTimeout
 	}
-	if o.writeTimeout == 0 {
-		o.writeTimeout = defaultWriteTimeout
+	if o.WriteTimeout == 0 {
+		o.WriteTimeout = defaultWriteTimeout
+	}
+	if o.RewriteTimeout == 0 {
+		o.RewriteTimeout = defaultRewriteTimeout
 	}
 	if o.pragmas == nil {
 		o.pragmas = requiredPragmas(o.busyTimeout)
@@ -347,7 +354,15 @@ func (d *DB) Read(ctx context.Context, op string, fn func(context.Context, Queri
 }
 
 func (d *DB) Write(ctx context.Context, op string, fn func(context.Context, Querier) error) error {
-	return d.within(ctx, op, d.writeTimeout, func(ctx context.Context) error {
+	return d.write(ctx, op, d.writeTimeout, fn)
+}
+
+func (d *DB) Rewrite(ctx context.Context, op string, fn func(context.Context, Querier) error) error {
+	return d.write(ctx, op, d.rewriteTimeout, fn)
+}
+
+func (d *DB) write(ctx context.Context, op string, timeout time.Duration, fn func(context.Context, Querier) error) error {
+	return d.within(ctx, op, timeout, func(ctx context.Context) error {
 		tx, err := d.sql.BeginTx(ctx, nil)
 		if err != nil {
 			return err

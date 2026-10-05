@@ -22,7 +22,8 @@ func TestDefaults(t *testing.T) {
 		got, want time.Duration
 	}{
 		{"read deadline", o.ReadTimeout, 2 * time.Second},
-		{"write deadline", o.writeTimeout, 10 * time.Second},
+		{"write deadline", o.WriteTimeout, 10 * time.Second},
+		{"rewrite deadline", o.RewriteTimeout, 5 * time.Minute},
 		{"lock wait", o.acquireFor, 5 * time.Minute},
 		{"busy timeout", o.busyTimeout, 5 * time.Second},
 	} {
@@ -31,8 +32,8 @@ func TestDefaults(t *testing.T) {
 		}
 	}
 	opts, _ := testOptions(t)
-	if d := mustOpen(t, opts); d.readTimeout != 2*time.Second || d.writeTimeout != 10*time.Second {
-		t.Errorf("an opened database has deadlines %v and %v, want 2s and 10s", d.readTimeout, d.writeTimeout)
+	if d := mustOpen(t, opts); d.readTimeout != 2*time.Second || d.writeTimeout != 10*time.Second || d.rewriteTimeout != 5*time.Minute {
+		t.Errorf("an opened database has deadlines %v, %v and %v, want 2s, 10s and 5m", d.readTimeout, d.writeTimeout, d.rewriteTimeout)
 	}
 }
 
@@ -566,6 +567,44 @@ func TestNoDeadlineEventWhenTheCallerGivesUp(t *testing.T) {
 	}
 	if events := logs.events("db_deadline"); len(events) != 0 {
 		t.Fatalf("db_deadline events = %v, want none for the caller's own deadline", events)
+	}
+}
+
+func TestRewriteRunsUnderItsOwnDeadline(t *testing.T) {
+	opts, logs := testOptions(t)
+	d := mustOpen(t, opts)
+	exec1(t, d, "CREATE TABLE t(x INTEGER)")
+	outlive := func(ctx context.Context, q Querier) error {
+		if _, err := q.ExecContext(ctx, "INSERT INTO t VALUES (1)"); err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(300 * time.Millisecond):
+			return nil
+		}
+	}
+	d.writeTimeout, d.rewriteTimeout = 100*time.Millisecond, time.Minute
+	if err := d.Write(t.Context(), "test.write", outlive); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a write beyond the write deadline = %v, want its deadline exceeded", err)
+	}
+	if err := d.Rewrite(t.Context(), "test.rewrite", outlive); err != nil {
+		t.Fatalf("a rewrite beyond the write deadline but within its own = %v", err)
+	}
+	if n := count(t, d, "SELECT count(*) FROM t"); n != 1 {
+		t.Fatalf("%d rows, want the rewrite's one", n)
+	}
+	d.writeTimeout, d.rewriteTimeout = time.Minute, 100*time.Millisecond
+	if err := d.Rewrite(t.Context(), "test.rewrite", outlive); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a rewrite beyond its own deadline = %v, want its deadline exceeded", err)
+	}
+	if n := count(t, d, "SELECT count(*) FROM t"); n != 1 {
+		t.Fatalf("%d rows after an interrupted rewrite, want it rolled back", n)
+	}
+	events := logs.events("db_deadline")
+	if len(events) != 2 || events[1]["operation"] != "test.rewrite" || events[1]["timeout_ms"] != float64(100) {
+		t.Fatalf("db_deadline events = %v, want the write's and then the rewrite's", events)
 	}
 }
 
