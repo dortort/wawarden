@@ -127,6 +127,12 @@ What works today:
   cannot read a backup; without it, no backup is taken. There is no schedule,
   retention or restore tool yet (see
   [backups](docs/configuration.md#backups)).
+- Also on `main`: development builds, made with the `dev` build tag, can run a
+  scripted fake engine in place of WhatsApp (`WAWARDEN_DEV_FAKE_ENGINE=1`) that
+  pairs, connects and plays synthetic messages and history offline. Release
+  builds refuse the variable and contain no part of the fake (see
+  [the fake engine](docs/configuration.md#fake-engine) and
+  [below](#with-the-fake-engine)).
 
 Planned:
 
@@ -252,6 +258,52 @@ wait
 rm -rf "$demo"
 ```
 
+### With the fake engine
+
+A development build can run a scripted fake in place of WhatsApp, to try
+pairing, ingest and the admin commands without an account and without
+contacting WhatsApp. Build it with the `dev` tag and set up a token as above:
+
+```sh
+go build -trimpath -tags dev -o wawarden-dev ./cmd/wawarden
+fake=$(mktemp -d)
+./wawarden-dev admin init > "$fake/admin.txt"
+sed -n 's/^sha256: //p' "$fake/admin.txt" > "$fake/admin.sha256"
+sed -n 's/^token: //p' "$fake/admin.txt" > "$fake/admin.token"
+```
+
+Run it with the fake engine and a synthetic owner number. It logs the warnings
+`dev_build` and `fake_engine`, opens no `session.db`, and starts unpaired:
+
+```sh
+WAWARDEN_DATA_DIR="$fake/data" \
+WAWARDEN_ADMIN_TOKEN_SHA256_FILE="$fake/admin.sha256" \
+WAWARDEN_OWNER_PHONE=+15550100009 \
+WAWARDEN_DEV_FAKE_ENGINE=1 \
+  ./wawarden-dev serve &
+```
+
+Once it logs `"event":"ready"`, pair it. The fake answers with the fixed code
+`FAKE-C0DE`, pairs the owner a moment later, connects, and plays its script:
+live messages that exercise the ingest rules, a dropped connection, and history
+blobs, two of which are built to be quarantined:
+
+```sh
+./wawarden-dev admin pair --token-file "$fake/admin.token"
+sleep 15
+./wawarden-dev admin status --token-file "$fake/admin.token"
+```
+
+The status then shows `state: connected`, `chats: 3`, `messages: 17` and
+`history blobs quarantined: 2`; the log shows the two `quarantine` events, and
+`/metrics` the drops by reason. `WAWARDEN_DEV_FAKE_ENGINE=wrong_account` pairs
+another number instead, which the engine rejects and logs out. Stop the service
+and remove the directory as above (`kill %1`, `wait`, `rm -rf "$fake"`).
+
+The fake exists only in development builds: release builds refuse
+`WAWARDEN_DEV_FAKE_ENGINE`, and the release build checks that no release binary
+holds the fake's code (see [the fake engine](docs/configuration.md#fake-engine)).
+
 ### From the container image
 
 Images are published to `ghcr.io/dortort/wawarden` by the release workflow only.
@@ -316,7 +368,8 @@ the full container contract.
 ## Running the tests
 
 `go test -race ./...` runs the suite, and `go test -race -tags dev ./...` runs it
-against a development build. No test contacts WhatsApp: the protocol adapter is
+against a development build, which adds an end-to-end test that runs `serve`
+with the fake engine and pairs it through the admin CLI. No test contacts WhatsApp: the protocol adapter is
 tested with hand-built events, protobuf fixtures and injected transports, and its
 dialer, like every transport it builds whatever dial function it is handed,
 refuses every connection inside a test binary. `hack/offline-test.sh`
