@@ -56,7 +56,7 @@ var (
 	protocolSettingNames  = lowerKeys(protocolSettings)
 	protocolNameInText    = regexp.MustCompile(`(?i)\b(` + strings.Join(slices.Sorted(maps.Keys(bannedProtocolCalls)), "|") + "|" + strings.Join(slices.Sorted(maps.Keys(protocolSettings)), "|") + `)\b`)
 	jsonEscape            = regexp.MustCompile(`\\u[0-9A-Fa-f]{4}`)
-	documentDecoders      = []string{"encoding/gob", "encoding/json", "encoding/xml", "net/rpc"}
+	documentDecoders      = []string{"encoding/gob", "encoding/json", "encoding/xml", "html/template", "net/rpc", "text/template"}
 )
 
 const (
@@ -316,6 +316,27 @@ func installLocked(device *store.Device) *whatsmeow.Client { return whatsmeow.Ne
 
 import "encoding/json/v2"
 `},
+		{name: "templates that call a method by a name built at run time", rel: "internal/engine/wa/x.go", want: 3, src: `package wa
+
+import (
+	"context"
+	htmltemplate "html/template"
+	"io"
+	"text/template"
+	"text/template/parse"
+
+	"go.mau.fi/whatsmeow"
+)
+
+const verb, noun = "Send", "Presence"
+
+func f(ctx context.Context, w io.Writer, cli *whatsmeow.Client) error {
+	t := template.Must(template.New("p").Parse("{{.C." + verb + noun + " .Ctx \"available\"}}"))
+	_ = htmltemplate.HTMLEscapeString
+	_ = parse.NodeAction
+	return t.Execute(w, map[string]any{"C": cli, "Ctx": ctx})
+}
+`},
 		{name: "an installer in a test and names spelled through JSON escapes or case folding", rel: "internal/engine/wa/x_test.go", want: 3, src: `package wa
 
 import (
@@ -332,11 +353,12 @@ func (c *Client) installLocked(cli *whatsmeow.Client) {
 	_ = json.Unmarshal([]byte("{\"manualhi\u017ftorysyncdownload\":false}"), cli)
 }
 `},
-		{name: "document decoders in tests and elsewhere", rel: "internal/app/x.go", src: `package app
+		{name: "document decoders and templates in tests and elsewhere", rel: "internal/app/x.go", src: `package app
 
 import (
 	"encoding/json"
 	"encoding/xml"
+	"html/template"
 )
 
 var _ = json.Valid([]byte("{\"enable\\u0064\":true}"))
@@ -353,7 +375,7 @@ func checkProtocolCalls(f *sourceFile) []string {
 	if !f.test && (within(f.dir, adapterDir) || within(f.dir, sessionDir)) {
 		for _, imp := range f.imports {
 			if slices.ContainsFunc(documentDecoders, func(d string) bool { return within(imp.path, d) }) {
-				out = append(out, f.at(imp.node, "%q decodes a document into any value, a protocol client and its settings included: %s and %s decode nothing but protobuf", imp.path, adapterDir, sessionDir))
+				out = append(out, f.at(imp.node, "%q reaches the methods and fields of any value, a protocol client and its settings included, by names that a document or template holds: %s and %s decode nothing but protobuf and execute no template", imp.path, adapterDir, sessionDir))
 			}
 		}
 	}
