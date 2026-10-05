@@ -111,15 +111,35 @@ func TestStartKeepsAnEqualVersion(t *testing.T) {
 func TestStartLeavesAnUnpairedClientUnpaired(t *testing.T) {
 	h := newSupRig(t)
 	h.client.setPaired(false)
-	h.versions(versionResult{v: newer})
+	v := h.versions(versionResult{v: newer})
 	h.s.begin(t.Context(), 1)
 	h.steps()
 	h.want(StateUnpaired, "")
-	if h.client.count("connect") != 0 {
-		t.Fatal("an unpaired client was connected without admin pair")
+	if h.client.count("connect") != 0 || v.count() != 0 || len(h.client.history()) != 0 {
+		t.Fatalf("an unpaired client made calls %v and %d version fetches without admin pair: it must make no connection at all", h.client.history(), v.count())
 	}
 	if h.counter("wawarden_paired") != 0 || h.counter("wawarden_connected") != 0 {
 		t.Fatal("gauges are not 0 while unpaired")
+	}
+	if u := h.alerts("unpaired"); len(u) != 1 || u[0]["level"] != "WARN" {
+		t.Fatalf("unpaired events %v, want exactly one warning", u)
+	}
+	if s := h.logs.events("engine_state"); len(s) != 0 {
+		t.Fatalf("engine_state events %v: the engine starts unpaired, so its state does not change", s)
+	}
+
+	budget := newSupRig(t)
+	budget.client.setPaired(false)
+	budget.s.begin(t.Context(), MaxRecentStarts+1)
+	budget.want(StateDisconnected, ReasonRestartBudget)
+	if len(budget.alerts("unpaired")) != 0 {
+		t.Fatal("a start held by the restart budget also reported unpaired")
+	}
+	paired := newSupRig(t)
+	paired.versions(versionResult{v: current})
+	paired.s.begin(t.Context(), 1)
+	if len(paired.alerts("unpaired")) != 0 {
+		t.Fatal("a paired start reported unpaired")
 	}
 }
 

@@ -132,11 +132,16 @@ func (s *supervisor) start(ctx context.Context, recentStarts int) {
 }
 
 func (s *supervisor) begin(ctx context.Context, recentStarts int) {
+	paired := s.client.Paired()
 	s.mu.Lock()
 	s.ctx = ctx
-	if recentStarts > MaxRecentStarts {
+	switch {
+	case recentStarts > MaxRecentStarts:
 		s.setLocked(StateDisconnected, ReasonRestartBudget)
-	} else {
+	case !paired:
+		s.setLocked(StateUnpaired, "")
+		s.alerts.Warn("no WhatsApp device is paired: the engine makes no connection until pairing is requested", slog.String("event", "unpaired"))
+	default:
 		s.setLocked(StateConnecting, "")
 		s.next, s.outdated = refresh, false
 	}
