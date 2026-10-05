@@ -493,7 +493,10 @@ but `shutdown` also logs `disconnected` at every log level. The gauges
 - **Reconnection.** After an ordinary drop or a failed connection attempt, the
   engine reconnects after a delay that starts at 2 seconds, doubles after each
   failed attempt up to 5 minutes, and is randomised to between half and all of
-  that; a successful connection resets it.
+  that; a successful connection resets it. Only the connection being opened
+  counts: a late report that the dropped connection came up changes nothing, and
+  a drop reported while a connection is being opened is followed by another
+  attempt.
 - **Stops that wait for the operator.** When another client replaces the session
   (`replaced`), WhatsApp bans the account temporarily (`temporary_ban`), a
   connection token cannot be refreshed (`cat_refresh`) or WhatsApp refuses the

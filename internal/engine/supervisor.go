@@ -95,6 +95,7 @@ type supervisor struct {
 	attempt    int
 	dialing    bool
 	dropped    bool
+	early      bool
 	awaiting   bool
 	pairs      []time.Time
 	cancelStep context.CancelFunc
@@ -153,7 +154,7 @@ func (s *supervisor) setLocked(state State, reason Reason) {
 		s.cancelStep()
 		s.cancelStep = nil
 	}
-	s.dialing, s.dropped, s.awaiting = false, false, false
+	s.dialing, s.dropped, s.early, s.awaiting = false, false, false, false
 	s.next = idle
 	if s.state == state && s.reason == reason {
 		return
@@ -305,12 +306,15 @@ func (s *supervisor) connect(ctx context.Context, gen uint64, attempt int) {
 	s.mu.Lock()
 	superseded := s.gen != gen
 	stale := superseded && err == nil && s.state == StateDisconnected
-	dropped := !superseded && s.dropped
+	dropped, early := !superseded && s.dropped, !superseded && s.early
 	if !superseded {
-		s.dialing, s.dropped = false, false
+		s.dialing, s.dropped, s.early = false, false, false
 	}
 	switch {
 	case superseded:
+	case err == nil && early && !dropped:
+		s.setLocked(StateConnected, "")
+		s.attempt = 0
 	case err == nil && !dropped:
 		s.awaiting = true
 	default:
@@ -339,9 +343,13 @@ func (s *supervisor) handle(ev Event) {
 	}
 	switch e := ev.(type) {
 	case Connected:
-		if s.state == StateConnecting {
+		switch {
+		case s.state != StateConnecting:
+		case s.awaiting:
 			s.setLocked(StateConnected, "")
 			s.attempt = 0
+		case s.dialing:
+			s.early = true
 		}
 	case Disconnected:
 		switch {

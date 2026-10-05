@@ -560,25 +560,12 @@ func TestStopEndsEveryTransition(t *testing.T) {
 	}
 }
 
-func TestOutOfOrderEventsKeepTheStickyState(t *testing.T) {
-	events := []Event{StreamReplaced{}, Disconnected{}, Disconnected{}, Connected{}}
+func permutations(events []Event) [][]Event {
+	var out [][]Event
 	var perms func([]Event, int)
-	count := 0
 	perms = func(evs []Event, k int) {
 		if k == len(evs) {
-			count++
-			h := newSupRig(t)
-			h.connectedNow()
-			h.deliver(evs...)
-			h.steps()
-			st := h.s.status()
-			replaced := st.State == StateDisconnected && st.Reason == ReasonReplaced
-			if !replaced && st.State != StateConnected {
-				t.Fatalf("order %v ended %+v", fmt.Sprint(evs), st)
-			}
-			if replaced && (h.client.isConnected() || h.steps() != 0) {
-				t.Fatalf("order %v reconnected after StreamReplaced: %v", fmt.Sprint(evs), h.client.history())
-			}
+			out = append(out, slices.Clone(evs))
 			return
 		}
 		for i := k; i < len(evs); i++ {
@@ -588,8 +575,84 @@ func TestOutOfOrderEventsKeepTheStickyState(t *testing.T) {
 		}
 	}
 	perms(slices.Clone(events), 0)
-	if count != 24 {
-		t.Fatalf("%d orders tried", count)
+	return out
+}
+
+func TestOutOfOrderEventsKeepTheStickyState(t *testing.T) {
+	orders := permutations([]Event{StreamReplaced{}, Disconnected{}, Disconnected{}, Connected{}})
+	if len(orders) != 24 {
+		t.Fatalf("%d orders tried", len(orders))
+	}
+	for _, evs := range orders {
+		h := newSupRig(t)
+		h.connectedNow()
+		h.deliver(evs...)
+		h.steps()
+		h.want(StateDisconnected, ReasonReplaced)
+		if h.client.isConnected() || h.steps() != 0 {
+			t.Fatalf("order %v reconnected after StreamReplaced: %v", fmt.Sprint(evs), h.client.history())
+		}
+	}
+}
+
+func TestEveryDropIsFollowedByAConnect(t *testing.T) {
+	for _, events := range [][]Event{{Disconnected{}, Connected{}}, {Disconnected{}, Disconnected{}, Connected{}}, {Disconnected{}, Connected{}, Connected{}}} {
+		for _, evs := range permutations(events) {
+			h := newSupRig(t)
+			h.connectedNow()
+			h.deliver(evs...)
+			h.steps()
+			h.want(StateConnecting, "")
+			if h.client.count("connect") != 2 || h.counter("wawarden_connected") != 0 {
+				t.Fatalf("order %v: calls %v, connected gauge %v, want a second connect and the gauge at 0", fmt.Sprint(evs), h.client.history(), h.counter("wawarden_connected"))
+			}
+			h.deliver(Connected{})
+			h.want(StateConnected, "")
+		}
+	}
+}
+
+func TestALateConnectedDuringTheBackoffIsIgnored(t *testing.T) {
+	h := newSupRig(t)
+	clock := newGatedClock()
+	h.s.clock = clock
+	h.versions(versionResult{v: current})
+	h.s.start(t.Context(), 1)
+	h.client.waitFor(t, "connect")
+	h.client.emit(Connected{})
+	eventually(t, "the engine is connected", func() bool { return h.s.status().State == StateConnected })
+	h.client.emit(Disconnected{})
+	eventually(t, "the reconnect waits for its backoff", func() bool { return clock.waiting() == 1 })
+	h.client.emit(Connected{})
+	h.want(StateConnecting, "")
+	clock.advance(time.Second)
+	h.client.waitFor(t, "connect")
+	if h.counter("wawarden_connected") != 0 {
+		t.Fatal("the Connected gauge is 1 while the engine reconnects")
+	}
+	h.client.emit(Connected{})
+	eventually(t, "the new connection is connected", func() bool { return h.s.status().State == StateConnected })
+}
+
+func TestConnectedBeforeConnectReturnsCounts(t *testing.T) {
+	h := newSupRig(t)
+	h.emitDuringFirstConnect(Connected{})
+	h.versions(versionResult{v: current})
+	h.s.begin(t.Context(), 1)
+	h.steps()
+	h.want(StateConnected, "")
+	if h.client.count("connect") != 1 || h.counter("wawarden_connected") != 1 {
+		t.Fatalf("calls %v, connected gauge %v", h.client.history(), h.counter("wawarden_connected"))
+	}
+
+	h = newSupRig(t)
+	h.emitDuringFirstConnect(Connected{}, Disconnected{})
+	h.versions(versionResult{v: current})
+	h.s.begin(t.Context(), 1)
+	h.steps()
+	h.want(StateConnecting, "")
+	if h.client.count("connect") != 2 {
+		t.Fatalf("calls %v, want a reconnect after the drop", h.client.history())
 	}
 }
 
