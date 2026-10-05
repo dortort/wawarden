@@ -76,7 +76,7 @@ func (w *wired) send(t *testing.T, evt any) {
 	w.c.mu.Lock()
 	gen := w.c.gen
 	w.c.mu.Unlock()
-	if !w.c.dispatch(gen, evt) {
+	if !w.c.handlerFor(gen)(evt) {
 		t.Fatalf("the engine refused %T", evt)
 	}
 }

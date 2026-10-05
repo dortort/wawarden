@@ -110,7 +110,7 @@ func (r *rig) dispatch(evt any) bool {
 	r.c.mu.Lock()
 	gen := r.c.gen
 	r.c.mu.Unlock()
-	return r.c.dispatch(gen, evt)
+	return r.c.handlerFor(gen)(evt)
 }
 
 func TestNewRefusesIncompleteOptions(t *testing.T) {
@@ -168,6 +168,9 @@ func TestTheClientIsBuiltForASupervisedDesktopCompanion(t *testing.T) {
 func checkClientSettings(t *testing.T, which string, cli *whatsmeow.Client, h httpClients) {
 	t.Helper()
 	checkHTTPClients(t, which, cli, h)
+	if handlers := reflect.ValueOf(cli).Elem().FieldByName("eventHandlers"); !handlers.IsValid() || handlers.Len() != 1 {
+		t.Errorf("%s: the library does not hold exactly one event handler, the adapter's, so the engine would miss events or another answer would decide the acknowledgement", which)
+	}
 	for name, bad := range map[string]bool{
 		"auto-reconnect is on":                          cli.EnableAutoReconnect,
 		"initial auto-reconnect is on":                  cli.InitialAutoReconnect,
@@ -421,7 +424,7 @@ func TestALoggedOutDeviceIsReplacedByAFreshOneBeforeTheNextConnection(t *testing
 	if fresh == old || fresh.Store.ID != nil || r.devices.made.Load() != 1 {
 		t.Fatalf("the next connection reuses the logged-out client (%v), its device is paired (%v), or %d devices were made", fresh == old, fresh.Store.ID, r.devices.made.Load())
 	}
-	if !r.c.dispatch(oldGen, &events.Connected{}) {
+	if !r.c.handlerFor(oldGen)(&events.Connected{}) {
 		t.Fatal("an event of the replaced client failed")
 	}
 	if got := r.events(); len(got) != 1 {

@@ -151,9 +151,12 @@ func (c *Client) installLocked(device *store.Device) {
 	cli.SetPreLoginHTTPClient(c.http.websocket)
 	cli.SetMediaHTTPClient(c.http.media)
 	c.gen++
-	gen := c.gen
-	cli.AddEventHandlerWithSuccessStatus(func(evt any) bool { return c.dispatch(gen, evt) })
+	cli.AddEventHandlerWithSuccessStatus(c.handlerFor(c.gen))
 	c.cli, c.stale = cli, false
+}
+
+func (c *Client) handlerFor(gen uint64) whatsmeow.EventHandlerWithSuccessStatus {
+	return func(evt any) bool { return c.dispatch(gen, evt) }
 }
 
 func (c *Client) prePair(jid types.JID, _, _ string) bool {
