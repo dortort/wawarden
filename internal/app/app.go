@@ -44,6 +44,7 @@ type App struct {
 	logger  *slog.Logger
 	ready   atomic.Bool
 	archive *ingest.Store
+	session deviceStore
 	engine  *engine.Engine
 	starts  int
 	serving listenerSet
@@ -53,21 +54,29 @@ type App struct {
 	afterDrain func()
 }
 
+type deviceStore interface {
+	Healthy() bool
+	Close() error
+}
+
 type engineParts struct {
 	client   engine.Client
 	versions engine.VersionSource
 	decoder  engine.HistoryDecoder
+	session  deviceStore
 }
 
+type engineSource func(ctx context.Context, cfg config.Config, out *logx.Writer, logger, alerts *slog.Logger) (engineParts, error)
+
 func New(ctx context.Context, cfg config.Config, out *logx.Writer) (*App, error) {
-	return newApp(ctx, cfg, out, noClients{})
+	return newAppWith(ctx, cfg, out, noClients{}, openWhatsApp)
 }
 
 func newApp(ctx context.Context, cfg config.Config, out *logx.Writer, auth api.Authenticator) (*App, error) {
-	return newAppWith(ctx, cfg, out, auth, engineParts{})
+	return newAppWith(ctx, cfg, out, auth, nil)
 }
 
-func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth api.Authenticator, parts engineParts) (*App, error) {
+func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth api.Authenticator, source engineSource) (*App, error) {
 	if !cfg.HealthListen.Addr().IsLoopback() {
 		return nil, errHealthNotLoopback
 	}
@@ -98,13 +107,20 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth a
 		slog.Bool("ofd_locking", archive.OFDLocking()), slog.Int("recent_starts", starts))
 
 	a := &App{logger: logger, archive: archive, starts: starts, grace: shutdownGrace}
-	if parts.client == nil {
+	if source == nil {
 		alerts.Warn("this build has no WhatsApp engine: nothing pairs, connects or ingests", slog.String("event", "engine_absent"))
-	} else if a.engine, err = engine.New(engine.Options{
-		Client: parts.client, Versions: parts.versions, Decoder: parts.decoder, Archive: archive, DataDir: cfg.DataDir,
-		OwnerPhone: cfg.OwnerPhone, HistoryMaxBytes: cfg.HistoryMaxBytes, Logger: logger, Alerts: alerts, Metrics: reg,
-	}); err != nil {
-		return nil, errors.Join(err, archive.Close())
+	} else {
+		parts, err := source(ctx, cfg, out, logger, alerts)
+		if err != nil {
+			return nil, errors.Join(err, archive.Close())
+		}
+		a.session = parts.session
+		if a.engine, err = engine.New(engine.Options{
+			Client: parts.client, Versions: parts.versions, Decoder: parts.decoder, Archive: archive, DataDir: cfg.DataDir,
+			OwnerPhone: cfg.OwnerPhone, HistoryMaxBytes: cfg.HistoryMaxBytes, Logger: logger, Alerts: alerts, Metrics: reg,
+		}); err != nil {
+			return nil, errors.Join(err, a.closeStores())
+		}
 	}
 	specs := []listeners.Spec{{
 		Name:    listenerClient,
@@ -120,7 +136,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth a
 	}
 	serving, err := listeners.Open(ctx, logger, specs)
 	if err != nil {
-		return nil, errors.Join(err, archive.Close())
+		return nil, errors.Join(err, a.closeStores())
 	}
 	health, err := listeners.Open(ctx, logger, []listeners.Spec{{
 		Name:    listenerHealth,
@@ -128,7 +144,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth a
 		Handler: api.NewHealthHandler(a.healthy),
 	}})
 	if err != nil {
-		return nil, errors.Join(err, serving.Shutdown(ctx), archive.Close())
+		return nil, errors.Join(err, serving.Shutdown(ctx), a.closeStores())
 	}
 	a.serving, a.health = serving, health
 
@@ -148,7 +164,17 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth a
 	return a, nil
 }
 
-func (a *App) healthy() bool { return a.ready.Load() && a.archive.Healthy() }
+func (a *App) healthy() bool {
+	return a.ready.Load() && a.archive.Healthy() && (a.session == nil || a.session.Healthy())
+}
+
+func (a *App) closeStores() error {
+	err := a.archive.Close()
+	if a.session != nil {
+		err = errors.Join(err, a.session.Close())
+	}
+	return err
+}
 
 func (a *App) Inventory() []listeners.Bound {
 	return append(a.serving.Inventory(), a.health.Inventory()...)
@@ -185,7 +211,7 @@ func (a *App) Run(ctx context.Context) error {
 	if a.engine != nil {
 		stopped = a.engine.Stop(grace)
 	}
-	err := errors.Join(failure, drained, stopped, a.archive.Close(), a.health.Shutdown(grace))
+	err := errors.Join(failure, drained, stopped, a.closeStores(), a.health.Shutdown(grace))
 	if err != nil {
 		a.logger.Error("stopped with errors", slog.String("event", "stopped"), slog.String("error", err.Error()))
 		return err

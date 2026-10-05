@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +20,7 @@ import (
 	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/store/ingest"
+	"github.com/dortort/wawarden/internal/store/session"
 	"github.com/dortort/wawarden/internal/token"
 )
 
@@ -24,9 +29,16 @@ type stubClient struct {
 	handler   func(engine.Event) bool
 	calls     []string
 	connected chan struct{}
+	unpaired  bool
 }
 
 func newStubClient() *stubClient { return &stubClient{connected: make(chan struct{}, 16)} }
+
+func fixed(p engineParts) engineSource {
+	return func(context.Context, config.Config, *logx.Writer, *slog.Logger, *slog.Logger) (engineParts, error) {
+		return p, nil
+	}
+}
 
 func (c *stubClient) record(call string) {
 	c.mu.Lock()
@@ -46,8 +58,14 @@ func (c *stubClient) Connect(context.Context) error {
 	return nil
 }
 
-func (c *stubClient) Disconnect()     { c.record("disconnect") }
-func (c *stubClient) Paired() bool    { return true }
+func (c *stubClient) Disconnect() { c.record("disconnect") }
+
+func (c *stubClient) Paired() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.unpaired
+}
+
 func (c *stubClient) Account() string { return "15550100009" }
 func (c *stubClient) PairPhone(context.Context, string) (string, error) {
 	return "", errors.New("synthetic")
@@ -78,9 +96,12 @@ func (c *stubClient) emit(ev engine.Event) bool {
 	return handler != nil && handler(ev)
 }
 
-type stubVersions struct{}
+type stubVersions struct{ calls *atomic.Int32 }
 
-func (stubVersions) Latest(context.Context) (engine.Version, error) {
+func (v stubVersions) Latest(context.Context) (engine.Version, error) {
+	if v.calls != nil {
+		v.calls.Add(1)
+	}
 	return engine.Version{2, 3000, 1}, nil
 }
 
@@ -121,7 +142,7 @@ func TestEngineRunsWhenAClientIsSupplied(t *testing.T) {
 	cfg.OwnerPhone, cfg.HistoryMaxBytes = "+15550100009", config.DefaultHistoryMaxBytes
 	client := newStubClient()
 	logs := &syncBuffer{}
-	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), noClients{}, engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}})
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), noClients{}, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
 	if err != nil {
 		t.Fatalf("newAppWith: %v", err)
 	}
@@ -190,7 +211,7 @@ func TestTheRestartBudgetReachesTheEngine(t *testing.T) {
 		}
 		client := newStubClient()
 		logs := &syncBuffer{}
-		a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), noClients{}, engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}})
+		a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), noClients{}, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
 		if err != nil {
 			t.Fatalf("newAppWith: %v", err)
 		}
@@ -228,7 +249,7 @@ func TestTheRestartBudgetReachesTheEngine(t *testing.T) {
 func TestIncompleteEnginePartsAreRefused(t *testing.T) {
 	cfg := testConfig(t, "")
 	cfg.HistoryMaxBytes = config.DefaultHistoryMaxBytes
-	if _, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), noClients{}, engineParts{client: newStubClient()}); err == nil {
+	if _, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), noClients{}, fixed(engineParts{client: newStubClient()})); err == nil {
 		t.Fatal("an engine without a version source or a decoder was accepted")
 	}
 	requireReleased(t, cfg.DataDir)
@@ -238,4 +259,150 @@ func TestHistoryCapLimitsAgree(t *testing.T) {
 	if config.DefaultHistoryMaxBytes != engine.DefaultHistoryMaxBytes || config.MaxHistoryMaxBytes != engine.MaxHistoryMaxBytes {
 		t.Fatal("config and engine disagree on the history cap")
 	}
+}
+
+type stubSession struct {
+	healthy atomic.Bool
+	closed  atomic.Int32
+}
+
+func (s *stubSession) Healthy() bool { return s.healthy.Load() }
+func (s *stubSession) Close() error  { s.closed.Add(1); return nil }
+
+func TestAnUnpairedEngineStaysIdleAndSaysSoOnce(t *testing.T) {
+	cfg := testConfig(t, "")
+	cfg.OwnerPhone, cfg.HistoryMaxBytes = "+15550100009", config.DefaultHistoryMaxBytes
+	client := newStubClient()
+	client.unpaired = true
+	var fetches atomic.Int32
+	logs := &syncBuffer{}
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), noClients{}, fixed(engineParts{client: client, versions: stubVersions{calls: &fetches}, decoder: stubDecoder{}}))
+	if err != nil {
+		t.Fatalf("newAppWith: %v", err)
+	}
+	stop := run(t, a)
+	waitUntil(t, "the service is ready", func() bool { return len(logs.find("ready")) == 1 })
+	if u := logs.find("unpaired"); len(u) != 1 || u[0]["level"] != "WARN" {
+		t.Fatalf("unpaired events %v, want one warning", u)
+	}
+	if err := stop(); err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	client.mu.Lock()
+	calls := slices.Clone(client.calls)
+	client.mu.Unlock()
+	if slices.Contains(calls, "connect") || slices.Contains(calls, "set_version") || fetches.Load() != 0 {
+		t.Fatalf("an unpaired engine made calls %v and %d version fetches", calls, fetches.Load())
+	}
+	if st := a.engine.Status(); st.State != engine.StateDisconnected || st.Reason != engine.ReasonShutdown || st.Paired {
+		t.Fatalf("engine status after shutdown %+v", st)
+	}
+}
+
+func TestTheDeviceStoreIsPartOfHealthAndClosedOnShutdown(t *testing.T) {
+	cfg := testConfig(t, "")
+	cfg.HistoryMaxBytes = config.DefaultHistoryMaxBytes
+	store := &stubSession{}
+	store.healthy.Store(true)
+	client := newStubClient()
+	client.unpaired = true
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), noClients{}, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}, session: store}))
+	if err != nil {
+		t.Fatalf("newAppWith: %v", err)
+	}
+	stop := run(t, a)
+	health := addr(t, a, "health")
+	waitUntil(t, "/healthz answers 200", func() bool { return mustDo(t, http.MethodGet, health, "/healthz", nil).status == http.StatusOK })
+	store.healthy.Store(false)
+	if r := mustDo(t, http.MethodGet, health, "/healthz", nil); r.status != http.StatusServiceUnavailable {
+		t.Fatalf("/healthz with the device store lost = %d %q, want 503", r.status, r.body)
+	}
+	if err := stop(); err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	if store.closed.Load() != 1 {
+		t.Fatalf("the device store was closed %d times on shutdown, want once", store.closed.Load())
+	}
+	requireReleased(t, cfg.DataDir)
+}
+
+func TestAFailingEngineSourceClosesTheArchive(t *testing.T) {
+	cfg := testConfig(t, "")
+	cfg.HistoryMaxBytes = config.DefaultHistoryMaxBytes
+	failure := errors.New("synthetic: no device store")
+	failing := func(context.Context, config.Config, *logx.Writer, *slog.Logger, *slog.Logger) (engineParts, error) {
+		return engineParts{}, failure
+	}
+	if _, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), noClients{}, failing); !errors.Is(err, failure) {
+		t.Fatalf("newAppWith = %v, want the source's failure", err)
+	}
+	requireReleased(t, cfg.DataDir)
+	store := &stubSession{}
+	if _, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), noClients{}, fixed(engineParts{client: newStubClient(), session: store})); err == nil {
+		t.Fatal("an engine without a version source or a decoder was accepted")
+	}
+	if store.closed.Load() != 1 {
+		t.Fatal("a refused engine left its device store open")
+	}
+	requireReleased(t, cfg.DataDir)
+}
+
+func TestReleaseBuildsOpenTheSessionAndWaitForPairing(t *testing.T) {
+	cfg := testConfig(t, "")
+	cfg.OwnerPhone, cfg.HistoryMaxBytes = "+15550100009", config.DefaultHistoryMaxBytes
+	logs := &syncBuffer{}
+	a, err := New(t.Context(), cfg, logx.NewWriter(logs))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	stop := run(t, a)
+	waitUntil(t, "the service is ready", func() bool { return len(logs.find("ready")) == 1 })
+	if o := logs.find("session_opened"); len(o) != 1 || o[0]["paired"] != false {
+		t.Fatalf("session_opened events %v", o)
+	}
+	if u := logs.find("unpaired"); len(u) != 1 {
+		t.Fatalf("unpaired events %v", u)
+	}
+	for _, event := range []string{"engine_absent", "engine_state", "version_refresh_failed", "version_updated", "connect_failed"} {
+		if found := logs.find(event); len(found) != 0 {
+			t.Fatalf("%s events %v: an unpaired release build must make no connection", event, found)
+		}
+	}
+	fi, err := os.Lstat(filepath.Join(cfg.DataDir, "session.db"))
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("session.db: %v, %v", fi, err)
+	}
+	if st := a.engine.Status(); st.State != engine.StateUnpaired || st.Paired {
+		t.Fatalf("engine status %+v", st)
+	}
+	if err := stop(); err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	requireReleased(t, cfg.DataDir)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	store, err := session.Open(ctx, session.Options{DataDir: cfg.DataDir, UID: os.Geteuid(), Profile: session.Profile(config.StorageLocal), Logger: logx.New(logx.NewWriter(io.Discard), slog.LevelInfo)})
+	if err != nil {
+		t.Fatalf("session.db is still locked after shutdown: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestReleaseBuildsRefuseASessionTheyCannotTrust(t *testing.T) {
+	cfg := testConfig(t, "")
+	cfg.HistoryMaxBytes = config.DefaultHistoryMaxBytes
+	path := filepath.Join(cfg.DataDir, "session.db")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Chmod(path, 0o640); err != nil { //nolint:gosec // G302: the refusal under test needs a group-readable session.db
+		t.Fatalf("Chmod: %v", err)
+	}
+	_, err := New(t.Context(), cfg, logx.NewWriter(io.Discard))
+	if r, ok := errors.AsType[*Refusal](err); !ok || r.Reason != "session_db_permissions" {
+		t.Fatalf("New = %v, want the refusal session_db_permissions", err)
+	}
+	requireReleased(t, cfg.DataDir)
 }
