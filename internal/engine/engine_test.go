@@ -3,10 +3,13 @@ package engine
 import (
 	"context"
 	"errors"
+	"math"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/dortort/wawarden/internal/metrics"
+	"github.com/dortort/wawarden/internal/store/ingest"
 )
 
 func eventually(t *testing.T, what string, cond func() bool) {
@@ -83,6 +86,52 @@ func TestEngineRunsTheSupervisorAndTheWorkers(t *testing.T) {
 	}
 	if r.counter("wawarden_connected") != 0 {
 		t.Fatal("the Connected gauge is not 0 after Stop")
+	}
+}
+
+func TestEnginePausesAndResumesWithTheFreeSpace(t *testing.T) {
+	r := newHistRig(t)
+	r.ingestOpts.MinFreeBytes = math.MaxUint64
+	r.reopen()
+	r.appendRaw(mustPayload(t, dm("M1", alice, "waits in the inbox")))
+	clock := newGatedClock()
+	o := r.opts
+	o.Clock, o.Metrics = clock, metrics.NewRegistry()
+	r.reg = o.Metrics
+	e, err := New(o)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	var freed, resumed atomic.Bool
+	e.pipe.space = func() (ingest.Space, error) {
+		if freed.Load() {
+			return ingest.Space{Free: 1 << 40, Floor: 1 << 30, Changed: !resumed.Swap(true)}, nil
+		}
+		return r.archive.CheckSpace()
+	}
+	e.Start(t.Context(), MaxRecentStarts+1)
+	t.Cleanup(func() { _ = e.Stop(context.Background()) })
+	if a := r.alerts("ingest_paused"); len(a) != 1 || a[0]["floor_bytes"] != float64(math.MaxUint64) {
+		t.Fatalf("ingest_paused alerts %v", a)
+	}
+	eventually(t, "the worker waits for its next check", func() bool { return clock.waiting() == 1 })
+	if _, ok := r.find(alice, "M1", alice); ok {
+		t.Fatal("the engine applied the inbox while ingest is paused")
+	}
+	if r.client.emit(dm("M2", alice, "while paused")) || r.counter("wawarden_ingest_refused_total", "reason", "paused") != 1 {
+		t.Fatal("the engine acknowledged a message while ingest is paused")
+	}
+	freed.Store(true)
+	clock.advance(spaceInterval)
+	eventually(t, "the inbox drains after the free space returns", func() bool {
+		_, ok := r.find(alice, "M1", alice)
+		return ok
+	})
+	if len(r.logs.events("ingest_resumed")) != 1 {
+		t.Fatalf("no ingest_resumed event: %s", r.logs)
+	}
+	if !r.client.emit(dm("M2", alice, "after the pause")) {
+		t.Fatal("the engine refused a message after ingest resumed")
 	}
 }
 

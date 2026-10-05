@@ -32,6 +32,7 @@ type pipeline struct {
 	ctx     context.Context
 
 	beforeApply func(seq int64)
+	space       func() (ingest.Space, error)
 }
 
 func newPipeline(o Options) *pipeline {
@@ -112,7 +113,11 @@ func (p *pipeline) accept(ev Event) bool {
 }
 
 func (p *pipeline) checkSpace() {
-	space, err := p.archive.CheckSpace()
+	check := p.archive.CheckSpace
+	if p.space != nil {
+		check = p.space
+	}
+	space, err := check()
 	if err != nil {
 		p.logger.Warn("the free space of the data directory cannot be read", slog.String("event", "free_space_unknown"), slog.String("error_type", fmt.Sprintf("%T", err)))
 		return
