@@ -250,7 +250,9 @@ func (h *webhook) run() {
 }
 
 func (h *webhook) shutdown(ctx context.Context) {
-	h.stopping.Store(true)
+	if h.stopping.Swap(true) {
+		return
+	}
 	close(h.stop)
 	select {
 	case <-h.done:

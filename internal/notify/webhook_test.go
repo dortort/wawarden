@@ -405,6 +405,27 @@ func TestASlowReceiverBlocksNeitherEmitNorStop(t *testing.T) {
 	if got, _ := strconv.Atoi(r.dropped(t, dropShutdown)); got != shutdown+1 {
 		t.Fatal("an event after Stop was not counted as a shutdown drop")
 	}
+	if err := r.n.Stop(t.Context()); err != nil {
+		t.Fatalf("a second Stop: %v", err)
+	}
+}
+
+func TestStopWithAnExpiredContextStillFlushes(t *testing.T) {
+	recv := newReceiver(t)
+	r := newHookRig(t, recv.srv.URL, true, roots(recv.srv))
+	r.n.Start(t.Context())
+	r.n.AdminAuthFailure()
+	r.n.AdminAuthFailure()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	began := time.Now()
+	_ = r.n.Stop(ctx)
+	if took := time.Since(began); took > 2*time.Second {
+		t.Fatalf("Stop with an expired context took %v", took)
+	}
+	if got := authFailures(t, r.out); len(got) != 2 || got[1] != 1 {
+		t.Fatalf("admin_auth_failure counts %v, want the held-back failure reported even when the grace period is over", got)
+	}
 }
 
 func TestNoPostedEventCarriesACanary(t *testing.T) {

@@ -107,16 +107,17 @@ func (n *Notifier) Stop(ctx context.Context) error {
 		return errNotStarted
 	}
 	n.cancel()
+	var err error
 	select {
 	case <-n.done:
 	case <-ctx.Done():
-		return ctx.Err()
+		err = ctx.Err()
 	}
 	n.flushAuthFailures(true)
 	if n.hook != nil {
 		n.hook.shutdown(ctx)
 	}
-	return nil
+	return err
 }
 
 func (n *Notifier) Unpaired() {
