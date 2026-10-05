@@ -1197,10 +1197,10 @@ version fetch or connection attempt (`engine.supervisor`) or of one inbox row's
 or history blob's attempt (`engine.ingest`), which the engine treats as a failed
 attempt. Its adapter adds `wa.connect`, which ends a connection attempt whose
 caller gave up, `wa.keepalive`, which closes a connection whose keepalives
-failed, and `wa.event` for a panic while it translates one of the protocol
-library's events or the engine handles it, which refuses the event. Other code
-on goroutines that the protocol library starts itself is not covered: a panic
-there ends the process.
+failed or that WhatsApp asked to log in again, and `wa.event` for a panic while
+it translates one of the protocol library's events or the engine handles it,
+which refuses the event. Other code on goroutines that the protocol library
+starts itself is not covered: a panic there ends the process.
 
 Anything that scrapes `/metrics` holds the full admin token, which from M1 can
 start pairing and from M2 can create clients. Treat a scrape configuration as
