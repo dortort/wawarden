@@ -370,7 +370,8 @@ Right after the master key, `serve`:
    open-file-description locks, and a kernel or filesystem that refuses them
    is refused in turn (46) instead of falling back to classic locks;
 5. brings the schema up to date (an archive written by a newer release is
-   refused, 47) and logs `archive_opened`.
+   refused, 47), completes a rewrite of the full-text index that a stop or a
+   failed rewrite left due (see below) and logs `archive_opened`.
 
 The connection that holds the lock is the only one the service ever opens to
 the archive. It survives a call that runs out of time, and should it ever be
@@ -387,15 +388,26 @@ zero bytes after every transaction; SQLite gives it the database file's mode.
 Temporary data stays in memory, so the service writes no other file next to the
 archive.
 
-Every read of the archive must finish within 2 seconds and every write within
-10 seconds. A call that runs out of time is interrupted and logged as
+Every read of the archive must finish within 2 seconds, every write within
+10 seconds and every rewrite of its full-text index within 5 minutes. A call
+that runs out of time is interrupted and logged as
 `db_deadline` with the profile of every goroutine of the process (function names
 and source positions only).
 
 Revoked, edited and expired message text will be removed from the database file,
 its journal and the full-text index, as described in the
 [threat model](threat-model.md#security-invariants) (I-8); backups are
-outside that guarantee.
+outside that guarantee. The index stores every three-character run of the text
+and finds them through page keys, which copy the start of the first run on each
+of its pages, and deleting a run keeps its key. When a deletion leaves a key that
+is a whole run of the old text and no other message holds that run, the service
+rewrites the entire index right after the deletion commits, in a transaction of
+its own. The rewrite holds the archive while it runs, so other calls wait and
+may reach their own deadlines; it writes the new index before it frees the old
+one, so it needs free space of about the index's size. When the rewrite does
+not commit, because the process stopped or the rewrite failed, the next start
+rewrites the index before it logs `archive_opened`. A key that holds less than a
+whole run is not rewritten.
 
 ### Storage profiles
 
@@ -610,7 +622,7 @@ loopback.
 | `stopped` | `INFO`, or `ERROR` with `error` | | Shutdown ended. |
 | `panic` | `ERROR` | `name`, `panic_type`, `stack` | A panic was recovered in a handler or a goroutine; `name` is as in `wawarden_panics_total`. |
 | `http_server_error` | `WARN` | `listener` | Go's HTTP server reported an error of its own, such as a failed accept; `msg` holds the server's text. |
-| `db_deadline` | `ERROR` | `database`, `operation`, `timeout_ms`, `goroutines` | A read of the archive ran beyond 2 seconds or a write beyond 10; the call is interrupted and fails. `operation` names the call in the code, and `goroutines` holds the goroutine profile of the process (function names and source positions, cut at 32 KiB). |
+| `db_deadline` | `ERROR` | `database`, `operation`, `timeout_ms`, `goroutines` | A read of the archive ran beyond 2 seconds, a write beyond 10 or a rewrite of its full-text index beyond 5 minutes; the call is interrupted and fails. `operation` names the call in the code, and `goroutines` holds the goroutine profile of the process (function names and source positions, cut at 32 KiB). |
 | `db_lost` | `ERROR` | `database` | The connection that held the archive's lock is gone, and the service refuses to open another; `/healthz` answers `503` from then on. |
 | `log_dropped` | `WARN` | `reason`: `xml` or `too_long` | Replaces a line that carried XML (`xml`) or was longer than 65,536 bytes (`too_long`); see [Pseudonyms and dropped lines](#pseudonyms-and-dropped-lines). It is written in place of a line that passed the log level, whatever that line's level was. |
 

@@ -86,7 +86,9 @@ What works today:
   it; a second instance waits for the lock. Nothing writes WhatsApp traffic into
   the archive yet. Internally: the archive's schema and write side, which keys
   every chat canonically and removes revoked, edited and expired text from the
-  disk. See [the message archive](docs/configuration.md#message-archive).
+  disk, rewriting the full-text index when one of its page keys still holds a
+  trigram of that text. See
+  [the message archive](docs/configuration.md#message-archive).
 
 Planned:
 
