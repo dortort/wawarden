@@ -491,7 +491,7 @@ Dependabot does not update the following, so they are bumped by hand:
 
 | Item | Where it is pinned |
 |---|---|
-| Go | The `go` and `toolchain` lines of `go.mod`. The workflows set up Go from `go.mod`; every job that runs Go in `ci.yml`, `codeql.yml`, `release.yml` and `govulncheck-daily.yml` then runs `hack/check-go-version.sh`, which stops the job unless `go env GOVERSION` equals the `toolchain` version, and `hack/repro-build.sh` requires exactly that version too. Dependabot proposes no Go release, but a module update it proposes can raise the `go` line when the new version needs a newer Go; review such a pull request as a Go bump. |
+| Go | The `go` and `toolchain` lines of `go.mod`. The workflows set up Go from `go.mod`; every job that runs Go in `ci.yml`, `codeql.yml`, `release.yml`, `govulncheck-daily.yml` and `bump-whatsmeow.yml` then runs `hack/check-go-version.sh`, which stops the job unless `go env GOVERSION` equals the `toolchain` version, and `hack/repro-build.sh` requires exactly that version too. Dependabot proposes no Go release, but a module update it proposes can raise the `go` line when the new version needs a newer Go; review such a pull request as a Go bump. |
 | golangci-lint | The `version` input of both `golangci/golangci-lint-action` steps in `.github/workflows/ci.yml`. |
 | govulncheck | The `go install golang.org/x/vuln/cmd/govulncheck@<version>` step in `.github/workflows/ci.yml` and in `.github/workflows/govulncheck-daily.yml`. |
 | buildx | `BUILDX_VERSION` in the `env` block of `.github/workflows/ci.yml` and of `.github/workflows/release.yml`. |
@@ -505,10 +505,10 @@ For every update:
       hashes. For a Dependabot pull request, read the release notes and
       commits it links and the upstream diff between the two versions. For
       `go.mau.fi/whatsmeow`, read the upstream commit log, the diffstat and the
-      diff of the watched paths that the bump workflow planned below puts into
-      the pull request, and pay particular attention to connection handling,
-      the device store, sending, media download and upload, pairing, and
-      message decryption.
+      diff of the watched paths that the bump workflow described below puts
+      into the pull request, and pay particular attention to connection
+      handling, the device store, sending, media download and upload, pairing,
+      and message decryption.
 - [ ] Look for new modules, licence changes, `init` functions with side effects,
       new goroutines, new listeners and handlers registered on
       `http.DefaultServeMux`. The architecture and listener-inventory tests catch
@@ -525,12 +525,80 @@ For every update:
       results from two independent builds. For a base image bump, also verify the
       new digest's signature as documented by the distroless project.
 
-Planned for M1 and not present yet:
+#### The whatsmeow bump workflow
 
-- `whatsmeow` has no tagged releases, so Dependabot cannot propose updates for it.
-  A scheduled workflow of this repository, which can also be dispatched by hand,
-  will open a pull request pinning an exact commit as a pseudo-version. Its
-  description will carry the upstream commit log, a diffstat and the diff of the
-  watched paths (`socket/`, `store/`, `send.go`, `download.go`, `upload.go`,
-  `message.go`, `pair*.go`, `handshake.go`, `msgsecret.go`, `appstate*`). It
-  never merges, tags or releases.
+`go.mau.fi/whatsmeow` has no tagged releases, so Dependabot cannot propose
+updates for it. The `bump-whatsmeow` workflow
+(`.github/workflows/bump-whatsmeow.yml`) proposes them instead, every Monday at
+05:41 UTC and whenever a maintainer dispatches it from `main` with an upstream
+commit (7 to 40 lowercase hex characters) or `latest`, the default. It never
+merges, tags or releases. It runs two jobs:
+
+1. The first job can only read the repository. It asks the Go module proxy for
+   the target's pseudo-version, and ends without a change when `go.mod` already
+   pins it. Otherwise it runs `go get`, `go mod tidy` and `go mod verify`, stops
+   unless exactly `go.mod` and `go.sum` changed, writes the pull request's
+   description, uploads it with `go.mod`, `go.sum` and the watched-path diff as
+   the artifact `whatsmeow-bump`, builds the release and `dev` tag sets, and
+   runs `hack/offline-test.sh`. A target that resolves to a tagged version or to
+   another commit, or that needs a newer Go than the `toolchain` line of
+   `go.mod` names (`GOTOOLCHAIN` is `local`), stops it.
+2. The second job runs only when the first one passed, and alone holds
+   `contents: write` and `pull-requests: write`. It runs no Go code. It commits
+   the artifact's `go.mod` and `go.sum` onto the commit the run started from,
+   pushes the commit to the branch `bump/whatsmeow`, and opens the pull request
+   from that branch, or updates the title and description of the open one. The
+   branch belongs to the workflow: a run replaces it, refuses to when it holds a
+   commit that the workflow did not make, and leaves it alone when it already
+   pins the same version, so that an approved CI run stays valid. A closed pull
+   request is not remembered: the next run opens a new one for the newest
+   commit, even one that was declined.
+
+The description carries the old and new pseudo-versions, the upstream compare
+link, whether the new commit descends from the pinned one (and if not, the
+commits it drops), the upstream commit log between them, a diffstat between the
+two module versions' sources as the module proxy serves them, the `go.mod`
+diff, and the full diff between those sources of the watched paths: `socket/`,
+`store/`, `send.go`, `download.go`, `upload.go`, `message.go`, `pair*.go`,
+`handshake.go`, `msgsecret.go` and `appstate*`. Upstream text is fenced so that
+it cannot end its code block. When the description would exceed GitHub's limit,
+the diff is cut at a line with a note, and the complete diff is
+`watched-paths.diff` in the run's `whatsmeow-bump` artifact.
+
+When the first job fails, nothing is pushed. If it failed at the build or the
+tests, its `whatsmeow-bump` artifact still holds the description and the diff. A bump that
+needs a change of this repository, such as a new module for the architecture
+tests' reviewed lists, is made by hand on a branch with the same commands.
+
+Opening the pull request needs the repository setting **Allow GitHub Actions to
+create and approve pull requests** (Settings, Actions, General, Workflow
+permissions), which is off by default for a repository in a personal account.
+`gh api repos/dortort/wawarden/actions/permissions/workflow --jq .can_approve_pull_request_reviews`
+prints `true` when it is on. While it is off, GitHub refuses the workflow
+token's request to open a pull request: the run fails after pushing the branch,
+and its summary links the page from which a maintainer opens the pull request
+by hand, with `body.md` from the artifact as its description. The setting also
+lets a workflow token approve pull requests; no other workflow holds
+`pull-requests: write`, and no ruleset requires an approval.
+
+CI does not start on its own. GitHub starts no workflow run for an event that
+the workflow token causes, apart from `workflow_dispatch` and
+`repository_dispatch`; when a workflow opens or updates a pull request with that
+token, the `pull_request` runs are created in an approval-required state
+([Triggering a workflow from a workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow)).
+A maintainer with write access starts them with **Approve workflows to run** in
+the pull request's merge box, after the workflow opens the pull request and
+again after each run that pushes the branch. This needs no personal access
+token, GitHub App or stored secret, and no workflow gains a permission. A pull
+request that a maintainer opened by hand runs CI on its own, but later pushes
+by the workflow wait for approval again.
+
+For a bump pull request, in addition to the list above:
+
+- [ ] Approve the CI runs as described above, and merge only after `ci` passed
+      on the pull request's head commit. The `main` ruleset requires no status
+      check, so GitHub does not enforce this.
+- [ ] Read the whole watched-path diff, from the artifact when the description
+      says it was cut, and the commit log. Treat a target that does not descend
+      from the pinned commit as a downgrade or rewritten history, and find out
+      why before merging.
