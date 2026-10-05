@@ -56,6 +56,7 @@ var (
 	errURL          = errors.New("notify: the webhook URL must be https://host[:port][/path][?query], without credentials or a fragment")
 	errSecret       = errors.New("notify: the webhook needs a signing secret of at least 32 bytes and a metrics registry")
 	errDestination  = errors.New("notify: the webhook's destination address is refused")
+	errShutdownDrop = errors.New("notify: the webhook dropped events at shutdown")
 	alwaysRefused   = prefixes("0.0.0.0/8", "169.254.0.0/16", "224.0.0.0/4", "240.0.0.0/4", "100.100.100.200/32", "192.0.0.192/32", "::/128", "fe80::/10", "ff00::/8", "fd00:ec2::254/128", "64:ff9b:1::/48")
 	privateUnlessOK = prefixes("100.64.0.0/10")
 	nat64           = netip.MustParsePrefix("64:ff9b::/96")
@@ -150,12 +151,13 @@ type webhook struct {
 	sleep   func(context.Context, time.Duration) error
 	dropped *metrics.CounterVec
 
-	queue    chan delivery
-	stopping atomic.Bool
-	stop     chan struct{}
-	done     chan struct{}
-	ctx      context.Context
-	cancel   context.CancelFunc
+	queue         chan delivery
+	stopping      atomic.Bool
+	shutdownDrops atomic.Int64
+	stop          chan struct{}
+	done          chan struct{}
+	ctx           context.Context
+	cancel        context.CancelFunc
 }
 
 func newWebhook(o Options, logger *slog.Logger, now func() time.Time) (*webhook, error) {
@@ -233,7 +235,7 @@ func writeString(b *bytes.Buffer, s string) {
 
 func (h *webhook) enqueue(d delivery) {
 	if h.stopping.Load() {
-		h.dropped.With(dropShutdown).Inc()
+		h.dropAtShutdown()
 		return
 	}
 	select {
@@ -262,9 +264,14 @@ func (h *webhook) run() {
 	}
 }
 
-func (h *webhook) shutdown(ctx context.Context) {
+func (h *webhook) dropAtShutdown() {
+	h.shutdownDrops.Add(1)
+	h.dropped.With(dropShutdown).Inc()
+}
+
+func (h *webhook) shutdown(ctx context.Context) error {
 	if h.stopping.Swap(true) {
-		return
+		return nil
 	}
 	close(h.stop)
 	select {
@@ -274,20 +281,22 @@ func (h *webhook) shutdown(ctx context.Context) {
 		<-h.done
 	}
 	h.cancel()
-	for {
-		select {
-		case <-h.queue:
-			h.dropped.With(dropShutdown).Inc()
-		default:
-			return
-		}
+	for len(h.queue) > 0 {
+		<-h.queue
+		h.dropAtShutdown()
 	}
+	n := h.shutdownDrops.Load()
+	if n == 0 {
+		return nil
+	}
+	h.logger.Warn("the notification webhook dropped events at shutdown", slog.String("event", "notify_dropped"), slog.Int64("count", n))
+	return errors.Join(errShutdownDrop, ctx.Err())
 }
 
 func (h *webhook) deliver(d delivery) {
 	for attempt := 1; ; attempt++ {
 		if h.ctx.Err() != nil {
-			h.dropped.With(dropShutdown).Inc()
+			h.dropAtShutdown()
 			return
 		}
 		status, retryAfter, err := h.post(d)
@@ -302,7 +311,7 @@ func (h *webhook) deliver(d delivery) {
 			reason, retry = failStatus, retryable(status)
 		}
 		if h.ctx.Err() != nil {
-			h.dropped.With(dropShutdown).Inc()
+			h.dropAtShutdown()
 			return
 		}
 		if !retry || attempt == maxAttempts {
@@ -316,7 +325,7 @@ func (h *webhook) deliver(d delivery) {
 			wait = retryAfter
 		}
 		if h.sleep(h.ctx, wait) != nil {
-			h.dropped.With(dropShutdown).Inc()
+			h.dropAtShutdown()
 			return
 		}
 	}

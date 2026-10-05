@@ -419,8 +419,8 @@ func TestASlowReceiverBlocksNeitherEmitNorStop(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
 	defer cancel()
 	began = time.Now()
-	if err := r.n.Stop(ctx); err != nil {
-		t.Fatalf("Stop: %v", err)
+	if err := r.n.Stop(ctx); !errors.Is(err, errShutdownDrop) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Stop = %v, want the events cut off by the grace period reported", err)
 	}
 	if took := time.Since(began); took > 2*time.Second {
 		t.Fatalf("Stop took %v behind a stalled receiver, want it bounded by its context", took)
@@ -429,6 +429,15 @@ func TestASlowReceiverBlocksNeitherEmitNorStop(t *testing.T) {
 	shutdown, _ := strconv.Atoi(r.dropped(t, dropShutdown))
 	if full+shutdown != queueSize+10 {
 		t.Fatalf("drops: %d queue_full and %d shutdown, want all %d events accounted for", full, shutdown, queueSize+10)
+	}
+	var reported []map[string]any
+	for _, rec := range r.out.records(t) {
+		if rec["event"] == "notify_dropped" {
+			reported = append(reported, rec)
+		}
+	}
+	if len(reported) != 1 || reported[0]["count"] != float64(shutdown) || reported[0]["level"] != "WARN" || len(reported[0]) != 5 {
+		t.Fatalf("notify_dropped lines %v, want one warning with the %d events dropped at shutdown", reported, shutdown)
 	}
 	r.n.Unpaired()
 	if got, _ := strconv.Atoi(r.dropped(t, dropShutdown)); got != shutdown+1 {

@@ -115,7 +115,7 @@ func (n *Notifier) Stop(ctx context.Context) error {
 	}
 	n.flushAuthFailures(true)
 	if n.hook != nil {
-		n.hook.shutdown(ctx)
+		err = errors.Join(err, n.hook.shutdown(ctx))
 	}
 	return err
 }

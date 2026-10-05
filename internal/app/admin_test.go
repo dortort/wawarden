@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/netip"
 	"strings"
@@ -177,6 +178,62 @@ func TestTheWebhookIsWiredFromTheConfiguration(t *testing.T) {
 	}
 	if strings.Contains(logs.buf.String(), "169.254") {
 		t.Fatal("the webhook URL reached the log")
+	}
+}
+
+func TestAWebhookCutShortByTheGracePeriodFailsTheRun(t *testing.T) {
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	accepted := make(chan net.Conn, 8)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- c
+		}
+	}()
+	t.Cleanup(func() {
+		_ = ln.Close()
+		for {
+			select {
+			case c := <-accepted:
+				_ = c.Close()
+			default:
+				return
+			}
+		}
+	})
+	cfg := testConfig(t, "")
+	cfg.OwnerPhone, cfg.HistoryMaxBytes = "+15550100009", config.DefaultHistoryMaxBytes
+	cfg.Notify = config.Notify{URL: "https://" + ln.Addr().String() + "/hook", Secret: []byte(strings.Repeat("s", 32)), AllowPrivate: true}
+	client := newStubClient()
+	client.unpaired = true
+	logs := &syncBuffer{}
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), noClients{}, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
+	if err != nil {
+		t.Fatalf("newAppWith: %v", err)
+	}
+	a.grace = 200 * time.Millisecond
+	stop := run(t, a)
+	var held net.Conn
+	select {
+	case held = <-accepted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the unpaired event was not posted")
+	}
+	defer func() { _ = held.Close() }()
+	if err := stop(); err == nil {
+		t.Fatal("Run = nil after the webhook lost an event to the grace period, want an error so that serve exits 1")
+	}
+	if d := logs.find("notify_dropped"); len(d) != 1 || d[0]["count"] != float64(1) {
+		t.Fatalf("notify_dropped events %v, want one counting the unpaired event", d)
+	}
+	if s := logs.find("stopped"); len(s) != 1 || s[0]["level"] != "ERROR" {
+		t.Fatalf("stopped events %v, want an error", s)
 	}
 }
 
