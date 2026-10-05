@@ -668,6 +668,58 @@ func TestPairedAccountMustBeTheOwner(t *testing.T) {
 	}
 }
 
+func TestPairingEventsOutOfOrder(t *testing.T) {
+	t.Run("a late PairRejected leaves the owner's device connected", func(t *testing.T) {
+		h := newSupRig(t)
+		h.client.oneSocket = true
+		h.connectedNow()
+		h.deliver(PairRejected{})
+		h.want(StateConnected, "")
+		if !h.s.accepting() || len(h.alerts("pair_rejected")) != 0 || h.counter("wawarden_connected") != 1 {
+			t.Fatalf("accepting %v, pair_rejected alerts %v", h.s.accepting(), h.alerts("pair_rejected"))
+		}
+		if err := h.s.reconnect(); !errors.Is(err, ErrAlreadyConnected) {
+			t.Fatalf("Reconnect = %v, want ErrAlreadyConnected", err)
+		}
+		if h.steps() != 0 || h.client.count("connect") != 1 {
+			t.Fatalf("calls %v", h.client.history())
+		}
+	})
+	t.Run("a late PairRejected leaves a stored device waiting for the admin", func(t *testing.T) {
+		h := newSupRig(t)
+		h.connectedNow()
+		h.deliver(StreamReplaced{}, PairRejected{})
+		h.want(StateDisconnected, ReasonReplaced)
+		if len(h.alerts("pair_rejected")) != 0 {
+			t.Fatalf("pair_rejected alerts %v", h.alerts("pair_rejected"))
+		}
+	})
+	for _, order := range [][]Event{{Paired{JID: ownerDev}, Connected{}}, {Connected{}, Paired{JID: ownerDev}}} {
+		t.Run(fmt.Sprintf("pairing then %T and %T", order[0], order[1]), func(t *testing.T) {
+			h := newSupRig(t)
+			h.client.setPaired(false)
+			if _, err := h.s.pair(t.Context()); err != nil {
+				t.Fatalf("Pair = %v", err)
+			}
+			h.client.pairAs(ownerDev)
+			h.deliver(order...)
+			h.want(StateConnected, "")
+			if !h.s.accepting() || h.counter("wawarden_connected") != 1 || h.steps() != 0 {
+				t.Fatalf("accepting %v, connected gauge %v, calls %v", h.s.accepting(), h.counter("wawarden_connected"), h.client.history())
+			}
+		})
+	}
+	t.Run("Paired for the owner while connected", func(t *testing.T) {
+		h := newSupRig(t)
+		h.connectedNow()
+		h.deliver(Paired{JID: ownerDev})
+		h.want(StateConnected, "")
+		if h.counter("wawarden_connected") != 1 || h.steps() != 0 || h.client.count("connect") != 1 {
+			t.Fatalf("connected gauge %v, calls %v", h.counter("wawarden_connected"), h.client.history())
+		}
+	})
+}
+
 func (f *fakeClient) failLogouts(n int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

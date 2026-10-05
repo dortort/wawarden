@@ -537,7 +537,10 @@ with `stage` `stored_device`. With `WAWARDEN_OWNER_PHONE` unset this check is
 skipped and a stored device is connected as it is, because pairing could link
 it only while the number was set.
 The adapter will also reject another account before anything is saved, which
-the engine reports as `pair_rejected` with `stage` `before_save`.
+the engine reports as `pair_rejected` with `stage` `before_save`; it takes that
+report only while no device is stored, so one that arrives late cannot unpair
+the owner's device. A report that pairing completed for the owner's number
+changes nothing while the engine is `connected`.
 
 ### Ingest
 

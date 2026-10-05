@@ -392,7 +392,8 @@ func (s *supervisor) connect(ctx context.Context, gen uint64, attempt int) {
 
 func (s *supervisor) handle(ev Event) {
 	var paired bool
-	if _, ok := ev.(Disconnected); ok {
+	switch ev.(type) {
+	case Disconnected, PairRejected:
 		paired = s.client.Paired()
 	}
 	var logout, disconnect bool
@@ -441,11 +442,17 @@ func (s *supervisor) handle(ev Event) {
 	case ConnectFailure:
 		disconnect = s.permanentLocked(ReasonConnectFailure, false)
 	case PairRejected:
+		if paired {
+			break
+		}
 		s.alerts.Warn("pairing was rejected: the account is not the owner's", slog.String("event", "pair_rejected"), slog.String("stage", stageBeforeSave))
 		s.setLocked(StateUnpaired, "")
 	case Paired:
 		if s.isOwner(e.JID) {
 			s.rejected = false
+			if s.state == StateConnected {
+				break
+			}
 			s.setLocked(StateConnecting, "")
 			s.awaiting = true
 			break
@@ -573,6 +580,11 @@ func (s *supervisor) pair(ctx context.Context) (string, error) {
 			s.logger.Warn("pairing failed", slog.String("event", "pair_failed"), slog.String("error_type", fmt.Sprintf("%T", err)))
 			return "", ErrPairFailed
 		}
+		s.mu.Lock()
+		if s.gen == gen {
+			s.awaiting = true
+		}
+		s.mu.Unlock()
 	}
 	code, err := s.client.PairPhone(ctx, s.owner)
 	if err != nil {
