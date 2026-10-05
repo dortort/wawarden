@@ -633,10 +633,13 @@ These remain at v1.0, after every control above is in place.
   passes the phone's answer on as live traffic in the chat that answer names. The
   library accepts such answers only from the owner's primary device, the trust
   that history sync gets as well. It builds them the way it builds history rows,
-  so an edit arrives under its target's identifier, holding the new text and
-  nothing that marks it as an edit; the adapter reads each answer from the row
-  the phone sent, as it reads history rows, so an edit is applied to its target
-  and never stored as the target itself, which a test through the engine checks.
+  so an edit arrives under its target's identifier, holding the new text, without
+  its own identifier or its protocol message; of the event's own fields, only the
+  library's edit flag, which an edit sent without its usual wrapper leaves unset,
+  can still show it was one. The adapter reads each answer from the row the phone
+  sent, which the event carries too, as it reads history rows, so an edit is
+  applied to its target and never stored as the target itself, which a test
+  through the engine checks.
 - **Bot accounts look like users** (M1, on `main`). WhatsApp's own bot accounts,
   such as its AI assistant, have phone-number identifiers, so `Normalize`
   accepts them and their chats are archived like any other.
