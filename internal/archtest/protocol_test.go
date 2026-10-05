@@ -26,6 +26,8 @@ var bannedProtocolCalls = map[string]string{
 	"SendMexIQ":                      "can end the process inside the protocol library",
 	"DangerousInternals":             "reaches raw queries that can end the process and internal handlers that can dial",
 	"AddEventHandler":                "registers a handler whose answer the protocol library ignores, so a message the engine refused would be acknowledged",
+	"RemoveEventHandler":             "removes the adapter's handler, after which the protocol library acknowledges every event without delivering it",
+	"RemoveEventHandlers":            "removes the adapter's handler, after which the protocol library acknowledges every event without delivering it",
 	"DefaultContextLogger":           "attaches a logger that bypasses the scrubbing writer",
 	"CreateNewsletter":               "is a newsletter call, which can end the process inside the protocol library",
 	"FollowNewsletter":               "is a newsletter call, which can end the process inside the protocol library",
@@ -157,6 +159,9 @@ func (c *Client) installLocked(device *store.Device) {
 	cli.DisableManualHistorySyncReceipt = true
 	cli.EnableAutoReconnect, cli.InitialAutoReconnect = false, false
 	cli.AutoReconnectHook = func(error) bool { return false }
+	cli.SetWebsocketHTTPClient(nil)
+	(cli.SetPreLoginHTTPClient)(nil)
+	cli.SetMediaHTTPClient(nil)
 	c.gen++
 	(cli.AddEventHandlerWithSuccessStatus)(c.handlerFor(c.gen))
 	c.cli = cli
@@ -171,7 +176,7 @@ func f(ctx context.Context, cli *whatsmeow.Client, log waLog.Logger) error {
 	return cli.SendProtocolMessageReceipt(ctx, "", types.ReceiptTypeHistorySync)
 }
 `},
-		{name: "a handler with its answer, and other packages' Stdout", rel: "internal/engine/wa/x_test.go", src: `package wa
+		{name: "a handler with its answer, a transport set in a test, which the offline-tests rule refuses, and other packages' Stdout", rel: "internal/engine/wa/x_test.go", src: `package wa
 
 import (
 	"os"
@@ -181,8 +186,40 @@ import (
 
 func f(cli *whatsmeow.Client) {
 	_ = cli.AddEventHandlerWithSuccessStatus(func(any) bool { return true })
+	cli.SetMediaHTTPClient(nil)
 	_ = os.Stdout
 }
+`},
+		{name: "handlers removed and transports replaced after the installer", rel: "internal/engine/wa/x.go", want: 7, src: `package wa
+
+import (
+	"net/http"
+
+	"go.mau.fi/whatsmeow"
+)
+
+type Client struct{ cli *whatsmeow.Client }
+
+func (c *Client) installLocked(cli *whatsmeow.Client) {
+	cli.SetMediaHTTPClient(&http.Client{})
+	func() { cli.SetWebsocketHTTPClient(&http.Client{}) }()
+	c.cli = cli
+}
+
+func (c *Client) Disconnect() {
+	c.cli.Disconnect()
+	c.cli.RemoveEventHandlers()
+	_ = c.cli.RemoveEventHandler(1)
+}
+
+func (c *Client) DownloadHistory() {
+	c.cli.SetMediaHTTPClient(&http.Client{})
+	set := c.cli.SetPreLoginHTTPClient
+	set(nil)
+	_ = (*whatsmeow.Client).SetWebsocketHTTPClient
+}
+
+func installLocked(cli *whatsmeow.Client) { cli.SetMediaHTTPClient(nil) }
 `},
 		{name: "clients built without the constructor, and banned names reached by reflection, decoding or declarations", rel: "internal/engine/wa/x_test.go", want: 12, src: `package wa
 
@@ -391,8 +428,9 @@ func checkProtocolCalls(f *sourceFile) []string {
 		}
 	}
 	var targets []ast.Expr
-	var registries, constructors []*ast.SelectorExpr
+	var registries, constructors, setters []*ast.SelectorExpr
 	registered := map[*ast.SelectorExpr]*ast.CallExpr{}
+	setterCalls := map[*ast.SelectorExpr]bool{}
 	fields, pointed := map[*ast.Ident]bool{}, map[ast.Expr]bool{}
 	ast.Inspect(f.file, func(n ast.Node) bool {
 		switch e := n.(type) {
@@ -401,6 +439,8 @@ func checkProtocolCalls(f *sourceFile) []string {
 		case *ast.CallExpr:
 			if sel, ok := ast.Unparen(e.Fun).(*ast.SelectorExpr); ok && sel.Sel.Name == handlerRegistry {
 				registered[sel] = e
+			} else if ok && transportSetters[sel.Sel.Name] {
+				setterCalls[sel] = true
 			}
 		case *ast.AssignStmt:
 			targets = append(targets, e.Lhs...)
@@ -418,6 +458,9 @@ func checkProtocolCalls(f *sourceFile) []string {
 			fields[e.Sel] = true
 			if e.Sel.Name == handlerRegistry {
 				registries = append(registries, e)
+			}
+			if transportSetters[e.Sel.Name] {
+				setters = append(setters, e)
 			}
 			if s, p := f.ref(e); s != nil && p == waLogPath && bannedProtocolLogging[e.Sel.Name] {
 				out = append(out, f.at(e, "the protocol library's %s logger bypasses the scrubbing writer: log through the adapter over logx", e.Sel.Name))
@@ -454,6 +497,11 @@ func checkProtocolCalls(f *sourceFile) []string {
 	for _, sel := range constructors {
 		if !f.test && (!inside(sel, writers) || inside(sel, closures)) {
 			out = append(out, f.at(sel, "only (*Client).%s in %s builds a protocol client, outside any function literal, so every client the adapter holds has its settings, guarded transports and handler", settingWriter, adapterDir))
+		}
+	}
+	for _, sel := range setters {
+		if !f.test && (!setterCalls[sel] || !inside(sel, writers) || inside(sel, closures)) {
+			out = append(out, f.at(sel, "%s replaces a transport of a protocol client: only (*Client).%s in %s calls it, outside any function literal, so every request of every client goes through the guarded, capped transports", sel.Sel.Name, settingWriter, adapterDir))
 		}
 	}
 	for _, sel := range registries {
