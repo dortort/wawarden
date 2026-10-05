@@ -2,10 +2,12 @@ package archtest
 
 import (
 	"go/ast"
+	"go/token"
 	"maps"
 	"net/netip"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -53,7 +55,11 @@ var (
 	bannedProtocolNames   = lowerKeys(bannedProtocolCalls)
 	protocolSettingNames  = lowerKeys(protocolSettings)
 	protocolNameInText    = regexp.MustCompile(`(?i)\b(` + strings.Join(slices.Sorted(maps.Keys(bannedProtocolCalls)), "|") + "|" + strings.Join(slices.Sorted(maps.Keys(protocolSettings)), "|") + `)\b`)
+	jsonEscape            = regexp.MustCompile(`\\u[0-9A-Fa-f]{4}`)
+	documentDecoders      = []string{"encoding/gob", "encoding/json", "encoding/xml", "net/rpc"}
 )
+
+const settingWriter = "installLocked"
 
 func lowerKeys[V any](m map[string]V) map[string]string {
 	out := make(map[string]string, len(m))
@@ -120,7 +126,7 @@ func f(cli *whatsmeow.Client) {
 	_ = cli.AddEventHandler(func(any) {})
 }
 `},
-		{name: "the calls the adapter makes", rel: "internal/engine/wa/x.go", src: `package wa
+		{name: "the calls the adapter makes, and its installer setting the client", rel: "internal/engine/wa/x.go", src: `package wa
 
 import (
 	"context"
@@ -128,12 +134,22 @@ import (
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
+	"google.golang.org/protobuf/proto"
 )
 
-func f(ctx context.Context, cli *whatsmeow.Client, log waLog.Logger) error {
+type Client struct{ cli *whatsmeow.Client }
+
+func (c *Client) installLocked(cli *whatsmeow.Client) {
 	cli.ManualHistorySyncDownload = true
 	cli.DisableManualHistorySyncReceipt = true
-	cli.EnableAutoReconnect = false
+	cli.EnableAutoReconnect, cli.InitialAutoReconnect = false, false
+	cli.AutoReconnectHook = func(error) bool { return false }
+	c.cli = cli
+}
+
+func f(ctx context.Context, cli *whatsmeow.Client, log waLog.Logger) error {
+	_ = proto.Unmarshal
+	_ = cli.ManualHistorySyncDownload && !cli.EnableAutoReconnect
 	_ = types.NewsletterServer
 	_ = waLog.Noop
 	log.Infof("x")
@@ -188,12 +204,72 @@ type holder struct{ cli *whatsmeow.Client }
 
 func f(cli *whatsmeow.Client, h holder) []string {
 	h.cli = cli
-	cli.SynchronousAck = false
-	cli.RefreshCAT = nil
+	_ = !cli.SynchronousAck && cli.RefreshCAT != nil
 	_ = (*whatsmeow.Client).AddEventHandlerWithSuccessStatus
 	_ = []*whatsmeow.Client{cli}
 	return []string{"manual history sync", "SendPresenceNow", "the read marker", "AddEventHandlerWithSuccessStatus", "markReadable"}
 }
+`},
+		{name: "document decoders in the adapter and settings written outside its installer", rel: "internal/engine/wa/x.go", want: 11, src: `package wa
+
+import (
+	"encoding/gob"
+	"encoding/json"
+	"encoding/xml"
+	"net/rpc/jsonrpc"
+
+	"go.mau.fi/whatsmeow"
+)
+
+type Client struct{ cli *whatsmeow.Client }
+
+func (c *Client) prepare(flags []bool) {
+	c.cli.ManualHistorySyncDownload = false
+	c.cli.EnableAutoReconnect, c.cli.InitialAutoReconnect = true, true
+	p := &c.cli.DisableLoginAutoReconnect
+	*p = false
+	for _, c.cli.DisableManualHistorySyncReceipt = range flags {
+	}
+}
+
+func (c *Client) installLocked(cli *whatsmeow.Client) {
+	cli.SynchronousAck = false
+	cli.AddEventHandlerWithSuccessStatus(func(any) bool {
+		cli.SendReportingTokens = true
+		return true
+	})
+}
+
+func installLocked(cli *whatsmeow.Client) { cli.UseRetryMessageStore = true }
+`},
+		{name: "a document decoder in the device store", rel: "internal/store/session/x.go", want: 1, src: `package session
+
+import "encoding/json/v2"
+`},
+		{name: "an installer in a test and names spelled through JSON escapes or case folding", rel: "internal/engine/wa/x_test.go", want: 3, src: `package wa
+
+import (
+	"encoding/json"
+
+	"go.mau.fi/whatsmeow"
+)
+
+type Client struct{}
+
+func (c *Client) installLocked(cli *whatsmeow.Client) {
+	cli.SynchronousAck = false
+	_ = json.Unmarshal([]byte("{\"Enable\\u0044ecryptedEventBuffer\":true,\"Manual\\u0048istorySyncDownload\":false}"), cli)
+	_ = json.Unmarshal([]byte("{\"manualhi\u017ftorysyncdownload\":false}"), cli)
+}
+`},
+		{name: "document decoders in tests and elsewhere", rel: "internal/app/x.go", src: `package app
+
+import (
+	"encoding/json"
+	"encoding/xml"
+)
+
+var _ = json.Valid([]byte("{\"enable\\u0064\":true}"))
 `},
 		{name: "the architecture tests' own snippets", rel: archtestDir + "/x_test.go", src: `package archtest
 
@@ -204,9 +280,38 @@ var calls = map[string]string{"SendPresence": "x", "EnableDecryptedEventBuffer":
 
 func checkProtocolCalls(f *sourceFile) []string {
 	var out []string
+	if !f.test && (within(f.dir, adapterDir) || within(f.dir, sessionDir)) {
+		for _, imp := range f.imports {
+			if slices.ContainsFunc(documentDecoders, func(d string) bool { return within(imp.path, d) }) {
+				out = append(out, f.at(imp.node, "%q decodes a document into any value, a protocol client and its settings included: %s and %s decode nothing but protobuf", imp.path, adapterDir, sessionDir))
+			}
+		}
+	}
+	var writers, closures []ast.Node
+	for _, d := range f.file.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && !f.test && f.dir == adapterDir && fd.Name.Name == settingWriter && fd.Recv != nil && fd.Body != nil &&
+			len(fd.Recv.List) == 1 && f.isType(fd.Recv.List[0].Type, module+"/"+adapterDir, "Client") {
+			writers = append(writers, fd.Body)
+		}
+	}
+	var targets []ast.Expr
 	fields, pointed := map[*ast.Ident]bool{}, map[ast.Expr]bool{}
 	ast.Inspect(f.file, func(n ast.Node) bool {
 		switch e := n.(type) {
+		case *ast.FuncLit:
+			closures = append(closures, e)
+		case *ast.AssignStmt:
+			targets = append(targets, e.Lhs...)
+		case *ast.RangeStmt:
+			if e.Tok == token.ASSIGN {
+				targets = append(targets, e.Key, e.Value)
+			}
+		case *ast.IncDecStmt:
+			targets = append(targets, e.X)
+		case *ast.UnaryExpr:
+			if e.Op == token.AND {
+				targets = append(targets, e.X)
+			}
 		case *ast.SelectorExpr:
 			fields[e.Sel] = true
 			if s, p := f.ref(e); s != nil && p == waLogPath && bannedProtocolLogging[e.Sel.Name] {
@@ -226,15 +331,40 @@ func checkProtocolCalls(f *sourceFile) []string {
 		}
 		return true
 	})
+	inside := func(n ast.Node, spans []ast.Node) bool {
+		return slices.ContainsFunc(spans, func(s ast.Node) bool { return s.Pos() <= n.Pos() && n.End() <= s.End() })
+	}
+	for _, target := range targets {
+		sel, ok := ast.Unparen(target).(*ast.SelectorExpr)
+		if !ok {
+			continue
+		}
+		if name, setting := protocolSettingNames[strings.ToLower(sel.Sel.Name)]; setting && (!inside(sel, writers) || inside(sel, closures)) {
+			out = append(out, f.at(sel, "%s is a protocol client setting that only (*Client).%s in %s writes, so nothing undoes it after the client is built", name, settingWriter, adapterDir))
+		}
+	}
 	if f.dir == archtestDir {
 		return out
 	}
 	literalRuns(f.file, func(at ast.Node, s string) {
-		if m := protocolNameInText.FindString(s); m != "" {
+		m := protocolNameInText.FindString(s)
+		if m == "" {
+			m = protocolNameInText.FindString(jsonUnescaped(s))
+		}
+		if m != "" {
 			out = append(out, f.at(at, "%q spells %s, a banned protocol call or a protocol client setting, which reflection or a decoded document could reach by name", s, m))
 		}
 	})
 	return out
+}
+
+func jsonUnescaped(s string) string {
+	return jsonEscape.ReplaceAllStringFunc(s, func(esc string) string {
+		if r, err := strconv.Unquote(`"` + esc + `"`); err == nil {
+			return r
+		}
+		return esc
+	})
 }
 
 var (
