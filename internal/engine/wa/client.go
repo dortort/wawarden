@@ -163,7 +163,8 @@ func (c *Client) current() *whatsmeow.Client {
 	return c.cli
 }
 
-func (c *Client) dispatch(gen uint64, evt any) bool {
+func (c *Client) dispatch(gen uint64, evt any) (handled bool) {
+	defer safego.Recover("wa.event")
 	c.mu.Lock()
 	live := gen == c.gen
 	c.mu.Unlock()

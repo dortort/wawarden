@@ -26,6 +26,8 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dortort/wawarden/internal/engine"
+	"github.com/dortort/wawarden/internal/metrics"
+	"github.com/dortort/wawarden/internal/safego"
 	"github.com/dortort/wawarden/internal/store/session"
 )
 
@@ -448,6 +450,30 @@ func TestTheEventHandlerReportsTheEnginesAnswer(t *testing.T) {
 	r.setAck(true)
 	if !r.dispatch(&events.Receipt{}) {
 		t.Fatal("an event the adapter ignores counts as a failed handler")
+	}
+}
+
+func TestAPanicInTheEventHandlerIsRecoveredAndRefusesTheEvent(t *testing.T) {
+	logger, logs := newLogger(slog.LevelInfo)
+	reg := metrics.NewRegistry()
+	safego.Install(logger, reg)
+	r := newRig(t, pairedDevice())
+	r.c.OnEvent(func(engine.Event) bool { panic("SYNTHETIC-PANIC from 15550100001@s.whatsapp.net") })
+	if r.dispatch(textMessage(t, peer, peer, "3EB0P1", "synthetic text")) {
+		t.Fatal("a message whose handling panicked was acknowledged")
+	}
+	if got := logs.events("panic"); len(got) != 1 || got[0]["name"] != "wa.event" || got[0]["panic_type"] != "string" {
+		t.Fatalf("panic events %v, want one for wa.event naming only the value's type", got)
+	}
+	if strings.Contains(logs.String(), "SYNTHETIC-PANIC") || strings.Contains(logs.String(), "15550100001") {
+		t.Fatalf("the panic value reached the log:\n%s", logs.String())
+	}
+	var b strings.Builder
+	if err := reg.WriteText(&b); err != nil {
+		t.Fatalf("WriteText: %v", err)
+	}
+	if !strings.Contains(b.String(), `wawarden_panics_total{name="wa.event"} 1`+"\n") {
+		t.Fatalf("the panic was not counted:\n%s", b.String())
 	}
 }
 

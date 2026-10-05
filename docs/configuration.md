@@ -704,8 +704,8 @@ send the delivery receipt. This gives:
 
 - A message the engine wrote reaches the archive even when the process stops
   before applying it: the inbox is applied again at the next start.
-- A message the engine refuses (a full inbox, a pause or a failed write) is not
-  acknowledged and gets no delivery receipt. WhatsApp sends it again later, but
+- A message the engine refuses (a full inbox, a pause or a failed write), or
+  whose handling panics in the adapter or the engine, is not acknowledged and gets no delivery receipt. WhatsApp sends it again later, but
   the library can no longer decrypt that copy, because its keys
   have moved on: it drops it without passing it on, then acknowledges it and
   sends the delivery receipt. A refused message is therefore lost to the archive.
@@ -1196,9 +1196,11 @@ and `signals` for goroutines. The engine adds `engine.supervisor`,
 version fetch or connection attempt (`engine.supervisor`) or of one inbox row's
 or history blob's attempt (`engine.ingest`), which the engine treats as a failed
 attempt. Its adapter adds `wa.connect`, which ends a connection attempt whose
-caller gave up, and `wa.keepalive`, which closes a connection whose keepalives
-failed. Goroutines that the protocol library starts itself are not covered: a
-panic there ends the process.
+caller gave up, `wa.keepalive`, which closes a connection whose keepalives
+failed, and `wa.event` for a panic while it translates one of the protocol
+library's events or the engine handles it, which refuses the event. Other code
+on goroutines that the protocol library starts itself is not covered: a panic
+there ends the process.
 
 Anything that scrapes `/metrics` holds the full admin token, which from M1 can
 start pairing and from M2 can create clients. Treat a scrape configuration as
