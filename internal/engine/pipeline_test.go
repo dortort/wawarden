@@ -1,0 +1,291 @@
+package engine
+
+import (
+	"bytes"
+	"math"
+	"os"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/dortort/wawarden/internal/store/ingest"
+)
+
+func TestPayloadRoundTrip(t *testing.T) {
+	for _, ev := range []Event{
+		Message{Chat: group, ID: "M1", Sender: alice, SenderAlt: aliceLID, Addressing: "pn", FromMe: true, Timestamp: epoch, PushName: "Alice Example",
+			Kind: KindEdit, Text: "body", MediaType: "image/jpeg", Target: &Key{RemoteJID: group, FromMe: true, ID: "M0", Participant: bob},
+			Reply: &Reply{ID: "M0", Participant: bob, RemoteJID: group, Text: "quoted"}, Expiration: time.Hour},
+		Group{Chat: group, Subject: "Synthetic Group", Members: []Participant{{User: alice, Admin: true}}, Joined: []Participant{{User: bob}}, Left: []string{carol}, Timestamp: epoch},
+	} {
+		b, err := encodePayload(ev)
+		if err != nil {
+			t.Fatalf("encode %T: %v", ev, err)
+		}
+		got, err := decodePayload(b)
+		if err != nil || !reflect.DeepEqual(got, ev) {
+			t.Fatalf("round trip of %T = %#v, %v", ev, got, err)
+		}
+	}
+	if _, err := encodePayload(Connected{}); err == nil {
+		t.Fatal("a connection event was encoded as an inbox payload")
+	}
+}
+
+func TestPayloadDecodingIsStrict(t *testing.T) {
+	for _, in := range []string{
+		``, `{}`, `{"v":1}`, `{"v":2,"message":{"chat":"x"}}`, `{"v":1,"message":{},"group":{}}`,
+		`{"v":1,"message":{"chat":"x"}} {}`, `{"v":1,"message":{"chat":"x","unknown":1}}`, `{"v":1,"other":{}}`, `[1]`, "\xff",
+	} {
+		if _, err := decodePayload([]byte(in)); err == nil {
+			t.Errorf("decodePayload(%q) accepted", in)
+		}
+	}
+}
+
+func FuzzDecodePayload(f *testing.F) {
+	for _, ev := range []Event{text(alice, "M1", alice, "body"), Group{Chat: group, Timestamp: epoch}} {
+		b, err := encodePayload(ev)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(b)
+	}
+	f.Fuzz(func(t *testing.T, b []byte) {
+		ev, err := decodePayload(b)
+		if err != nil {
+			return
+		}
+		again, err := encodePayload(ev)
+		if err != nil {
+			t.Fatalf("a decoded payload does not encode: %v", err)
+		}
+		back, err := decodePayload(again)
+		if err != nil {
+			t.Fatalf("a re-encoded payload does not decode: %v", err)
+		}
+		if third, err := encodePayload(back); err != nil || !bytes.Equal(third, again) {
+			t.Fatalf("re-encoding is not stable: %q then %q, %v", again, third, err)
+		}
+	})
+}
+
+func (r *pipeRig) appendRaw(payload []byte) {
+	r.t.Helper()
+	r.write(func(tx *ingest.Tx) error {
+		_, err := tx.AppendInbox(payload, epoch)
+		return err
+	})
+}
+
+func (r *pipeRig) refused(reason string) float64 {
+	return r.counter("wawarden_ingest_refused_total", "reason", reason)
+}
+
+func TestBacklogBoundRefusesSoWhatsAppRedelivers(t *testing.T) {
+	r := newPipeRig(t)
+	r.bulkInbox(ingest.MaxInboxBacklog - 1)
+	if !r.p.accept(dm("M0", alice, "the last one that fits")) {
+		t.Fatal("a message within the backlog was refused")
+	}
+	if r.p.accept(dm("M1", alice, "one too many")) {
+		t.Fatal("a message beyond the backlog was acknowledged")
+	}
+	if r.refused(refusedBacklog) != 1 {
+		t.Fatal("the refusal was not counted")
+	}
+	if !r.p.accept(text("status@broadcast", "S1", alice, "dropped, not refused")) {
+		t.Fatal("a dropped chat was refused instead of acknowledged")
+	}
+}
+
+func TestPausedIngestRefuses(t *testing.T) {
+	r := newPipeRig(t)
+	r.ingestOpts.MinFreeBytes = math.MaxUint64
+	r.reopen()
+	r.p.checkSpace()
+	if a := r.alerts("ingest_paused"); len(a) != 1 || a[0]["floor_bytes"] != float64(math.MaxUint64) {
+		t.Fatalf("ingest_paused alerts %v", a)
+	}
+	if r.p.accept(dm("M1", alice, "while paused")) || r.refused(refusedPaused) != 1 {
+		t.Fatal("a message was acknowledged while ingest is paused")
+	}
+	r.appendRaw(mustPayload(t, dm("M2", alice, "already in the inbox")))
+	r.drain()
+	if _, ok := r.find(alice, "M2", alice); ok {
+		t.Fatal("the worker applied the inbox while ingest is paused")
+	}
+	r.ingestOpts.MinFreeBytes = 1
+	r.reopen()
+	r.p.checkSpace()
+	r.ingest(dm("M3", alice, "resumed"))
+	r.must(alice, "M2", alice)
+}
+
+func mustPayload(t *testing.T, ev Event) []byte {
+	t.Helper()
+	b, err := encodePayload(ev)
+	if err != nil {
+		t.Fatalf("encodePayload: %v", err)
+	}
+	return b
+}
+
+func TestPoisonRowIsQuarantinedAfterThreeAttempts(t *testing.T) {
+	r := newPipeRig(t)
+	r.appendRaw([]byte(`{"v":1,"message":{"chat":"` + alice + `","ts":"not a time"}}`))
+	r.ingest(dm("M1", alice, "after the poison"))
+	if !slices.Equal(r.clock.slept(), []time.Duration{time.Second, 2 * time.Second}) {
+		t.Fatalf("waits %v, want 1s and 2s between attempts", r.clock.slept())
+	}
+	if a := r.alerts("quarantine"); len(a) != 1 || a[0]["queue"] != "inbox" || a[0]["attempts"] != float64(3) {
+		t.Fatalf("quarantine alerts %v", a)
+	}
+	if r.counter("wawarden_ingest_quarantined_total", "queue", "inbox") != 1 {
+		t.Fatal("the quarantine was not counted")
+	}
+	if len(r.logs.events("ingest_failed")) != 3 {
+		t.Fatalf("ingest_failed events: %s", r.logs)
+	}
+	r.must(alice, "M1", alice)
+	db := r.inspect()
+	if got := query[string](t, db, "SELECT attempts || ' ' || quarantined || ' ' || (payload IS NULL) FROM inbox"); got != "3 1 1" {
+		t.Fatalf("quarantined row = %q, want three attempts, quarantined and no payload", got)
+	}
+}
+
+func TestInvalidContentIsDroppedWithoutRetries(t *testing.T) {
+	r := newPipeRig(t)
+	r.ingest(dm("an id with spaces", alice, "invalid id"), Message{Chat: alice, ID: "M2", Sender: alice, Kind: KindText, Text: "no time"})
+	if r.dropped(dropInvalid) != 2 || len(r.clock.slept()) != 0 {
+		t.Fatalf("invalid drops %v, waits %v", r.dropped(dropInvalid), r.clock.slept())
+	}
+	db := r.inspect()
+	if n := query[int](t, db, "SELECT (SELECT count(*) FROM inbox) + (SELECT count(*) FROM messages) + (SELECT count(*) FROM chats)"); n != 0 {
+		t.Fatalf("%d rows left behind by invalid content", n)
+	}
+}
+
+func (r *pipeRig) attempt() int {
+	r.t.Helper()
+	var attempts int
+	r.write(func(tx *ingest.Tx) error {
+		var item ingest.InboxItem
+		var ok bool
+		var err error
+		if item, ok, err = tx.NextInbox(); err != nil || !ok {
+			r.t.Fatalf("NextInbox: %v, %v", ok, err)
+		}
+		attempts, err = tx.RecordInboxAttempt(item.Seq)
+		return err
+	})
+	return attempts
+}
+
+func TestCrashBetweenAttemptAndApplyReplaysOnce(t *testing.T) {
+	r := newPipeRig(t)
+	orig := dm("M1", alice, "before the crash")
+	edit := change(KindEdit, alice, "M2", alice, Key{FromMe: true, ID: "M1"})
+	edit.Text = "edited once"
+	r.deliver(orig, edit)
+	for crash := 1; crash <= 2; crash++ {
+		if got := r.attempt(); got != crash {
+			t.Fatalf("attempt %d recorded as %d", crash, got)
+		}
+		r.reopen()
+	}
+	r.restart()
+	r.drain()
+	if f := r.must(alice, "M1", alice); f.Text != "edited once" {
+		t.Fatalf("after the replay %+v", f)
+	}
+	r.deliver(orig, edit)
+	r.drain()
+	db := r.inspect()
+	if got := query[string](t, db, "SELECT count(*) || ' ' || (SELECT count(*) FROM inbox) || ' ' || max(text) FROM messages"); got != "1 0 edited once" {
+		t.Fatalf("messages, inbox rows and text = %q, want one row, an empty inbox and the edit", got)
+	}
+}
+
+func TestThreeCrashesQuarantine(t *testing.T) {
+	r := newPipeRig(t)
+	r.deliver(dm("M1", alice, "crashes the process"))
+	for range maxAttempts {
+		r.attempt()
+		r.reopen()
+	}
+	r.restart()
+	r.drain()
+	if _, ok := r.find(alice, "M1", alice); ok {
+		t.Fatal("a row that crashed three times was applied a fourth time")
+	}
+	if a := r.alerts("quarantine"); len(a) != 1 || a[0]["attempts"] != float64(3) {
+		t.Fatalf("quarantine alerts %v", a)
+	}
+}
+
+func TestConcurrentDeliveryKeepsEveryMessageOnce(t *testing.T) {
+	r := newPipeRig(t)
+	const senders, each = 4, 25
+	var wg sync.WaitGroup
+	for s := range senders {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range each {
+				m := dm("M"+strconv.Itoa(s)+"x"+strconv.Itoa(i), alice, "concurrent")
+				for !r.p.accept(m) {
+					time.Sleep(time.Millisecond)
+				}
+				if i%5 == 0 {
+					r.p.accept(m)
+				}
+			}
+		}()
+	}
+	done := make(chan struct{})
+	var drainer sync.WaitGroup
+	drainer.Add(1)
+	go func() {
+		defer drainer.Done()
+		for {
+			select {
+			case <-done:
+				r.p.drainInbox(t.Context())
+				return
+			case <-r.p.kick:
+				r.p.drainInbox(t.Context())
+			}
+		}
+	}()
+	wg.Wait()
+	close(done)
+	drainer.Wait()
+	if got := r.counter("wawarden_messages_ingested_total"); got != senders*each {
+		t.Fatalf("ingested %v, want %d", got, senders*each)
+	}
+	db := r.inspect()
+	if n := query[int](t, db, "SELECT count(*) FROM messages"); n != senders*each {
+		t.Fatalf("%d rows, want %d", n, senders*each)
+	}
+}
+
+func TestInboxNeverHoldsDroppedTraffic(t *testing.T) {
+	r := newPipeRig(t)
+	canary := "status text that must never reach the disk"
+	r.deliver(text("status@broadcast", "S1", alice, canary))
+	if err := r.archive.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Clean(filepath.Join(r.opts.DataDir, "archive.db")))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if bytes.Contains(raw, []byte(canary)) {
+		t.Fatal("a dropped status update was written to the archive")
+	}
+}
