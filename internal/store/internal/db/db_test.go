@@ -665,3 +665,67 @@ func TestFileURIKeepsThePath(t *testing.T) {
 		t.Fatalf("the parent directory holds %v (%v), want only the data directory", entries, err)
 	}
 }
+
+func TestTheSessionDatabaseIsCheckedAndLockedLikeTheArchive(t *testing.T) {
+	saved := syscall.Umask(0)
+	defer syscall.Umask(saved)
+	opts, _ := testOptions(t)
+	archive := mustOpen(t, opts)
+	session, err := Open(t.Context(), Session, opts)
+	if err != nil {
+		t.Fatalf("Open session: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	raw := session.RawHandle()
+	if raw == nil || raw == archive.RawHandle() {
+		t.Fatal("the session database does not have a handle of its own")
+	}
+	for query, want := range map[string]string{
+		"PRAGMA foreign_keys":  "1",
+		"PRAGMA journal_mode":  "truncate",
+		"PRAGMA locking_mode":  "exclusive",
+		"PRAGMA secure_delete": "1",
+	} {
+		var got string
+		if err := raw.QueryRowContext(t.Context(), query).Scan(&got); err != nil || got != want {
+			t.Fatalf("%s through the raw handle = %q, %v, want %q", query, got, err, want)
+		}
+	}
+	if _, err := raw.ExecContext(t.Context(), "CREATE TABLE t(x INTEGER)"); err != nil {
+		t.Fatalf("write through the raw handle: %v", err)
+	}
+	path := filepath.Join(opts.DataDir, "session.db")
+	fi, err := os.Lstat(path)
+	if err != nil || fi.Mode() != 0o600 {
+		t.Fatalf("session.db: %v, mode %v under umask 0, want 0600", err, fi.Mode())
+	}
+	if got := probeFromAnotherProcess(t, path); got != probeBusy {
+		t.Fatalf("another process probing the held session database = %d, want busy", got)
+	}
+	if _, err := session.connector.Connect(t.Context()); !errors.Is(err, errReconnect) {
+		t.Fatalf("a second connection to the session database = %v, want errReconnect", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := probeFromAnotherProcess(t, path); got != probeFree {
+		t.Fatalf("another process probing the closed session database = %d, want free", got)
+	}
+
+	other, _ := testOptions(t)
+	writeFile(t, filepath.Join(other.DataDir, "session.db"), 0o640)
+	if d, err := Open(t.Context(), Session, other); err == nil {
+		_ = d.Close()
+		t.Fatal("Open accepted a group-readable session.db")
+	} else if r, ok := errors.AsType[*Refusal](err); !ok || r.Reason != "session_db_permissions" || !strings.Contains(r.Error(), "session.db") {
+		t.Fatalf("Open = %v, want the refusal session_db_permissions naming session.db", err)
+	}
+	writeFile(t, filepath.Join(other.DataDir, "session.db"), 0o600)
+	writeFile(t, filepath.Join(other.DataDir, "session.db-journal"), 0o604)
+	if d, err := Open(t.Context(), Session, other); err == nil {
+		_ = d.Close()
+		t.Fatal("Open accepted a world-readable session.db-journal")
+	} else if r, ok := errors.AsType[*Refusal](err); !ok || r.Reason != "session_journal_permissions" {
+		t.Fatalf("Open = %v, want the refusal session_journal_permissions", err)
+	}
+}

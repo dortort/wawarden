@@ -25,11 +25,17 @@ import (
 
 type Name uint8
 
-const Archive Name = 1
+const (
+	Archive Name = 1
+	Session Name = 2
+)
 
 func (n Name) label() string {
-	if n == Archive {
+	switch n {
+	case Archive:
 		return "archive"
+	case Session:
+		return "session"
 	}
 	return ""
 }
@@ -337,6 +343,8 @@ func (d *DB) Close() error {
 }
 
 func (d *DB) Healthy() bool { return !d.closed.Load() && !d.connector.lostConnection() }
+
+func (d *DB) RawHandle() *sql.DB { return d.sql }
 
 func (d *DB) Profile() Profile { return d.profile }
 

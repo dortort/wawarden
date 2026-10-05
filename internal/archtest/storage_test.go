@@ -274,3 +274,46 @@ func checkSQLiteStatements(f *sourceFile) []string {
 	})
 	return out
 }
+
+var rawHandleRule = rule{
+	name:  "raw-database-handle",
+	check: checkRawHandle,
+	cases: []snippet{
+		{name: "the raw handle outside the session store", rel: "internal/store/ingest/x.go", want: 2, src: `package ingest
+
+import "database/sql"
+
+type opener interface{ RawHandle() *sql.DB }
+
+func f(d opener) *sql.DB {
+	raw := d.RawHandle
+	_ = raw
+	return d.RawHandle()
+}
+`},
+		{name: "the session store and the db package", rel: "internal/store/session/x.go", src: `package session
+
+import "database/sql"
+
+func f(d interface{ RawHandle() *sql.DB }) *sql.DB { return d.RawHandle() }
+`},
+		{name: "a test", rel: "internal/store/internal/db/x_test.go", src: `package db
+
+func f(d *DB) { _ = d.RawHandle() }
+`},
+	},
+}
+
+func checkRawHandle(f *sourceFile) []string {
+	if f.test || within(f.dir, dbDir) || within(f.dir, sessionDir) {
+		return nil
+	}
+	var out []string
+	ast.Inspect(f.file, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "RawHandle" {
+			out = append(out, f.at(sel, "RawHandle hands out the database handle without deadlines; only %s gives it to the protocol library's device store", sessionDir))
+		}
+		return true
+	})
+	return out
+}

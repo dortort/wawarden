@@ -54,7 +54,7 @@ var rules = []rule{
 	goroutineRule, netHTTPRule, dotImportRule, socketRule, muxRule, serverRule, handlerRule,
 	inListRule, bannedImportRule, reflectionRule, fenceRule, chatMethodRule, thirdPartyRule, hiddenPackageRule, nolintRule, generatedRule, wildcardRule,
 	credentialRule, preludeRule, secretComparisonRule, formRule, shadowRule, sealRule, keysDirectoryRule, standardLibraryOnlyRule, logHandlerRule, logOutputRule,
-	confinementRule, databaseFileRule, constantSQLRule, sqliteStatementRule, protocolCallRule, offlineTestRule,
+	confinementRule, databaseFileRule, constantSQLRule, sqliteStatementRule, protocolCallRule, offlineTestRule, rawHandleRule,
 }
 
 var majorVersion = regexp.MustCompile(`^v([2-9]|[1-9][0-9]+)$`)
@@ -343,6 +343,7 @@ func TestArchitecture(t *testing.T) {
 		"internal/safego/safego.go",
 		"internal/sanitize/sanitize.go",
 		"internal/store/internal/db/db.go",
+		"internal/store/session/session.go",
 	} {
 		if !walked[rel] {
 			t.Fatalf("the walk missed %s, so every rule would pass on it vacuously", rel)
