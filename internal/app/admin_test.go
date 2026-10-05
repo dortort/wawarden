@@ -237,6 +237,25 @@ func TestAWebhookCutShortByTheGracePeriodFailsTheRun(t *testing.T) {
 	}
 }
 
+func TestEMFLinesAreWrittenEveryIntervalAndAtShutdown(t *testing.T) {
+	cfg := testConfig(t, "")
+	cfg.MetricsEMF = true
+	a, logs := open(t, cfg, noClients{})
+	if a.emfEvery != time.Minute {
+		t.Fatalf("embedded-metric-format lines every %v, want the documented minute", a.emfEvery)
+	}
+	a.emfEvery = 20 * time.Millisecond
+	stop := run(t, a)
+	waitUntil(t, "two periodic embedded-metric-format lines", func() bool { return len(emfLines(logs)) >= 2 })
+	before := len(emfLines(logs))
+	if err := stop(); err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	if after := len(emfLines(logs)); after <= before {
+		t.Fatalf("%d embedded-metric-format lines after shutdown, %d before it: want the shutdown line too", after, before)
+	}
+}
+
 func emfLines(logs *syncBuffer) []map[string]any {
 	var out []map[string]any
 	for _, rec := range logs.events() {

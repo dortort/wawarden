@@ -44,17 +44,18 @@ type listenerSet interface {
 }
 
 type App struct {
-	logger  *slog.Logger
-	ready   atomic.Bool
-	archive *ingest.Store
-	session deviceStore
-	engine  *engine.Engine
-	notify  *notify.Notifier
-	emf     *metrics.EMF
-	starts  int
-	serving listenerSet
-	health  listenerSet
-	grace   time.Duration
+	logger   *slog.Logger
+	ready    atomic.Bool
+	archive  *ingest.Store
+	session  deviceStore
+	engine   *engine.Engine
+	notify   *notify.Notifier
+	emf      *metrics.EMF
+	emfEvery time.Duration
+	starts   int
+	serving  listenerSet
+	health   listenerSet
+	grace    time.Duration
 
 	afterDrain func()
 }
@@ -119,7 +120,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth a
 		slog.Int("schema_version", archive.SchemaVersion()), slog.String("profile", string(archive.Profile())),
 		slog.Bool("ofd_locking", archive.OFDLocking()), slog.Int("recent_starts", starts))
 
-	a := &App{logger: logger, archive: archive, notify: notifier, starts: starts, grace: shutdownGrace}
+	a := &App{logger: logger, archive: archive, notify: notifier, emfEvery: emfInterval, starts: starts, grace: shutdownGrace}
 	if cfg.MetricsEMF {
 		a.emf = metrics.NewEMF(reg, out, time.Now)
 	}
@@ -259,7 +260,7 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) emitEvery(ctx context.Context) {
-	tick := time.NewTicker(emfInterval)
+	tick := time.NewTicker(a.emfEvery)
 	defer tick.Stop()
 	for {
 		select {
