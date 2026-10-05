@@ -422,7 +422,10 @@ and source positions only).
 Revoked, edited and expired message text will be removed from the database file,
 its journal and the full-text index, as described in the
 [threat model](threat-model.md#security-invariants) (I-8); backups are
-outside that guarantee, and so is a revocation or edit that arrives before
+outside that guarantee, as are the same text, or any three-character run of it,
+held elsewhere in the archive (by another message, a message waiting in the
+inbox, a push name, a chat name or group subject, an identifier or the schema),
+and so is a revocation or edit that arrives before
 history sync has stored its target (see [Ingest](#ingest)). The index stores every three-character run of the text
 and finds them through page keys, which copy the start of the first run on each
 of its pages, and deleting a run keeps its key. When a deletion leaves a key that

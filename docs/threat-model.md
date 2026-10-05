@@ -107,8 +107,10 @@ These are stated so that nobody relies on WaWarden for them:
 - Delivery receipts and the other traffic the protocol library sends by itself
   (see residual risks).
 - Deletion residuals in backups, in filesystem blocks the service cannot scrub,
-  in full-text index page keys shorter than a trigram, and in messages that
-  history sync stores after their revocation or edit arrived.
+  in full-text index page keys shorter than a trigram, in other stored text
+  (names, identifiers, messages waiting in the inbox) that holds the same text,
+  and in messages that history sync stores after their revocation or edit
+  arrived.
 - Agents that pass message text into tools. WaWarden marks the text as untrusted;
   what an agent does with it is the agent's responsibility.
 
@@ -320,10 +322,13 @@ mechanisms that enforce them.
   configured as a hash; client tokens are stored as hashes.
 - **I-8 Deletions are honoured on disk.** Once the write that revokes, edits or
   expires a message has returned without error, the message's row no longer
-  holds its old text, and neither that text nor any of its trigrams (the
-  three-character runs the full-text index stores) is in the database, its
-  journal or the full-text index, page keys included, unless a message that
-  remains in the archive holds the same text or trigram. Backups, a
+  holds its old text; the full-text index, page keys included, keeps only those
+  of its trigrams (the three-character runs the index stores) that a remaining
+  message holds; and neither that text nor any of its trigrams is in the
+  database or its journal unless the archive still holds the same text or
+  trigram elsewhere: in a remaining message, in a message waiting in the inbox,
+  in a stored name (a push name, chat name or group subject), in an identifier
+  or another stored value, or in the schema. Backups, a
   page key that holds less than a whole trigram, a trigram left by a stop or
   a failure between the deletion and the index rewrite it requires, and a
   revocation or edit that arrives before history sync has stored its target are
@@ -490,7 +495,11 @@ These remain at v1.0, after every control above is in place.
   expired keep its old text until they leave retention. Filesystem blocks,
   snapshots and storage-level copies are outside the service's control. A
   trigram of the old text that a remaining message also holds stays in the
-  full-text index, because that message still needs it. The
+  full-text index, because that message still needs it. The deletion clears
+  only the message's own text: when a push name, a chat name or a group subject,
+  a message waiting in the inbox, an identifier or another stored value, or the
+  schema holds the same text or one of its trigrams, those bytes stay in the
+  archive. The
   full-text index finds a term through page keys, and a key can be a prefix of
   the first term of its page: the index rewrite runs only for a key that is a
   whole trigram of the old text, so a key holding its first one or two
