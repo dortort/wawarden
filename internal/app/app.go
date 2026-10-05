@@ -90,7 +90,9 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth a
 	reg.GaugeVec("wawarden_build_info", "Build metadata of the running binary.", "version", "revision", "dev").
 		With(info.Version, info.Revision, strconv.FormatBool(info.Dev)).Set(1)
 
-	notifier, err := notify.New(notify.Options{Writer: out})
+	notifier, err := notify.New(notify.Options{
+		Writer: out, Metrics: reg, URL: cfg.Notify.URL, Secret: cfg.Notify.Secret, AllowPrivate: cfg.Notify.AllowPrivate,
+	})
 	if err != nil {
 		return nil, err
 	}

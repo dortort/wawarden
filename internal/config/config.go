@@ -2,6 +2,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"io/fs"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/dortort/wawarden/internal/buildinfo"
+	"github.com/dortort/wawarden/internal/notify"
 	"github.com/dortort/wawarden/internal/policy"
 )
 
@@ -35,6 +37,9 @@ const (
 	envOwnerPhone     = "WAWARDEN_OWNER_PHONE"
 	envHistoryMax     = "WAWARDEN_HISTORY_MAX_BYTES"
 	envUnsafeDebug    = "WAWARDEN_UNSAFE_DEBUG"
+	envNotifyURL      = "WAWARDEN_NOTIFY_URL"
+	envNotifySecret   = "WAWARDEN_NOTIFY_SECRET_FILE"
+	envNotifyPrivate  = "WAWARDEN_NOTIFY_ALLOW_PRIVATE"
 
 	prefix    = "WAWARDEN_"
 	devPrefix = "WAWARDEN_DEV_"
@@ -52,6 +57,8 @@ const (
 	MaxUnsafeDebug = 60 * time.Minute
 
 	maxHashFileBytes = 4096
+
+	maxNotifySecretBytes = 4096
 )
 
 const (
@@ -76,10 +83,17 @@ const (
 	reasonOwnerPhoneInvalid        = "owner_phone_invalid"
 	reasonHistoryMaxBytesInvalid   = "history_max_bytes_invalid"
 	reasonUnsafeDebugInvalid       = "unsafe_debug_invalid"
+	reasonNotifyURLInvalid         = "notify_url_invalid"
+	reasonNotifyPrivateInvalid     = "notify_allow_private_invalid"
+	reasonNotifyURLMissing         = "notify_url_missing"
+	reasonNotifySecretMissing      = "notify_secret_missing"
+	reasonNotifySecretUnreadable   = "notify_secret_unreadable"
+	reasonNotifySecretPermissions  = "notify_secret_permissions"
+	reasonNotifySecretInvalid      = "notify_secret_invalid"
 )
 
 var known = []string{envDataDir, envListen, envAdminListen, envHealthListen, envAdminHash, envAdminHashFile, envLogLevel, envStorageProfile, envMinFreeBytes,
-	envOwnerPhone, envHistoryMax, envUnsafeDebug}
+	envOwnerPhone, envHistoryMax, envUnsafeDebug, envNotifyURL, envNotifySecret, envNotifyPrivate}
 
 type StorageProfile string
 
@@ -110,6 +124,13 @@ type Config struct {
 	OwnerPhone      string
 	HistoryMaxBytes int64
 	UnsafeDebug     time.Duration
+	Notify          Notify
+}
+
+type Notify struct {
+	URL          string
+	Secret       []byte
+	AllowPrivate bool
 }
 
 type Options struct {
@@ -172,6 +193,9 @@ func Load(environ []string, opts Options) (Config, *Refusal) {
 		return Config{}, r
 	}
 	if cfg.UnsafeDebug, r = unsafeDebug(env); r != nil {
+		return Config{}, r
+	}
+	if cfg.Notify, r = notifySettings(env); r != nil {
 		return Config{}, r
 	}
 	uids := processUIDs
@@ -412,6 +436,66 @@ func unsafeDebug(env map[string]string) (time.Duration, *Refusal) {
 		return 0, &Refusal{Reason: reasonUnsafeDebugInvalid, Variable: envUnsafeDebug, detail: "must be a number of minutes written in decimal digits, from 1 to 60"}
 	}
 	return time.Duration(n) * time.Minute, nil
+}
+
+func notifySettings(env map[string]string) (Notify, *Refusal) {
+	var n Notify
+	url, withURL := env[envNotifyURL]
+	if withURL && notify.CheckURL(url) != nil {
+		return Notify{}, &Refusal{Reason: reasonNotifyURLInvalid, Variable: envNotifyURL, detail: "must be an https URL with a host, without credentials or a fragment"}
+	}
+	private, withPrivate := env[envNotifyPrivate]
+	if withPrivate && private != "0" && private != "1" {
+		return Notify{}, &Refusal{Reason: reasonNotifyPrivateInvalid, Variable: envNotifyPrivate, detail: "must be 0 or 1"}
+	}
+	n.AllowPrivate = private == "1"
+	path, withSecret := env[envNotifySecret]
+	switch {
+	case !withURL && withSecret:
+		return Notify{}, &Refusal{Reason: reasonNotifyURLMissing, Variable: envNotifySecret, detail: "is set without " + envNotifyURL}
+	case !withURL && withPrivate:
+		return Notify{}, &Refusal{Reason: reasonNotifyURLMissing, Variable: envNotifyPrivate, detail: "is set without " + envNotifyURL}
+	case !withURL:
+		return Notify{}, nil
+	case !withSecret:
+		return Notify{}, &Refusal{Reason: reasonNotifySecretMissing, Variable: envNotifySecret, detail: "is required with " + envNotifyURL}
+	}
+	secret, r := readNotifySecret(path)
+	if r != nil {
+		return Notify{}, r
+	}
+	n.URL, n.Secret = url, secret
+	return n, nil
+}
+
+func readNotifySecret(path string) ([]byte, *Refusal) {
+	unreadable := func(why string) *Refusal {
+		return &Refusal{Reason: reasonNotifySecretUnreadable, Variable: envNotifySecret, detail: "cannot be read: " + why}
+	}
+	f, err := os.OpenFile(filepath.Clean(path), os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, unreadable(cause(err))
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, unreadable(cause(err))
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, unreadable("not a regular file")
+	}
+	if fi.Mode()&0o027 != 0 {
+		return nil, &Refusal{Reason: reasonNotifySecretPermissions, Variable: envNotifySecret, detail: "must grant no write access to group and no access to others"}
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxNotifySecretBytes+1))
+	if err != nil {
+		return nil, unreadable(cause(err))
+	}
+	secret := bytes.TrimSpace(b)
+	if len(b) > maxNotifySecretBytes || len(secret) < notify.MinSecretBytes {
+		return nil, &Refusal{Reason: reasonNotifySecretInvalid, Variable: envNotifySecret, detail: "must hold a secret of at least 32 bytes, apart from surrounding white space, in a file of at most 4096 bytes"}
+	}
+	return secret, nil
 }
 
 func checkSubdirectory(dataDir, name string, uid int, owner func(fs.FileInfo) (int, bool)) *Refusal {

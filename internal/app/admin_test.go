@@ -151,3 +151,27 @@ func TestAdminRoutesWithoutAnEngine(t *testing.T) {
 		t.Fatalf("admin_mutation outcomes %v", outcomes)
 	}
 }
+
+func TestTheWebhookIsWiredFromTheConfiguration(t *testing.T) {
+	cfg := testConfig(t, "")
+	cfg.OwnerPhone, cfg.HistoryMaxBytes = "+15550100009", config.DefaultHistoryMaxBytes
+	cfg.Notify = config.Notify{URL: "https://" + netip.AddrFrom4([4]byte{169, 254, 169, 254}).String() + "/latest", Secret: []byte(strings.Repeat("s", 32))}
+	client := newStubClient()
+	client.unpaired = true
+	logs := &syncBuffer{}
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), noClients{}, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
+	if err != nil {
+		t.Fatalf("newAppWith: %v", err)
+	}
+	stop := run(t, a)
+	logs.waitFor(t, "notify_failed")
+	if err := stop(); err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	if f := logs.find("notify_failed"); len(f) != 1 || f[0]["reason"] != "destination_refused" || f[0]["attempts"] != float64(1) {
+		t.Fatalf("notify_failed events %v, want the unpaired event refused at the metadata address", f)
+	}
+	if strings.Contains(logs.buf.String(), "169.254") {
+		t.Fatal("the webhook URL reached the log")
+	}
+}

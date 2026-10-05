@@ -1,4 +1,4 @@
-// Package notify is the one place that emits operational events: one fixed-shape JSON line on standard output for each.
+// Package notify is the one place that emits operational events: one fixed-shape JSON line on standard output for each, also posted, signed, to an optional webhook.
 package notify
 
 import (
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/dortort/wawarden/internal/logx"
+	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/safego"
 )
 
@@ -40,13 +41,18 @@ var (
 )
 
 type Options struct {
-	Writer *logx.Writer
-	Now    func() time.Time
+	Writer       *logx.Writer
+	Metrics      *metrics.Registry
+	URL          string
+	Secret       []byte
+	AllowPrivate bool
+	Now          func() time.Time
 }
 
 type Notifier struct {
 	logger *slog.Logger
 	now    func() time.Time
+	hook   *webhook
 
 	authMu      sync.Mutex
 	authPending int64
@@ -64,12 +70,23 @@ func New(o Options) (*Notifier, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &Notifier{logger: logx.New(o.Writer, slog.LevelInfo), now: now}, nil
+	n := &Notifier{logger: logx.New(o.Writer, slog.LevelInfo), now: now}
+	if o.URL != "" {
+		hook, err := newWebhook(o, n.logger, now)
+		if err != nil {
+			return nil, err
+		}
+		n.hook = hook
+	}
+	return n, nil
 }
 
 func (n *Notifier) Start(ctx context.Context) {
 	ctx, n.cancel = context.WithCancel(ctx)
 	n.done = make(chan struct{})
+	if n.hook != nil {
+		safego.Go("notify.webhook", n.hook.run)
+	}
 	safego.Go("notify.flush", func() {
 		defer close(n.done)
 		tick := time.NewTicker(flushInterval)
@@ -96,6 +113,9 @@ func (n *Notifier) Stop(ctx context.Context) error {
 		return ctx.Err()
 	}
 	n.flushAuthFailures(true)
+	if n.hook != nil {
+		n.hook.shutdown(ctx)
+	}
 	return nil
 }
 
@@ -170,6 +190,10 @@ func (n *Notifier) authFailures(count int64) {
 
 func (n *Notifier) emit(level slog.Level, msg, event string, fields ...slog.Attr) {
 	n.logger.LogAttrs(context.Background(), level, msg, append([]slog.Attr{slog.String("event", event)}, fields...)...)
+	if n.hook != nil {
+		id := eventID()
+		n.hook.enqueue(delivery{id: id, body: eventBody(id, event, n.now(), fields)})
+	}
 }
 
 func code(key, value string) slog.Attr {

@@ -6,8 +6,10 @@ import (
 	"log/slog"
 	"maps"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"syscall"
@@ -50,6 +52,17 @@ func withDataDir(t *testing.T, vars map[string]string) map[string]string {
 	out := map[string]string{envDataDir: filepath.Join(t.TempDir(), "data")}
 	maps.Copy(out, vars)
 	return out
+}
+
+const syntheticSecret = "synthetic-webhook-secret-of-forty-two-bytes"
+
+func secretFile(t *testing.T, mode fs.FileMode) string {
+	t.Helper()
+	path := writeFile(t, syntheticSecret+"\n")
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	return path
 }
 
 func writeFile(t *testing.T, content string) string {
@@ -106,7 +119,7 @@ func TestDefaults(t *testing.T) {
 		MinFreeBytes:    268435456,
 		HistoryMaxBytes: 33554432,
 	}
-	if cfg != want {
+	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("Load = %+v, want %+v", cfg, want)
 	}
 }
@@ -227,6 +240,23 @@ func TestRefusals(t *testing.T) {
 		{name: "signed debug window", vars: map[string]string{envUnsafeDebug: "+5"}, reason: "unsafe_debug_invalid", variable: envUnsafeDebug},
 		{name: "debug window as a flag", vars: map[string]string{envUnsafeDebug: "true"}, reason: "unsafe_debug_invalid", variable: envUnsafeDebug},
 
+		{name: "plain http webhook", vars: map[string]string{envNotifyURL: "http://hooks.example.test/x", envNotifySecret: secretFile(t, 0o600)}, reason: "notify_url_invalid", variable: envNotifyURL},
+		{name: "webhook with credentials", vars: map[string]string{envNotifyURL: (&url.URL{Scheme: "https", User: url.UserPassword("synthetic", "synthetic"), Host: "hooks.example.test"}).String(), envNotifySecret: secretFile(t, 0o600)}, reason: "notify_url_invalid", variable: envNotifyURL},
+		{name: "webhook with a fragment", vars: map[string]string{envNotifyURL: "https://hooks.example.test/x#f", envNotifySecret: secretFile(t, 0o600)}, reason: "notify_url_invalid", variable: envNotifyURL},
+		{name: "empty webhook", vars: map[string]string{envNotifyURL: ""}, reason: "notify_url_invalid", variable: envNotifyURL},
+		{name: "private destinations as a word", vars: map[string]string{envNotifyURL: "https://hooks.example.test/x", envNotifyPrivate: "true"}, reason: "notify_allow_private_invalid", variable: envNotifyPrivate},
+		{name: "empty private destinations", vars: map[string]string{envNotifyURL: "https://hooks.example.test/x", envNotifyPrivate: ""}, reason: "notify_allow_private_invalid", variable: envNotifyPrivate},
+		{name: "secret without a webhook", vars: map[string]string{envNotifySecret: secretFile(t, 0o600)}, reason: "notify_url_missing", variable: envNotifySecret},
+		{name: "private destinations without a webhook", vars: map[string]string{envNotifyPrivate: "1"}, reason: "notify_url_missing", variable: envNotifyPrivate},
+		{name: "webhook without a secret", vars: map[string]string{envNotifyURL: "https://hooks.example.test/x"}, reason: "notify_secret_missing", variable: envNotifySecret},
+		{name: "missing secret file", vars: map[string]string{envNotifyURL: "https://hooks.example.test/x", envNotifySecret: missing}, reason: "notify_secret_unreadable", variable: envNotifySecret},
+		{name: "secret file is a directory", vars: map[string]string{envNotifyURL: "https://hooks.example.test/x", envNotifySecret: t.TempDir()}, reason: "notify_secret_unreadable", variable: envNotifySecret},
+		{name: "secret file is a device", vars: map[string]string{envNotifyURL: "https://hooks.example.test/x", envNotifySecret: os.DevNull}, reason: "notify_secret_unreadable", variable: envNotifySecret},
+		{name: "world-readable secret", vars: map[string]string{envNotifyURL: "https://hooks.example.test/x", envNotifySecret: secretFile(t, 0o644)}, reason: "notify_secret_permissions", variable: envNotifySecret},
+		{name: "group-writable secret", vars: map[string]string{envNotifyURL: "https://hooks.example.test/x", envNotifySecret: secretFile(t, 0o620)}, reason: "notify_secret_permissions", variable: envNotifySecret},
+		{name: "short secret", vars: map[string]string{envNotifyURL: "https://hooks.example.test/x", envNotifySecret: writeFile(t, " "+strings.Repeat("s", 31)+"\n")}, reason: "notify_secret_invalid", variable: envNotifySecret},
+		{name: "secret file over its size limit", vars: map[string]string{envNotifyURL: "https://hooks.example.test/x", envNotifySecret: writeFile(t, strings.Repeat("s", 4097))}, reason: "notify_secret_invalid", variable: envNotifySecret},
+
 		{name: "uid 0 without --allow-root", opts: func(o *Options) { o.UIDs = uids(0, 0); o.FileOwner = owned(0) }, reason: "running_as_root"},
 		{name: "effective uid 0 without --allow-root", opts: func(o *Options) { o.UIDs = uids(testUID, 0); o.FileOwner = owned(0) }, reason: "running_as_root"},
 		{name: "real uid 0 without --allow-root", opts: func(o *Options) { o.UIDs = uids(0, testUID) }, reason: "running_as_root"},
@@ -245,7 +275,7 @@ func TestRefusals(t *testing.T) {
 			if r.Reason != tt.reason || r.Variable != tt.variable {
 				t.Fatalf("refusal = %q on %q (%v), want %q on %q", r.Reason, r.Variable, r, tt.reason, tt.variable)
 			}
-			if cfg != (Config{}) {
+			if !reflect.DeepEqual(cfg, Config{}) {
 				t.Fatalf("a refusal came with a configuration: %+v", cfg)
 			}
 			if _, err := os.Lstat(vars[envDataDir]); err == nil {
@@ -390,7 +420,7 @@ func TestDataSubdirectoryRefusals(t *testing.T) {
 					opts.FileOwner = tt.owner
 				}
 				cfg, r := Load(environ(map[string]string{envDataDir: data}), opts)
-				if r == nil || r.Reason != name+tt.reason || r.Variable != "" || cfg != (Config{}) {
+				if r == nil || r.Reason != name+tt.reason || r.Variable != "" || !reflect.DeepEqual(cfg, Config{}) {
 					t.Fatalf("Load = %+v, %v, want %s%s naming no variable", cfg, r, name, tt.reason)
 				}
 				if strings.Contains(r.Error(), data) || !strings.Contains(r.Error(), name+"/") {
@@ -682,6 +712,24 @@ func TestAccepted(t *testing.T) {
 	}
 }
 
+func TestNotifySettings(t *testing.T) {
+	for _, mode := range []fs.FileMode{0o600, 0o400, 0o640, 0o440} {
+		path := secretFile(t, mode)
+		vars := withDataDir(t, map[string]string{envNotifyURL: "https://hooks.example.test:8443/x?team=a", envNotifySecret: linkTo(t, path), envNotifyPrivate: "1"})
+		cfg, r := Load(environ(vars), testOptions())
+		if r != nil {
+			t.Fatalf("Load with a secret of mode %v: %v", mode, r)
+		}
+		if want := (Notify{URL: "https://hooks.example.test:8443/x?team=a", Secret: []byte(syntheticSecret), AllowPrivate: true}); !reflect.DeepEqual(cfg.Notify, want) {
+			t.Fatalf("Notify = %+v, want %+v", cfg.Notify, want)
+		}
+	}
+	vars := withDataDir(t, map[string]string{envNotifyURL: "https://hooks.example.test/x", envNotifySecret: secretFile(t, 0o600), envNotifyPrivate: "0"})
+	if cfg, r := Load(environ(vars), testOptions()); r != nil || cfg.Notify.AllowPrivate || cfg.Notify.URL == "" {
+		t.Fatalf("Load = %+v, %v", cfg.Notify, r)
+	}
+}
+
 func TestFirstOccurrenceWins(t *testing.T) {
 	vars := withDataDir(t, nil)
 	env := append(environ(vars), envListen+"=127.0.0.1:9001", envListen+"=localhost:9002")
@@ -707,6 +755,9 @@ func TestRefusalsNeverEchoValues(t *testing.T) {
 		{envOwnerPhone: secret},
 		{envHistoryMax: secret},
 		{envUnsafeDebug: secret},
+		{envNotifyURL: "http://" + secret + ".example.test/x"},
+		{envNotifyURL: "https://hooks.example.test/x", envNotifyPrivate: secret},
+		{envNotifyURL: "https://hooks.example.test/x", envNotifySecret: writeFile(t, secret[:20])},
 	}
 	for _, vars := range tests {
 		_, r := Load(environ(withDataDir(t, vars)), testOptions())

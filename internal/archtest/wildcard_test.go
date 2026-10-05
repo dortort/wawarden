@@ -23,6 +23,7 @@ var wildcardAllowances = map[string]wildcardAllowance{
 	"internal/app/app_test.go":          {count: 2, reason: "binds 0.0.0.0 on an ephemeral port to prove a non-loopback client or admin listener logs a warning; no other non-loopback address is bindable on every host"},
 	"internal/config/config_test.go":    {count: 12, reason: "addresses the validator accepts or refuses; package config never binds"},
 	"internal/listeners/family_test.go": {count: 3, reason: "binds 0.0.0.0 on an ephemeral port to prove an IPv4 wildcard listener takes IPv4 only, which only a wildcard bind can show"},
+	"internal/notify/webhook_test.go":   {count: 2, reason: "destinations the webhook's dialer must refuse; the check never binds or dials"},
 }
 
 var unspecifiedValues = map[string]map[string]bool{
