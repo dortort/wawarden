@@ -89,6 +89,15 @@ What works today:
   disk, rewriting the full-text index when one of its page keys still holds a
   trigram of that text. See
   [the message archive](docs/configuration.md#message-archive).
+- Also on `main`: the core of the WhatsApp engine, tested with plain-data events
+  and a stand-in client: the state machine that refreshes the protocol version,
+  reconnects with backoff, stops on a replaced session or a ban and guards
+  pairing with the owner's number (`WAWARDEN_OWNER_PHONE`); the durable inbox and
+  the ingest rules that apply edits, revocations, reactions and poll votes only
+  inside their own chat; and the history-sync worker with its size cap
+  (`WAWARDEN_HISTORY_MAX_BYTES`). `serve` does not run it yet and says so with an
+  `engine_absent` warning: the adapter to the WhatsApp protocol library arrives
+  later in M1. See [the WhatsApp engine](docs/configuration.md#whatsapp-engine).
 
 Planned:
 

@@ -7,7 +7,9 @@
 > metrics to the admin token. There is no WhatsApp engine, storage, client
 > management, REST route or MCP route yet; they arrive in milestones M1 to M3.
 > On `main`, ahead of the M1 release, `serve` also opens and locks the message
-> archive, which nothing writes WhatsApp traffic to yet.
+> archive, and the core of the WhatsApp engine is built in, but `serve` does not
+> run it: the adapter to the protocol library arrives later in M1, so nothing
+> connects to WhatsApp or writes WhatsApp traffic to the archive yet.
 >
 > Every control carries a status. **M0** means it is in place as of the M0
 > release. **M1, on `main`** means it is in place on the `main` branch and ships
@@ -136,12 +138,27 @@ These are stated so that nobody relies on WaWarden for them:
    before opening it. It answers only `GET /healthz`, with whether the process is
    up and serving (M0) and its databases open and locked by the service (M1, on
    `main`, for the archive).
-4. **WhatsApp to engine (M1).** Everything that arrives from WhatsApp is untrusted,
+4. **WhatsApp to engine (M1, on `main`, for the engine core; M1 for the
+   protocol adapter).** Everything that arrives from WhatsApp is untrusted,
    including payloads attributed to the account's own other devices, except where
-   the server asserts a field. Protocol messages are applied only inside the chat
-   they belong to. History-sync notifications are accepted only from the primary
-   device (device 0), are size-capped when decompressed, and are persisted before
-   parsing so that a poison payload is quarantined rather than replayed forever.
+   the server asserts a field. An edit, revocation, reaction or poll vote is
+   applied only to a message found in the chat it arrived in, by identifier and
+   sender; an edit or revocation only from the message's sender, or, for a
+   revocation in a group, from a member the archive records as an admin. A chat
+   named in a message key or a reply reference is never followed unless it is
+   the event's own chat (or, in a direct chat, the owner's number, which is how
+   the other side names it). LID-to-number mappings are learned only from
+   server-asserted alternates of live messages and from history sync.
+   History-sync notifications are accepted only from the owner's primary device
+   (device 0); blobs are downloaded through a size cap, persisted before the
+   receipt and before parsing, decompressed under the same cap, and quarantined
+   after three failed attempts, so a poison payload is set aside rather than
+   replayed forever; inbox rows are quarantined the same way. Live traffic waits
+   in a durable inbox and is acknowledged only once written, so a full inbox or a
+   paused ingest makes WhatsApp deliver it again instead of losing it. These
+   rules are tested with plain-data events in the engine core; decoding real
+   protocol messages into those events, and rejecting another account before a
+   pairing is saved, belong to the adapter (M1).
 5. **Service to clients (M2).** Message text, contact names and group subjects are
    written by third parties. Every message object carries `untrusted: true` and its
    `origin`, and a `text_display` field with control, bidirectional-override,
@@ -165,8 +182,11 @@ These are stated so that nobody relies on WaWarden for them:
    is a byte slice and as its type name otherwise, never its content (see
    [Logging](configuration.md#pseudonyms-and-dropped-lines)). Identifiers in other
    forms, such as a phone number on its own, pass unchanged, so code must not log
-   them. The protocol library's logger will feed that writer through an adapter
-   (M1); the MCP library's logger will too (M2).
+   them. The engine core's log events and metrics carry states, counts, fixed
+   reason codes and the Go types of errors, never an identifier, a name, message
+   text or a pairing code, which a test checks with canary content (M1, on
+   `main`). The protocol library's logger will feed that writer through an
+   adapter (M1); the MCP library's logger will too (M2).
 7. **Service to data directory and backups (M0, M1).** The data directory must be
    owned by the service's user with mode `0700`, and the service creates it that
    way (M0). The service creates `keys/` and the master key in it, and refuses to
@@ -310,6 +330,7 @@ or a nested module.
 | 13 | **One log writer.** `serve` wraps standard output in one `logx.Writer` before it logs anything, loads the master key right after the configuration and data directory checks, and keys the writer with the `log-redact` key derived from it. Every logger is built by `logx.New` on that writer: `app.New` takes it, so the app's logger, its alert logger, the HTTP servers' error logs and, once `app.New` has installed its logger, the panic reports of `safego` all write through it. A panic recovered before that, in the signal goroutine `main` starts first, is recovered but neither logged nor counted, so it cannot reach Go's default logger on standard error. The writer replaces identifiers in `user@server` form whose server name no ASCII letter or digit follows directly with keyed pseudonyms, keeps a JSON line valid when an identifier follows an escape sequence, drops every line longer than 65,536 bytes or carrying XML in one of these shapes, also written with the JSON escapes `\u003c`, `\u003e` and `\"`: a closing tag, a self-closing tag without attributes, the start of a tag with an attribute (`<x a="`) whatever its value holds and whether or not the tag ends, a tag directly followed by another (`<x><y`), `<!--`, `<![CDATA[` or `<?xml` (an opening tag without attributes followed only by text is kept), and writes each line whole under one lock, only once its newline has arrived, so a line written in pieces is checked as a whole; `logx.New` renders a value that is not a string, number, boolean, time, error or value with a `String` method as its length when it is a byte slice and as its type name otherwise. Text that code formats into a message is only pseudonymised and checked for XML. | I-5 | Compile time (`app.New` and `logx.New` take a `*logx.Writer`); an architecture test that refuses `slog.NewJSONHandler` and `slog.NewTextHandler` in non-test files outside `internal/logx` (a custom `slog.Handler` written elsewhere would pass it); an architecture test that refuses in non-test files Go's default loggers (`slog.Default`, `slog.SetDefault`, the package-level logging functions of `log/slog` and `log`, `log.Default`, `log.SetOutput`, `log.Writer` and `log.Output`), `fmt.Print`, `fmt.Printf` and `fmt.Println`, the built-ins `print` and `println`, `syscall.Stdout` and `syscall.Stderr`, and `os.Stdout` and `os.Stderr` outside `cmd/wawarden/main.go` (a file opened by its descriptor number would pass it). Tests: every identifier syntax becomes the pseudonym an HMAC written out in the test gives, and every form of one identifier the same one; module paths, `<nil>` and `<autogenerated>` are kept; every XML shape drops its line, including an attribute value holding a quote, raw, as a message and as `json.Marshal` writes it, and a tag followed by a tag without a closing tag; a canary identifier passed as a string, byte slice, error, `Stringer`, struct, map, slice, array, pointer, chat, grant and `LogValuer`, as a message, a key and a group, through `With`, `WithGroup`, the `log` package bridge and direct writes never reaches the output, which fails when values are not rendered fail-closed; lines stay valid JSON next to escapes; an identifier or a tag split across two writes is pseudonymised or dropped as if written at once, and an overlong line is dropped; concurrent loggers and writers produce whole lines; `serve` reports a goroutine named after an identifier under the pseudonym keyed by the data directory's master key. | M1, on `main` |
 | 14 | **The keys directory belongs to `internal/keys`.** Only `internal/keys` creates, checks and reads `keys/` and the master key in the data directory (see [Startup refusals](#startup-refusals)), and it derives every purpose key with HKDF-SHA256. A master key value prints no key material through `fmt`, `encoding/json` or `log/slog`. | I-5, I-7 | An architecture test refuses, in non-test files outside `internal/keys`, a string literal outside import declarations, or a run of concatenated literals, with a path element named `keys`; a name assembled at run time passes it. Tests of every refusal, of 16 racing creators ending with one key and no temporary file, of derivation vectors checked against an HKDF written out in the test, and that every `fmt` verb, `encoding/json` and both `log/slog` handlers print no key material from a master key. | M1, on `main` |
 | 15 | **Verified storage and deletion on disk.** The archive is opened with foreign keys on, a `TRUNCATE` rollback journal, `synchronous` `FULL`, exclusive locking, temporary storage in memory, `secure_delete` `ON` and a 5-second busy timeout; a per-driver connection hook reads every one of them back and refuses the connection on any difference, so `PERSIST`, write-ahead logging and `secure_delete` `FAST` cannot take effect, and then takes the exclusive lock. The single connection stays valid after an interrupted call, and a second connection is refused, because the driver would otherwise discard the first and silently drop the lock; profile `local` selects open-file-description locks on Linux and refuses to start when the kernel or the filesystem rejects them, and profile `nfs` selects classic POSIX locks, one kind per process. The DSN is built with `net/url`. The full-text index is created with its `secure-delete` option, and a revoke, an edit or an expiry issues the index's `delete` command with the exact old text, then nulls `text` and `text_display` and writes a new or empty index row, in one transaction. That transaction also tokenises the old text in a contentless full-text table of the in-memory temporary database, and when one of its trigrams that no remaining message holds is still a page key of the index (secure delete removes the term but keeps the key), it records that an index rewrite is due. After the commit the index is rewritten whole (`optimize`, with a filler row added before and deleted after, so that an index of a single segment is rewritten too) under a 5-minute deadline of its own, clearing the record in the same transaction; a start that finds the record, left by a stop or a failed rewrite, rewrites before it opens the archive. Quoted text is never stored, and reactions and poll updates store no content. | I-3, I-8 | Tests: each setting refused when it reads back differently; a database in write-ahead-log mode converted; an interrupted read, write or statement keeping the lock against another process, with a negative control showing the driver's own connection handling loses it; a stray close of the database file not freeing the lock on Linux with profile `local`, and freeing it with profile `nfs`; the other profile's lock kind refused once a process has locked; profile `local` refused when the driver reports no open-file-description locks; files created `0600` under `umask 0`; every file-mode, owner, filesystem and lock-wait refusal. A canary of 1,500 two-byte letters in both cases that arrives through the inbox, is written among more than 3,000 messages and 25 companions over its alphabet, one per transaction, so that the index has page keys and one of them is a trigram of the canary, and is then revoked, expired or edited, which must rewrite the index, is absent from `MATCH`, from `fts5vocab`, from the page keys, from the message rows, and, as a whole and as each of its trigrams that the baseline database and the companions lack, from the raw bytes of `archive.db` and its journal, open and closed; the same holds for an index of a single segment, for a rewrite cut short by a stop, which the next open completes even with a write deadline of 1 ns, and for a rewrite that runs out of time, which the write reports as such after its commit and the next open completes; negative controls show the proof fails without `secure_delete`, without the index's `secure-delete` option when no rewrite follows, without its `delete` command or without the rewrite; a rewrite runs under its own deadline and not the write deadline; the record of a due rewrite cannot be set through the sync-state API. | M1, on `main` |
+| 16 | **A neutral engine core.** `internal/engine` and its subpackages other than the protocol adapter `internal/engine/wa` handle plain data: they may import neither the protocol library nor protobuf, and, like all code outside `internal/store`, neither `database/sql` nor the SQLite driver; the core reaches the archive only through `internal/store/ingest`. Every goroutine it starts goes through `safego.Go` (row 9). | I-3, I-5, I-9 | An architecture test on the non-test files of those packages, with violating and conforming self-tests, and `depguard`. | M1, on `main` |
 
 Other tests that guard the invariants:
 
@@ -345,17 +366,23 @@ reason codes of the checks in the current build.
 | The archive's storage settings read back differently from the fixed ones (row 15): the journal mode is not `TRUNCATE` (write-ahead logging and `PERSIST`, which keeps deleted pages, are never used), `secure_delete` is not `ON`, or any other setting differs. | M1, on `main` |
 | Storage profile `local` on a network filesystem, as `statfs` reports it. | M1, on `main` |
 | The archive's schema is newer than the build knows. | M1, on `main` |
+| `WAWARDEN_OWNER_PHONE` is set but is not an E.164 number, or `WAWARDEN_HISTORY_MAX_BYTES` is not from 1 byte to 256 MiB. Unset, the owner's number refuses pairing, not the start. | M1, on `main` |
 | Protocol-library debug logging is enabled in a release build without `WAWARDEN_UNSAFE_DEBUG=<minutes>` (which reverts automatically and prints a banner). | M1 |
 | Backups of `session.db` are configured without an age recipient. | M1 |
 | A rate limit is zero or negative, or above its hard cap, without an `UNSAFE_` override. `0` never means unlimited. | M2 for read and search limits; M3 for send limits (global cap 60 per hour). |
 
-### Pairing refusals (M1)
+### Pairing refusals (M1, on `main`, for the engine core)
 
-Pairing is refused while a device is already paired (`409`), while the owner's
-phone number is missing or not in E.164 form, and beyond three attempts per hour.
-After pairing, the linked account must be the owner's number; otherwise the engine
-logs the new device out, wipes it and raises an alert, so that a pairing completed
-from someone else's account cannot bind the gateway to that account.
+Pairing is refused while a device is already paired, while the owner's phone
+number is missing, and beyond three attempts per hour; an owner's number that is
+set but not in E.164 form refuses the start. The pairing code goes to the caller
+only and is never logged. After pairing, the linked account must be the owner's
+number; otherwise the engine logs the new device out and raises a
+`pair_rejected` alert, so that a pairing completed from someone else's account
+cannot bind the gateway to that account. These are enforced and tested in the
+engine core on `main`. Not yet in place (M1): the admin route that starts
+pairing and answers `409`, and the protocol adapter, which rejects another
+account before anything is saved and wipes a logged-out device.
 
 ## Secure defaults
 
@@ -375,10 +402,11 @@ from someone else's account cannot bind the gateway to that account.
 | Database files are created with mode `0600` before SQLite opens them, and their journals take that mode. | M1, on `main`, for the archive; M1 for `session.db` |
 | Every log line passes through one writer: WhatsApp identifiers in `user@server` form, unless an ASCII letter or digit follows the server name directly, become `jid:` and 8 hexadecimal digits of an HMAC keyed from the master key, lines carrying XML in one of the recognised shapes are dropped, and log values of other types than strings, numbers, booleans, times, errors and values with a `String` method are written as their length (byte slices) or their type name. Protocol-library and MCP-library logs will reach the writer through adapters; tool arguments are never logged. | M1, on `main`, for the writer; M1 for the protocol-library adapter; M2 for the MCP library. |
 | Text that the admin CLI prints from a server answer passes through a terminal sanitiser that replaces every control, format, line-separator and paragraph-separator character and every invalid byte with U+FFFD, so an answer cannot move the cursor, rewrite the screen, set a link or write the clipboard. | M1, on `main`, for the sanitiser; M1 for the CLI commands that use it. |
-| Status, broadcast and newsletter traffic is dropped at ingest; raw protocol messages are not retained unless configured, and their media keys and message secrets are stripped first. | M1 |
+| Status, broadcast and newsletter traffic, and traffic of every other chat that is not a phone-number user, a LID user or a group, is dropped at ingest, before it is written anywhere. | M1, on `main`, in the engine core, which no build runs before the protocol adapter (M1) |
+| Raw protocol messages are not retained unless configured, and their media keys and message secrets are stripped first. | M1 |
 | Never sends read receipts, presence or typing indicators. | M1 |
 | No first contact (a DM with no prior inbound message) unless the client is allowed it; sends are paced, idempotent and budgeted per client, with `429` rather than queueing. | M3 |
-| Disconnections from WhatsApp never exit the process; repeated restarts within a short window start the engine disconnected, to avoid reconnect storms. | M1 |
+| Disconnections from WhatsApp never exit the process, and `/healthz` does not depend on them; more than five starts within ten minutes start the engine disconnected, and reconnection after a drop backs off exponentially, with jitter, up to five minutes, to avoid reconnect storms. A replaced session, a temporary ban, a refused connection or a failed token refresh waits for the operator. | M1, on `main`, in the engine core, which no build runs before the protocol adapter (M1) |
 | Backups are encrypted to an age recipient; plaintext backups of `archive.db` alone require an explicit flag. | M1 |
 
 ## Residual risks
@@ -470,6 +498,21 @@ These remain at v1.0, after every control above is in place.
   the risk; it does not remove it. It uses classic POSIX record locks, which a
   close of any other descriptor of the database file in the process would drop;
   the service's own code never opens the file (row 3a), but a dependency could.
+- **Group admins as the archive knows them.** A revocation of another member's
+  message in a group is applied when the archive records the revoker as an
+  admin of that group, and that record is only as current as the group changes
+  and history WhatsApp has delivered: a demotion the engine never received
+  leaves a former admin able to revoke (M1, on `main`). A member the archive
+  does not record is refused.
+- **References from the other side of a direct chat.** The other party of a
+  direct chat names it by the owner's identifier. The engine accepts the owner's
+  number there, and the owner's LID only once the archive has learned which LID
+  belongs to that number; until then, and whenever `WAWARDEN_OWNER_PHONE` is
+  unset, such edits, revocations, reactions and replies are dropped or stored
+  without their reference (M1, on `main`).
+- **Stops count as attempts.** A history blob whose processing is cut short by a
+  stop or a crash three times is quarantined like a failing one, and its
+  messages do not reach the archive (M1, on `main`).
 - **An interrupted revoke.** A crash in the middle of a revoke, an edit or an
   expiry rolls it back, so the old text is in the database again until the
   change is applied again, and the journal keeps the pre-image until the next

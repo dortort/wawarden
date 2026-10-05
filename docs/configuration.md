@@ -4,9 +4,12 @@ This is the authoritative reference for configuring and running WaWarden. It
 describes the current build on `main`: milestone **M0**, plus the parts of milestone
 **M1** merged so far, which are the [master key](#master-key), the pseudonyms and
 dropped lines in the [logs](#pseudonyms-and-dropped-lines), the
-[request-body decoder](#request-bodies), which no route uses yet, and the
-[message archive](#message-archive), which nothing writes WhatsApp traffic to yet. Everything listed
-here is implemented, and nothing else is. Settings planned for later milestones are
+[request-body decoder](#request-bodies), which no route uses yet, the
+[message archive](#message-archive), and the core of the
+[WhatsApp engine](#whatsapp-engine), which this build does not run: the adapter to
+the WhatsApp protocol library arrives later in M1, so nothing connects to WhatsApp
+or writes WhatsApp traffic to the archive yet. Everything listed here is
+implemented, and nothing else is. Settings planned for later milestones are
 listed under [Reserved names](#reserved-names) and are refused by this build.
 
 ## Unknown variables stop the service
@@ -15,8 +18,8 @@ listed under [Reserved names](#reserved-names) and are refused by this build.
 > whose name begins with `WAWARDEN_` and that this build does not implement.** A
 > typo, a variable meant for a later release, or a leftover from another
 > deployment stops the service with the reason code `unknown_variable` instead of
-> being ignored. An empty value counts as set: `WAWARDEN_OWNER_PHONE=` is
-> refused as well.
+> being ignored. An empty value counts as set:
+> `WAWARDEN_BACKUP_AGE_RECIPIENT=` is refused as well.
 
 Only the names in [Environment variables](#environment-variables) are accepted.
 Names are matched exactly, so a lower-case `wawarden_listen` is not recognised as a
@@ -30,7 +33,6 @@ with `unknown_variable`.
 
 | Variable | Planned purpose | Becomes valid in |
 |---|---|---|
-| `WAWARDEN_OWNER_PHONE` | The account owner's number in E.164 form, checked when pairing | M1 |
 | `WAWARDEN_BACKUP_AGE_RECIPIENT` | The age recipient that backups are encrypted to | M1 |
 | `WAWARDEN_METRICS_EMF` | `1` writes metrics as embedded-metric-format lines on standard output | M1 |
 | `WAWARDEN_SEND_PER_CLIENT_PER_MINUTE` | Per-client send rate limit | M3 |
@@ -152,6 +154,8 @@ These are all the variables this build reads.
 | `WAWARDEN_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`, in lower case. | `log_level_invalid` |
 | `WAWARDEN_STORAGE_PROFILE` | `local` | `local` or `nfs`, in lower case; see [Storage profiles](#storage-profiles). | `storage_profile_invalid` |
 | `WAWARDEN_MIN_FREE_BYTES` | `268435456` (256 MiB) | A number of bytes in decimal digits, from `0` to `18446744073709551615`: no sign, unit, separator or white space. `0` turns the floor off. See [Free space](#free-space). | `min_free_bytes_invalid` |
+| `WAWARDEN_OWNER_PHONE` | unset | The phone number of the WhatsApp account that WaWarden may link to, in E.164 form: `+`, then 7 to 15 digits, the first not `0`, and nothing else (no spaces or separators), for example `+15550100001`. Unset, the service starts but refuses to pair; see [Pairing](#pairing). | `owner_phone_invalid` |
+| `WAWARDEN_HISTORY_MAX_BYTES` | `33554432` (32 MiB) | The largest history-sync blob, in bytes, before and after decompression: a number in decimal digits from `1` to `268435456` (256 MiB), with no sign, unit, separator or white space. See [History sync](#history-sync). | `history_max_bytes_invalid` |
 
 Rules that apply to all of them:
 
@@ -230,46 +234,49 @@ The checks run in this order:
 | 11 | `log_level_invalid` | `WAWARDEN_LOG_LEVEL` | The level is not `debug`, `info`, `warn` or `error`. |
 | 12 | `storage_profile_invalid` | `WAWARDEN_STORAGE_PROFILE` | The profile is not `local` or `nfs`. |
 | 13 | `min_free_bytes_invalid` | `WAWARDEN_MIN_FREE_BYTES` | The value is not a number of bytes in decimal digits that fits in 64 bits. |
-| 14 | `running_as_root` | none | The real or the effective user ID is 0 and `--allow-root` was not given. |
-| 15 | `data_dir_unusable` | `WAWARDEN_DATA_DIR` | The directory does not exist and cannot be created, or cannot be inspected; the path is empty. |
-| 16 | `data_dir_not_directory` | `WAWARDEN_DATA_DIR` | The path is not a directory, or its last component is a symbolic link. |
-| 17 | `data_dir_foreign_owner` | `WAWARDEN_DATA_DIR` | The directory is not owned by the process's effective user ID. |
-| 18 | `data_dir_permissions` | `WAWARDEN_DATA_DIR` | The directory's mode is not exactly `0700`. |
-| 19 | `history_dir_unusable` | none; the error names `history/` | `history` exists in the data directory but cannot be inspected. |
-| 20 | `history_dir_not_directory` | none; the error names `history/` | `history` exists but is not a directory, or is a symbolic link. |
-| 21 | `history_dir_foreign_owner` | none; the error names `history/` | `history` is not owned by the process's effective user ID. |
-| 22 | `history_dir_permissions` | none; the error names `history/` | The mode of `history` is not exactly `0700`. |
-| 23 | `backups_dir_unusable` | none; the error names `backups/` | `backups` exists in the data directory but cannot be inspected. |
-| 24 | `backups_dir_not_directory` | none; the error names `backups/` | `backups` exists but is not a directory, or is a symbolic link. |
-| 25 | `backups_dir_foreign_owner` | none; the error names `backups/` | `backups` is not owned by the process's effective user ID. |
-| 26 | `backups_dir_permissions` | none; the error names `backups/` | The mode of `backups` is not exactly `0700`. |
-| 27 | `keys_dir_unusable` | none; the error names `keys/` | `keys` in the data directory does not exist and cannot be created, or cannot be inspected. |
-| 28 | `keys_dir_not_directory` | none; the error names `keys/` | `keys` is not a directory, or is a symbolic link. |
-| 29 | `keys_dir_foreign_owner` | none; the error names `keys/` | `keys` is not owned by the process's effective user ID. |
-| 30 | `keys_dir_permissions` | none; the error names `keys/` | The mode of `keys` is not exactly `0700`. |
-| 31 | `master_key_unusable` | none; the error names `keys/master` | `keys/master` does not exist and cannot be created, or cannot be inspected, opened or read. |
-| 32 | `master_key_not_regular` | none; the error names `keys/master` | `keys/master` is not a regular file: a symbolic link (even to a valid key), a directory or a named pipe, for example. |
-| 33 | `master_key_foreign_owner` | none; the error names `keys/master` | `keys/master` is not owned by the process's effective user ID. |
-| 34 | `master_key_permissions` | none; the error names `keys/master` | `keys/master` grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 35 | `master_key_size` | none; the error names `keys/master` | `keys/master` does not hold exactly 32 bytes. |
-| 36 | `storage_filesystem_unknown` | none | The filesystem of the data directory cannot be inspected (`statfs`). |
-| 37 | `storage_network_filesystem` | none | The storage profile is `local` and the data directory is on a network filesystem; see [Storage profiles](#storage-profiles). |
-| 38 | `archive_db_unusable` | none; the error names `archive.db` | `archive.db` does not exist and cannot be created, or cannot be inspected. |
-| 39 | `archive_db_not_regular` | none; the error names `archive.db` | `archive.db` is not a regular file: a symbolic link or a directory, for example. |
-| 40 | `archive_db_foreign_owner` | none; the error names `archive.db` | `archive.db` is not owned by the process's effective user ID. |
-| 41 | `archive_db_permissions` | none; the error names `archive.db` | `archive.db` grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 42 | `archive_journal_unusable` | none; the error names `archive.db-journal` | `archive.db-journal` exists but cannot be inspected. |
-| 43 | `archive_journal_not_regular` | none; the error names `archive.db-journal` | `archive.db-journal` exists but is not a regular file. |
-| 44 | `archive_journal_foreign_owner` | none; the error names `archive.db-journal` | `archive.db-journal` is not owned by the process's effective user ID. |
-| 45 | `archive_journal_permissions` | none; the error names `archive.db-journal` | `archive.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 46 | `storage_ofd_unavailable` | none | On Linux, the storage profile is `local` and the kernel or the data directory's filesystem refused open-file-description locks; see [Storage profiles](#storage-profiles). |
-| 47 | `archive_schema_newer` | none; the error names `archive.db` | The archive's schema version is newer than this build knows: a newer release wrote it. |
+| 14 | `owner_phone_invalid` | `WAWARDEN_OWNER_PHONE` | The value is set but is not an E.164 number: `+` and 7 to 15 digits, the first not `0`. |
+| 15 | `history_max_bytes_invalid` | `WAWARDEN_HISTORY_MAX_BYTES` | The value is not a number of bytes in decimal digits from 1 to 268435456. |
+| 16 | `running_as_root` | none | The real or the effective user ID is 0 and `--allow-root` was not given. |
+| 17 | `data_dir_unusable` | `WAWARDEN_DATA_DIR` | The directory does not exist and cannot be created, or cannot be inspected; the path is empty. |
+| 18 | `data_dir_not_directory` | `WAWARDEN_DATA_DIR` | The path is not a directory, or its last component is a symbolic link. |
+| 19 | `data_dir_foreign_owner` | `WAWARDEN_DATA_DIR` | The directory is not owned by the process's effective user ID. |
+| 20 | `data_dir_permissions` | `WAWARDEN_DATA_DIR` | The directory's mode is not exactly `0700`. |
+| 21 | `history_dir_unusable` | none; the error names `history/` | `history` exists in the data directory but cannot be inspected. |
+| 22 | `history_dir_not_directory` | none; the error names `history/` | `history` exists but is not a directory, or is a symbolic link. |
+| 23 | `history_dir_foreign_owner` | none; the error names `history/` | `history` is not owned by the process's effective user ID. |
+| 24 | `history_dir_permissions` | none; the error names `history/` | The mode of `history` is not exactly `0700`. |
+| 25 | `backups_dir_unusable` | none; the error names `backups/` | `backups` exists in the data directory but cannot be inspected. |
+| 26 | `backups_dir_not_directory` | none; the error names `backups/` | `backups` exists but is not a directory, or is a symbolic link. |
+| 27 | `backups_dir_foreign_owner` | none; the error names `backups/` | `backups` is not owned by the process's effective user ID. |
+| 28 | `backups_dir_permissions` | none; the error names `backups/` | The mode of `backups` is not exactly `0700`. |
+| 29 | `keys_dir_unusable` | none; the error names `keys/` | `keys` in the data directory does not exist and cannot be created, or cannot be inspected. |
+| 30 | `keys_dir_not_directory` | none; the error names `keys/` | `keys` is not a directory, or is a symbolic link. |
+| 31 | `keys_dir_foreign_owner` | none; the error names `keys/` | `keys` is not owned by the process's effective user ID. |
+| 32 | `keys_dir_permissions` | none; the error names `keys/` | The mode of `keys` is not exactly `0700`. |
+| 33 | `master_key_unusable` | none; the error names `keys/master` | `keys/master` does not exist and cannot be created, or cannot be inspected, opened or read. |
+| 34 | `master_key_not_regular` | none; the error names `keys/master` | `keys/master` is not a regular file: a symbolic link (even to a valid key), a directory or a named pipe, for example. |
+| 35 | `master_key_foreign_owner` | none; the error names `keys/master` | `keys/master` is not owned by the process's effective user ID. |
+| 36 | `master_key_permissions` | none; the error names `keys/master` | `keys/master` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 37 | `master_key_size` | none; the error names `keys/master` | `keys/master` does not hold exactly 32 bytes. |
+| 38 | `storage_filesystem_unknown` | none | The filesystem of the data directory cannot be inspected (`statfs`). |
+| 39 | `storage_network_filesystem` | none | The storage profile is `local` and the data directory is on a network filesystem; see [Storage profiles](#storage-profiles). |
+| 40 | `archive_db_unusable` | none; the error names `archive.db` | `archive.db` does not exist and cannot be created, or cannot be inspected. |
+| 41 | `archive_db_not_regular` | none; the error names `archive.db` | `archive.db` is not a regular file: a symbolic link or a directory, for example. |
+| 42 | `archive_db_foreign_owner` | none; the error names `archive.db` | `archive.db` is not owned by the process's effective user ID. |
+| 43 | `archive_db_permissions` | none; the error names `archive.db` | `archive.db` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 44 | `archive_journal_unusable` | none; the error names `archive.db-journal` | `archive.db-journal` exists but cannot be inspected. |
+| 45 | `archive_journal_not_regular` | none; the error names `archive.db-journal` | `archive.db-journal` exists but is not a regular file. |
+| 46 | `archive_journal_foreign_owner` | none; the error names `archive.db-journal` | `archive.db-journal` is not owned by the process's effective user ID. |
+| 47 | `archive_journal_permissions` | none; the error names `archive.db-journal` | `archive.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 48 | `storage_ofd_unavailable` | none | On Linux, the storage profile is `local` and the kernel or the data directory's filesystem refused open-file-description locks; see [Storage profiles](#storage-profiles). |
+| 49 | `archive_schema_newer` | none; the error names `archive.db` | The archive's schema version is newer than this build knows: a newer release wrote it. |
 
-When the data directory is missing, it is created only after checks 1 to 14 pass,
-so a start refused by checks 1 to 14 leaves nothing behind. `history/` and
-`backups/` are checked only when they exist, and are never created by this
-build. `keys/` and the master key are created, when missing, only after checks 15
-to 26 pass, and an empty `archive.db` only after checks 15 to 37 pass. A refusal
+When the data directory is missing, it is created only after checks 1 to 16 pass,
+so a start refused by checks 1 to 16 leaves nothing behind. `history/` and
+`backups/` are checked only when they exist; `serve` itself creates neither (see
+[Data directory](#data-directory)). `keys/` and the master key are created, when
+missing, only after checks 17 to 28 pass, and an empty `archive.db` only after
+checks 17 to 39 pass. A refusal
 by a later check (on a filesystem that forces its own ownership or mode, for
 example), or a `startup_failed` exit, leaves what was created in place: the data
 directory, `keys/`, the master key and `archive.db`.
@@ -291,12 +298,14 @@ The data directory is `WAWARDEN_DATA_DIR`, by default `/data`.
 
 The checks run once, at start. When they exist, `history/` and `backups/` in the
 data directory must also be directories, not symbolic links, owned by the
-effective user ID with mode exactly `0700` (refusals 19 to 26); this build does
-not create them, and later M1 releases will keep history-sync downloads and
-backups there. Then `serve` creates the [master key](#master-key) when it is
-missing and opens the [message archive](#message-archive), `archive.db`; this
-build writes nothing else there. Later in M1 the directory also holds the
-WhatsApp session. It must be on a writable, persistent filesystem that supports
+effective user ID with mode exactly `0700` (refusals 21 to 28). Then `serve`
+creates the [master key](#master-key) when it is missing and opens the
+[message archive](#message-archive), `archive.db`. The
+[engine](#whatsapp-engine) creates `history/` with mode `0700` when it first
+downloads a [history-sync blob](#history-sync), and keeps each blob there as
+`history/<id>.bin`, mode `0600`, only until it is processed; this build has no
+engine, so it writes nothing but the master key and the archive. Nothing creates
+`backups/` yet. Later in M1 the directory also holds the WhatsApp session. It must be on a writable, persistent filesystem that supports
 hard links and that only the service's user can read.
 
 Mechanisms that add group permissions or the setgid bit to a volume, such as
@@ -308,7 +317,7 @@ Kubernetes `fsGroup`, make the directory fail the mode check.
 bytes. Right after the data directory checks, `serve`:
 
 1. creates `keys/` with mode `0700` when it does not exist;
-2. checks `keys/` (refusals 17 to 20): a directory, not a symbolic link, owned by
+2. checks `keys/` (refusals 29 to 32): a directory, not a symbolic link, owned by
    the effective user ID, with mode exactly `0700`;
 3. when `keys/master` does not exist, writes 32 bytes from the operating system's
    cryptographic random source to a new temporary file `keys/.master-<random>`
@@ -316,7 +325,7 @@ bytes. Right after the data directory checks, `serve`:
    the temporary name and flushes the directory. When two processes start at once,
    the second link fails, and both use the key that was linked first. An existing
    key is never replaced;
-4. checks `keys/master` (refusals 21 to 25): a regular file, not a symbolic link,
+4. checks `keys/master` (refusals 33 to 37): a regular file, not a symbolic link,
    owned by the effective user ID, without any permission for group or others and
    without the setuid, setgid or sticky bit, holding exactly 32 bytes. Mode `0600`
    and mode `0400` are both accepted.
@@ -346,14 +355,15 @@ can be deleted at any time while the service is stopped.
 `archive.db` in the data directory is the message archive: a SQLite database
 written by the SQLite engine compiled into the binary (`modernc.org/sqlite`).
 This build creates it, applies its schema and records each start in it; nothing
-writes WhatsApp traffic into it yet, because the engine arrives later in M1.
+writes WhatsApp traffic into it yet, because this build runs no
+[engine](#whatsapp-engine).
 Right after the master key, `serve`:
 
 1. checks the data directory's filesystem against the
-   [storage profile](#storage-profiles) (refusals 36 and 37);
+   [storage profile](#storage-profiles) (refusals 38 and 39);
 2. creates `archive.db` empty with mode `0600` when it does not exist, and
-   refuses (38 to 41) one that is not a regular file, belongs to another user,
-   or grants any access to group or others; then refuses (42 to 45) an
+   refuses (40 to 43) one that is not a regular file, belongs to another user,
+   or grants any access to group or others; then refuses (44 to 47) an
    `archive.db-journal` that exists and fails the same checks;
 3. opens one connection and reads back every setting it applies, refusing the
    connection on any difference: foreign keys on, the rollback journal in
@@ -368,9 +378,9 @@ Right after the master key, `serve`:
    then exits `1` with `startup_failed`. A stop signal ends the wait within one
    busy timeout and also exits `1`. On Linux, profile `local` takes it with
    open-file-description locks, and a kernel or filesystem that refuses them
-   is refused in turn (46) instead of falling back to classic locks;
+   is refused in turn (48) instead of falling back to classic locks;
 5. brings the schema up to date (an archive written by a newer release is
-   refused, 47), completes a rewrite of the full-text index that a stop or a
+   refused, 49), completes a rewrite of the full-text index that a stop or a
    failed rewrite left due (see below) and logs `archive_opened`.
 
 The connection that holds the lock is the only one the service ever opens to
@@ -430,12 +440,163 @@ a time.
 ### Free space
 
 `WAWARDEN_MIN_FREE_BYTES` sets a floor on the free space of the data
-directory's filesystem, for profile `local` only: below it ingest will pause,
-and it resumes once the free space reaches 1.25 times the floor. `0` turns the
-floor off. This build validates the setting, but it ingests nothing yet, so
-nothing measures the free space or pauses; the engine that does arrives later
-in M1. With profile `nfs` the floor never applies, because a network filesystem
-such as Amazon EFS grows on demand; watch its own capacity metrics instead.
+directory's filesystem, for profile `local` only: below it ingest pauses, and it
+resumes once the free space reaches 1.25 times the floor. `0` turns the floor
+off. The [engine](#whatsapp-engine) measures the free space when it starts and
+every 30 seconds. While ingest is paused it acknowledges no message and no
+history-sync notification, so that WhatsApp delivers them again later, and
+applies nothing from its inbox or from history sync; pausing logs `ingest_paused` at every log level
+and resuming logs `ingest_resumed`. This build runs no engine, so it validates
+the setting but nothing measures the free space. With profile `nfs` the floor
+never applies, because a network filesystem such as Amazon EFS grows on demand;
+watch its own capacity metrics instead.
+
+## WhatsApp engine
+
+The engine links the service to WhatsApp as a companion device, keeps the
+connection, and writes what arrives into the [message archive](#message-archive).
+This build contains the engine's core, described below, but not its adapter to
+the WhatsApp protocol library, which arrives later in M1. `serve` therefore starts
+without an engine and logs `engine_absent` once, at every log level: nothing
+pairs, connects to WhatsApp, downloads history or ingests, and none of the
+engine's [metrics](#metrics) exist. Everything else in this reference applies
+unchanged.
+
+A disconnection never stops the process, and `/healthz` does not depend on the
+engine: an unpaired or disconnected engine still answers `200`.
+
+### Engine states
+
+| State | Meaning |
+|---|---|
+| `unpaired` | No device is linked; the engine waits for pairing. |
+| `connecting` | The engine is fetching the protocol version, connecting, or waiting before it reconnects. |
+| `connected` | The engine is connected and receiving. |
+| `disconnected` | The engine is not connected and does not reconnect on its own. The reason is one of `outdated`, `replaced`, `logged_out`, `temporary_ban`, `cat_refresh`, `connect_failure`, `restart_budget` or `shutdown`. |
+
+Every change is logged as `engine_state`; entering `disconnected` for any reason
+but `shutdown` also logs `disconnected` at every log level. The gauges
+`wawarden_paired` and `wawarden_connected` follow the state.
+
+- **Restart budget.** When the archive has recorded more than 5 starts in the
+  last ten minutes, this one included (`recent_starts` in `archive_opened`), the
+  engine starts in `disconnected` with reason `restart_budget` and makes no
+  connection, so that a crash loop does not become a reconnect storm.
+- **Protocol version.** Otherwise the engine first fetches the current WhatsApp
+  Web version, at most four times: once, then after 1, 2 and 4 seconds. It
+  takes a newer version, keeps its own when the fetched one is equal, never takes
+  an older one, and changes the version only while disconnected. When WhatsApp
+  reports the client as outdated, the engine fetches again the same way and then
+  needs a strictly newer version. When no fetch succeeds, it stays in
+  `disconnected` with reason `outdated`, and an explicit reconnect fetches again
+  before it connects.
+- **Reconnection.** After an ordinary drop or a failed connection attempt, the
+  engine reconnects after a delay that starts at 2 seconds, doubles after each
+  failed attempt up to 5 minutes, and is randomised to between half and all of
+  that; a successful connection resets it.
+- **Stops that wait for the operator.** When another client replaces the session
+  (`replaced`), WhatsApp bans the account temporarily (`temporary_ban`), a
+  connection token cannot be refreshed (`cat_refresh`) or WhatsApp refuses the
+  connection (`connect_failure`), the engine disconnects and waits for an
+  explicit reconnect. When WhatsApp logs the device out (`logged_out`), it waits
+  for pairing. A connection event that arrives late, after one of these, changes
+  nothing. The admin routes that request a reconnect or pairing arrive later in
+  M1.
+
+### Pairing
+
+Pairing links a new device by the code WhatsApp shows on the owner's phone. It
+is refused while a device is paired, while `WAWARDEN_OWNER_PHONE` is unset, and
+after three attempts within the last hour. The pairing code goes to the caller
+only and is never logged. When pairing completes, the linked account must have
+the number in `WAWARDEN_OWNER_PHONE`; otherwise the engine logs the new device
+out and logs `pair_rejected` at every log level with `stage` `after_pairing`.
+The adapter will also reject another account before anything is saved, which
+the engine reports as `pair_rejected` with `stage` `before_save`.
+
+### Ingest
+
+Each message and each group change that WhatsApp delivers is first written to
+the archive's inbox, in the same file as the archive, and only then
+acknowledged. It is not acknowledged, so that WhatsApp delivers it again later,
+when the inbox already holds 5,000 rows that wait to be applied, when ingest is
+[paused](#free-space), or when the write fails; each case counts in
+`wawarden_ingest_refused_total`. Traffic of a chat that is not a phone-number
+user, a LID user or a group (status updates, broadcast lists, newsletters and
+every other kind) is acknowledged and dropped before it reaches the inbox.
+
+One worker applies the inbox in order. It records each attempt in the archive
+before applying the row, then applies the row and removes it from the inbox in
+one transaction, so that a row is applied once even when the process stops in
+between. A failed attempt is retried after 1 and then 2 seconds; after three
+failed attempts, attempts cut short by a crash included, the row is quarantined:
+its content is removed, the row stays as a record, and `quarantine` is logged at
+every log level with `queue` `inbox`. A row whose content the archive refuses,
+such as a message identifier with spaces, is dropped at once.
+
+The rules the worker applies, each counted in `wawarden_ingest_dropped_total`
+when it drops an event:
+
+| Rule | Drop reason |
+|---|---|
+| The chat must be a phone-number user, a LID user or a group. | `chat_rejected` |
+| The sender must be a phone-number or LID user. | `sender_rejected` |
+| An event of no known kind is dropped; in particular it never counts as a revocation. | `unknown_kind` |
+| An edit, revocation, reaction or poll vote names its target by a key. A key without a message identifier, or a group key without the target's sender, is dropped. | `no_target` |
+| A key, or the reference of a reply, that names a chat is followed only when it names the chat the event arrived in, or, in a direct chat, the owner's own number, which is how the other side names that chat. Any other chat is never followed: the event is dropped, and a reply is stored without its reference. | `foreign_reference` |
+| The target is looked up only inside the event's chat, by its identifier and its sender; in a direct chat, a key that does not name the event's sender as the author names the other side. | `target_unknown`, and `owner_unknown` when the other side is the owner and `WAWARDEN_OWNER_PHONE` is unset |
+| An edit or revocation must come from the target's sender. In a group, a revocation by someone else is applied only when the archive records that member as an admin of the group; a member it does not record is refused. | `not_original_sender`, `not_admin`, `admin_unknown` |
+| An edit needs new text and a target that is neither revoked, a reaction nor a poll vote. | `invalid`, `target_kind` |
+
+Further, the worker:
+
+- stores a reply's reference to the message it quotes when that message is
+  found in the same chat, and marks the quote unverified when the quoted text
+  differs from the stored original; the quoted text itself is never stored;
+- stores reactions and poll votes as rows of their kind that point at their
+  target, without their content;
+- stores the push name of a sender other than the owner for that contact, and
+  as the name of a direct chat, and a group's subject as its name, each with its
+  source;
+- stores `text_display`, the text without control, bidirectional, zero-width and
+  tag characters, beside the text;
+- stores whether a message came live or from history sync, and whether the
+  owner sent it;
+- sets the expiry of a message sent with a disappearing timer; every minute the
+  engine removes the text of expired messages from the archive as described
+  under [Message archive](#message-archive);
+- learns which LID belongs to which phone number only from the alternate
+  identifiers WhatsApp's servers attach to live messages and from history sync,
+  and re-keys a direct chat from the number to the LID. A mapping that
+  contradicts one already learned, or that would merge two chats that both hold
+  messages, is refused, counted in `wawarden_rekey_conflicts_total` and logged
+  as `rekey_conflict` at every log level.
+
+### History sync
+
+The owner's phone sends the chat history in blobs, each announced by a
+notification. The engine accepts a notification only from the owner's own
+primary device (device 0) and drops any other (`history_not_primary`). It
+records the notification in the archive and acknowledges it. Then, while
+connected, it downloads the blob into `history/<id>.part` in the data directory
+through a writer that stops at `WAWARDEN_HISTORY_MAX_BYTES`, refusing a blob
+announced as larger without downloading it, flushes the file to disk, renames it
+to `history/<id>.bin`, flushes the directory and only then sends WhatsApp the
+history receipt. A small first blob can arrive inside the notification; it is
+kept in the archive's record, needs no download, and gets its receipt when the
+engine takes it up. After a restart, the receipt of a blob that is still waiting
+is sent again.
+
+For each blob the engine records an attempt, decompresses it, refusing more
+than `WAWARDEN_HISTORY_MAX_BYTES` of output, decodes it, and applies it with
+the rules above in transactions of 100 messages, with origin `history`; group
+subjects and members, push names and LID mappings in the blob are stored too.
+It then marks the blob processed, which also removes its record's download
+reference and inline content, and deletes its file. Blobs not yet processed are
+taken up again at the next start. After three failed attempts, attempts cut
+short by a crash or a stop included, a blob is quarantined: its reference and
+files are deleted and `quarantine` is logged at every log level with `queue`
+`history`.
 
 ## Listeners
 
@@ -558,7 +719,8 @@ route's grant was decided. It answers with a fixed error and reads no further wh
 The health listener requires no credential, so its address must be loopback; the
 service refuses any other (`health_address_not_loopback`). `200` means the
 process is up, its listeners are serving, and the archive is open and locked by
-the service. The health listener opens only after the archive, so while `serve`
+the service; the state of the [WhatsApp engine](#whatsapp-engine) does not
+change it. The health listener opens only after the archive, so while `serve`
 waits for the archive's lock, health checks fail to connect.
 
 ### Responses
@@ -598,12 +760,14 @@ has these keys:
 | `msg` | A human-readable sentence; it may change between releases |
 | `event` | A stable, machine-readable event name; match on this, not on `msg` |
 
-`WAWARDEN_LOG_LEVEL` sets the lowest level written, with three exceptions that
-ignore the setting. The `startup_refused` line is written before the
-configuration is accepted. The `dev_build` and `listener_not_loopback` warnings
-are written at every level, `error` included, because they are the only signal
-that a development binary is running or that a listener is reachable beyond
-loopback.
+`WAWARDEN_LOG_LEVEL` sets the lowest level written, with exceptions that ignore
+the setting. The `startup_refused` line is written before the configuration is
+accepted. The `dev_build` and `listener_not_loopback` warnings are written at
+every level, `error` included, because they are the only signal that a
+development binary is running or that a listener is reachable beyond loopback.
+So are the engine's alerts, which an operator must see: `engine_absent`,
+`disconnected`, `pair_rejected`, `quarantine`, `rekey_conflict` and
+`ingest_paused`.
 
 | Event | Level | Other keys | Written when |
 |---|---|---|---|
@@ -625,12 +789,33 @@ loopback.
 | `db_deadline` | `ERROR` | `database`, `operation`, `timeout_ms`, `goroutines` | A read of the archive ran beyond 2 seconds, a write beyond 10 or a rewrite of its full-text index beyond 5 minutes; the call is interrupted and fails. `operation` names the call in the code, and `goroutines` holds the goroutine profile of the process (function names and source positions, cut at 32 KiB). |
 | `db_lost` | `ERROR` | `database` | The connection that held the archive's lock is gone, and the service refuses to open another; `/healthz` answers `503` from then on. |
 | `log_dropped` | `WARN` | `reason`: `xml` or `too_long` | Replaces a line that carried XML (`xml`) or was longer than 65,536 bytes (`too_long`); see [Pseudonyms and dropped lines](#pseudonyms-and-dropped-lines). It is written in place of a line that passed the log level, whatever that line's level was. |
+| `engine_absent` | `WARN`, at every log level | | This build has no [WhatsApp engine](#whatsapp-engine); logged once, after `archive_opened`. |
+| `engine_state` | `INFO` | `state`, `reason` | The [engine's state](#engine-states) changed; `reason` is empty unless the state is `disconnected`. |
+| `disconnected` | `WARN`, at every log level | `reason` | The engine entered `disconnected` for any reason but `shutdown`. |
+| `version_updated` | `INFO` | `version` | The engine took a newer WhatsApp Web version, such as `2.3000.1027000000`. |
+| `version_refresh_failed` | `WARN` | `attempt` | A version fetch failed or returned no usable version. |
+| `connect_failed` | `WARN` | `attempt`, `error_type` | A connection attempt failed; the engine retries. `error_type` is the Go type of the error, never its text. |
+| `pairing_started` | `INFO` | | A pairing attempt passed the refusals above. The code is never logged. |
+| `pair_failed` | `WARN` | `error_type` | Connecting or requesting the pairing code failed. |
+| `pair_rejected` | `WARN`, at every log level | `stage`: `before_save` or `after_pairing` | Pairing linked or tried to link an account other than the owner's; see [Pairing](#pairing). |
+| `logout_failed` | `WARN` | `error_type` | Logging out a rejected device failed. |
+| `ingest_failed` | `WARN` | `queue`: `inbox` or `history`, `attempt` when an attempt failed, `error_type` | Reading, applying or quarantining an inbox row or a history blob failed. |
+| `quarantine` | `WARN`, at every log level | `queue`, `attempts` | An inbox row or a history blob was quarantined after three failed attempts. |
+| `rekey_conflict` | `WARN`, at every log level | `conflict`: `mapping_contradicts`, `both_chats_have_messages` or `message_collision` | A LID mapping was refused; the event that carried it is still applied. |
+| `ingest_paused` | `WARN`, at every log level | `free_bytes`, `floor_bytes` | The data directory fell below its [free-space floor](#free-space). |
+| `ingest_resumed` | `INFO` | `free_bytes`, `floor_bytes` | The free space reached 1.25 times the floor again. |
+| `free_space_unknown` | `WARN` | `error_type` | The free space of the data directory could not be read. |
+| `index_rewrite_pending` | `WARN` | `operation` | A change committed, but the full-text index rewrite it requires failed; it stays due and runs at the next start. |
+| `history_ack_failed` | `WARN` | `error_type` | Sending the history receipt failed; the blob is processed anyway. |
+| `history_file_kept` | `WARN` | `error_type` | A history file could not be deleted. |
+| `expiry_sweep_failed` | `WARN` | `error_type` | Removing the text of expired messages failed; the sweep runs again a minute later. |
 
 What is never logged: requests (there is no access log), request bodies, header
 values, tokens, failed authentications, the admin token's hash, the values of
 refused variables (a refusal names the variable only), panic values (only their
 Go type and the stack), the master key and the keys derived from it (only the key
-id), WhatsApp identifiers in their `user@server` form when no ASCII letter or
+id), pairing codes, message text and push names (the engine logs states, reasons,
+counts and the Go types of errors, never their text), WhatsApp identifiers in their `user@server` form when no ASCII letter or
 digit follows the server name (they become
 [pseudonyms](#pseudonyms-and-dropped-lines)) and lines carrying XML in one of
 the [recognised shapes](#pseudonyms-and-dropped-lines). The listen addresses are the only configuration values that
@@ -731,9 +916,25 @@ Prometheus text exposition format 0.0.4
 | `wawarden_panics_total` | counter | `name` | Panics recovered, by handler or goroutine name. Absent until the first panic. |
 | `wawarden_build_info` | gauge | `version`, `revision`, `dev` | Always `1`; the labels describe the running binary. |
 
+A build with a [WhatsApp engine](#whatsapp-engine) also serves these; this build
+has none, so it serves none of them:
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `wawarden_paired` | gauge | | `1` while a device is paired, `0` otherwise. |
+| `wawarden_connected` | gauge | | `1` while the engine is `connected`, `0` otherwise. |
+| `wawarden_messages_ingested_total` | counter | | Messages, reactions and poll votes stored in the archive, live and from history. |
+| `wawarden_ingest_dropped_total` | counter | `reason` | Events dropped by an [ingest rule](#ingest) or a [history-sync](#history-sync) check: `chat_rejected`, `sender_rejected`, `invalid`, `unknown_kind`, `no_target`, `foreign_reference`, `target_unknown`, `target_kind`, `not_original_sender`, `not_admin`, `admin_unknown`, `owner_unknown`, `history_not_primary`. |
+| `wawarden_ingest_refused_total` | counter | `reason` | Events left unacknowledged so that WhatsApp delivers them again: `backlog_full`, `paused`, `store_error`. |
+| `wawarden_ingest_quarantined_total` | counter | `queue` | Inbox rows (`inbox`) and history blobs (`history`) quarantined. |
+| `wawarden_rekey_conflicts_total` | counter | `conflict` | LID mappings refused, by conflict as in `rekey_conflict`. |
+
+Labelled counters appear once they count their first event.
+
 Panic names in M0: `api.client`, `api.admin` and `api.health` for the handlers;
 `listeners.client`, `listeners.admin`, `listeners.health`, `listeners.shutdown`
-and `signals` for goroutines.
+and `signals` for goroutines. A build with an engine adds `engine.supervisor`,
+`engine.ingest` and `engine.logout`.
 
 Anything that scrapes `/metrics` holds the full admin token, which from M1 can
 start pairing and from M2 can create clients. Treat a scrape configuration as
@@ -772,7 +973,6 @@ the events under [Logging](#logging):
 |---|---|
 | `admin_mutation` | M1 |
 | `unpaired` | M1 |
-| `quarantine` | M1 |
 | `admin_auth_failure` | M1 |
 
 ## Shutdown
@@ -782,8 +982,11 @@ the events under [Logging](#logging):
 1. `/healthz` starts answering `503`.
 2. The client and admin listeners stop accepting connections, and requests in
    flight are allowed to finish.
-3. The [archive](#message-archive) is closed, which releases its lock.
-4. The health listener stops.
+3. In a build with a [WhatsApp engine](#whatsapp-engine), the engine
+   disconnects from WhatsApp and its workers stop after the row or batch in
+   hand.
+4. The [archive](#message-archive) is closed, which releases its lock.
+5. The health listener stops.
 
 One grace period of 10 seconds bounds the whole shutdown. When it runs out, the
 remaining connections are closed and `serve` exits `1`; otherwise it exits `0`.
