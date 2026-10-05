@@ -53,6 +53,7 @@ func translate(evt any) (engine.Event, bool) {
 		if errors.Is(e.Error, whatsmeow.ErrPairRejectedLocally) {
 			return engine.PairRejected{}, true
 		}
+		return engine.Disconnected{}, true
 	}
 	return nil, false
 }

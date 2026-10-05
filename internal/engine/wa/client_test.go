@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -142,6 +143,7 @@ func TestTheClientIsBuiltForASupervisedDesktopCompanion(t *testing.T) {
 	for name, bad := range map[string]bool{
 		"auto-reconnect is on":                          cli.EnableAutoReconnect,
 		"initial auto-reconnect is on":                  cli.InitialAutoReconnect,
+		"the library re-dials after a login request":    !cli.DisableLoginAutoReconnect,
 		"automatic history download is on":              !cli.ManualHistorySyncDownload,
 		"the automatic history receipt is on":           !cli.DisableManualHistorySyncReceipt,
 		"acknowledgements wait for every handler":       cli.SynchronousAck,
@@ -297,13 +299,56 @@ func TestPairingEventsUpdateTheDeviceAndReachTheEngine(t *testing.T) {
 	if got := rejected.events(); len(got) != 1 || got[0] != (engine.PairRejected{}) {
 		t.Fatalf("engine events %v, want one PairRejected", got)
 	}
-	failed := newRig(t, &store.Device{})
-	failed.dispatch(&events.PairError{Error: whatsmeow.ErrPairInvalidDeviceIdentityHMAC})
-	if got := failed.events(); len(got) != 0 {
-		t.Fatalf("a pairing failure that is no rejection reached the engine: %v", got)
+	if rejected.c.Paired() {
+		t.Fatal("a rejected pairing reports a paired device")
 	}
-	if rejected.c.Paired() || failed.c.Paired() {
-		t.Fatal("a failed pairing reports a paired device")
+}
+
+func TestAFailedPairingClosesTheAttemptForTheEngine(t *testing.T) {
+	for name, err := range map[string]error{
+		"an HMAC mismatch":            whatsmeow.ErrPairInvalidDeviceIdentityHMAC,
+		"a signature mismatch":        whatsmeow.ErrPairInvalidDeviceSignature,
+		"an undecodable identity":     &whatsmeow.PairProtoError{Message: "synthetic", ProtoErr: errNoDial},
+		"a device that was not saved": &whatsmeow.PairDatabaseError{Message: "synthetic", DBErr: errNoDial},
+		"an unsent confirmation":      fmt.Errorf("failed to send pairing confirmation: %w", errNoDial),
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t, &store.Device{})
+			old := r.c.current()
+			if !r.dispatch(&events.PairError{ID: types.JID{User: owner.User, Device: 12, Server: types.DefaultUserServer}, Error: err}) {
+				t.Fatal("the pairing failure was not acknowledged")
+			}
+			if got := r.events(); len(got) != 1 || got[0] != (engine.Disconnected{}) {
+				t.Fatalf("engine events %v, want one Disconnected, which the engine takes as the end of the pairing attempt", got)
+			}
+			if r.c.Paired() || r.c.Account() != "" {
+				t.Fatalf("after a failed pairing Paired %v, Account %q", r.c.Paired(), r.c.Account())
+			}
+			_, _, cancel := r.c.prepare()
+			defer cancel()
+			if r.c.current() == old || r.devices.made.Load() != 1 {
+				t.Fatal("the next attempt does not start from a fresh device")
+			}
+		})
+	}
+}
+
+func TestALoginRequestIsADropForTheEngine(t *testing.T) {
+	r := newRig(t, pairedDevice())
+	_, _, cancel := r.c.prepare()
+	defer cancel()
+	for range 2 {
+		if !r.dispatch(&events.ManualLoginReconnect{}) {
+			t.Fatal("the login request was not acknowledged")
+		}
+	}
+	eventually(t, "the engine hears of the drop", func() bool { return len(r.events()) > 0 })
+	time.Sleep(50 * time.Millisecond)
+	if got := r.events(); len(got) != 1 || got[0] != (engine.Disconnected{}) {
+		t.Fatalf("engine events %v, want one Disconnected so that the engine re-dials with its own backoff", got)
+	}
+	if r.c.current().IsConnected() {
+		t.Fatal("the connection that WhatsApp asked to log in again is still open")
 	}
 }
 

@@ -134,6 +134,7 @@ func (c *Client) installLocked(device *store.Device) {
 	cli := whatsmeow.NewClient(device, c.log)
 	cli.EnableAutoReconnect = false
 	cli.InitialAutoReconnect = false
+	cli.DisableLoginAutoReconnect = true
 	cli.AutoReconnectHook = func(error) bool { return false }
 	cli.ManualHistorySyncDownload = true
 	cli.DisableManualHistorySyncReceipt = true
@@ -175,8 +176,11 @@ func (c *Client) dispatch(gen uint64, evt any) bool {
 		return true
 	case *events.KeepAliveTimeout:
 		if time.Since(e.LastSuccess) >= whatsmeow.KeepAliveMaxFailTime {
-			c.dropDeadConnection(gen)
+			c.dropConnection(gen)
 		}
+		return true
+	case *events.ManualLoginReconnect:
+		c.dropConnection(gen)
 		return true
 	case *events.PairSuccess:
 		c.update(gen, func() { c.paired, c.account = true, account(e.ID) })
@@ -216,7 +220,7 @@ func (c *Client) sawQR(gen uint64) {
 	}
 }
 
-func (c *Client) dropDeadConnection(gen uint64) {
+func (c *Client) dropConnection(gen uint64) {
 	c.mu.Lock()
 	if gen != c.gen || c.dropping {
 		c.mu.Unlock()

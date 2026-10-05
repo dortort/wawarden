@@ -552,9 +552,10 @@ but `shutdown` also logs `disconnected` at every log level. The gauges
   connection being opened and opens a new one without waiting. A version fetch
   or a connection attempt that panics fails like any other. The protocol
   library's own reconnection is switched off, so these delays are the only
-  ones; the library re-dials by itself only once, right after pairing, when
-  WhatsApp asks the new device to log in again. A connection whose keepalives
-  have failed for 3 minutes is closed and counts as a drop.
+  ones: when WhatsApp asks a device to log in again, as it does right after
+  pairing, the adapter closes the connection instead of letting the library
+  re-dial, and that counts as a drop. A connection whose keepalives have failed
+  for 3 minutes is closed and counts as a drop too.
 - **Stops that wait for the operator.** When another client replaces the session
   (`replaced`), WhatsApp bans the account temporarily (`temporary_ban`), a
   connection token cannot be refreshed (`cat_refresh`) or WhatsApp refuses the
@@ -578,7 +579,11 @@ adapter refuses an account whose number is not exactly the one in
 `WAWARDEN_OWNER_PHONE`: the library sends WhatsApp a pairing error and stores
 nothing, and the engine logs `pair_rejected` with `stage` `before_save`; it
 takes that report only while no device is stored, so one that arrives late
-cannot unpair the owner's device. When pairing completes, the linked account must have
+cannot unpair the owner's device. When pairing fails in the library for another
+reason, such as an answer from WhatsApp that fails its checks, a device that
+cannot be saved or a confirmation that cannot be sent, the library closes the
+connection and the engine returns to `unpaired`; the next pairing request
+connects again with a fresh device. When pairing completes, the linked account must have
 the number in `WAWARDEN_OWNER_PHONE`; otherwise the engine logs
 `pair_rejected` at every log level with `stage` `after_pairing`, stays
 `unpaired` and logs the new device out. A logout that fails is logged as

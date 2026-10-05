@@ -1060,6 +1060,42 @@ func TestUnpairedDropDuringPairingReturnsToUnpaired(t *testing.T) {
 	}
 }
 
+func TestAPairingThatFailedInTheClientCanBeStartedAgain(t *testing.T) {
+	h := newSupRig(t)
+	h.client.setPaired(false)
+	if _, err := h.s.pair(t.Context()); err != nil {
+		t.Fatalf("Pair = %v", err)
+	}
+	h.deliver(Disconnected{})
+	h.want(StateUnpaired, "")
+	if _, err := h.s.pair(t.Context()); err != nil {
+		t.Fatalf("the second Pair = %v", err)
+	}
+	h.want(StateConnecting, "")
+	if h.client.count("connect") != 2 || h.client.count("pair:15550100009") != 2 {
+		t.Fatalf("calls %v, want the second pairing to dial again before it asks for a code", h.client.history())
+	}
+}
+
+func TestALoginRequestAfterPairingIsRedialledByTheSupervisor(t *testing.T) {
+	h := newSupRig(t)
+	h.client.setPaired(false)
+	if _, err := h.s.pair(t.Context()); err != nil {
+		t.Fatalf("Pair = %v", err)
+	}
+	h.client.pairAs(ownerDev)
+	h.deliver(Paired{JID: ownerDev}, Disconnected{})
+	h.want(StateConnecting, "")
+	if h.steps() == 0 || h.client.count("connect") != 2 {
+		t.Fatalf("calls %v, want the supervisor to dial the paired device again", h.client.history())
+	}
+	if got := h.clock.slept(); len(got) != 1 || got[0] <= 0 {
+		t.Fatalf("waits %v, want one backoff delay before the new dial", got)
+	}
+	h.deliver(Connected{})
+	h.want(StateConnected, "")
+}
+
 func TestReconnect(t *testing.T) {
 	h := newSupRig(t)
 	h.connectedNow()
