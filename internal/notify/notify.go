@@ -50,9 +50,10 @@ type Options struct {
 }
 
 type Notifier struct {
-	logger *slog.Logger
-	now    func() time.Time
-	hook   *webhook
+	logger     *slog.Logger
+	now        func() time.Time
+	hook       *webhook
+	flushEvery time.Duration
 
 	authMu      sync.Mutex
 	authPending int64
@@ -70,7 +71,7 @@ func New(o Options) (*Notifier, error) {
 	if now == nil {
 		now = time.Now
 	}
-	n := &Notifier{logger: logx.New(o.Writer, slog.LevelInfo), now: now}
+	n := &Notifier{logger: logx.New(o.Writer, slog.LevelInfo), now: now, flushEvery: flushInterval}
 	if o.URL != "" {
 		hook, err := newWebhook(o, n.logger, now)
 		if err != nil {
@@ -89,7 +90,7 @@ func (n *Notifier) Start(ctx context.Context) {
 	}
 	safego.Go("notify.flush", func() {
 		defer close(n.done)
-		tick := time.NewTicker(flushInterval)
+		tick := time.NewTicker(n.flushEvery)
 		defer tick.Stop()
 		for {
 			select {

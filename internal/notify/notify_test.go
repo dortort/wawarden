@@ -2,6 +2,7 @@ package notify
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"maps"
 	"reflect"
@@ -204,6 +205,31 @@ func TestAdminAuthFailuresAreReportedAtMostOncePerMinute(t *testing.T) {
 	}
 	if got := authFailures(t, out); !slices.Equal(got, []float64{1, 5, 1, 1}) {
 		t.Fatalf("admin_auth_failure counts %v, want a failure after a quiet minute reported at once and the rest at Stop", got)
+	}
+}
+
+func TestHeldBackAuthFailuresAreReportedByTheTicker(t *testing.T) {
+	n, out, c := newNotifier(t)
+	if n.flushEvery != 10*time.Second {
+		t.Fatalf("held-back failures are checked every %v, want the documented ten seconds", n.flushEvery)
+	}
+	n.flushEvery = 5 * time.Millisecond
+	n.AdminAuthFailure()
+	n.AdminAuthFailure()
+	n.AdminAuthFailure()
+	n.Start(t.Context())
+	t.Cleanup(func() { _ = n.Stop(context.Background()) })
+	time.Sleep(50 * time.Millisecond)
+	if got := authFailures(t, out); !slices.Equal(got, []float64{1}) {
+		t.Fatalf("admin_auth_failure counts %v within the minute, want [1]", got)
+	}
+	c.advance(authFailureWindow)
+	deadline := time.Now().Add(5 * time.Second)
+	for !slices.Equal(authFailures(t, out), []float64{1, 2}) {
+		if time.Now().After(deadline) {
+			t.Fatalf("admin_auth_failure counts %v, want the two held back reported by the ticker without Stop", authFailures(t, out))
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
