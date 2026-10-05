@@ -209,6 +209,17 @@ The SBOMs list the Go modules and the Go standard library compiled into each
 binary. No SBOM covers the image as a whole, so the packages of the distroless
 base image are not listed; an image-level SBOM is planned and not produced yet.
 
+Sizes, measured on `main` during M1 with `hack/repro-build.sh`, once the
+WhatsApp protocol library and SQLite were linked: the binaries take about
+27.2 MiB (`linux/amd64`) and 26.0 MiB (`linux/arm64`); the image's compressed
+layers add up to about 14.9 MiB and 14.1 MiB, and the `linux/arm64` image takes
+about 28.5 MiB unpacked. An unpaired `serve` left idle for two minutes in that
+image on `linux/arm64`, with no network, a read-only root filesystem and a named
+volume on `/data`, held a resident set of about 24.3 MiB: 9.9 MiB of its own
+memory and 14.4 MiB of the binary's mapped pages (`docker stats` reported
+10.6 MiB for the container). A paired service needs more, growing with message
+traffic and with history sync, whose blobs `WAWARDEN_HISTORY_MAX_BYTES` caps.
+
 Signing and attesting use GitHub's OIDC identity for the release workflow on
 `main`. No long-lived signing key exists.
 
