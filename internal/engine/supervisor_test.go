@@ -130,10 +130,18 @@ func TestStartLeavesAnUnpairedClientUnpaired(t *testing.T) {
 
 	budget := newSupRig(t)
 	budget.client.setPaired(false)
+	bv := budget.versions(versionResult{v: newer})
 	budget.s.begin(t.Context(), MaxRecentStarts+1)
+	budget.steps()
 	budget.want(StateDisconnected, ReasonRestartBudget)
-	if len(budget.alerts("unpaired")) != 0 {
-		t.Fatal("a start held by the restart budget also reported unpaired")
+	if u := budget.alerts("unpaired"); len(u) != 1 || u[0]["level"] != "WARN" {
+		t.Fatalf("unpaired events %v at a start held by the restart budget without a device, want exactly one warning", u)
+	}
+	if d := budget.alerts("disconnected"); len(d) != 1 || d[0]["reason"] != string(ReasonRestartBudget) {
+		t.Fatalf("disconnected events %v, want the restart budget reported too", d)
+	}
+	if len(budget.client.history()) != 0 || bv.count() != 0 {
+		t.Fatalf("calls %v and %d version fetches at a start held by the restart budget", budget.client.history(), bv.count())
 	}
 	paired := newSupRig(t)
 	paired.versions(versionResult{v: current})
@@ -636,6 +644,9 @@ func TestRestartBudgetStartsDisconnected(t *testing.T) {
 	}
 	if a := h.alerts("disconnected"); len(a) != 1 || a[0]["reason"] != "restart_budget" {
 		t.Fatalf("disconnected alerts %v", a)
+	}
+	if u := h.alerts("unpaired"); len(u) != 0 {
+		t.Fatalf("unpaired alerts %v at a start held by the restart budget with a device", u)
 	}
 	if err := h.s.reconnect(); err != nil {
 		t.Fatalf("Reconnect = %v", err)

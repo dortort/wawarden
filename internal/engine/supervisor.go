@@ -141,6 +141,9 @@ func (s *supervisor) begin(ctx context.Context, recentStarts int) {
 		s.setLocked(StateDisconnected, ReasonOwnerMismatch)
 	case recentStarts > MaxRecentStarts:
 		s.setLocked(StateDisconnected, ReasonRestartBudget)
+		if !paired {
+			s.notify.Unpaired()
+		}
 	case !paired:
 		s.setLocked(StateUnpaired, "")
 		s.notify.Unpaired()
