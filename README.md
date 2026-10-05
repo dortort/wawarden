@@ -120,6 +120,13 @@ What works today:
   With `WAWARDEN_METRICS_EMF=1`, metrics are also written on standard output in
   CloudWatch's embedded metric format, which needs no token (see
   [metrics](docs/configuration.md#embedded-metric-format)).
+- Also on `main`: with `WAWARDEN_BACKUP_AGE_RECIPIENT`, an age public key,
+  `serve` writes one encrypted backup of `archive.db` and `session.db` to
+  `backups/` once a paired device's initial history sync has settled, and
+  reports `backup_done` or `backup_failed`. It holds only the recipient and
+  cannot read a backup; without it, no backup is taken. There is no schedule,
+  retention or restore tool yet (see
+  [backups](docs/configuration.md#backups)).
 
 Planned:
 
