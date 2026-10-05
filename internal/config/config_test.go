@@ -220,6 +220,12 @@ func TestRefusals(t *testing.T) {
 		{name: "signed history cap", vars: map[string]string{envHistoryMax: "+1024"}, reason: "history_max_bytes_invalid", variable: envHistoryMax},
 		{name: "history cap with a unit", vars: map[string]string{envHistoryMax: "32MiB"}, reason: "history_max_bytes_invalid", variable: envHistoryMax},
 		{name: "history cap beyond 64 bits", vars: map[string]string{envHistoryMax: "18446744073709551616"}, reason: "history_max_bytes_invalid", variable: envHistoryMax},
+		{name: "empty debug window", vars: map[string]string{envUnsafeDebug: ""}, reason: "unsafe_debug_invalid", variable: envUnsafeDebug},
+		{name: "zero debug window", vars: map[string]string{envUnsafeDebug: "0"}, reason: "unsafe_debug_invalid", variable: envUnsafeDebug},
+		{name: "debug window above its maximum", vars: map[string]string{envUnsafeDebug: "61"}, reason: "unsafe_debug_invalid", variable: envUnsafeDebug},
+		{name: "debug window with a unit", vars: map[string]string{envUnsafeDebug: "5m"}, reason: "unsafe_debug_invalid", variable: envUnsafeDebug},
+		{name: "signed debug window", vars: map[string]string{envUnsafeDebug: "+5"}, reason: "unsafe_debug_invalid", variable: envUnsafeDebug},
+		{name: "debug window as a flag", vars: map[string]string{envUnsafeDebug: "true"}, reason: "unsafe_debug_invalid", variable: envUnsafeDebug},
 
 		{name: "uid 0 without --allow-root", opts: func(o *Options) { o.UIDs = uids(0, 0); o.FileOwner = owned(0) }, reason: "running_as_root"},
 		{name: "effective uid 0 without --allow-root", opts: func(o *Options) { o.UIDs = uids(testUID, 0); o.FileOwner = owned(0) }, reason: "running_as_root"},
@@ -632,6 +638,24 @@ func TestAccepted(t *testing.T) {
 			},
 		},
 		{
+			name: "the shortest debug window",
+			vars: map[string]string{envUnsafeDebug: "1"},
+			check: func(t *testing.T, c Config) {
+				if c.UnsafeDebug != time.Minute {
+					t.Fatalf("UnsafeDebug = %v", c.UnsafeDebug)
+				}
+			},
+		},
+		{
+			name: "the longest debug window",
+			vars: map[string]string{envUnsafeDebug: "60"},
+			check: func(t *testing.T, c Config) {
+				if c.UnsafeDebug != time.Hour {
+					t.Fatalf("UnsafeDebug = %v", c.UnsafeDebug)
+				}
+			},
+		},
+		{
 			name: "error log level",
 			vars: map[string]string{envLogLevel: "error"},
 			check: func(t *testing.T, c Config) {
@@ -682,6 +706,7 @@ func TestRefusalsNeverEchoValues(t *testing.T) {
 		{envMinFreeBytes: secret},
 		{envOwnerPhone: secret},
 		{envHistoryMax: secret},
+		{envUnsafeDebug: secret},
 	}
 	for _, vars := range tests {
 		_, r := Load(environ(withDataDir(t, vars)), testOptions())

@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/dortort/wawarden/internal/buildinfo"
 	"github.com/dortort/wawarden/internal/policy"
@@ -33,6 +34,7 @@ const (
 	envMinFreeBytes   = "WAWARDEN_MIN_FREE_BYTES"
 	envOwnerPhone     = "WAWARDEN_OWNER_PHONE"
 	envHistoryMax     = "WAWARDEN_HISTORY_MAX_BYTES"
+	envUnsafeDebug    = "WAWARDEN_UNSAFE_DEBUG"
 
 	prefix    = "WAWARDEN_"
 	devPrefix = "WAWARDEN_DEV_"
@@ -46,6 +48,8 @@ const (
 
 	DefaultHistoryMaxBytes = 32 << 20
 	MaxHistoryMaxBytes     = 256 << 20
+
+	MaxUnsafeDebug = 60 * time.Minute
 
 	maxHashFileBytes = 4096
 )
@@ -71,10 +75,11 @@ const (
 	reasonMinFreeBytesInvalid      = "min_free_bytes_invalid"
 	reasonOwnerPhoneInvalid        = "owner_phone_invalid"
 	reasonHistoryMaxBytesInvalid   = "history_max_bytes_invalid"
+	reasonUnsafeDebugInvalid       = "unsafe_debug_invalid"
 )
 
 var known = []string{envDataDir, envListen, envAdminListen, envHealthListen, envAdminHash, envAdminHashFile, envLogLevel, envStorageProfile, envMinFreeBytes,
-	envOwnerPhone, envHistoryMax}
+	envOwnerPhone, envHistoryMax, envUnsafeDebug}
 
 type StorageProfile string
 
@@ -104,6 +109,7 @@ type Config struct {
 	MinFreeBytes    uint64
 	OwnerPhone      string
 	HistoryMaxBytes int64
+	UnsafeDebug     time.Duration
 }
 
 type Options struct {
@@ -163,6 +169,9 @@ func Load(environ []string, opts Options) (Config, *Refusal) {
 		return Config{}, r
 	}
 	if cfg.HistoryMaxBytes, r = historyMaxBytes(env); r != nil {
+		return Config{}, r
+	}
+	if cfg.UnsafeDebug, r = unsafeDebug(env); r != nil {
 		return Config{}, r
 	}
 	uids := processUIDs
@@ -391,6 +400,18 @@ func historyMaxBytes(env map[string]string) (int64, *Refusal) {
 		return 0, &Refusal{Reason: reasonHistoryMaxBytesInvalid, Variable: envHistoryMax, detail: "must be a number of bytes written in decimal digits, from 1 to 268435456"}
 	}
 	return int64(n), nil
+}
+
+func unsafeDebug(env map[string]string) (time.Duration, *Refusal) {
+	v, ok := env[envUnsafeDebug]
+	if !ok {
+		return 0, nil
+	}
+	n, err := strconv.ParseUint(v, 10, 64)
+	if err != nil || n == 0 || n > uint64(MaxUnsafeDebug/time.Minute) {
+		return 0, &Refusal{Reason: reasonUnsafeDebugInvalid, Variable: envUnsafeDebug, detail: "must be a number of minutes written in decimal digits, from 1 to 60"}
+	}
+	return time.Duration(n) * time.Minute, nil
 }
 
 func checkSubdirectory(dataDir, name string, uid int, owner func(fs.FileInfo) (int, bool)) *Refusal {
