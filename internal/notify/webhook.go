@@ -116,8 +116,11 @@ func (d destination) control(_, address string, _ syscall.RawConn) error {
 	return d.check(ap.Addr())
 }
 
-func newHTTPClient(allowPrivate bool) *http.Client {
-	dialer := &net.Dialer{Timeout: dialTimeout, Control: destination{allowPrivate: allowPrivate}.control}
+func newDialer(allowPrivate bool) *net.Dialer {
+	return &net.Dialer{Timeout: dialTimeout, Control: destination{allowPrivate: allowPrivate}.control}
+}
+
+func newHTTPClient(dialer *net.Dialer) *http.Client {
 	return &http.Client{
 		Timeout: requestTimeout,
 		Transport: &http.Transport{
@@ -166,7 +169,7 @@ func newWebhook(o Options, logger *slog.Logger, now func() time.Time) (*webhook,
 	return &webhook{
 		url:     o.URL,
 		secret:  bytes.Clone(o.Secret),
-		client:  newHTTPClient(o.AllowPrivate),
+		client:  newHTTPClient(newDialer(o.AllowPrivate)),
 		logger:  logger,
 		now:     now,
 		sleep:   sleep,

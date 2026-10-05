@@ -1,12 +1,15 @@
 package notify
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -481,5 +485,80 @@ func TestNoPostedEventCarriesACanary(t *testing.T) {
 	}
 	if strings.Contains(r.out.String(), canary) {
 		t.Fatal("a line carries the canary")
+	}
+}
+
+func TestTheTransportTakesNoProxyNoRedirectAndHasTimeouts(t *testing.T) {
+	for _, allowPrivate := range []bool{false, true} {
+		d := newDialer(allowPrivate)
+		if d.Timeout <= 0 || d.Control == nil {
+			t.Fatalf("dialer %+v, want a timeout and the destination check", d)
+		}
+		if err := d.Control("tcp4", "169.254.169.254:80", nil); !errors.Is(err, errDestination) {
+			t.Fatalf("the dialer's check let the metadata address through: %v", err)
+		}
+		c := newHTTPClient(d)
+		tr, ok := c.Transport.(*http.Transport)
+		if !ok || tr.Proxy != nil || tr.DialContext == nil || tr.DialTLSContext != nil {
+			t.Fatalf("transport %+v, want no proxy and the checked dialer", tr)
+		}
+		if c.Timeout <= 0 || tr.TLSHandshakeTimeout <= 0 || tr.ResponseHeaderTimeout <= 0 {
+			t.Fatalf("client timeout %v, handshake %v, response header %v: want every one set", c.Timeout, tr.TLSHandshakeTimeout, tr.ResponseHeaderTimeout)
+		}
+		if tr.TLSClientConfig == nil || tr.TLSClientConfig.MinVersion < tls.VersionTLS12 || tr.TLSClientConfig.InsecureSkipVerify {
+			t.Fatalf("TLS configuration %+v, want verified TLS 1.2 or later", tr.TLSClientConfig)
+		}
+		if c.CheckRedirect == nil || c.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
+			t.Fatal("the client follows redirects")
+		}
+		if _, err := tr.DialContext(t.Context(), "tcp", "240.0.0.1:80"); !errors.Is(err, errDestination) {
+			t.Fatalf("dialling a reserved address through the transport = %v, want the destination refused", err)
+		}
+	}
+	if _, err := newHTTPClient(newDialer(false)).Transport.(*http.Transport).DialContext(t.Context(), "tcp", "127.0.0.1:1"); !errors.Is(err, errDestination) {
+		t.Fatalf("dialling loopback by default = %v, want the destination refused", err)
+	}
+}
+
+type countingBody struct {
+	io.ReadCloser
+	n *atomic.Int64
+}
+
+func (b countingBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.n.Add(int64(n))
+	return n, err
+}
+
+type countingTransport struct {
+	inner http.RoundTripper
+	n     *atomic.Int64
+}
+
+func (c countingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := c.inner.RoundTrip(req)
+	if err == nil {
+		resp.Body = countingBody{resp.Body, c.n}
+	}
+	return resp, err
+}
+
+func TestAtMost4KiBOfTheAnswerIsRead(t *testing.T) {
+	recv := newReceiver(t, func(w http.ResponseWriter) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(bytes.Repeat([]byte("synthetic answer "), 1<<16))
+	})
+	r := newHookRig(t, recv.srv.URL, true, roots(recv.srv))
+	var read atomic.Int64
+	r.n.hook.client.Transport = countingTransport{inner: r.n.hook.client.Transport, n: &read}
+	r.n.Start(t.Context())
+	r.n.Unpaired()
+	r.stop(t)
+	if len(recv.requests()) != 1 {
+		t.Fatalf("%d posts, want 1", len(recv.requests()))
+	}
+	if got := read.Load(); got != maxReplyBytes {
+		t.Fatalf("read %d bytes of a 1 MiB answer, want exactly %d", got, maxReplyBytes)
 	}
 }
