@@ -75,10 +75,15 @@ func (e *Engine) Start(ctx context.Context, recentStarts int) {
 
 func (e *Engine) dispatch(ev Event) bool {
 	switch v := ev.(type) {
-	case Message, Group:
+	case Message, Group, HistoryNotification:
+		if e.sup.unpaired() {
+			e.pipe.counts.dropped.With(dropNotPaired).Inc()
+			return true
+		}
+		if n, ok := v.(HistoryNotification); ok {
+			return e.hist.accept(n)
+		}
 		return e.pipe.accept(v)
-	case HistoryNotification:
-		return e.hist.accept(v)
 	case Connected:
 		e.sup.handle(v)
 		e.pipe.wake()

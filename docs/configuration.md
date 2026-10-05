@@ -516,7 +516,9 @@ is refused while a device is paired, while `WAWARDEN_OWNER_PHONE` is unset, and
 after three attempts within the last hour. The pairing code goes to the caller
 only and is never logged. When pairing completes, the linked account must have
 the number in `WAWARDEN_OWNER_PHONE`; otherwise the engine logs the new device
-out and logs `pair_rejected` at every log level with `stage` `after_pairing`.
+out, logs `pair_rejected` at every log level with `stage` `after_pairing`, and
+stays `unpaired`, so that what the rejected account's connection delivers is
+dropped before it is written (see [Ingest](#ingest)).
 The adapter will also reject another account before anything is saved, which
 the engine reports as `pair_rejected` with `stage` `before_save`.
 
@@ -529,7 +531,10 @@ when the inbox already holds 5,000 rows that wait to be applied, when ingest is
 [paused](#free-space), or when the write fails; each case counts in
 `wawarden_ingest_refused_total`. Traffic of a chat that is not a phone-number
 user, a LID user or a group (status updates, broadcast lists, newsletters and
-every other kind) is acknowledged and dropped before it reaches the inbox.
+every other kind) is acknowledged and dropped before it reaches the inbox. So
+is every message, group change and history-sync notification that arrives
+while the engine is `unpaired`, such as from an account that
+[pairing](#pairing) rejected (`not_paired`).
 
 One worker applies the inbox in order. It records each attempt in the archive
 before applying the row, then applies the row and removes it from the inbox in
@@ -946,7 +951,7 @@ has none, so it serves none of them:
 | `wawarden_paired` | gauge | | `1` while a device is paired, `0` otherwise. |
 | `wawarden_connected` | gauge | | `1` while the engine is `connected`, `0` otherwise. |
 | `wawarden_messages_ingested_total` | counter | | Messages, reactions and poll votes stored in the archive, live and from history. |
-| `wawarden_ingest_dropped_total` | counter | `reason` | Events dropped by an [ingest rule](#ingest) or a [history-sync](#history-sync) check: `chat_rejected`, `sender_rejected`, `invalid`, `unknown_kind`, `no_target`, `foreign_reference`, `target_unknown`, `target_kind`, `stale_edit`, `not_original_sender`, `not_admin`, `admin_unknown`, `owner_unknown`, `history_not_primary`. |
+| `wawarden_ingest_dropped_total` | counter | `reason` | Events dropped by an [ingest rule](#ingest) or a [history-sync](#history-sync) check: `chat_rejected`, `sender_rejected`, `invalid`, `unknown_kind`, `no_target`, `foreign_reference`, `target_unknown`, `target_kind`, `stale_edit`, `not_original_sender`, `not_admin`, `admin_unknown`, `owner_unknown`, `not_paired`, `history_not_primary`. |
 | `wawarden_ingest_refused_total` | counter | `reason` | Events left unacknowledged so that WhatsApp delivers them again: `backlog_full`, `paused`, `store_error`. |
 | `wawarden_ingest_quarantined_total` | counter | `queue` | Inbox rows (`inbox`) and history blobs (`history`) quarantined. |
 | `wawarden_rekey_conflicts_total` | counter | `conflict` | LID mappings refused, by conflict as in `rekey_conflict`. |

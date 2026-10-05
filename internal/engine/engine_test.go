@@ -136,6 +136,52 @@ func TestEnginePausesAndResumesWithTheFreeSpace(t *testing.T) {
 	}
 }
 
+func TestContentIsDroppedWhileNoDeviceIsPaired(t *testing.T) {
+	r := newHistRig(t)
+	r.client.setPaired(false)
+	e := newEngine(t, r)
+	e.Start(t.Context(), 1)
+	t.Cleanup(func() { _ = e.Stop(context.Background()) })
+	eventually(t, "the engine waits for pairing", func() bool { return e.Status().State == StateUnpaired })
+	if _, err := e.Pair(t.Context()); err != nil {
+		t.Fatalf("Pair: %v", err)
+	}
+	r.client.setPaired(true)
+	r.client.emit(Paired{JID: "15550100002:3@s.whatsapp.net"})
+	for _, ev := range []Event{
+		dm("M1", bob, "from the rejected account"),
+		Group{Chat: group, Subject: "Rejected Account Group", Timestamp: epoch},
+		HistoryNotification{Sender: bob, FromMe: true, Ref: HistoryRef{ID: "HS1", Inline: []byte("synthetic")}},
+	} {
+		if !r.client.emit(ev) {
+			t.Fatalf("%T from the rejected account was refused instead of dropped", ev)
+		}
+	}
+	if got := r.counter("wawarden_ingest_dropped_total", "reason", "not_paired"); got != 3 {
+		t.Fatalf("not_paired drops %v, want 3", got)
+	}
+	r.client.waitFor(t, "logout")
+	if _, err := e.Pair(t.Context()); err != nil {
+		t.Fatalf("Pair: %v", err)
+	}
+	r.client.setPaired(true)
+	r.client.emit(Paired{JID: "15550100009:12@s.whatsapp.net"})
+	if !r.client.emit(dm("M2", alice, "after the owner paired")) {
+		t.Fatal("a message after the owner paired was refused")
+	}
+	eventually(t, "the owner's traffic is stored", func() bool {
+		_, ok := r.find(alice, "M2", alice)
+		return ok
+	})
+	if err := e.Stop(t.Context()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	db := r.inspect()
+	if got := query[string](t, db, "SELECT (SELECT count(*) FROM inbox) || ' ' || (SELECT count(*) FROM history_blobs) || ' ' || (SELECT group_concat(id) FROM messages) || ' ' || (SELECT count(*) FROM chats WHERE jid != ?)", alice); got != "0 0 M2 0" {
+		t.Fatalf("inbox rows, blobs, messages and other chats = %q, want only the owner's message", got)
+	}
+}
+
 type panickingDecoder struct{}
 
 func (panickingDecoder) Decode([]byte) (History, error) {

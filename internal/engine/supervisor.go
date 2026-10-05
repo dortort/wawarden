@@ -148,6 +148,12 @@ func (s *supervisor) status() Status {
 	return Status{State: s.state, Reason: s.reason, Paired: paired}
 }
 
+func (s *supervisor) unpaired() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state == StateUnpaired
+}
+
 func (s *supervisor) setLocked(state State, reason Reason) {
 	s.gen++
 	if s.cancelStep != nil && state != StateConnected {

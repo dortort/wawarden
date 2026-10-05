@@ -149,7 +149,10 @@ These are stated so that nobody relies on WaWarden for them:
    named in a message key or a reply reference is never followed unless it is
    the event's own chat (or, in a direct chat, the owner's number, which is how
    the other side names it). LID-to-number mappings are learned only from
-   server-asserted alternates of live messages and from history sync.
+   server-asserted alternates of live messages and from history sync. Messages,
+   group changes and history-sync notifications that arrive while the engine is
+   in its `unpaired` state, which it also enters when pairing rejects an
+   account, are dropped before they are written.
    History-sync notifications are accepted only from the owner's primary device
    (device 0); blobs are downloaded through a size cap, persisted before the
    receipt and before parsing, decompressed under the same cap, and quarantined
