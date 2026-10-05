@@ -31,6 +31,8 @@ const (
 	envTraceback      = "GOTRACEBACK"
 	envStorageProfile = "WAWARDEN_STORAGE_PROFILE"
 	envMinFreeBytes   = "WAWARDEN_MIN_FREE_BYTES"
+	envOwnerPhone     = "WAWARDEN_OWNER_PHONE"
+	envHistoryMax     = "WAWARDEN_HISTORY_MAX_BYTES"
 
 	prefix    = "WAWARDEN_"
 	devPrefix = "WAWARDEN_DEV_"
@@ -41,6 +43,9 @@ const (
 	defaultHealthListen = "127.0.0.1:8081"
 	defaultLogLevel     = "info"
 	defaultMinFreeBytes = 256 << 20
+
+	DefaultHistoryMaxBytes = 32 << 20
+	MaxHistoryMaxBytes     = 256 << 20
 
 	maxHashFileBytes = 4096
 )
@@ -64,9 +69,12 @@ const (
 	reasonTracebackLevelUnsafe     = "traceback_level_unsafe"
 	reasonStorageProfileInvalid    = "storage_profile_invalid"
 	reasonMinFreeBytesInvalid      = "min_free_bytes_invalid"
+	reasonOwnerPhoneInvalid        = "owner_phone_invalid"
+	reasonHistoryMaxBytesInvalid   = "history_max_bytes_invalid"
 )
 
-var known = []string{envDataDir, envListen, envAdminListen, envHealthListen, envAdminHash, envAdminHashFile, envLogLevel, envStorageProfile, envMinFreeBytes}
+var known = []string{envDataDir, envListen, envAdminListen, envHealthListen, envAdminHash, envAdminHashFile, envLogLevel, envStorageProfile, envMinFreeBytes,
+	envOwnerPhone, envHistoryMax}
 
 type StorageProfile string
 
@@ -94,6 +102,8 @@ type Config struct {
 	LogLevel        slog.Level
 	StorageProfile  StorageProfile
 	MinFreeBytes    uint64
+	OwnerPhone      string
+	HistoryMaxBytes int64
 }
 
 type Options struct {
@@ -147,6 +157,12 @@ func Load(environ []string, opts Options) (Config, *Refusal) {
 		return Config{}, r
 	}
 	if cfg.MinFreeBytes, r = minFreeBytes(env); r != nil {
+		return Config{}, r
+	}
+	if cfg.OwnerPhone, r = ownerPhone(env); r != nil {
+		return Config{}, r
+	}
+	if cfg.HistoryMaxBytes, r = historyMaxBytes(env); r != nil {
 		return Config{}, r
 	}
 	uids := processUIDs
@@ -352,6 +368,29 @@ func minFreeBytes(env map[string]string) (uint64, *Refusal) {
 		return 0, &Refusal{Reason: reasonMinFreeBytesInvalid, Variable: envMinFreeBytes, detail: "must be a number of bytes written in decimal digits, at most 18446744073709551615"}
 	}
 	return n, nil
+}
+
+func ownerPhone(env map[string]string) (string, *Refusal) {
+	v, ok := env[envOwnerPhone]
+	if !ok {
+		return "", nil
+	}
+	if _, valid := policy.OwnerDigits(v); !valid {
+		return "", &Refusal{Reason: reasonOwnerPhoneInvalid, Variable: envOwnerPhone, detail: "must be a number in E.164 form: + and 7 to 15 digits, the first not 0, nothing else"}
+	}
+	return v, nil
+}
+
+func historyMaxBytes(env map[string]string) (int64, *Refusal) {
+	v, ok := env[envHistoryMax]
+	if !ok {
+		return DefaultHistoryMaxBytes, nil
+	}
+	n, err := strconv.ParseUint(v, 10, 64)
+	if err != nil || n == 0 || n > MaxHistoryMaxBytes {
+		return 0, &Refusal{Reason: reasonHistoryMaxBytesInvalid, Variable: envHistoryMax, detail: "must be a number of bytes written in decimal digits, from 1 to 268435456"}
+	}
+	return int64(n), nil
 }
 
 func checkSubdirectory(dataDir, name string, uid int, owner func(fs.FileInfo) (int, bool)) *Refusal {

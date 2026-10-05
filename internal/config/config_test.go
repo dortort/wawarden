@@ -86,8 +86,9 @@ func dirWithMode(t *testing.T, mode fs.FileMode) string {
 }
 
 func TestDefaults(t *testing.T) {
-	if defaultDataDir != "/data" || defaultMinFreeBytes != 268435456 {
-		t.Fatalf("default data directory = %q and free-space floor = %d, want /data and 268435456", defaultDataDir, defaultMinFreeBytes)
+	if defaultDataDir != "/data" || defaultMinFreeBytes != 268435456 || DefaultHistoryMaxBytes != 33554432 || MaxHistoryMaxBytes != 268435456 {
+		t.Fatalf("default data directory = %q, free-space floor = %d, history cap = %d up to %d, want /data, 268435456, 33554432 and 268435456",
+			defaultDataDir, defaultMinFreeBytes, DefaultHistoryMaxBytes, MaxHistoryMaxBytes)
 	}
 	vars := withDataDir(t, nil)
 	cfg, r := Load(environ(vars), testOptions())
@@ -95,14 +96,15 @@ func TestDefaults(t *testing.T) {
 		t.Fatalf("Load: %v", r)
 	}
 	want := Config{
-		DataDir:        vars[envDataDir],
-		UID:            testUID,
-		Listen:         netip.MustParseAddrPort("127.0.0.1:8080"),
-		AdminListen:    netip.MustParseAddrPort("127.0.0.1:8082"),
-		HealthListen:   netip.MustParseAddrPort("127.0.0.1:8081"),
-		LogLevel:       slog.LevelInfo,
-		StorageProfile: StorageLocal,
-		MinFreeBytes:   268435456,
+		DataDir:         vars[envDataDir],
+		UID:             testUID,
+		Listen:          netip.MustParseAddrPort("127.0.0.1:8080"),
+		AdminListen:     netip.MustParseAddrPort("127.0.0.1:8082"),
+		HealthListen:    netip.MustParseAddrPort("127.0.0.1:8081"),
+		LogLevel:        slog.LevelInfo,
+		StorageProfile:  StorageLocal,
+		MinFreeBytes:    268435456,
+		HistoryMaxBytes: 33554432,
 	}
 	if cfg != want {
 		t.Fatalf("Load = %+v, want %+v", cfg, want)
@@ -203,6 +205,21 @@ func TestRefusals(t *testing.T) {
 		{name: "free-space floor with underscores", vars: map[string]string{envMinFreeBytes: "1_000"}, reason: "min_free_bytes_invalid", variable: envMinFreeBytes},
 		{name: "free-space floor with a space", vars: map[string]string{envMinFreeBytes: " 1"}, reason: "min_free_bytes_invalid", variable: envMinFreeBytes},
 		{name: "free-space floor beyond 64 bits", vars: map[string]string{envMinFreeBytes: "18446744073709551616"}, reason: "min_free_bytes_invalid", variable: envMinFreeBytes},
+
+		{name: "empty owner phone", vars: map[string]string{envOwnerPhone: ""}, reason: "owner_phone_invalid", variable: envOwnerPhone},
+		{name: "owner phone without a plus", vars: map[string]string{envOwnerPhone: "15550100009"}, reason: "owner_phone_invalid", variable: envOwnerPhone},
+		{name: "owner phone with a leading zero", vars: map[string]string{envOwnerPhone: "+05550100009"}, reason: "owner_phone_invalid", variable: envOwnerPhone},
+		{name: "owner phone too short", vars: map[string]string{envOwnerPhone: "+155501"}, reason: "owner_phone_invalid", variable: envOwnerPhone},
+		{name: "owner phone too long", vars: map[string]string{envOwnerPhone: "+1555010000912345"}, reason: "owner_phone_invalid", variable: envOwnerPhone},
+		{name: "owner phone with spaces", vars: map[string]string{envOwnerPhone: "+1 555 010 0009"}, reason: "owner_phone_invalid", variable: envOwnerPhone},
+		{name: "owner phone as an identifier", vars: map[string]string{envOwnerPhone: "15550100009@s.whatsapp.net"}, reason: "owner_phone_invalid", variable: envOwnerPhone},
+
+		{name: "empty history cap", vars: map[string]string{envHistoryMax: ""}, reason: "history_max_bytes_invalid", variable: envHistoryMax},
+		{name: "zero history cap", vars: map[string]string{envHistoryMax: "0"}, reason: "history_max_bytes_invalid", variable: envHistoryMax},
+		{name: "history cap above its maximum", vars: map[string]string{envHistoryMax: "268435457"}, reason: "history_max_bytes_invalid", variable: envHistoryMax},
+		{name: "signed history cap", vars: map[string]string{envHistoryMax: "+1024"}, reason: "history_max_bytes_invalid", variable: envHistoryMax},
+		{name: "history cap with a unit", vars: map[string]string{envHistoryMax: "32MiB"}, reason: "history_max_bytes_invalid", variable: envHistoryMax},
+		{name: "history cap beyond 64 bits", vars: map[string]string{envHistoryMax: "18446744073709551616"}, reason: "history_max_bytes_invalid", variable: envHistoryMax},
 
 		{name: "uid 0 without --allow-root", opts: func(o *Options) { o.UIDs = uids(0, 0); o.FileOwner = owned(0) }, reason: "running_as_root"},
 		{name: "effective uid 0 without --allow-root", opts: func(o *Options) { o.UIDs = uids(testUID, 0); o.FileOwner = owned(0) }, reason: "running_as_root"},
@@ -597,6 +614,24 @@ func TestAccepted(t *testing.T) {
 			},
 		},
 		{
+			name: "owner phone and the smallest history cap",
+			vars: map[string]string{envOwnerPhone: "+15550100009", envHistoryMax: "1"},
+			check: func(t *testing.T, c Config) {
+				if c.OwnerPhone != "+15550100009" || c.HistoryMaxBytes != 1 {
+					t.Fatalf("OwnerPhone = %q, HistoryMaxBytes = %d", c.OwnerPhone, c.HistoryMaxBytes)
+				}
+			},
+		},
+		{
+			name: "the largest history cap",
+			vars: map[string]string{envHistoryMax: "268435456"},
+			check: func(t *testing.T, c Config) {
+				if c.OwnerPhone != "" || c.HistoryMaxBytes != 268435456 {
+					t.Fatalf("OwnerPhone = %q, HistoryMaxBytes = %d", c.OwnerPhone, c.HistoryMaxBytes)
+				}
+			},
+		},
+		{
 			name: "error log level",
 			vars: map[string]string{envLogLevel: "error"},
 			check: func(t *testing.T, c Config) {
@@ -645,6 +680,8 @@ func TestRefusalsNeverEchoValues(t *testing.T) {
 		{"GOTRACEBACK": secret},
 		{envStorageProfile: secret},
 		{envMinFreeBytes: secret},
+		{envOwnerPhone: secret},
+		{envHistoryMax: secret},
 	}
 	for _, vars := range tests {
 		_, r := Load(environ(withDataDir(t, vars)), testOptions())
