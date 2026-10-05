@@ -491,8 +491,9 @@ but `shutdown` also logs `disconnected` at every log level. The gauges
   recorded at a later time than the current one, as after the system clock was
   set back, is forgotten, so it cannot hold the engine in `restart_budget`
   until the clock catches up.
-- **Protocol version.** Otherwise the engine first fetches the current WhatsApp
-  Web version, at most four times: once, then after 1, 2 and 4 seconds. It
+- **Protocol version.** Otherwise, unless the stored device fails the
+  [owner check](#pairing), the engine first fetches the current WhatsApp Web
+  version, at most four times: once, then after 1, 2 and 4 seconds. It
   takes a newer version, keeps its own when the fetched one is equal, never takes
   an older one, and changes the version only while disconnected. When WhatsApp
   reports the client as outdated, the engine fetches again the same way and then
@@ -537,13 +538,15 @@ then the engine never connects the device, an explicit reconnect included, and
 drops what its connection delivers before it is written (see
 [Ingest](#ingest)); pairing stays refused while it is stored.
 
-Before every connection, at the start, on an explicit reconnect and after a
-drop, the engine also checks that the stored device's number is the one in
-`WAWARDEN_OWNER_PHONE`; the stored number is compared and never logged. When it
-is not, as for a device whose logout failed before the process stopped, or
-when `WAWARDEN_OWNER_PHONE` names another number than the one that was paired,
-the engine stays `disconnected` with reason `owner_mismatch` and logs
-`disconnected` at every log level. It refuses an explicit reconnect, drops what
+Before every connection the engine also checks that the stored device's number
+is exactly the one in `WAWARDEN_OWNER_PHONE`: at the start before it fetches
+the protocol version, so that a failed fetch cannot hide a mismatch behind
+`outdated`; on an explicit reconnect, also one from `outdated` or
+`restart_budget`; and after a drop. The stored number is compared and never
+logged. When it is not, as for a device whose logout failed before the process
+stopped, or when `WAWARDEN_OWNER_PHONE` names another number than the one that
+was paired, the engine stays `disconnected` with reason `owner_mismatch` and
+logs `disconnected` at every log level. It refuses an explicit reconnect, drops what
 a connection would deliver, and does not log the device out, because the cause
 can be a mistake in the configuration as well as another account: correct
 `WAWARDEN_OWNER_PHONE` or remove the stored device, then restart the service.

@@ -944,6 +944,46 @@ func TestTheStoredDeviceMustBeTheOwnersBeforeEveryConnect(t *testing.T) {
 		h.steps()
 		h.refusesTheStoredDevice(0)
 	})
+	t.Run("before the version is fetched", func(t *testing.T) {
+		h := newSupRig(t)
+		h.client.pairAs(bobDev)
+		v := h.versions(versionResult{err: errors.New("synthetic: offline")})
+		h.s.begin(t.Context(), 1)
+		h.steps()
+		h.refusesTheStoredDevice(0)
+		if v.count() != 0 || len(h.alerts("disconnected")) != 1 {
+			t.Fatalf("%d fetches, disconnected alerts %v", v.count(), h.alerts("disconnected"))
+		}
+	})
+	t.Run("on an explicit reconnect while outdated", func(t *testing.T) {
+		h := newSupRig(t)
+		v := h.versions(versionResult{err: errors.New("synthetic: offline")})
+		h.s.begin(t.Context(), 1)
+		h.steps()
+		h.want(StateDisconnected, ReasonOutdated)
+		h.client.pairAs(bobDev)
+		if err := h.s.reconnect(); !errors.Is(err, ErrOwnerMismatch) {
+			t.Fatalf("Reconnect while outdated with another account's device = %v, want ErrOwnerMismatch", err)
+		}
+		h.refusesTheStoredDevice(0)
+		if v.count() != 4 {
+			t.Fatalf("%d fetches, want only the 4 of the start", v.count())
+		}
+	})
+	t.Run("on an explicit reconnect under the restart budget", func(t *testing.T) {
+		h := newSupRig(t)
+		h.client.pairAs(bobDev)
+		v := h.versions(versionResult{v: current})
+		h.s.begin(t.Context(), MaxRecentStarts+1)
+		h.want(StateDisconnected, ReasonRestartBudget)
+		if err := h.s.reconnect(); !errors.Is(err, ErrOwnerMismatch) {
+			t.Fatalf("Reconnect under the restart budget with another account's device = %v, want ErrOwnerMismatch", err)
+		}
+		h.refusesTheStoredDevice(0)
+		if v.count() != 0 {
+			t.Fatalf("%d fetches, want none", v.count())
+		}
+	})
 	for _, account := range []string{"155501000091", "1555010000", ownerDev, owner} {
 		t.Run("not "+account, func(t *testing.T) {
 			h := newSupRig(t)

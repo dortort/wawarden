@@ -248,6 +248,14 @@ func (s *supervisor) current(gen uint64) bool {
 }
 
 func (s *supervisor) refresh(ctx context.Context, gen uint64, outdated bool) {
+	if paired, foreign := s.device(); foreign {
+		s.mu.Lock()
+		if s.gen == gen {
+			s.admitLocked(paired, foreign)
+		}
+		s.mu.Unlock()
+		return
+	}
 	delay := versionBackoff
 	for try := 0; ; try++ {
 		have := s.client.Version()
@@ -617,6 +625,9 @@ func (s *supervisor) reconnectLocked(paired, foreign bool) (redial bool, err err
 		return false, ErrStopped
 	case s.rejected:
 		return false, ErrNotPaired
+	case foreign:
+		s.setLocked(StateDisconnected, ReasonOwnerMismatch)
+		return false, ErrOwnerMismatch
 	case s.state == StateDisconnected && s.reason == ReasonOutdated:
 		s.setLocked(StateConnecting, "")
 		// s.outdated still holds the mode of the refresh that failed.
@@ -625,9 +636,6 @@ func (s *supervisor) reconnectLocked(paired, foreign bool) (redial bool, err err
 		return false, nil
 	case !paired:
 		return false, ErrNotPaired
-	case foreign:
-		s.setLocked(StateDisconnected, ReasonOwnerMismatch)
-		return false, ErrOwnerMismatch
 	case s.state == StateConnected:
 		return false, ErrAlreadyConnected
 	case s.state == StateConnecting:
