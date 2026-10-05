@@ -12,6 +12,7 @@ import (
 	"github.com/dortort/wawarden/internal/api"
 	"github.com/dortort/wawarden/internal/buildinfo"
 	"github.com/dortort/wawarden/internal/config"
+	"github.com/dortort/wawarden/internal/engine"
 	"github.com/dortort/wawarden/internal/listeners"
 	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/metrics"
@@ -43,6 +44,8 @@ type App struct {
 	logger  *slog.Logger
 	ready   atomic.Bool
 	archive *ingest.Store
+	engine  *engine.Engine
+	starts  int
 	serving listenerSet
 	health  listenerSet
 	grace   time.Duration
@@ -50,11 +53,21 @@ type App struct {
 	afterDrain func()
 }
 
+type engineParts struct {
+	client   engine.Client
+	versions engine.VersionSource
+	decoder  engine.HistoryDecoder
+}
+
 func New(ctx context.Context, cfg config.Config, out *logx.Writer) (*App, error) {
 	return newApp(ctx, cfg, out, noClients{})
 }
 
 func newApp(ctx context.Context, cfg config.Config, out *logx.Writer, auth api.Authenticator) (*App, error) {
+	return newAppWith(ctx, cfg, out, auth, engineParts{})
+}
+
+func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth api.Authenticator, parts engineParts) (*App, error) {
 	if !cfg.HealthListen.Addr().IsLoopback() {
 		return nil, errHealthNotLoopback
 	}
@@ -84,7 +97,15 @@ func newApp(ctx context.Context, cfg config.Config, out *logx.Writer, auth api.A
 		slog.Int("schema_version", archive.SchemaVersion()), slog.String("profile", string(archive.Profile())),
 		slog.Bool("ofd_locking", archive.OFDLocking()), slog.Int("recent_starts", starts))
 
-	a := &App{logger: logger, archive: archive, grace: shutdownGrace}
+	a := &App{logger: logger, archive: archive, starts: starts, grace: shutdownGrace}
+	if parts.client == nil {
+		alerts.Warn("this build has no WhatsApp engine: nothing pairs, connects or ingests", slog.String("event", "engine_absent"))
+	} else if a.engine, err = engine.New(engine.Options{
+		Client: parts.client, Versions: parts.versions, Decoder: parts.decoder, Archive: archive, DataDir: cfg.DataDir,
+		OwnerPhone: cfg.OwnerPhone, HistoryMaxBytes: cfg.HistoryMaxBytes, Logger: logger, Alerts: alerts, Metrics: reg,
+	}); err != nil {
+		return nil, errors.Join(err, archive.Close())
+	}
 	specs := []listeners.Spec{{
 		Name:    listenerClient,
 		Addr:    cfg.Listen,
@@ -137,6 +158,9 @@ func (a *App) Run(ctx context.Context) error {
 	a.ready.Store(true)
 	a.serving.Serve()
 	a.health.Serve()
+	if a.engine != nil {
+		a.engine.Start(context.WithoutCancel(ctx), a.starts)
+	}
 	a.logger.Info("ready", slog.String("event", "ready"))
 
 	var failure error
@@ -157,7 +181,11 @@ func (a *App) Run(ctx context.Context) error {
 	if a.afterDrain != nil {
 		a.afterDrain()
 	}
-	err := errors.Join(failure, drained, a.archive.Close(), a.health.Shutdown(grace))
+	var stopped error
+	if a.engine != nil {
+		stopped = a.engine.Stop(grace)
+	}
+	err := errors.Join(failure, drained, stopped, a.archive.Close(), a.health.Shutdown(grace))
 	if err != nil {
 		a.logger.Error("stopped with errors", slog.String("event", "stopped"), slog.String("error", err.Error()))
 		return err
