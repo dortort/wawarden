@@ -39,13 +39,13 @@ func guarded(dial dialFunc) dialFunc {
 }
 
 func systemDial() dialFunc {
-	return (&net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}).DialContext
+	return guarded((&net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}).DialContext)
 }
 
 func newTransport(dial dialFunc) *http.Transport {
 	return &http.Transport{
 		Proxy:                 nil,
-		DialContext:           dial,
+		DialContext:           guarded(dial),
 		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 		TLSHandshakeTimeout:   tlsTimeout,
 		ResponseHeaderTimeout: responseHeaderTimeout,

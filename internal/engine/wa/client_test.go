@@ -40,10 +40,10 @@ func (d *freshDevices) NewDevice() *store.Device {
 }
 
 func refusingDial(t *testing.T) dialFunc {
-	return guarded(func(context.Context, string, string) (net.Conn, error) {
+	return func(context.Context, string, string) (net.Conn, error) {
 		t.Error("a dial passed the guard of a test binary")
 		return nil, errNoDial
-	})
+	}
 }
 
 func noDownload(context.Context, *whatsmeow.Client, *waE2E.HistorySyncNotification, whatsmeow.File) error {

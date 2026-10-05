@@ -2,8 +2,10 @@ package wa
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -115,6 +117,22 @@ func checkTransport(t *testing.T, name string, rt http.RoundTripper) {
 	}
 	if _, err := tr.DialContext(t.Context(), "tcp", "127.0.0.1:9"); !errors.Is(err, errOffline) {
 		t.Errorf("the %s transport dialled from a test binary: %v", name, err)
+	}
+}
+
+func TestEveryDialThePackageBuildsRefusesInATestBinary(t *testing.T) {
+	dialled := func(context.Context, string, string) (net.Conn, error) {
+		t.Error("a dial that a caller handed to the package was used in a test binary")
+		return nil, errNoDial
+	}
+	if _, err := systemDial()(t.Context(), "tcp", "127.0.0.1:9"); !errors.Is(err, errOffline) {
+		t.Errorf("the system dialer = %v, want the offline refusal", err)
+	}
+	if _, err := newTransport(dialled).DialContext(t.Context(), "tcp", "127.0.0.1:9"); !errors.Is(err, errOffline) {
+		t.Errorf("a transport built over another dial = %v, want the offline refusal", err)
+	}
+	if got, err := newVersions(newTransport(dialled)).Latest(t.Context()); !errors.Is(err, errVersionFetch) || !got.IsZero() {
+		t.Errorf("a version source over another dial = %v, %v, want errVersionFetch", got, err)
 	}
 }
 

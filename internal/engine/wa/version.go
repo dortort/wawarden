@@ -19,7 +19,7 @@ type Versions struct {
 var _ engine.VersionSource = (*Versions)(nil)
 
 func NewVersions() *Versions {
-	return newVersions(newTransport(guarded(systemDial())))
+	return newVersions(newTransport(systemDial()))
 }
 
 func newVersions(rt http.RoundTripper) *Versions {

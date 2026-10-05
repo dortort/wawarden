@@ -97,7 +97,7 @@ var (
 )
 
 func New(opts Options) (*Client, error) {
-	return newClient(opts, guarded(systemDial()), downloadToFile, time.Now)
+	return newClient(opts, systemDial(), downloadToFile, time.Now)
 }
 
 func newClient(opts Options, dial dialFunc, download downloader, now func() time.Time) (*Client, error) {
