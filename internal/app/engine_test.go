@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -166,6 +167,62 @@ func TestEngineRunsWhenAClientIsSupplied(t *testing.T) {
 		t.Fatalf("after shutdown the client was not disconnected or still delivers events: %v", client.calls)
 	}
 	requireReleased(t, cfg.DataDir)
+}
+
+func TestTheRestartBudgetReachesTheEngine(t *testing.T) {
+	for _, tt := range []struct {
+		prior  int
+		budget bool
+	}{{engine.MaxRecentStarts - 1, false}, {engine.MaxRecentStarts, true}} {
+		cfg := testConfig(t, "")
+		cfg.OwnerPhone, cfg.HistoryMaxBytes = "+15550100009", config.DefaultHistoryMaxBytes
+		s, err := openArchive(t, t.Context(), cfg.DataDir)
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		for range tt.prior {
+			if _, err := s.RecordStart(t.Context(), time.Now()); err != nil {
+				t.Fatalf("RecordStart: %v", err)
+			}
+		}
+		if err := s.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		client := newStubClient()
+		logs := &syncBuffer{}
+		a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), noClients{}, engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}})
+		if err != nil {
+			t.Fatalf("newAppWith: %v", err)
+		}
+		stop := run(t, a)
+		waitUntil(t, "the service is ready", func() bool { return len(logs.find("ready")) == 1 })
+		if o := logs.find("archive_opened"); len(o) != 1 || o[0]["recent_starts"] != float64(tt.prior+1) {
+			t.Fatalf("archive_opened %v", o)
+		}
+		if !tt.budget {
+			select {
+			case <-client.connected:
+			case <-time.After(10 * time.Second):
+				t.Fatalf("start %d of the window did not connect", tt.prior+1)
+			}
+		} else {
+			if st := a.engine.Status(); st.State != engine.StateDisconnected || st.Reason != engine.ReasonRestartBudget {
+				t.Fatalf("engine status %+v at start %d of the window", st, tt.prior+1)
+			}
+			if d := logs.find("disconnected"); len(d) != 1 || d[0]["reason"] != "restart_budget" {
+				t.Fatalf("disconnected events %v", d)
+			}
+		}
+		if err := stop(); err != nil {
+			t.Fatalf("Run = %v", err)
+		}
+		client.mu.Lock()
+		connected := slices.Contains(client.calls, "connect")
+		client.mu.Unlock()
+		if tt.budget && connected {
+			t.Fatal("the engine connected beyond the restart budget")
+		}
+	}
 }
 
 func TestIncompleteEnginePartsAreRefused(t *testing.T) {
