@@ -159,6 +159,33 @@ func TestFixtureOwnRevoke(t *testing.T) {
 	}
 }
 
+func TestFixtureDirectChatChangesNeedTheOriginalSender(t *testing.T) {
+	r := newPipeRig(t)
+	r.ingest(fromOwner(alice, "M1", "the owner's words"), dm("M2", alice, "alice's words"))
+	byOwner := func(kind Kind, id, body string, target Key) Message {
+		m := fromOwner(alice, id, body)
+		m.Kind, m.Target, m.Timestamp = kind, &target, epoch.Add(time.Minute)
+		return m
+	}
+	aliceEdit := change(KindEdit, alice, "X3", alice, Key{RemoteJID: owner, ID: "M1"})
+	aliceEdit.Text = "alice rewrote the owner's words"
+	r.ingest(
+		change(KindRevoke, alice, "X1", alice, Key{RemoteJID: owner, ID: "M1"}),
+		byOwner(KindRevoke, "X2", "", Key{RemoteJID: alice, ID: "M2"}),
+		aliceEdit,
+		byOwner(KindEdit, "X4", "the owner rewrote alice's words", Key{RemoteJID: alice, ID: "M2"}),
+	)
+	if f := r.must(alice, "M1", owner); f.Revoked || f.Text != "the owner's words" {
+		t.Fatalf("alice changed the owner's message: %+v", f)
+	}
+	if f := r.must(alice, "M2", alice); f.Revoked || f.Text != "alice's words" {
+		t.Fatalf("the owner changed alice's message: %+v", f)
+	}
+	if r.dropped(dropNotOriginal) != 4 {
+		t.Fatalf("not original sender drops %v, want 4", r.dropped(dropNotOriginal))
+	}
+}
+
 func TestFixtureDirectChatKeysNameTheOwnerOrTheChat(t *testing.T) {
 	r := newPipeRig(t)
 	r.ingest(fromOwner(alice, "M1", "owner's message"), dm("M2", alice, "alice's message"))
