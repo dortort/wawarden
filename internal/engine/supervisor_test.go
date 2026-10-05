@@ -869,35 +869,81 @@ func TestTheOwnersPairingEndsARejection(t *testing.T) {
 	h.want(StateConnected, "")
 }
 
+func (h *supRig) refusesTheStoredDevice(connects int) {
+	h.t.Helper()
+	h.want(StateDisconnected, ReasonOwnerMismatch)
+	h.s.mu.Lock()
+	loggingOut := h.s.loggingOut
+	h.s.mu.Unlock()
+	if h.steps() != 0 || h.client.count("connect") != connects || loggingOut || h.client.count("logout") != 0 || h.client.count("logout_failed") != 0 {
+		h.t.Fatalf("calls %v: another account's stored device was connected or logged out", h.client.history())
+	}
+	mismatches := 0
+	for _, a := range h.alerts("disconnected") {
+		if a["reason"] == string(ReasonOwnerMismatch) && a["level"] == "WARN" {
+			mismatches++
+		}
+	}
+	if mismatches != 1 || len(h.alerts("pair_rejected")) != 0 {
+		h.t.Fatalf("disconnected alerts %v, pair_rejected alerts %v", h.alerts("disconnected"), h.alerts("pair_rejected"))
+	}
+	if h.s.accepting() {
+		h.t.Fatal("traffic of another account's stored device is accepted")
+	}
+	alerts := len(h.alerts("disconnected"))
+	if err := h.s.reconnect(); !errors.Is(err, ErrOwnerMismatch) {
+		h.t.Fatalf("Reconnect = %v, want ErrOwnerMismatch", err)
+	}
+	h.want(StateDisconnected, ReasonOwnerMismatch)
+	if h.steps() != 0 || h.client.count("connect") != connects || !h.client.Paired() || len(h.alerts("disconnected")) != alerts {
+		h.t.Fatalf("calls %v after the refused reconnect", h.client.history())
+	}
+	if h.counter("wawarden_paired") != 1 || h.counter("wawarden_connected") != 0 {
+		h.t.Fatal("the gauges do not show a paired, disconnected engine")
+	}
+	if strings.Contains(h.logs.String(), "15550100002") {
+		h.t.Fatal("the stored account reached the log")
+	}
+}
+
 func TestTheStoredDeviceMustBeTheOwnersBeforeEveryConnect(t *testing.T) {
+	t.Run("the owner's device connects", func(t *testing.T) {
+		h := newSupRig(t)
+		h.client.pairAs(ownerDev)
+		h.versions(versionResult{v: current})
+		h.s.begin(t.Context(), 1)
+		h.steps()
+		h.deliver(Connected{})
+		h.want(StateConnected, "")
+		if h.client.count("connect") != 1 || len(h.alerts("disconnected")) != 0 {
+			t.Fatalf("calls %v, disconnected alerts %v", h.client.history(), h.alerts("disconnected"))
+		}
+	})
 	t.Run("at the start", func(t *testing.T) {
 		h := newSupRig(t)
 		h.client.pairAs(bobDev)
 		h.versions(versionResult{v: current})
 		h.s.begin(t.Context(), 1)
 		h.steps()
-		h.client.waitFor(t, "logout")
-		h.want(StateUnpaired, "")
-		if h.client.count("connect") != 0 {
-			t.Fatalf("calls %v: another account's stored device was connected", h.client.history())
-		}
-		if a := h.alerts("pair_rejected"); len(a) != 1 || a[0]["stage"] != "stored_device" {
-			t.Fatalf("pair_rejected alerts %v", a)
-		}
+		h.refusesTheStoredDevice(0)
+	})
+	t.Run("without an account", func(t *testing.T) {
+		h := newSupRig(t)
+		h.client.pairAs("@s.whatsapp.net")
+		h.versions(versionResult{v: current})
+		h.s.begin(t.Context(), 1)
+		h.steps()
+		h.refusesTheStoredDevice(0)
 	})
 	t.Run("on an explicit reconnect", func(t *testing.T) {
 		h := newSupRig(t)
 		h.connectedNow()
 		h.deliver(StreamReplaced{})
 		h.client.pairAs(bobDev)
-		if err := h.s.reconnect(); !errors.Is(err, ErrNotPaired) {
-			t.Fatalf("Reconnect with another account's device = %v, want ErrNotPaired", err)
+		if err := h.s.reconnect(); !errors.Is(err, ErrOwnerMismatch) {
+			t.Fatalf("Reconnect with another account's device = %v, want ErrOwnerMismatch", err)
 		}
-		h.client.waitFor(t, "logout")
-		if h.steps() != 0 || h.client.count("connect") != 1 {
-			t.Fatalf("calls %v", h.client.history())
-		}
-		h.want(StateUnpaired, "")
+		h.refusesTheStoredDevice(1)
 	})
 	t.Run("after a drop", func(t *testing.T) {
 		h := newSupRig(t)
@@ -905,11 +951,7 @@ func TestTheStoredDeviceMustBeTheOwnersBeforeEveryConnect(t *testing.T) {
 		h.client.pairAs(bobDev)
 		h.deliver(Disconnected{})
 		h.steps()
-		h.client.waitFor(t, "logout")
-		if h.client.count("connect") != 1 {
-			t.Fatalf("calls %v", h.client.history())
-		}
-		h.want(StateUnpaired, "")
+		h.refusesTheStoredDevice(1)
 	})
 	t.Run("not without an owner's number", func(t *testing.T) {
 		h := newSupRig(t, withOwner(""))
@@ -917,7 +959,9 @@ func TestTheStoredDeviceMustBeTheOwnersBeforeEveryConnect(t *testing.T) {
 		h.versions(versionResult{v: current})
 		h.s.begin(t.Context(), 1)
 		h.steps()
-		if h.client.count("connect") != 1 || h.client.count("logout") != 0 || len(h.alerts("pair_rejected")) != 0 {
+		h.deliver(Connected{})
+		h.want(StateConnected, "")
+		if h.client.count("connect") != 1 || h.client.count("logout") != 0 || len(h.alerts("disconnected")) != 0 || len(h.alerts("pair_rejected")) != 0 {
 			t.Fatalf("calls %v: without an owner's number the stored device is connected unchecked", h.client.history())
 		}
 	})

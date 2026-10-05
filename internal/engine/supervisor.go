@@ -32,6 +32,7 @@ const (
 	ReasonCATRefresh     Reason = "cat_refresh"
 	ReasonConnectFailure Reason = "connect_failure"
 	ReasonRestartBudget  Reason = "restart_budget"
+	ReasonOwnerMismatch  Reason = "owner_mismatch"
 	ReasonShutdown       Reason = "shutdown"
 )
 
@@ -47,6 +48,7 @@ var (
 	ErrPairRateLimited   = errors.New("engine: three pairing attempts were made in the last hour")
 	ErrPairFailed        = errors.New("engine: pairing failed")
 	ErrNotPaired         = errors.New("engine: no device is paired")
+	ErrOwnerMismatch     = errors.New("engine: the stored device belongs to another number than the owner's")
 	ErrAlreadyConnected  = errors.New("engine: already connected")
 	ErrStopped           = errors.New("engine: stopped")
 )
@@ -74,7 +76,6 @@ const (
 const (
 	stageBeforeSave   = "before_save"
 	stageAfterPairing = "after_pairing"
-	stageStoredDevice = "stored_device"
 )
 
 type supervisor struct {
@@ -162,7 +163,7 @@ func (s *supervisor) accepting() bool {
 	paired := s.client.Paired()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return paired && !s.rejected && s.state != StateUnpaired
+	return paired && !s.rejected && s.state != StateUnpaired && s.reason != ReasonOwnerMismatch
 }
 
 func (s *supervisor) setLocked(state State, reason Reason) {
@@ -295,38 +296,34 @@ func (s *supervisor) refreshed(gen uint64) {
 		s.mu.Unlock()
 		return
 	}
-	admit, logout := s.admitLocked(paired, foreign)
-	if admit {
+	if s.admitLocked(paired, foreign) {
 		s.next, s.attempt = connect, 0
 		s.wake()
 	}
-	ctx := s.ctx
 	s.mu.Unlock()
-	if logout {
-		s.startLogout(ctx)
-	}
 }
 
 func (s *supervisor) device() (paired, foreign bool) {
 	if !s.client.Paired() {
 		return false, false
 	}
-	return true, s.owner != "" && !s.isOwner(s.client.Account())
+	return true, s.owner != "" && s.client.Account() != s.owner
 }
 
-func (s *supervisor) admitLocked(paired, foreign bool) (admit, logout bool) {
+func (s *supervisor) admitLocked(paired, foreign bool) bool {
 	switch {
 	case foreign && !s.rejected:
-		return false, s.rejectLocked(stageStoredDevice)
-	case !paired || foreign || s.rejected:
+		s.setLocked(StateDisconnected, ReasonOwnerMismatch)
+	case !paired || s.rejected:
 		s.setLocked(StateUnpaired, "")
-		return false, false
+	default:
+		return true
 	}
-	return true, false
+	return false
 }
 
-func (s *supervisor) rejectLocked(stage string) bool {
-	s.alerts.Warn("pairing was rejected: the account is not the owner's", slog.String("event", "pair_rejected"), slog.String("stage", stage))
+func (s *supervisor) rejectLocked() bool {
+	s.alerts.Warn("pairing was rejected: the account is not the owner's", slog.String("event", "pair_rejected"), slog.String("stage", stageAfterPairing))
 	s.rejected = true
 	s.setLocked(StateUnpaired, "")
 	start := !s.loggingOut
@@ -354,12 +351,8 @@ func (s *supervisor) connect(ctx context.Context, gen uint64, attempt int) {
 		s.mu.Unlock()
 		return
 	}
-	if admit, logout := s.admitLocked(paired, foreign); !admit {
-		engineCtx := s.ctx
+	if !s.admitLocked(paired, foreign) {
 		s.mu.Unlock()
-		if logout {
-			s.startLogout(engineCtx)
-		}
 		return
 	}
 	s.dialing = true
@@ -462,7 +455,7 @@ func (s *supervisor) handle(ev Event) {
 			s.awaiting = true
 			break
 		}
-		logout = s.rejectLocked(stageAfterPairing)
+		logout = s.rejectLocked()
 	}
 	ctx := s.ctx
 	s.mu.Unlock()
@@ -633,10 +626,8 @@ func (s *supervisor) reconnectLocked(paired, foreign bool) (redial bool, err err
 	case !paired:
 		return false, ErrNotPaired
 	case foreign:
-		if s.rejectLocked(stageStoredDevice) {
-			s.startLogout(s.ctx)
-		}
-		return false, ErrNotPaired
+		s.setLocked(StateDisconnected, ReasonOwnerMismatch)
+		return false, ErrOwnerMismatch
 	case s.state == StateConnected:
 		return false, ErrAlreadyConnected
 	case s.state == StateConnecting:

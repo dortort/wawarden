@@ -48,7 +48,7 @@ func (c *stubClient) Connect(context.Context) error {
 
 func (c *stubClient) Disconnect()     { c.record("disconnect") }
 func (c *stubClient) Paired() bool    { return true }
-func (c *stubClient) Account() string { return "15550100009:1@s.whatsapp.net" }
+func (c *stubClient) Account() string { return "15550100009" }
 func (c *stubClient) PairPhone(context.Context, string) (string, error) {
 	return "", errors.New("synthetic")
 }

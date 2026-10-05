@@ -181,7 +181,7 @@ type fakeClient struct {
 }
 
 func newClient(paired bool) *fakeClient {
-	return &fakeClient{paired: paired, account: ownerDev, version: Version{2, 3000, 100}, blobs: map[string][]byte{}, called: make(chan string, 1024)}
+	return &fakeClient{paired: paired, account: accountOf(ownerDev), version: Version{2, 3000, 100}, blobs: map[string][]byte{}, called: make(chan string, 1024)}
 }
 
 func (f *fakeClient) record(call string) {
@@ -249,10 +249,16 @@ func (f *fakeClient) Account() string {
 	return f.account
 }
 
-func (f *fakeClient) pairAs(account string) {
+func accountOf(jid string) string {
+	user, _, _ := strings.Cut(jid, "@")
+	user, _, _ = strings.Cut(user, ":")
+	return user
+}
+
+func (f *fakeClient) pairAs(jid string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.paired, f.account = true, account
+	f.paired, f.account = true, accountOf(jid)
 }
 
 func (f *fakeClient) PairPhone(_ context.Context, digits string) (string, error) {

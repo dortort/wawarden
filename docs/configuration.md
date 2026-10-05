@@ -477,7 +477,7 @@ engine: an unpaired or disconnected engine still answers `200`.
 | `unpaired` | No device is linked; the engine waits for pairing. |
 | `connecting` | The engine is fetching the protocol version, connecting, or waiting before it reconnects. |
 | `connected` | The engine is connected and receiving. |
-| `disconnected` | The engine is not connected and does not reconnect on its own. The reason is one of `outdated`, `replaced`, `logged_out`, `temporary_ban`, `cat_refresh`, `connect_failure`, `restart_budget` or `shutdown`. |
+| `disconnected` | The engine is not connected and does not reconnect on its own. The reason is one of `outdated`, `replaced`, `logged_out`, `temporary_ban`, `cat_refresh`, `connect_failure`, `restart_budget`, `owner_mismatch` or `shutdown`. |
 
 Every change is logged as `engine_state`; entering `disconnected` for any reason
 but `shutdown` also logs `disconnected` at every log level. The gauges
@@ -536,12 +536,19 @@ then the engine never connects the device, an explicit reconnect included, and
 drops what its connection delivers before it is written (see
 [Ingest](#ingest)); pairing stays refused while it is stored.
 
-Before every connection, the engine also checks that the stored device belongs
-to the number in `WAWARDEN_OWNER_PHONE`. A device of another account, such as
-one whose logout failed before the process stopped, is rejected the same way,
-with `stage` `stored_device`. With `WAWARDEN_OWNER_PHONE` unset this check is
-skipped and a stored device is connected as it is, because pairing could link
-it only while the number was set.
+Before every connection, at the start, on an explicit reconnect and after a
+drop, the engine also checks that the stored device's number is the one in
+`WAWARDEN_OWNER_PHONE`; the stored number is compared and never logged. When it
+is not, as for a device whose logout failed before the process stopped, or
+when `WAWARDEN_OWNER_PHONE` names another number than the one that was paired,
+the engine stays `disconnected` with reason `owner_mismatch` and logs
+`disconnected` at every log level. It refuses an explicit reconnect, drops what
+a connection would deliver, and does not log the device out, because the cause
+can be a mistake in the configuration as well as another account: correct
+`WAWARDEN_OWNER_PHONE` or remove the stored device, then restart the service.
+With `WAWARDEN_OWNER_PHONE` unset this check is skipped and a stored device is
+connected as it is, because pairing could link it only while the number was
+set.
 The adapter will also reject another account before anything is saved, which
 the engine reports as `pair_rejected` with `stage` `before_save`; it takes that
 report only while no device is stored, so one that arrives late cannot unpair
@@ -560,8 +567,9 @@ user, a LID user or a group (status updates, broadcast lists, newsletters and
 every other kind) is acknowledged and dropped before it reaches the inbox. So
 is every message, group change and history-sync notification that arrives
 while the engine is `unpaired`, while no device is stored, such as after
-WhatsApp logged the device out, or while a device that [pairing](#pairing)
-rejected is still stored (`not_paired`), and every message whose
+WhatsApp logged the device out, while a device that [pairing](#pairing)
+rejected is still stored, or while the stored device is not the owner's
+(`owner_mismatch`), all counted as `not_paired`, and every message whose
 identifiers, push name, text and quoted text add up to more than 512 KiB
 (`too_large`). Accepting and applying one message therefore allocates at most
 48 MiB of Go memory, besides SQLite's own; only text made of control characters
@@ -867,7 +875,7 @@ So are the engine's alerts, which an operator must see: `engine_absent`,
 | `connect_failed` | `WARN` | `attempt`, `error_type` | A connection attempt failed; the engine retries. `error_type` is the Go type of the error, never its text. |
 | `pairing_started` | `INFO` | | A pairing attempt passed the refusals above. The code is never logged. |
 | `pair_failed` | `WARN` | `error_type` | Connecting or requesting the pairing code failed. |
-| `pair_rejected` | `WARN`, at every log level | `stage`: `before_save`, `after_pairing` or `stored_device` | Pairing linked or tried to link an account other than the owner's, or the stored device belongs to one; see [Pairing](#pairing). |
+| `pair_rejected` | `WARN`, at every log level | `stage`: `before_save` or `after_pairing` | Pairing linked or tried to link an account other than the owner's; see [Pairing](#pairing). |
 | `logout_failed` | `WARN`, at every log level | `attempt`, `error_type` | Logging out a rejected device failed; the engine tries again. |
 | `ingest_failed` | `WARN` | `queue`: `inbox` or `history`, `attempt` when an attempt failed, `error_type` | Reading, applying or quarantining an inbox row or a history blob failed. |
 | `quarantine` | `WARN`, at every log level | `queue`, `attempts` | An inbox row or a history blob was quarantined after three failed attempts. |

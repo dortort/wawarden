@@ -393,10 +393,14 @@ device out, retrying with backoff and a `logout_failed` alert for as long as
 the logout fails. Until the device is gone, the engine connects it neither on
 its own nor on an explicit reconnect, and drops what its connection delivers
 before it is written. Before every connection it also checks that the stored
-device is the owner's number, so a rejected device whose logout never succeeded
-is rejected again after a restart. A pairing completed from someone else's
-account therefore cannot bind the gateway to that account. When the owner's
-number is unset, the stored device is not checked. These are enforced and tested
+device's number is the owner's. When it is not, as for a rejected device whose
+logout never succeeded before a restart, or an owner's number that differs from
+the paired one, the engine stays disconnected (`owner_mismatch`) with an alert,
+refuses an explicit reconnect, drops what a connection would deliver and leaves
+the device in place for the operator, without logging it out. A pairing
+completed from someone else's account therefore cannot bind the gateway to that
+account. When the owner's number is unset, the stored device is not checked, and
+the stored number never reaches a log or an event. These are enforced and tested
 in the engine core on `main`. Not yet in place (M1): the admin route that starts
 pairing and answers `409`, and the protocol adapter, which rejects another
 account before anything is saved and wipes a logged-out device.
@@ -423,7 +427,7 @@ account before anything is saved and wipes a logged-out device.
 | Raw protocol messages are not retained unless configured, and their media keys and message secrets are stripped first. | M1 |
 | Never sends read receipts, presence or typing indicators. | M1 |
 | No first contact (a DM with no prior inbound message) unless the client is allowed it; sends are paced, idempotent and budgeted per client, with `429` rather than queueing. | M3 |
-| Disconnections from WhatsApp never exit the process, and `/healthz` does not depend on them; more than five starts within ten minutes start the engine disconnected, and reconnection after a drop backs off exponentially, with jitter, up to five minutes, to avoid reconnect storms; a connection that drops within a minute of coming up counts as a failed attempt and does not reset the delay. A replaced session, a temporary ban, a refused connection or a failed token refresh waits for the operator. | M1, on `main`, in the engine core, which no build runs before the protocol adapter (M1) |
+| Disconnections from WhatsApp never exit the process, and `/healthz` does not depend on them; more than five starts within ten minutes start the engine disconnected, and reconnection after a drop backs off exponentially, with jitter, up to five minutes, to avoid reconnect storms; a connection that drops within a minute of coming up counts as a failed attempt and does not reset the delay. A replaced session, a temporary ban, a refused connection, a failed token refresh or a stored device of another number than the owner's waits for the operator. | M1, on `main`, in the engine core, which no build runs before the protocol adapter (M1) |
 | Backups are encrypted to an age recipient; plaintext backups of `archive.db` alone require an explicit flag. | M1 |
 
 ## Residual risks

@@ -334,12 +334,31 @@ func TestARejectedAccountIsNeitherConnectedNorStoredWhenItsLogoutFails(t *testin
 	}
 
 	e = startEngine(2)
-	rejectedEverywhere(e, 2)
-	if a := r.alerts("pair_rejected"); len(a) != 2 || a[0]["stage"] != "after_pairing" || a[1]["stage"] != "stored_device" {
+	mismatch := Status{State: StateDisconnected, Reason: ReasonOwnerMismatch, Paired: true}
+	eventually(t, "the engine refuses the stored device", func() bool { return e.Status() == mismatch })
+	if err := e.Reconnect(); !errors.Is(err, ErrOwnerMismatch) {
+		t.Fatalf("Reconnect = %v, want ErrOwnerMismatch", err)
+	}
+	r.client.emit(Connected{})
+	for _, ev := range content {
+		if !r.client.emit(ev) {
+			t.Fatalf("%T from the stored device of another account was refused instead of dropped", ev)
+		}
+	}
+	if got := r.counter("wawarden_ingest_dropped_total", "reason", "not_paired"); got != float64(len(content)) {
+		t.Fatalf("not_paired drops %v", got)
+	}
+	if st := e.Status(); st != mismatch {
+		t.Fatalf("status %+v", st)
+	}
+	if a := r.alerts("pair_rejected"); len(a) != 1 || a[0]["stage"] != "after_pairing" {
 		t.Fatalf("pair_rejected alerts %v", a)
 	}
-	if r.client.count("connect") != 1 || r.client.count("logout_failed") != 2 {
-		t.Fatalf("calls %v: want only the pairing's connect and one failed logout per start", r.client.history())
+	if a := r.alerts("disconnected"); len(a) != 2 || a[0]["reason"] != "logged_out" || a[1]["reason"] != "owner_mismatch" {
+		t.Fatalf("disconnected alerts %v", a)
+	}
+	if r.client.count("connect") != 1 || r.client.count("logout_failed") != 1 {
+		t.Fatalf("calls %v: want only the pairing's connect and the first start's failed logout", r.client.history())
 	}
 	if err := e.Stop(t.Context()); err != nil {
 		t.Fatalf("Stop: %v", err)
