@@ -610,6 +610,40 @@ func TestAFailedWriteRefusesSoWhatsAppRedelivers(t *testing.T) {
 	}
 }
 
+func TestHistoryWaitsWhileIngestIsPaused(t *testing.T) {
+	r := newHistRig(t)
+	r.online.Store(true)
+	one := func(id string) History {
+		return History{Conversations: []Conversation{{Chat: alice, Messages: []Message{{ID: id, Sender: alice, Timestamp: epoch, Kind: KindText, Text: "history"}}}}}
+	}
+	r.client.blobs["HS2"] = r.blob("synthetic download", one("P2"))
+	r.notify(HistoryRef{ID: "HS1", Inline: r.blob("synthetic inline", one("P1"))})
+	r.notify(HistoryRef{ID: "HS2"})
+	r.p.paused.Store(true)
+	r.drainHistory()
+	if calls := r.client.history(); len(calls) != 0 {
+		t.Fatalf("calls %v while ingest is paused", calls)
+	}
+	var pending []ingest.Blob
+	if err := r.archive.Read(t.Context(), "test.pending", func(rd *ingest.Reader) error {
+		var err error
+		pending, err = rd.PendingBlobs(pendingWindow)
+		return err
+	}); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(pending) != 2 || pending[0].Attempts != 0 || pending[1].Attempts != 0 {
+		t.Fatalf("pending blobs %+v, want both without an attempt", pending)
+	}
+	if _, ok := r.find(alice, "P1", alice); ok {
+		t.Fatal("history was applied while ingest is paused")
+	}
+	r.p.paused.Store(false)
+	r.drainHistory()
+	r.must(alice, "P1", alice)
+	r.must(alice, "P2", alice)
+}
+
 func TestHistoryRecordingRespectsThePause(t *testing.T) {
 	r := newHistRig(t)
 	r.p.paused.Store(true)
