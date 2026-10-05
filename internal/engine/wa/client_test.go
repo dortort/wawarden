@@ -135,14 +135,37 @@ func TestNewRefusesIncompleteOptions(t *testing.T) {
 }
 
 func TestTheClientIsBuiltForASupervisedDesktopCompanion(t *testing.T) {
-	r := newRig(t, &store.Device{})
+	r := newRig(t, pairedDevice())
 	if got := store.DeviceProps.GetPlatformType(); got != waCompanionReg.DeviceProps_DESKTOP {
 		t.Errorf("platform %v, want DESKTOP", got)
 	}
 	if !store.DeviceProps.GetRequireFullSync() {
 		t.Error("full sync is not required")
 	}
-	cli := r.c.current()
+	built := r.c.current()
+	checkClientSettings(t, "the built client", built)
+	cli, _, cancel := r.c.prepare()
+	cancel()
+	if cli != built {
+		t.Fatal("a connection without a stale device replaced the client")
+	}
+	checkClientSettings(t, "the client prepared for a connection", cli)
+	r.dispatch(&events.LoggedOut{Reason: events.ConnectFailureLoggedOut})
+	fresh, _, cancel := r.c.prepare()
+	cancel()
+	if fresh == built || fresh != r.c.current() {
+		t.Fatal("a logged-out device was not replaced before the next connection")
+	}
+	checkClientSettings(t, "the client that replaced a logged-out device", fresh)
+	unpaired := newRig(t, &store.Device{})
+	checkClientSettings(t, "the client of an unpaired device", unpaired.c.current())
+	if unpaired.c.Paired() || unpaired.c.Account() != "" {
+		t.Fatalf("an unpaired device reports Paired %v, Account %q", unpaired.c.Paired(), unpaired.c.Account())
+	}
+}
+
+func checkClientSettings(t *testing.T, which string, cli *whatsmeow.Client) {
+	t.Helper()
 	for name, bad := range map[string]bool{
 		"auto-reconnect is on":                          cli.EnableAutoReconnect,
 		"initial auto-reconnect is on":                  cli.InitialAutoReconnect,
@@ -158,17 +181,17 @@ func TestTheClientIsBuiltForASupervisedDesktopCompanion(t *testing.T) {
 		"no reconnect hook is installed":                cli.AutoReconnectHook == nil,
 	} {
 		if bad {
-			t.Errorf("%s", name)
+			t.Errorf("%s: %s", which, name)
 		}
 	}
+	if cli.RefreshCAT == nil || cli.AutoReconnectHook == nil {
+		return
+	}
 	if err := cli.RefreshCAT(t.Context()); !errors.Is(err, errCATRefresh) {
-		t.Errorf("the connection-token refresh = %v, want errCATRefresh", err)
+		t.Errorf("%s: the connection-token refresh = %v, want errCATRefresh", which, err)
 	}
 	if cli.AutoReconnectHook(errNoDial) {
-		t.Error("the reconnect hook allows a reconnect")
-	}
-	if r.c.Paired() || r.c.Account() != "" {
-		t.Fatalf("an unpaired device reports Paired %v, Account %q", r.c.Paired(), r.c.Account())
+		t.Errorf("%s: the reconnect hook allows a reconnect", which)
 	}
 }
 
