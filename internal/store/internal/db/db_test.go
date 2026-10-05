@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -487,6 +488,47 @@ func TestInterruptedCallsKeepTheConnectionAndTheLock(t *testing.T) {
 				t.Fatalf("db_deadline event = %v", e)
 			}
 		})
+	}
+}
+
+func park(depth int, parked *sync.WaitGroup, release <-chan struct{}) {
+	if depth > 0 {
+		park(depth-1, parked, release)
+		return
+	}
+	parked.Done()
+	<-release
+}
+
+func TestTheDeadlineEventKeepsItsGoroutineDumpUnderTheLineLimit(t *testing.T) {
+	var parked sync.WaitGroup
+	release := make(chan struct{})
+	defer close(release)
+	for depth := range 300 {
+		parked.Add(1)
+		go park(depth, &parked, release)
+	}
+	parked.Wait()
+	opts, logs := testOptions(t)
+	opts.ReadTimeout = 100 * time.Millisecond
+	d := mustOpen(t, opts)
+	if err := d.Read(t.Context(), "test.slow_read", func(ctx context.Context, q Querier) error {
+		var n int
+		return q.QueryRowContext(ctx, slowQuery).Scan(&n)
+	}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the slow read = %v, want its deadline exceeded", err)
+	}
+	if dropped := logs.events("log_dropped"); len(dropped) != 0 {
+		t.Fatalf("log_dropped events = %v: the deadline event was too long to log", dropped)
+	}
+	events := logs.events("db_deadline")
+	if len(events) != 1 {
+		t.Fatalf("db_deadline events = %d, want one", len(events))
+	}
+	const marker = "[truncated]\n"
+	dump, _ := events[0]["goroutines"].(string)
+	if !strings.HasSuffix(dump, marker) || len(dump) > maxGoroutineDump+len(marker) {
+		t.Fatalf("the goroutine dump has %d bytes and ends %q, want at most %d ending %q", len(dump), dump[max(0, len(dump)-20):], maxGoroutineDump+len(marker), marker)
 	}
 }
 
