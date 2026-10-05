@@ -245,7 +245,11 @@ var (
 
 var serverNames = set("s.whatsapp.net", "whatsapp.net")
 
-var networkEntryPoints = set("ConnectContext", "DownloadToFile", "DownloadMediaWithPathToFile", "SendMessage", "SendPeerMessage")
+var networkEntryPoints = set("ConnectContext", "Download", "DownloadAny", "DownloadFB", "DownloadFBToFile", "DownloadMediaWithOnlyPath",
+	"DownloadMediaWithOnlyPathToFile", "DownloadMediaWithPath", "DownloadMediaWithPathToFile", "DownloadThumbnail", "DownloadToFile", "FetchAppState",
+	"SendMessage", "SendPeerMessage", "Upload", "UploadReader")
+
+var transportSetters = set("SetMediaHTTPClient", "SetPreLoginHTTPClient", "SetWebsocketHTTPClient")
 
 var offlineTestRule = rule{
 	name:  "offline-tests",
@@ -274,6 +278,55 @@ func f(ctx context.Context, cli *whatsmeow.Client) {
 	_ = cli.DownloadToFile(ctx, nil, nil)
 }
 `},
+		{name: "the client constructor, its transport setters, downloads, uploads and state fetches in a test", rel: "internal/engine/wa/x_test.go", want: 10, src: `package wa
+
+import (
+	"context"
+	"net/http"
+
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/appstate"
+)
+
+func f(ctx context.Context, cli *whatsmeow.Client) {
+	other := whatsmeow.NewClient(cli.Store, nil)
+	build := whatsmeow.NewClient
+	_ = build
+	other.SetWebsocketHTTPClient(http.DefaultClient)
+	other.SetPreLoginHTTPClient(nil)
+	other.SetMediaHTTPClient(nil)
+	_, _ = cli.Download(ctx, nil)
+	_, _ = cli.DownloadAny(ctx, nil)
+	_, _ = cli.DownloadMediaWithPath(ctx, "", nil, nil, nil, 0, "", "")
+	_, _ = cli.Upload(ctx, nil, whatsmeow.MediaImage)
+	_ = cli.FetchAppState(ctx, appstate.WAPatchRegular, false, false)
+}
+`},
+		{name: "the adapter's own methods in a test, whose names the library's client shares", rel: "internal/engine/wa/x_test.go", src: `package wa
+
+import (
+	"context"
+
+	"go.mau.fi/whatsmeow"
+)
+
+type adapter interface {
+	Connect(context.Context) error
+	PairPhone(context.Context, string) (string, error)
+	Logout(context.Context) error
+	DownloadHistory(context.Context) error
+	AckHistory(context.Context) error
+}
+
+func f(ctx context.Context, a adapter, cli *whatsmeow.Client) bool {
+	_ = a.Connect(ctx)
+	_, _ = a.PairPhone(ctx, "15550100001")
+	_ = a.Logout(ctx)
+	_ = a.DownloadHistory(ctx)
+	_ = a.AckHistory(ctx)
+	return cli.IsConnected()
+}
+`},
 		{name: "identifiers, loopback and reserved names in a test", rel: "internal/engine/wa/x_test.go", src: `package wa
 
 const (
@@ -299,7 +352,11 @@ import (
 
 const origin = "https://` + webHost + `"
 
-func f(ctx context.Context, cli *whatsmeow.Client) error { return cli.ConnectContext(ctx) }
+func f(ctx context.Context, cli *whatsmeow.Client) error {
+	other := whatsmeow.NewClient(cli.Store, nil)
+	other.SetMediaHTTPClient(nil)
+	return cli.ConnectContext(ctx)
+}
 `},
 	},
 }
@@ -338,9 +395,15 @@ func checkOfflineTests(f *sourceFile) []string {
 		if !ok {
 			return true
 		}
-		if s, p := f.ref(sel); s != nil && p == whatsmeowModule && s.Sel.Name == "GetLatestVersion" {
+		s, p := f.ref(sel)
+		switch {
+		case s != nil && p == whatsmeowModule && s.Sel.Name == "GetLatestVersion":
 			out = append(out, f.at(sel, "GetLatestVersion fetches from WhatsApp: test the version source through an injected transport"))
-		} else if networkEntryPoints[sel.Sel.Name] {
+		case s != nil && p == whatsmeowModule && s.Sel.Name == "NewClient":
+			out = append(out, f.at(sel, "NewClient builds a protocol client whose transports do not dial through the adapter's guard: build test clients with newClient"))
+		case transportSetters[sel.Sel.Name]:
+			out = append(out, f.at(sel, "%s replaces a transport that dials through the adapter's guard", sel.Sel.Name))
+		case networkEntryPoints[sel.Sel.Name]:
 			out = append(out, f.at(sel, "%s reaches WhatsApp: tests drive the adapter through hand-built events and injected seams", sel.Sel.Name))
 		}
 		return true
