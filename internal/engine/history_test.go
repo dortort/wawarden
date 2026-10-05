@@ -488,6 +488,70 @@ func TestZipBombIsRefusedWithBoundedMemory(t *testing.T) {
 	}
 }
 
+func stored(t *testing.T, data []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw, err := zlib.NewWriterLevel(&buf, zlib.NoCompression)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := zw.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestAnInlinePayloadOverTheCapIsRefusedBeforeItIsInflated(t *testing.T) {
+	const limit = 1024
+	r := newHistRig(t, withHistoryMax(limit))
+	one := func(id string) History {
+		return History{Conversations: []Conversation{{Chat: alice, Messages: []Message{{ID: id, Sender: alice, Timestamp: epoch, Kind: KindText, Text: "inline"}}}}}
+	}
+	const overhead = 13
+	over, fit := strings.Repeat("o", limit+1-overhead), strings.Repeat("f", limit-overhead)
+	r.decoder.decoded[over], r.decoder.decoded[fit] = one("O1"), one("F1")
+	overBlob, fitBlob := stored(t, []byte(over)), stored(t, []byte(fit))
+	if len(overBlob) != limit+1 || len(fitBlob) != limit {
+		t.Fatalf("stored streams of %d and %d bytes, want %d and %d", len(overBlob), len(fitBlob), limit+1, limit)
+	}
+	r.notify(HistoryRef{ID: "HS1", Inline: overBlob})
+	r.notify(HistoryRef{ID: "HS2", Inline: fitBlob})
+	r.drainHistory()
+	if a := r.alerts("quarantine"); len(a) != 1 || a[0]["attempts"] != float64(3) {
+		t.Fatalf("quarantine alerts %v", a)
+	}
+	if len(r.decoder.inputs) != 1 || string(r.decoder.inputs[0]) != fit {
+		t.Fatalf("the decoder saw %d inputs, want only the payload at the cap", len(r.decoder.inputs))
+	}
+	r.must(alice, "F1", alice)
+	if _, ok := r.find(alice, "O1", alice); ok {
+		t.Fatal("the payload over the cap was applied")
+	}
+	if calls := r.client.history(); !slices.Equal(calls, []string{"ack:HS2"}) {
+		t.Fatalf("calls %v, want a receipt only for the payload at the cap", calls)
+	}
+}
+
+func TestASwappedHistoryMappingIsDroppedAndTheBlobStillApplies(t *testing.T) {
+	r := newHistRig(t)
+	r.notify(HistoryRef{ID: "HS1", Inline: r.blob("synthetic swapped mapping", History{
+		Conversations: []Conversation{{Chat: alice, Messages: []Message{{ID: "L1", Sender: alice, Timestamp: epoch, Kind: KindText, Text: "kept"}}}},
+		LIDMappings:   []LIDMapping{{PN: aliceLID, LID: alice}},
+	})})
+	r.drainHistory()
+	r.must(alice, "L1", alice)
+	if r.dropped(dropInvalid) != 1 || len(r.alerts("quarantine")) != 0 {
+		t.Fatalf("invalid drops %v, quarantine alerts %v", r.dropped(dropInvalid), r.alerts("quarantine"))
+	}
+	db := r.inspect()
+	if got := query[string](t, db, "SELECT (SELECT count(*) FROM lid_map) || ' ' || (SELECT processed_at IS NOT NULL FROM history_blobs)"); got != "0 1" {
+		t.Fatalf("lid_map rows and processed blob = %q", got)
+	}
+}
+
 func TestInflateBoundaryAndDamage(t *testing.T) {
 	data := bytes.Repeat([]byte("history "), 125)
 	z := deflate(t, data)

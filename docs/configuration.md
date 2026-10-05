@@ -619,8 +619,9 @@ through a writer that stops at `WAWARDEN_HISTORY_MAX_BYTES`, refusing a blob
 announced as larger without downloading it, flushes the file to disk, renames it
 to `history/<id>.bin`, flushes the directory and only then sends WhatsApp the
 history receipt. A small first blob can arrive inside the notification; it is
-kept in the archive's record, needs no download, and gets its receipt when the
-engine takes it up. After a restart, the receipt of a blob that is still waiting
+kept in the archive's record, needs no download, is refused without being
+decompressed when it is larger than `WAWARDEN_HISTORY_MAX_BYTES`, and gets its
+receipt when the engine takes it up. After a restart, the receipt of a blob that is still waiting
 is sent again.
 
 For each blob the engine records an attempt, decompresses it, refusing more
