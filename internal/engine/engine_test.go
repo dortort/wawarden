@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -133,6 +134,79 @@ func TestEnginePausesAndResumesWithTheFreeSpace(t *testing.T) {
 	}
 	if !r.client.emit(dm("M2", alice, "after the pause")) {
 		t.Fatal("the engine refused a message after ingest resumed")
+	}
+}
+
+type clockedDecoder struct {
+	inner HistoryDecoder
+	clock *gatedClock
+}
+
+func (d clockedDecoder) Decode(blob []byte) (History, error) {
+	d.clock.mu.Lock()
+	d.clock.now = d.clock.now.Add(31 * time.Second)
+	d.clock.mu.Unlock()
+	return d.inner.Decode(blob)
+}
+
+func TestHistorySyncChecksTheFreeSpaceBetweenBatches(t *testing.T) {
+	r := newHistRig(t)
+	for i := 1; i <= 3; i++ {
+		id := strconv.Itoa(i)
+		r.notify(HistoryRef{ID: "HB" + id, Inline: r.blob("synthetic blob "+id, History{Conversations: []Conversation{{Chat: alice, Messages: []Message{
+			{ID: "S" + id, Sender: alice, Timestamp: epoch, Kind: KindText, Text: "history " + id},
+		}}}})})
+	}
+	clock := newGatedClock()
+	o := r.opts
+	o.Decoder, o.Clock, o.Metrics = clockedDecoder{inner: r.decoder, clock: clock}, clock, metrics.NewRegistry()
+	r.reg = o.Metrics
+	e, err := New(o)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	var freed atomic.Bool
+	e.pipe.space = lowAfter(clock, epoch.Add(45*time.Second), freed.Load)
+	e.Start(t.Context(), MaxRecentStarts+1)
+	t.Cleanup(func() { _ = e.Stop(context.Background()) })
+	eventually(t, "ingest pauses in the middle of the history sync", func() bool { return len(r.alerts("ingest_paused")) == 1 })
+	eventually(t, "the worker waits for its next check", func() bool { return clock.waiting() == 1 })
+	r.must(alice, "S1", alice)
+	for _, id := range []string{"S2", "S3"} {
+		if _, ok := r.find(alice, id, alice); ok {
+			t.Fatalf("%s was applied after ingest paused", id)
+		}
+	}
+	var pending []ingest.Blob
+	if err := r.archive.Read(t.Context(), "test.pending", func(rd *ingest.Reader) error {
+		var err error
+		pending, err = rd.PendingBlobs(pendingWindow)
+		return err
+	}); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(pending) != 2 || pending[0].ID != "HB2" || pending[0].Attempts != 0 || pending[1].Attempts != 0 {
+		t.Fatalf("pending blobs %+v, want HB2 and HB3 without an attempt", pending)
+	}
+	if r.client.emit(dm("M1", alice, "while paused")) {
+		t.Fatal("a message was acknowledged while ingest is paused")
+	}
+	freed.Store(true)
+	clock.advance(spaceInterval)
+	eventually(t, "the history sync resumes", func() bool {
+		_, two := r.find(alice, "S2", alice)
+		_, three := r.find(alice, "S3", alice)
+		return two && three
+	})
+	if len(r.logs.events("ingest_resumed")) != 1 {
+		t.Fatalf("no ingest_resumed event: %s", r.logs)
+	}
+	if err := e.Stop(t.Context()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	db := r.inspect()
+	if got := query[string](t, db, "SELECT group_concat(attempts || (processed_at IS NOT NULL), ',') FROM history_blobs"); got != "11,11,11" {
+		t.Fatalf("blob rows %q, want each processed after one attempt", got)
 	}
 }
 

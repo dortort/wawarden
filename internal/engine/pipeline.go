@@ -32,6 +32,9 @@ type pipeline struct {
 	paused  atomic.Bool
 	ctx     context.Context
 
+	nextSpace time.Time
+	nextSweep time.Time
+
 	beforeApply func(seq int64)
 	space       func() (ingest.Space, error)
 }
@@ -136,8 +139,21 @@ func (p *pipeline) checkSpace() {
 	}
 }
 
+func (p *pipeline) tick(ctx context.Context) bool {
+	now := p.clock.Now()
+	if !now.Before(p.nextSpace) {
+		p.checkSpace()
+		p.nextSpace = now.Add(spaceInterval)
+	}
+	if !now.Before(p.nextSweep) {
+		p.sweep(ctx)
+		p.nextSweep = now.Add(sweepInterval)
+	}
+	return !p.paused.Load()
+}
+
 func (p *pipeline) drainInbox(ctx context.Context) {
-	for ctx.Err() == nil && !p.paused.Load() {
+	for ctx.Err() == nil && p.tick(ctx) {
 		var item ingest.InboxItem
 		var ok bool
 		err := p.archive.Read(ctx, "engine.inbox_next", func(r *ingest.Reader) error {

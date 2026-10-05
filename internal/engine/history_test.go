@@ -619,7 +619,8 @@ func TestHistoryWaitsWhileIngestIsPaused(t *testing.T) {
 	r.client.blobs["HS2"] = r.blob("synthetic download", one("P2"))
 	r.notify(HistoryRef{ID: "HS1", Inline: r.blob("synthetic inline", one("P1"))})
 	r.notify(HistoryRef{ID: "HS2"})
-	r.p.paused.Store(true)
+	var freed atomic.Bool
+	r.p.space = func() (ingest.Space, error) { return ingest.Space{Free: 1, Floor: 2, Paused: !freed.Load()}, nil }
 	r.drainHistory()
 	if calls := r.client.history(); len(calls) != 0 {
 		t.Fatalf("calls %v while ingest is paused", calls)
@@ -638,7 +639,8 @@ func TestHistoryWaitsWhileIngestIsPaused(t *testing.T) {
 	if _, ok := r.find(alice, "P1", alice); ok {
 		t.Fatal("history was applied while ingest is paused")
 	}
-	r.p.paused.Store(false)
+	freed.Store(true)
+	r.clock.advance(spaceInterval)
 	r.drainHistory()
 	r.must(alice, "P1", alice)
 	r.must(alice, "P2", alice)

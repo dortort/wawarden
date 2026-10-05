@@ -69,6 +69,7 @@ func (e *Engine) Start(ctx context.Context, recentStarts int) {
 	e.unhook = e.sup.client.OnEvent(e.dispatch)
 	e.started = true
 	e.pipe.checkSpace()
+	e.pipe.nextSpace = e.pipe.clock.Now().Add(spaceInterval)
 	e.sup.start(ctx, recentStarts)
 	safego.Go("engine.ingest", func() { e.loop(ctx) })
 }
@@ -97,21 +98,12 @@ func (e *Engine) loop(ctx context.Context) {
 	defer close(e.done)
 	e.hist.clean(ctx)
 	clock := e.pipe.clock
-	nextSweep, nextSpace := clock.Now(), clock.Now().Add(spaceInterval)
 	for ctx.Err() == nil {
-		if now := clock.Now(); !now.Before(nextSpace) {
-			e.pipe.checkSpace()
-			nextSpace = now.Add(spaceInterval)
-		}
 		e.pipe.drainInbox(ctx)
 		e.hist.drain(ctx)
-		if now := clock.Now(); !now.Before(nextSweep) {
-			e.pipe.sweep(ctx)
-			nextSweep = now.Add(sweepInterval)
-		}
-		next := nextSweep
-		if nextSpace.Before(next) {
-			next = nextSpace
+		next := e.pipe.nextSweep
+		if e.pipe.nextSpace.Before(next) {
+			next = e.pipe.nextSpace
 		}
 		select {
 		case <-ctx.Done():

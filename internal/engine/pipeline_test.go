@@ -192,6 +192,44 @@ func TestPausedIngestRefuses(t *testing.T) {
 	r.must(alice, "M2", alice)
 }
 
+func lowAfter(clock Clock, at time.Time, freed func() bool) func() (ingest.Space, error) {
+	was := false
+	return func() (ingest.Space, error) {
+		paused := clock.Now().After(at) && !freed()
+		changed := paused != was
+		was = paused
+		return ingest.Space{Free: 1, Floor: 2, Paused: paused, Changed: changed}, nil
+	}
+}
+
+func TestTheWorkerChecksTheFreeSpaceAndSweepsBetweenInboxRows(t *testing.T) {
+	r := newPipeRig(t)
+	r.p.space = lowAfter(r.clock, epoch.Add(45*time.Second), func() bool { return false })
+	short := dm("M1", alice, "expires while the inbox drains")
+	short.Expiration = 40 * time.Second
+	for _, m := range []Message{short, dm("M2", alice, "two"), dm("M3", alice, "three"), dm("M4", alice, "four")} {
+		r.appendRaw(mustPayload(t, m))
+	}
+	r.p.beforeApply = func(int64) { r.clock.advance(31 * time.Second) }
+	r.drain()
+	if f := r.must(alice, "M1", alice); f.Text != "" {
+		t.Fatal("the expired message kept its text while the inbox drained for a minute")
+	}
+	r.must(alice, "M2", alice)
+	for _, id := range []string{"M3", "M4"} {
+		if _, ok := r.find(alice, id, alice); ok {
+			t.Fatalf("%s was applied after ingest paused", id)
+		}
+	}
+	if a := r.alerts("ingest_paused"); len(a) != 1 {
+		t.Fatalf("ingest_paused alerts %v", a)
+	}
+	db := r.inspect()
+	if n := query[int](t, db, "SELECT count(*) FROM inbox"); n != 2 {
+		t.Fatalf("%d inbox rows, want the two not applied", n)
+	}
+}
+
 func mustPayload(t *testing.T, ev Event) []byte {
 	t.Helper()
 	b, err := encodePayload(ev)

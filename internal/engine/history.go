@@ -27,7 +27,10 @@ const (
 	blobFileSuffix = ".bin"
 )
 
-var errNotConnected = errors.New("engine: the history blob needs a download and the engine is not connected")
+var (
+	errNotConnected = errors.New("engine: the history blob needs a download and the engine is not connected")
+	errPaused       = errors.New("engine: ingest is paused")
+)
 
 type historian struct {
 	p         *pipeline
@@ -101,7 +104,7 @@ func (h *historian) path(id, suffix string) string {
 }
 
 func (h *historian) drain(ctx context.Context) {
-	for ctx.Err() == nil && !h.p.paused.Load() {
+	for ctx.Err() == nil && h.p.tick(ctx) {
 		var pending []ingest.Blob
 		if err := h.p.archive.Read(ctx, "engine.history_pending", func(r *ingest.Reader) error {
 			var err error
@@ -154,6 +157,10 @@ func (h *historian) process(ctx context.Context, b ingest.Blob) {
 		return
 	}
 	err := guarded("engine.ingest", func() error { return h.ingest(ctx, b) })
+	if errors.Is(err, errPaused) {
+		h.release(run, b.ID)
+		return
+	}
 	if err == nil || ctx.Err() != nil {
 		return
 	}
@@ -163,6 +170,12 @@ func (h *historian) process(ctx context.Context, b ingest.Blob) {
 		return
 	}
 	_ = wait(ctx, p.clock, retryBase<<(attempts-1))
+}
+
+func (h *historian) release(ctx context.Context, id string) {
+	if err := h.p.write(ctx, "engine.history_release", func(tx *ingest.Tx) error { return tx.ReleaseBlobAttempt(id) }); err != nil {
+		h.p.logger.Warn("giving back a paused history attempt failed", slog.String("event", "ingest_failed"), slog.String("queue", queueHistory), slog.String("error_type", fmt.Sprintf("%T", err)))
+	}
 }
 
 func (h *historian) ingest(ctx context.Context, b ingest.Blob) error {
@@ -395,6 +408,9 @@ func (h *historian) messages(ctx context.Context, chat string, msgs []Message) e
 func (h *historian) batch(ctx context.Context, fn func(*applier) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if !h.p.tick(ctx) {
+		return errPaused
 	}
 	var out outcome
 	err := h.p.write(context.WithoutCancel(ctx), "engine.history_ingest", func(tx *ingest.Tx) error {

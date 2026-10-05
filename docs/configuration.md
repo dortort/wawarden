@@ -443,9 +443,13 @@ a time.
 directory's filesystem, for profile `local` only: below it ingest pauses, and it
 resumes once the free space reaches 1.25 times the floor. `0` turns the floor
 off. The [engine](#whatsapp-engine) measures the free space when it starts and
-every 30 seconds. While ingest is paused it acknowledges no message and no
+every 30 seconds, also while it works through its inbox or history sync: it
+checks whether a measurement is due before each inbox row, each history blob
+and each batch of a blob. While ingest is paused it acknowledges no message and no
 history-sync notification, so that WhatsApp delivers them again later, and
-applies nothing from its inbox or from history sync; pausing logs `ingest_paused` at every log level
+applies nothing from its inbox or from history sync; a blob that the pause
+interrupts stays waiting without using an attempt and is applied from its start
+once ingest resumes. Pausing logs `ingest_paused` at every log level
 and resuming logs `ingest_resumed`. This build runs no engine, so it validates
 the setting but nothing measures the free space. With profile `nfs` the floor
 never applies, because a network filesystem such as Amazon EFS grows on demand;
@@ -593,9 +597,10 @@ Further, the worker:
   tag characters, beside the text;
 - stores whether a message came live or from history sync, and whether the
   owner sent it;
-- sets the expiry of a message sent with a disappearing timer; every minute the
-  engine removes the text of expired messages from the archive as described
-  under [Message archive](#message-archive);
+- sets the expiry of a message sent with a disappearing timer; every minute,
+  also between the rows and batches it applies, the engine removes the text of
+  expired messages from the archive as described under
+  [Message archive](#message-archive);
 - learns which LID belongs to which phone number only from the alternate
   identifiers WhatsApp's servers attach to live messages and from history sync,
   and re-keys a direct chat from the number to the LID. A mapping that
