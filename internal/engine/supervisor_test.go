@@ -236,6 +236,100 @@ func TestPermanentDisconnectsWaitForTheAdmin(t *testing.T) {
 	}
 }
 
+func TestPermanentDisconnectsWhileConnectingWaitForTheAdmin(t *testing.T) {
+	for _, tt := range []struct {
+		event  Event
+		reason Reason
+	}{
+		{StreamReplaced{}, ReasonReplaced},
+		{TemporaryBan{Expire: time.Hour}, ReasonTemporaryBan},
+		{CATRefreshFailed{}, ReasonCATRefresh},
+		{ConnectFailure{Code: 409}, ReasonConnectFailure},
+	} {
+		for _, dialing := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s dialing=%v", tt.reason, dialing), func(t *testing.T) {
+				h := newSupRig(t)
+				h.versions(versionResult{v: current})
+				if dialing {
+					h.emitDuringFirstConnect(tt.event)
+				}
+				h.s.begin(t.Context(), 1)
+				h.steps()
+				if !dialing {
+					h.want(StateConnecting, "")
+					h.deliver(tt.event)
+				}
+				h.deliver(Connected{}, Disconnected{})
+				h.want(StateDisconnected, tt.reason)
+				if h.steps() != 0 || h.client.count("connect") != 1 || h.client.isConnected() {
+					t.Fatalf("calls %v: want the one connection closed and no other", h.client.history())
+				}
+				if a := h.alerts("disconnected"); len(a) != 1 || a[0]["reason"] != string(tt.reason) {
+					t.Fatalf("disconnected alerts %v", a)
+				}
+				if h.counter("wawarden_connected") != 0 {
+					t.Fatal("the Connected gauge is not 0")
+				}
+				if err := h.s.reconnect(); err != nil {
+					t.Fatalf("Reconnect = %v", err)
+				}
+				h.steps()
+				h.deliver(Connected{})
+				h.want(StateConnected, "")
+			})
+		}
+	}
+}
+
+func TestOutdatedWhileConnectingRefreshesTheVersion(t *testing.T) {
+	for _, dialing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dialing=%v newer", dialing), func(t *testing.T) {
+			h := newSupRig(t)
+			v := h.versions(versionResult{v: current}, versionResult{v: newer})
+			if dialing {
+				h.emitDuringFirstConnect(ClientOutdated{})
+			}
+			h.s.begin(t.Context(), 1)
+			h.steps()
+			if !dialing {
+				h.want(StateConnecting, "")
+				h.deliver(ClientOutdated{})
+				h.steps()
+			}
+			calls := h.client.history()
+			if v.count() != 2 || h.client.Version() != newer || slices.Contains(calls, "set_version_while_connected") {
+				t.Fatalf("%d fetches, version %v, calls %v", v.count(), h.client.Version(), calls)
+			}
+			i := slices.Index(calls, "set_version")
+			if i < 1 || calls[i-1] != "disconnect" || calls[len(calls)-1] != "connect" || h.client.count("connect") != 2 {
+				t.Fatalf("calls %v, want a disconnect, the version, then a second connect", calls)
+			}
+			h.deliver(Connected{})
+			h.want(StateConnected, "")
+		})
+		t.Run(fmt.Sprintf("dialing=%v none newer", dialing), func(t *testing.T) {
+			h := newSupRig(t)
+			v := h.versions(versionResult{v: current})
+			if dialing {
+				h.emitDuringFirstConnect(ClientOutdated{})
+			}
+			h.s.begin(t.Context(), 1)
+			h.steps()
+			if !dialing {
+				h.deliver(ClientOutdated{})
+				h.steps()
+			}
+			h.want(StateDisconnected, ReasonOutdated)
+			if v.count() != 5 || h.client.count("connect") != 1 || h.client.count("set_version") != 0 {
+				t.Fatalf("%d fetches, calls %v", v.count(), h.client.history())
+			}
+			if a := h.alerts("disconnected"); len(a) != 1 || a[0]["reason"] != string(ReasonOutdated) {
+				t.Fatalf("disconnected alerts %v", a)
+			}
+		})
+	}
+}
+
 func TestLoggedOutWinsInEitherOrder(t *testing.T) {
 	for _, order := range [][]Event{{LoggedOut{}, StreamReplaced{}}, {StreamReplaced{}, LoggedOut{}}, {Disconnected{}, LoggedOut{}}} {
 		h := newSupRig(t)
