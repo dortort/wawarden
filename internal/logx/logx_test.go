@@ -491,12 +491,21 @@ func TestAttributesRenderFailClosed(t *testing.T) {
 	}
 	w, out := keyedWriter(t)
 	logger := New(w, slog.LevelDebug)
+	raw := json.RawMessage(`{"text":"synthetic secret"}`)
+	rawPtr := &raw
+	text, failing, plain := stringBytes(canary), errorBytes(canary), []byte(canary)
 	tests := []struct {
 		name  string
 		value any
 		want  any
 	}{
 		{name: "byte slice", value: []byte(canary), want: "[26 bytes]"},
+		{name: "pointer to raw JSON", value: &raw, want: "[27 bytes]"},
+		{name: "pointer to a pointer to raw JSON", value: &rawPtr, want: "[**jsontext.Value]"},
+		{name: "nil pointer to raw JSON", value: (*json.RawMessage)(nil), want: "[*jsontext.Value]"},
+		{name: "pointer to a byte slice with a String method", value: &text, want: "[26 bytes]"},
+		{name: "pointer to a byte slice with an Error method", value: &failing, want: "[26 bytes]"},
+		{name: "pointer to a byte slice", value: &plain, want: "[26 bytes]"},
 		{name: "empty byte slice", value: []byte{}, want: "[0 bytes]"},
 		{name: "error", value: errors.New("dial " + canary + " failed"), want: "dial " + expected(canary) + " failed"},
 		{name: "wrapped error", value: fmt.Errorf("outer: %w", errors.New(canary)), want: "outer: " + expected(canary)},
@@ -554,7 +563,10 @@ func TestTheCanaryNeverReachesTheOutput(t *testing.T) {
 	logger := New(w, slog.LevelDebug)
 	alerts := New(w, slog.LevelWarn)
 	err := fmt.Errorf("wrapped: %w", errors.Join(errors.New(canary), errors.New("<iq to=\""+canary+"\"/>")))
+	raw := json.RawMessage(`{"text":"` + secretText + `","phone":"` + canaryUser + `"}`)
+	stringy, failing := stringBytes(secretText), errorBytes(secretText)
 	values := []any{
+		&raw, &stringy, &failing,
 		canary, []byte(canary), errors.New(canary), err, stringer{canary}, holder{Chat: canaryUser, Data: []byte(canary)},
 		&holder{Chat: canaryUser}, map[string]any{"phone": canaryUser}, []any{canaryUser}, chat, &chat,
 		valuer{slog.StringValue(canary)}, valuer{slog.GroupValue(slog.String(canary, canary))},

@@ -211,7 +211,11 @@ func render(v any) (s string) {
 			s = typeName(v)
 		}
 	}()
-	if b := reflect.ValueOf(v); b.Kind() == reflect.Slice && b.Type().Elem().Kind() == reflect.Uint8 {
+	b := reflect.ValueOf(v)
+	if b.Kind() == reflect.Pointer && !b.IsNil() {
+		b = b.Elem()
+	}
+	if b.Kind() == reflect.Slice && b.Type().Elem().Kind() == reflect.Uint8 {
 		return fmt.Sprintf("[%d bytes]", b.Len())
 	}
 	switch x := v.(type) {

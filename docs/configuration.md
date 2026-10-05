@@ -1158,8 +1158,9 @@ was written at once or in pieces.
 
 **Values are written fail-closed.** In the events above every value is a
 string, a number, a boolean or a time. Should any other value reach a log line, a
-byte slice of any type is written as its length (`[32 bytes]`), even when it has
-a `String` or `Error` method, as a raw JSON value does; an error or a value with a
+byte slice of any type, or a pointer to one, is written as its length
+(`[32 bytes]`), even when it has a `String` or `Error` method, as a raw JSON value
+does; an error or a value with a
 `String` method as its text, which is then pseudonymised like the rest of the
 line, and every other value as its Go type in brackets, such as `[seal.Chat]`,
 never as its content.
