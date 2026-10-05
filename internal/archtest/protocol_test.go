@@ -59,7 +59,11 @@ var (
 	documentDecoders      = []string{"encoding/gob", "encoding/json", "encoding/xml", "net/rpc"}
 )
 
-const settingWriter = "installLocked"
+const (
+	settingWriter   = "installLocked"
+	handlerRegistry = "AddEventHandlerWithSuccessStatus"
+	handlerFactory  = "handlerFor"
+)
 
 func lowerKeys[V any](m map[string]V) map[string]string {
 	out := make(map[string]string, len(m))
@@ -126,7 +130,7 @@ func f(cli *whatsmeow.Client) {
 	_ = cli.AddEventHandler(func(any) {})
 }
 `},
-		{name: "the calls the adapter makes, and its installer setting the client", rel: "internal/engine/wa/x.go", src: `package wa
+		{name: "the calls the adapter makes, and its installer setting the client and registering its handler", rel: "internal/engine/wa/x.go", src: `package wa
 
 import (
 	"context"
@@ -137,13 +141,22 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type Client struct{ cli *whatsmeow.Client }
+type Client struct {
+	cli *whatsmeow.Client
+	gen uint64
+}
+
+func (c *Client) handlerFor(gen uint64) whatsmeow.EventHandlerWithSuccessStatus {
+	return func(any) bool { return gen == c.gen }
+}
 
 func (c *Client) installLocked(cli *whatsmeow.Client) {
 	cli.ManualHistorySyncDownload = true
 	cli.DisableManualHistorySyncReceipt = true
 	cli.EnableAutoReconnect, cli.InitialAutoReconnect = false, false
 	cli.AutoReconnectHook = func(error) bool { return false }
+	c.gen++
+	(cli.AddEventHandlerWithSuccessStatus)(c.handlerFor(c.gen))
 	c.cli = cli
 }
 
@@ -205,12 +218,11 @@ type holder struct{ cli *whatsmeow.Client }
 func f(cli *whatsmeow.Client, h holder) []string {
 	h.cli = cli
 	_ = !cli.SynchronousAck && cli.RefreshCAT != nil
-	_ = (*whatsmeow.Client).AddEventHandlerWithSuccessStatus
 	_ = []*whatsmeow.Client{cli}
 	return []string{"manual history sync", "SendPresenceNow", "the read marker", "AddEventHandlerWithSuccessStatus", "markReadable"}
 }
 `},
-		{name: "document decoders in the adapter and settings written outside its installer", rel: "internal/engine/wa/x.go", want: 11, src: `package wa
+		{name: "document decoders in the adapter, settings written outside its installer and a handler that is not its own", rel: "internal/engine/wa/x.go", want: 12, src: `package wa
 
 import (
 	"encoding/gob"
@@ -241,6 +253,40 @@ func (c *Client) installLocked(cli *whatsmeow.Client) {
 }
 
 func installLocked(cli *whatsmeow.Client) { cli.UseRetryMessageStore = true }
+`},
+		{name: "event handlers registered other than by the installer as its own handler for the current client", rel: "internal/engine/wa/x.go", want: 9, src: `package wa
+
+import "go.mau.fi/whatsmeow"
+
+type Client struct {
+	cli *whatsmeow.Client
+	gen uint64
+}
+
+func (c *Client) handlerFor(gen uint64) whatsmeow.EventHandlerWithSuccessStatus {
+	return func(any) bool { return gen == c.gen }
+}
+
+func (c *Client) installLocked(cli *whatsmeow.Client) {
+	cli.AddEventHandlerWithSuccessStatus(func(any) bool { return true })
+	cli.AddEventHandlerWithSuccessStatus(c.handlerFor(c.gen + 1))
+	cli.AddEventHandlerWithSuccessStatus(c.handlerFor(c.gen))
+	other := &Client{}
+	cli.AddEventHandlerWithSuccessStatus(other.handlerFor(other.gen))
+	cli.AddEventHandlerWithSuccessStatus(c.handlerFor(other.gen))
+	register := cli.AddEventHandlerWithSuccessStatus
+	register(c.handlerFor(c.gen))
+	func() { cli.AddEventHandlerWithSuccessStatus(c.handlerFor(c.gen)) }()
+}
+
+func (c *Client) prepare() {
+	c.cli.AddEventHandlerWithSuccessStatus(c.handlerFor(c.gen))
+	_ = (*whatsmeow.Client).AddEventHandlerWithSuccessStatus
+}
+
+func installLocked(c *Client, cli *whatsmeow.Client) {
+	cli.AddEventHandlerWithSuccessStatus(c.handlerFor(c.gen))
+}
 `},
 		{name: "a document decoder in the device store", rel: "internal/store/session/x.go", want: 1, src: `package session
 
@@ -288,18 +334,28 @@ func checkProtocolCalls(f *sourceFile) []string {
 		}
 	}
 	var writers, closures []ast.Node
+	receivers := map[ast.Node]string{}
 	for _, d := range f.file.Decls {
 		if fd, ok := d.(*ast.FuncDecl); ok && !f.test && f.dir == adapterDir && fd.Name.Name == settingWriter && fd.Recv != nil && fd.Body != nil &&
 			len(fd.Recv.List) == 1 && f.isType(fd.Recv.List[0].Type, module+"/"+adapterDir, "Client") {
 			writers = append(writers, fd.Body)
+			if names := fd.Recv.List[0].Names; len(names) == 1 {
+				receivers[fd.Body] = names[0].Name
+			}
 		}
 	}
 	var targets []ast.Expr
+	var registries []*ast.SelectorExpr
+	registered := map[*ast.SelectorExpr]*ast.CallExpr{}
 	fields, pointed := map[*ast.Ident]bool{}, map[ast.Expr]bool{}
 	ast.Inspect(f.file, func(n ast.Node) bool {
 		switch e := n.(type) {
 		case *ast.FuncLit:
 			closures = append(closures, e)
+		case *ast.CallExpr:
+			if sel, ok := ast.Unparen(e.Fun).(*ast.SelectorExpr); ok && sel.Sel.Name == handlerRegistry {
+				registered[sel] = e
+			}
 		case *ast.AssignStmt:
 			targets = append(targets, e.Lhs...)
 		case *ast.RangeStmt:
@@ -314,6 +370,9 @@ func checkProtocolCalls(f *sourceFile) []string {
 			}
 		case *ast.SelectorExpr:
 			fields[e.Sel] = true
+			if e.Sel.Name == handlerRegistry {
+				registries = append(registries, e)
+			}
 			if s, p := f.ref(e); s != nil && p == waLogPath && bannedProtocolLogging[e.Sel.Name] {
 				out = append(out, f.at(e, "the protocol library's %s logger bypasses the scrubbing writer: log through the adapter over logx", e.Sel.Name))
 			}
@@ -343,6 +402,12 @@ func checkProtocolCalls(f *sourceFile) []string {
 			out = append(out, f.at(sel, "%s is a protocol client setting that only (*Client).%s in %s writes, so nothing undoes it after the client is built", name, settingWriter, adapterDir))
 		}
 	}
+	for _, sel := range registries {
+		if f.test || !inside(sel, closures) && ownHandler(registered[sel], writers, receivers) {
+			continue
+		}
+		out = append(out, f.at(sel, "the protocol library acknowledges an event only when every handler answers true: only (*Client).%s in %s registers one, outside any function literal, and only as %s(<receiver>.gen) of its own receiver, so the answer is the engine's for the current client", settingWriter, adapterDir, handlerFactory))
+	}
 	if f.dir == archtestDir {
 		return out
 	}
@@ -356,6 +421,32 @@ func checkProtocolCalls(f *sourceFile) []string {
 		}
 	})
 	return out
+}
+
+func ownHandler(call *ast.CallExpr, writers []ast.Node, receivers map[ast.Node]string) bool {
+	if call == nil || len(call.Args) != 1 || call.Ellipsis.IsValid() {
+		return false
+	}
+	recv := ""
+	for _, w := range writers {
+		if w.Pos() <= call.Pos() && call.End() <= w.End() {
+			recv = receivers[w]
+		}
+	}
+	isRecv := func(e ast.Expr) bool {
+		id, ok := ast.Unparen(e).(*ast.Ident)
+		return ok && recv != "" && recv != "_" && id.Name == recv
+	}
+	inner, ok := ast.Unparen(call.Args[0]).(*ast.CallExpr)
+	if !ok || len(inner.Args) != 1 || inner.Ellipsis.IsValid() {
+		return false
+	}
+	factory, ok := ast.Unparen(inner.Fun).(*ast.SelectorExpr)
+	if !ok || factory.Sel.Name != handlerFactory || !isRecv(factory.X) {
+		return false
+	}
+	gen, ok := ast.Unparen(inner.Args[0]).(*ast.SelectorExpr)
+	return ok && gen.Sel.Name == "gen" && isRecv(gen.X)
 }
 
 func jsonUnescaped(s string) string {
