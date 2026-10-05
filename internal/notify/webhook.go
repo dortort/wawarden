@@ -18,6 +18,7 @@ import (
 	"net/netip"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -55,8 +56,9 @@ var (
 	errURL          = errors.New("notify: the webhook URL must be https://host[:port][/path][?query], without credentials or a fragment")
 	errSecret       = errors.New("notify: the webhook needs a signing secret of at least 32 bytes and a metrics registry")
 	errDestination  = errors.New("notify: the webhook's destination address is refused")
-	alwaysRefused   = prefixes("0.0.0.0/8", "169.254.0.0/16", "224.0.0.0/4", "240.0.0.0/4", "100.100.100.200/32", "192.0.0.192/32", "::/128", "fe80::/10", "ff00::/8", "fd00:ec2::254/128")
+	alwaysRefused   = prefixes("0.0.0.0/8", "169.254.0.0/16", "224.0.0.0/4", "240.0.0.0/4", "100.100.100.200/32", "192.0.0.192/32", "::/128", "fe80::/10", "ff00::/8", "fd00:ec2::254/128", "64:ff9b:1::/48")
 	privateUnlessOK = prefixes("100.64.0.0/10")
+	nat64           = netip.MustParsePrefix("64:ff9b::/96")
 )
 
 func prefixes(ss ...string) []netip.Prefix {
@@ -69,7 +71,8 @@ func prefixes(ss ...string) []netip.Prefix {
 
 func CheckURL(raw string) error {
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.Hostname() == "" || u.User != nil || u.Fragment != "" || u.Opaque != "" {
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.Hostname() == "" || strings.Contains(u.Hostname(), "%") ||
+		u.User != nil || u.Fragment != "" || u.Opaque != "" {
 		return errURL
 	}
 	return nil
@@ -78,7 +81,14 @@ func CheckURL(raw string) error {
 type destination struct{ allowPrivate bool }
 
 func (d destination) check(a netip.Addr) error {
+	if a.Zone() != "" {
+		return errDestination
+	}
 	a = a.Unmap()
+	if nat64.Contains(a) {
+		b := a.As16()
+		a = netip.AddrFrom4([4]byte(b[12:]))
+	}
 	for _, p := range alwaysRefused {
 		if p.Contains(a) {
 			return errDestination

@@ -322,6 +322,18 @@ func TestDestinations(t *testing.T) {
 		{"100.64.0.1", false, true},
 		{"192.0.2.10", true, true},
 		{"2001:db8::10", true, true},
+		{"fe80::1%eth0", false, false},
+		{"fe80::a9fe:a9fe%1", false, false},
+		{"fd00:ec2::254%eth0", false, false},
+		{"ff02::1%eth0", false, false},
+		{"2001:db8::10%eth0", false, false},
+		{"64:ff9b::a9fe:a9fe", false, false},
+		{"64:ff9b::6464:64c8", false, false},
+		{"64:ff9b::a00:1", false, true},
+		{"64:ff9b::7f00:1", false, true},
+		{"64:ff9b::c000:20a", true, true},
+		{"64:ff9b:1::a00:1", false, false},
+		{"64:ff9b:1::c000:20a", false, false},
 	}
 	for _, tt := range tests {
 		a := netip.MustParseAddr(tt.addr)
@@ -335,6 +347,11 @@ func TestDestinations(t *testing.T) {
 	if (destination{allowPrivate: true}).control("tcp", "not an address", nil) == nil {
 		t.Fatal("an unparsable address was allowed")
 	}
+	for _, address := range []string{"[fd00:ec2::254%eth0]:80", "[fe80::1%lo]:443", "[64:ff9b::a9fe:a9fe]:80"} {
+		if (destination{allowPrivate: true}).control("tcp6", address, nil) == nil {
+			t.Errorf("dialling %s was allowed with private destinations", address)
+		}
+	}
 }
 
 func TestCheckURL(t *testing.T) {
@@ -345,8 +362,16 @@ func TestCheckURL(t *testing.T) {
 	}
 	withUser := (&url.URL{Scheme: "https", User: url.UserPassword("synthetic", "synthetic"), Host: "hooks.example.test", Path: "/x"}).String()
 	port := ":443"
-	for _, u := range []string{"", "http://hooks.example.test/x", withUser, "https://hooks.example.test/x#f",
-		"https:///x", "https:hooks.example.test", "ftp://hooks.example.test", "hooks.example.test/x", "https://" + port + "/x"} {
+	refused := []string{"", "http://hooks.example.test/x", withUser, "https://hooks.example.test/x#f",
+		"https:///x", "https:hooks.example.test", "ftp://hooks.example.test", "hooks.example.test/x", "https://" + port + "/x"}
+	for _, zoned := range []string{"[fd00:ec2::254%eth0]", "[fe80::1%lo]", "[2001:db8::10%eth0]:8443"} {
+		u := (&url.URL{Scheme: "https", Host: zoned, Path: "/latest/meta-data/"}).String()
+		if !strings.Contains(u, "%25") {
+			t.Fatalf("%q does not carry its zone", u)
+		}
+		refused = append(refused, u)
+	}
+	for _, u := range refused {
 		if err := CheckURL(u); err == nil {
 			t.Errorf("CheckURL(%q) accepted", u)
 		}
