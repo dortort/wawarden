@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/dortort/wawarden/internal/metrics"
 )
 
 var (
@@ -302,6 +304,40 @@ func TestBackoffStaysWithinItsBounds(t *testing.T) {
 		if d := s.backoff(attempt); d < ceiling/2 || d >= ceiling {
 			t.Fatalf("backoff(%d) = %v, want within [%v, %v)", attempt, d, ceiling/2, ceiling)
 		}
+	}
+}
+
+func TestBackoffAddsTheJitterToHalfTheDelay(t *testing.T) {
+	s := &supervisor{jitter: func(d time.Duration) time.Duration { return d / 3 }}
+	for i, secs := range []time.Duration{2, 4, 8, 16, 32, 64, 128, 256, 300, 300} {
+		d := secs * time.Second
+		if got, want := s.backoff(i+1), d/2+(d-d/2)/3; got != want {
+			t.Fatalf("backoff(%d) = %v, want %v", i+1, got, want)
+		}
+	}
+	if got, want := s.backoff(50), 150*time.Second+50*time.Second; got != want {
+		t.Fatalf("backoff at the cap = %v, want %v", got, want)
+	}
+}
+
+func TestNewInstallsARandomJitter(t *testing.T) {
+	r := newHistRig(t)
+	o := r.opts
+	o.Jitter, o.Metrics = nil, metrics.NewRegistry()
+	e, err := New(o)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	seen := map[time.Duration]bool{}
+	for range 100 {
+		d := e.sup.backoff(5)
+		if d < 16*time.Second || d >= 32*time.Second {
+			t.Fatalf("backoff(5) = %v, want within [16s, 32s)", d)
+		}
+		seen[d] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("100 draws of backoff(5) all gave %v", seen)
 	}
 }
 
