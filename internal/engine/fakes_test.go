@@ -97,6 +97,54 @@ func (c *fakeClock) slept() []time.Duration {
 	return slices.Clone(c.waits)
 }
 
+type gatedClock struct {
+	mu      sync.Mutex
+	now     time.Time
+	waiters []gatedWaiter
+}
+
+type gatedWaiter struct {
+	at time.Time
+	ch chan time.Time
+}
+
+func newGatedClock() *gatedClock { return &gatedClock{now: epoch} }
+
+func (c *gatedClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *gatedClock) After(d time.Duration) <-chan time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ch := make(chan time.Time, 1)
+	c.waiters = append(c.waiters, gatedWaiter{at: c.now.Add(d), ch: ch})
+	return ch
+}
+
+func (c *gatedClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+	kept := c.waiters[:0]
+	for _, w := range c.waiters {
+		if w.at.After(c.now) {
+			kept = append(kept, w)
+			continue
+		}
+		w.ch <- c.now
+	}
+	c.waiters = kept
+}
+
+func (c *gatedClock) waiting() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.waiters)
+}
+
 type fakeClient struct {
 	mu          sync.Mutex
 	paired      bool

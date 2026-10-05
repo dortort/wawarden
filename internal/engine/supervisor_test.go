@@ -317,6 +317,46 @@ func TestAConnectionThatLostItsRaceIsClosed(t *testing.T) {
 	}
 }
 
+func (h *supRig) emitDuringFirstConnect(evs ...Event) {
+	var once sync.Once
+	h.client.onConnect = func() {
+		once.Do(func() {
+			for _, ev := range evs {
+				h.client.emit(ev)
+			}
+		})
+	}
+}
+
+func TestADropWhileConnectingReconnects(t *testing.T) {
+	h := newSupRig(t)
+	h.emitDuringFirstConnect(Disconnected{})
+	h.versions(versionResult{v: current})
+	h.s.begin(t.Context(), 1)
+	h.steps()
+	if h.client.count("connect") != 2 || !slices.Equal(h.clock.slept(), []time.Duration{time.Second}) {
+		t.Fatalf("calls %v waits %v, want a second connect after the backoff", h.client.history(), h.clock.slept())
+	}
+	h.want(StateConnecting, "")
+	h.deliver(Connected{})
+	h.want(StateConnected, "")
+}
+
+func TestADropWhileConnectingReconnectsInTheRunLoop(t *testing.T) {
+	h := newSupRig(t)
+	clock := newGatedClock()
+	h.s.clock = clock
+	h.emitDuringFirstConnect(Disconnected{})
+	h.versions(versionResult{v: current})
+	h.s.start(t.Context(), 1)
+	h.client.waitFor(t, "connect")
+	eventually(t, "the reconnect waits for its backoff", func() bool { return clock.waiting() == 1 })
+	clock.advance(time.Second)
+	h.client.waitFor(t, "connect")
+	h.client.emit(Connected{})
+	eventually(t, "the second connection is connected", func() bool { return h.s.status().State == StateConnected })
+}
+
 func TestConnectFailuresRetry(t *testing.T) {
 	h := newSupRig(t)
 	h.client.connectErrs = []error{errors.New("synthetic"), errors.New("synthetic"), nil}

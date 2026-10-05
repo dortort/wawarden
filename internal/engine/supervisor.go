@@ -93,6 +93,8 @@ type supervisor struct {
 	next       intent
 	outdated   bool
 	attempt    int
+	dialing    bool
+	dropped    bool
 	awaiting   bool
 	pairs      []time.Time
 	cancelStep context.CancelFunc
@@ -151,7 +153,7 @@ func (s *supervisor) setLocked(state State, reason Reason) {
 		s.cancelStep()
 		s.cancelStep = nil
 	}
-	s.awaiting = false
+	s.dialing, s.dropped, s.awaiting = false, false, false
 	s.next = idle
 	if s.state == state && s.reason == reason {
 		return
@@ -292,19 +294,29 @@ func (s *supervisor) connect(ctx context.Context, gen uint64, attempt int) {
 	if attempt > 0 && wait(ctx, s.clock, s.backoff(attempt)) != nil {
 		return
 	}
-	if !s.current(gen) {
+	s.mu.Lock()
+	if s.gen != gen {
+		s.mu.Unlock()
 		return
 	}
+	s.dialing = true
+	s.mu.Unlock()
 	err := s.client.Connect(ctx)
 	s.mu.Lock()
 	superseded := s.gen != gen
 	stale := superseded && err == nil && s.state == StateDisconnected
+	dropped := !superseded && s.dropped
+	if !superseded {
+		s.dialing, s.dropped = false, false
+	}
 	switch {
 	case superseded:
-	case err == nil:
+	case err == nil && !dropped:
 		s.awaiting = true
 	default:
-		s.logger.Warn("connecting to WhatsApp failed", slog.String("event", "connect_failed"), slog.Int("attempt", attempt+1), slog.String("error_type", fmt.Sprintf("%T", err)))
+		if err != nil {
+			s.logger.Warn("connecting to WhatsApp failed", slog.String("event", "connect_failed"), slog.Int("attempt", attempt+1), slog.String("error_type", fmt.Sprintf("%T", err)))
+		}
 		s.next, s.attempt = connect, attempt+1
 		s.wake()
 	}
@@ -341,6 +353,8 @@ func (s *supervisor) handle(ev Event) {
 			s.setLocked(StateConnecting, "")
 			s.next, s.attempt = connect, attempt
 			s.wake()
+		case s.dialing:
+			s.dropped = true
 		}
 	case ClientOutdated:
 		if s.trying() {
