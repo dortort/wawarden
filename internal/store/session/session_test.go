@@ -128,6 +128,29 @@ func TestOpenRefusesASessionFileItCannotTrust(t *testing.T) {
 	}
 }
 
+func TestOpenUsesANewerStoreThatDeclaresItselfCompatible(t *testing.T) {
+	dir := t.TempDir()
+	s := open(t, dir)
+	var version int
+	if err := s.db.RawHandle().QueryRowContext(t.Context(), "SELECT version FROM whatsmeow_version").Scan(&version); err != nil {
+		t.Fatalf("read the schema version: %v", err)
+	}
+	if _, err := s.db.RawHandle().ExecContext(t.Context(), "UPDATE whatsmeow_version SET version = ?, compat = ?", version+1, version); err != nil {
+		t.Fatalf("UPDATE: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	again := open(t, dir)
+	var gotVersion, gotCompat int
+	if err := again.db.RawHandle().QueryRowContext(t.Context(), "SELECT version, compat FROM whatsmeow_version").Scan(&gotVersion, &gotCompat); err != nil {
+		t.Fatalf("read the schema version: %v", err)
+	}
+	if gotVersion != version+1 || gotCompat != version {
+		t.Fatalf("the reopened store is at version %d, compatible down to %d, want %d and %d unchanged", gotVersion, gotCompat, version+1, version)
+	}
+}
+
 func TestOpenRefusesAStoreItCannotUpgrade(t *testing.T) {
 	dir := t.TempDir()
 	s := open(t, dir)

@@ -445,8 +445,10 @@ checked, the file is created empty with mode `0600` when it does not exist, the
 file and its journal must pass refusals 51 to 58, the connection reads back the
 same fixed settings and takes the same exclusive lock, kept the same way, with
 `db_lock_wait` naming `session` and `db_lost` too. Then the protocol library
-brings its tables up to date, within one minute; a store written by a newer
-version of the library stops the start with `startup_failed`. `serve` logs
+brings its tables up to date, within one minute. A store written by a newer
+version of the library is used unchanged when it declares itself compatible
+with the version this build links, and stops the start with `startup_failed`
+when it does not. `serve` logs
 `session_opened` with `paired` set to whether the store holds a linked device.
 
 The protocol library runs its own queries on that connection, so the read and
