@@ -58,6 +58,7 @@ type Client interface {
 	Connect(ctx context.Context) error
 	Disconnect()
 	Paired() bool
+	Account() string
 	PairPhone(ctx context.Context, digits string) (code string, err error)
 	Logout(ctx context.Context) error
 	Version() Version

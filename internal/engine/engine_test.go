@@ -146,8 +146,8 @@ func TestContentIsDroppedWhileNoDeviceIsPaired(t *testing.T) {
 	if _, err := e.Pair(t.Context()); err != nil {
 		t.Fatalf("Pair: %v", err)
 	}
-	r.client.setPaired(true)
-	r.client.emit(Paired{JID: "15550100002:3@s.whatsapp.net"})
+	r.client.pairAs(bobDev)
+	r.client.emit(Paired{JID: bobDev})
 	for _, ev := range []Event{
 		dm("M1", bob, "from the rejected account"),
 		Group{Chat: group, Subject: "Rejected Account Group", Timestamp: epoch},
@@ -164,8 +164,8 @@ func TestContentIsDroppedWhileNoDeviceIsPaired(t *testing.T) {
 	if _, err := e.Pair(t.Context()); err != nil {
 		t.Fatalf("Pair: %v", err)
 	}
-	r.client.setPaired(true)
-	r.client.emit(Paired{JID: "15550100009:12@s.whatsapp.net"})
+	r.client.pairAs(ownerDev)
+	r.client.emit(Paired{JID: ownerDev})
 	if !r.client.emit(dm("M2", alice, "after the owner paired")) {
 		t.Fatal("a message after the owner paired was refused")
 	}
@@ -179,6 +179,85 @@ func TestContentIsDroppedWhileNoDeviceIsPaired(t *testing.T) {
 	db := r.inspect()
 	if got := query[string](t, db, "SELECT (SELECT count(*) FROM inbox) || ' ' || (SELECT count(*) FROM history_blobs) || ' ' || (SELECT group_concat(id) FROM messages) || ' ' || (SELECT count(*) FROM chats WHERE jid != ?)", alice); got != "0 0 M2 0" {
 		t.Fatalf("inbox rows, blobs, messages and other chats = %q, want only the owner's message", got)
+	}
+}
+
+func TestARejectedAccountIsNeitherConnectedNorStoredWhenItsLogoutFails(t *testing.T) {
+	r := newHistRig(t)
+	r.client.setPaired(false)
+	r.client.failLogouts(1000)
+	clock := newGatedClock()
+	startEngine := func(recent int) *Engine {
+		o := r.opts
+		o.Clock, o.Metrics = clock, metrics.NewRegistry()
+		o.Versions = &fakeVersions{results: []versionResult{{v: current}}}
+		r.reg = o.Metrics
+		e, err := New(o)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		e.Start(t.Context(), recent)
+		t.Cleanup(func() { _ = e.Stop(context.Background()) })
+		return e
+	}
+	content := []Event{
+		dm("W1", bob, "from the rejected account"),
+		Group{Chat: group, Subject: "Rejected Account Group", Timestamp: epoch},
+		HistoryNotification{Sender: bob, FromMe: true, Ref: HistoryRef{ID: "HS1", Inline: []byte("synthetic")}},
+	}
+	rejectedEverywhere := func(e *Engine, logouts int) {
+		t.Helper()
+		eventually(t, "the logout failed", func() bool { return r.client.count("logout_failed") == logouts })
+		if err := e.Reconnect(); !errors.Is(err, ErrNotPaired) {
+			t.Fatalf("Reconnect = %v, want ErrNotPaired", err)
+		}
+		r.client.emit(Connected{})
+		for _, ev := range content {
+			if !r.client.emit(ev) {
+				t.Fatalf("%T from the rejected account was refused instead of dropped", ev)
+			}
+		}
+		if got := r.counter("wawarden_ingest_dropped_total", "reason", "not_paired"); got != float64(len(content)) {
+			t.Fatalf("not_paired drops %v", got)
+		}
+		if st := e.Status(); st != (Status{State: StateUnpaired, Paired: true}) {
+			t.Fatalf("status %+v", st)
+		}
+	}
+
+	e := startEngine(1)
+	eventually(t, "the engine waits for pairing", func() bool { return e.Status().State == StateUnpaired })
+	if _, err := e.Pair(t.Context()); err != nil {
+		t.Fatalf("Pair: %v", err)
+	}
+	r.client.pairAs(bobDev)
+	r.client.emit(Paired{JID: bobDev})
+	rejectedEverywhere(e, 1)
+	r.client.emit(LoggedOut{})
+	for _, ev := range content {
+		r.client.emit(ev)
+	}
+	if got := r.counter("wawarden_ingest_dropped_total", "reason", "not_paired"); got != float64(2*len(content)) {
+		t.Fatalf("not_paired drops after a LoggedOut %v", got)
+	}
+	if err := e.Stop(t.Context()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	e = startEngine(2)
+	rejectedEverywhere(e, 2)
+	if a := r.alerts("pair_rejected"); len(a) != 2 || a[0]["stage"] != "after_pairing" || a[1]["stage"] != "stored_device" {
+		t.Fatalf("pair_rejected alerts %v", a)
+	}
+	if r.client.count("connect") != 1 || r.client.count("logout_failed") != 2 {
+		t.Fatalf("calls %v: want only the pairing's connect and one failed logout per start", r.client.history())
+	}
+	if err := e.Stop(t.Context()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	db := r.inspect()
+	if got := query[string](t, db, "SELECT (SELECT count(*) FROM inbox) || ' ' || (SELECT count(*) FROM messages) || ' ' || (SELECT count(*) FROM history_blobs) || ' ' || (SELECT count(*) FROM chats)"); got != "0 0 0 0" {
+		t.Fatalf("inbox rows, messages, blobs and chats = %q, want none", got)
 	}
 }
 

@@ -515,10 +515,21 @@ Pairing links a new device by the code WhatsApp shows on the owner's phone. It
 is refused while a device is paired, while `WAWARDEN_OWNER_PHONE` is unset, and
 after three attempts within the last hour. The pairing code goes to the caller
 only and is never logged. When pairing completes, the linked account must have
-the number in `WAWARDEN_OWNER_PHONE`; otherwise the engine logs the new device
-out, logs `pair_rejected` at every log level with `stage` `after_pairing`, and
-stays `unpaired`, so that what the rejected account's connection delivers is
-dropped before it is written (see [Ingest](#ingest)).
+the number in `WAWARDEN_OWNER_PHONE`; otherwise the engine logs
+`pair_rejected` at every log level with `stage` `after_pairing`, stays
+`unpaired` and logs the new device out. A logout that fails is logged as
+`logout_failed` at every log level and tried again after the same delays as a
+[reconnection](#engine-states), until it succeeds or the device is gone. Until
+then the engine never connects the device, an explicit reconnect included, and
+drops what its connection delivers before it is written (see
+[Ingest](#ingest)); pairing stays refused while it is stored.
+
+Before every connection, the engine also checks that the stored device belongs
+to the number in `WAWARDEN_OWNER_PHONE`. A device of another account, such as
+one whose logout failed before the process stopped, is rejected the same way,
+with `stage` `stored_device`. With `WAWARDEN_OWNER_PHONE` unset this check is
+skipped and a stored device is connected as it is, because pairing could link
+it only while the number was set.
 The adapter will also reject another account before anything is saved, which
 the engine reports as `pair_rejected` with `stage` `before_save`.
 
@@ -798,8 +809,8 @@ accepted. The `dev_build` and `listener_not_loopback` warnings are written at
 every level, `error` included, because they are the only signal that a
 development binary is running or that a listener is reachable beyond loopback.
 So are the engine's alerts, which an operator must see: `engine_absent`,
-`disconnected`, `pair_rejected`, `quarantine`, `rekey_conflict` and
-`ingest_paused`.
+`disconnected`, `pair_rejected`, `logout_failed`, `quarantine`,
+`rekey_conflict` and `ingest_paused`.
 
 | Event | Level | Other keys | Written when |
 |---|---|---|---|
@@ -829,8 +840,8 @@ So are the engine's alerts, which an operator must see: `engine_absent`,
 | `connect_failed` | `WARN` | `attempt`, `error_type` | A connection attempt failed; the engine retries. `error_type` is the Go type of the error, never its text. |
 | `pairing_started` | `INFO` | | A pairing attempt passed the refusals above. The code is never logged. |
 | `pair_failed` | `WARN` | `error_type` | Connecting or requesting the pairing code failed. |
-| `pair_rejected` | `WARN`, at every log level | `stage`: `before_save` or `after_pairing` | Pairing linked or tried to link an account other than the owner's; see [Pairing](#pairing). |
-| `logout_failed` | `WARN` | `error_type` | Logging out a rejected device failed. |
+| `pair_rejected` | `WARN`, at every log level | `stage`: `before_save`, `after_pairing` or `stored_device` | Pairing linked or tried to link an account other than the owner's, or the stored device belongs to one; see [Pairing](#pairing). |
+| `logout_failed` | `WARN`, at every log level | `attempt`, `error_type` | Logging out a rejected device failed; the engine tries again. |
 | `ingest_failed` | `WARN` | `queue`: `inbox` or `history`, `attempt` when an attempt failed, `error_type` | Reading, applying or quarantining an inbox row or a history blob failed. |
 | `quarantine` | `WARN`, at every log level | `queue`, `attempts` | An inbox row or a history blob was quarantined after three failed attempts. |
 | `rekey_conflict` | `WARN`, at every log level | `conflict`: `mapping_contradicts`, `both_chats_have_messages` or `message_collision` | A LID mapping was refused; the event that carried it is still applied. |

@@ -386,10 +386,16 @@ Pairing is refused while a device is already paired, while the owner's phone
 number is missing, and beyond three attempts per hour; an owner's number that is
 set but not in E.164 form refuses the start. The pairing code goes to the caller
 only and is never logged. After pairing, the linked account must be the owner's
-number; otherwise the engine logs the new device out and raises a
-`pair_rejected` alert, so that a pairing completed from someone else's account
-cannot bind the gateway to that account. These are enforced and tested in the
-engine core on `main`. Not yet in place (M1): the admin route that starts
+number; otherwise the engine raises a `pair_rejected` alert and logs the new
+device out, retrying with backoff and a `logout_failed` alert for as long as
+the logout fails. Until the device is gone, the engine connects it neither on
+its own nor on an explicit reconnect, and drops what its connection delivers
+before it is written. Before every connection it also checks that the stored
+device is the owner's number, so a rejected device whose logout never succeeded
+is rejected again after a restart. A pairing completed from someone else's
+account therefore cannot bind the gateway to that account. When the owner's
+number is unset, the stored device is not checked. These are enforced and tested
+in the engine core on `main`. Not yet in place (M1): the admin route that starts
 pairing and answers `409`, and the protocol adapter, which rejects another
 account before anything is saved and wipes a logged-out device.
 

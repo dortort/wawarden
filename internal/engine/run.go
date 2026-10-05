@@ -76,7 +76,7 @@ func (e *Engine) Start(ctx context.Context, recentStarts int) {
 func (e *Engine) dispatch(ev Event) bool {
 	switch v := ev.(type) {
 	case Message, Group, HistoryNotification:
-		if e.sup.unpaired() {
+		if !e.sup.accepting() {
 			e.pipe.counts.dropped.With(dropNotPaired).Inc()
 			return true
 		}

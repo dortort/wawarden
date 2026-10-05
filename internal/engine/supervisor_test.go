@@ -539,8 +539,8 @@ func TestPairedAccountMustBeTheOwner(t *testing.T) {
 	if _, err := h.s.pair(t.Context()); err != nil {
 		t.Fatalf("Pair = %v", err)
 	}
-	h.client.setPaired(true)
-	h.deliver(Paired{JID: "15550100002:3@s.whatsapp.net"})
+	h.client.pairAs(bobDev)
+	h.deliver(Paired{JID: bobDev})
 	h.client.waitFor(t, "logout")
 	h.want(StateUnpaired, "")
 	if a := h.alerts("pair_rejected"); len(a) != 1 || a[0]["stage"] != "after_pairing" {
@@ -566,12 +566,128 @@ func TestPairedAccountMustBeTheOwner(t *testing.T) {
 	if _, err := h.s.pair(t.Context()); err != nil {
 		t.Fatalf("Pair = %v", err)
 	}
-	h.client.setPaired(true)
-	h.deliver(Paired{JID: "15550100009:12@s.whatsapp.net"}, Connected{})
+	h.client.pairAs(ownerDev)
+	h.deliver(Paired{JID: ownerDev}, Connected{})
 	h.want(StateConnected, "")
 	if h.client.count("logout") != 0 || len(h.alerts("pair_rejected")) != 0 {
 		t.Fatalf("the owner's own pairing was rejected: %v", h.client.history())
 	}
+}
+
+func (f *fakeClient) failLogouts(n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.logoutErrs = nil
+	for range n {
+		f.logoutErrs = append(f.logoutErrs, errors.New("synthetic: error sending logout request"))
+	}
+}
+
+func TestARejectedDeviceIsLoggedOutUntilItIsGone(t *testing.T) {
+	h := newSupRig(t)
+	clock := newGatedClock()
+	h.s.clock = clock
+	h.client.setPaired(false)
+	if _, err := h.s.pair(t.Context()); err != nil {
+		t.Fatalf("Pair = %v", err)
+	}
+	h.client.failLogouts(2)
+	h.client.pairAs(bobDev)
+	h.deliver(Paired{JID: bobDev})
+	eventually(t, "the first logout failed and its retry waits", func() bool { return clock.waiting() == 1 })
+	if st := h.s.status(); st != (Status{State: StateUnpaired, Paired: true}) {
+		t.Fatalf("status %+v while the rejected device is still stored", st)
+	}
+	if err := h.s.reconnect(); !errors.Is(err, ErrNotPaired) {
+		t.Fatalf("Reconnect with a rejected device = %v, want ErrNotPaired", err)
+	}
+	h.deliver(Connected{}, Disconnected{}, Connected{})
+	h.want(StateUnpaired, "")
+	if h.steps() != 0 || h.client.count("connect") != 1 {
+		t.Fatalf("calls %v: the rejected device was connected", h.client.history())
+	}
+	clock.advance(time.Second)
+	eventually(t, "the second logout failed and its retry waits", func() bool {
+		return len(h.alerts("logout_failed")) == 2 && clock.waiting() == 1
+	})
+	clock.advance(2 * time.Second)
+	h.client.waitFor(t, "logout")
+	eventually(t, "the logout loop ends", func() bool {
+		h.s.mu.Lock()
+		defer h.s.mu.Unlock()
+		return !h.s.loggingOut
+	})
+	for i, a := range h.alerts("logout_failed") {
+		if a["level"] != "WARN" || a["attempt"] != float64(i+1) || a["error_type"] != "*errors.errorString" {
+			t.Fatalf("logout_failed alerts %v", h.alerts("logout_failed"))
+		}
+	}
+	if a := h.alerts("pair_rejected"); len(a) != 1 || a[0]["stage"] != "after_pairing" {
+		t.Fatalf("pair_rejected alerts %v", a)
+	}
+	if h.counter("wawarden_paired") != 0 {
+		t.Fatal("the Paired gauge is not 0 after the rejected device was logged out")
+	}
+	if _, err := h.s.pair(t.Context()); err != nil {
+		t.Fatalf("Pair after the rejected device was logged out = %v", err)
+	}
+	if strings.Contains(h.logs.String(), "15550100002") {
+		t.Fatal("the rejected account reached the log")
+	}
+}
+
+func TestTheStoredDeviceMustBeTheOwnersBeforeEveryConnect(t *testing.T) {
+	t.Run("at the start", func(t *testing.T) {
+		h := newSupRig(t)
+		h.client.pairAs(bobDev)
+		h.versions(versionResult{v: current})
+		h.s.begin(t.Context(), 1)
+		h.steps()
+		h.client.waitFor(t, "logout")
+		h.want(StateUnpaired, "")
+		if h.client.count("connect") != 0 {
+			t.Fatalf("calls %v: another account's stored device was connected", h.client.history())
+		}
+		if a := h.alerts("pair_rejected"); len(a) != 1 || a[0]["stage"] != "stored_device" {
+			t.Fatalf("pair_rejected alerts %v", a)
+		}
+	})
+	t.Run("on an explicit reconnect", func(t *testing.T) {
+		h := newSupRig(t)
+		h.connectedNow()
+		h.deliver(StreamReplaced{})
+		h.client.pairAs(bobDev)
+		if err := h.s.reconnect(); !errors.Is(err, ErrNotPaired) {
+			t.Fatalf("Reconnect with another account's device = %v, want ErrNotPaired", err)
+		}
+		h.client.waitFor(t, "logout")
+		if h.steps() != 0 || h.client.count("connect") != 1 {
+			t.Fatalf("calls %v", h.client.history())
+		}
+		h.want(StateUnpaired, "")
+	})
+	t.Run("after a drop", func(t *testing.T) {
+		h := newSupRig(t)
+		h.connectedNow()
+		h.client.pairAs(bobDev)
+		h.deliver(Disconnected{})
+		h.steps()
+		h.client.waitFor(t, "logout")
+		if h.client.count("connect") != 1 {
+			t.Fatalf("calls %v", h.client.history())
+		}
+		h.want(StateUnpaired, "")
+	})
+	t.Run("not without an owner's number", func(t *testing.T) {
+		h := newSupRig(t, withOwner(""))
+		h.client.pairAs(bobDev)
+		h.versions(versionResult{v: current})
+		h.s.begin(t.Context(), 1)
+		h.steps()
+		if h.client.count("connect") != 1 || h.client.count("logout") != 0 || len(h.alerts("pair_rejected")) != 0 {
+			t.Fatalf("calls %v: without an owner's number the stored device is connected unchecked", h.client.history())
+		}
+	})
 }
 
 func TestUnpairedDropDuringPairingReturnsToUnpaired(t *testing.T) {

@@ -23,6 +23,8 @@ import (
 const (
 	ownerPhone = "+15550100009"
 	owner      = "15550100009@s.whatsapp.net"
+	ownerDev   = "15550100009:12@s.whatsapp.net"
+	bobDev     = "15550100002:3@s.whatsapp.net"
 	alice      = "15550100001@s.whatsapp.net"
 	bob        = "15550100002@s.whatsapp.net"
 	carol      = "15550100003@s.whatsapp.net"
@@ -160,9 +162,11 @@ func (c *gatedClock) waiting() int {
 type fakeClient struct {
 	mu          sync.Mutex
 	paired      bool
+	account     string
 	connected   bool
 	version     Version
 	connectErrs []error
+	logoutErrs  []error
 	pairErr     error
 	calls       []string
 	handler     func(Event) bool
@@ -176,7 +180,7 @@ type fakeClient struct {
 }
 
 func newClient(paired bool) *fakeClient {
-	return &fakeClient{paired: paired, version: Version{2, 3000, 100}, blobs: map[string][]byte{}, called: make(chan string, 1024)}
+	return &fakeClient{paired: paired, account: ownerDev, version: Version{2, 3000, 100}, blobs: map[string][]byte{}, called: make(chan string, 1024)}
 }
 
 func (f *fakeClient) record(call string) {
@@ -230,6 +234,21 @@ func (f *fakeClient) setPaired(p bool) {
 	f.paired = p
 }
 
+func (f *fakeClient) Account() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.paired {
+		return ""
+	}
+	return f.account
+}
+
+func (f *fakeClient) pairAs(account string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.paired, f.account = true, account
+}
+
 func (f *fakeClient) PairPhone(_ context.Context, digits string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -243,6 +262,12 @@ func (f *fakeClient) PairPhone(_ context.Context, digits string) (string, error)
 func (f *fakeClient) Logout(context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if len(f.logoutErrs) > 0 {
+		var err error
+		err, f.logoutErrs = f.logoutErrs[0], f.logoutErrs[1:]
+		f.record("logout_failed")
+		return err
+	}
 	f.record("logout")
 	f.paired, f.connected = false, false
 	return nil

@@ -70,6 +70,12 @@ const (
 	connect
 )
 
+const (
+	stageBeforeSave   = "before_save"
+	stageAfterPairing = "after_pairing"
+	stageStoredDevice = "stored_device"
+)
+
 type supervisor struct {
 	client    Client
 	versions  VersionSource
@@ -97,6 +103,8 @@ type supervisor struct {
 	dropped    bool
 	early      bool
 	awaiting   bool
+	rejected   bool
+	loggingOut bool
 	pairs      []time.Time
 	cancelStep context.CancelFunc
 }
@@ -148,10 +156,10 @@ func (s *supervisor) status() Status {
 	return Status{State: s.state, Reason: s.reason, Paired: paired}
 }
 
-func (s *supervisor) unpaired() bool {
+func (s *supervisor) accepting() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.state == StateUnpaired
+	return !s.rejected && s.state != StateUnpaired
 }
 
 func (s *supervisor) setLocked(state State, reason Reason) {
@@ -278,18 +286,49 @@ func (s *supervisor) refresh(ctx context.Context, gen uint64, outdated bool) {
 }
 
 func (s *supervisor) refreshed(gen uint64) {
-	paired := s.client.Paired()
+	paired, foreign := s.device()
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.gen != gen {
+		s.mu.Unlock()
 		return
 	}
-	if !paired {
+	admit, logout := s.admitLocked(paired, foreign)
+	if admit {
+		s.next, s.attempt = connect, 0
+		s.wake()
+	}
+	ctx := s.ctx
+	s.mu.Unlock()
+	if logout {
+		s.startLogout(ctx)
+	}
+}
+
+func (s *supervisor) device() (paired, foreign bool) {
+	if !s.client.Paired() {
+		return false, false
+	}
+	return true, s.owner != "" && !s.isOwner(s.client.Account())
+}
+
+func (s *supervisor) admitLocked(paired, foreign bool) (admit, logout bool) {
+	switch {
+	case foreign && !s.rejected:
+		return false, s.rejectLocked(stageStoredDevice)
+	case !paired || foreign || s.rejected:
 		s.setLocked(StateUnpaired, "")
-		return
+		return false, false
 	}
-	s.next, s.attempt = connect, 0
-	s.wake()
+	return true, false
+}
+
+func (s *supervisor) rejectLocked(stage string) bool {
+	s.alerts.Warn("pairing was rejected: the account is not the owner's", slog.String("event", "pair_rejected"), slog.String("stage", stage))
+	s.rejected = true
+	s.setLocked(StateUnpaired, "")
+	start := !s.loggingOut
+	s.loggingOut = true
+	return start
 }
 
 func (s *supervisor) backoff(attempt int) time.Duration {
@@ -306,9 +345,18 @@ func (s *supervisor) connect(ctx context.Context, gen uint64, attempt int) {
 	if attempt > 0 && wait(ctx, s.clock, s.backoff(attempt)) != nil {
 		return
 	}
+	paired, foreign := s.device()
 	s.mu.Lock()
 	if s.gen != gen {
 		s.mu.Unlock()
+		return
+	}
+	if admit, logout := s.admitLocked(paired, foreign); !admit {
+		engineCtx := s.ctx
+		s.mu.Unlock()
+		if logout {
+			s.startLogout(engineCtx)
+		}
 		return
 	}
 	s.dialing = true
@@ -392,17 +440,16 @@ func (s *supervisor) handle(ev Event) {
 	case ConnectFailure:
 		disconnect = s.permanentLocked(ReasonConnectFailure, false)
 	case PairRejected:
-		s.alerts.Warn("pairing was rejected: the account is not the owner's", slog.String("event", "pair_rejected"), slog.String("stage", "before_save"))
+		s.alerts.Warn("pairing was rejected: the account is not the owner's", slog.String("event", "pair_rejected"), slog.String("stage", stageBeforeSave))
 		s.setLocked(StateUnpaired, "")
 	case Paired:
 		if s.isOwner(e.JID) {
+			s.rejected = false
 			s.setLocked(StateConnecting, "")
 			s.awaiting = true
 			break
 		}
-		s.alerts.Warn("pairing was rejected: the account is not the owner's", slog.String("event", "pair_rejected"), slog.String("stage", "after_pairing"))
-		s.setLocked(StateUnpaired, "")
-		logout = true
+		logout = s.rejectLocked(stageAfterPairing)
 	}
 	ctx := s.ctx
 	s.mu.Unlock()
@@ -410,7 +457,7 @@ func (s *supervisor) handle(ev Event) {
 		s.client.Disconnect()
 	}
 	if logout {
-		safego.Go("engine.logout", func() { s.logout(ctx) })
+		s.startLogout(ctx)
 	}
 	s.updateGauges()
 }
@@ -435,16 +482,47 @@ func (s *supervisor) isOwner(jid string) bool {
 	return c.JID() == s.owner+"@s.whatsapp.net"
 }
 
-func (s *supervisor) logout(ctx context.Context) {
+func (s *supervisor) startLogout(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), logoutTimeout)
-	defer cancel()
-	if err := s.client.Logout(ctx); err != nil {
-		s.logger.Warn("logging out the rejected device failed", slog.String("event", "logout_failed"), slog.String("error_type", fmt.Sprintf("%T", err)))
+	safego.Go("engine.logout", func() { s.logout(ctx) })
+}
+
+func (s *supervisor) logout(ctx context.Context) {
+	defer func() {
+		s.mu.Lock()
+		s.loggingOut = false
+		s.mu.Unlock()
+		s.updateGauges()
+	}()
+	for attempt := 1; s.stillRejected(); attempt++ {
+		err := guarded("engine.logout", func() error {
+			call, cancel := context.WithTimeout(context.WithoutCancel(ctx), logoutTimeout)
+			defer cancel()
+			return s.client.Logout(call)
+		})
+		if err == nil {
+			s.mu.Lock()
+			s.rejected = false
+			s.mu.Unlock()
+			return
+		}
+		s.alerts.Warn("logging out the rejected device failed", slog.String("event", "logout_failed"), slog.Int("attempt", attempt), slog.String("error_type", fmt.Sprintf("%T", err)))
+		if wait(ctx, s.clock, s.backoff(attempt)) != nil {
+			return
+		}
 	}
-	s.updateGauges()
+}
+
+func (s *supervisor) stillRejected() bool {
+	paired := s.client.Paired()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !paired {
+		s.rejected = false
+	}
+	return s.rejected
 }
 
 func (s *supervisor) pair(ctx context.Context) (string, error) {
@@ -504,17 +582,24 @@ func (s *supervisor) pair(ctx context.Context) (string, error) {
 }
 
 func (s *supervisor) reconnect() error {
-	paired := s.client.Paired()
+	paired, foreign := s.device()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch {
 	case s.reason == ReasonShutdown:
 		return ErrStopped
+	case s.rejected:
+		return ErrNotPaired
 	case s.state == StateDisconnected && s.reason == ReasonOutdated:
 		s.setLocked(StateConnecting, "")
 		// s.outdated still holds the mode of the refresh that failed.
 		s.next = refresh
 	case !paired:
+		return ErrNotPaired
+	case foreign:
+		if s.rejectLocked(stageStoredDevice) {
+			s.startLogout(s.ctx)
+		}
 		return ErrNotPaired
 	case s.state == StateConnected:
 		return ErrAlreadyConnected
