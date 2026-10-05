@@ -17,6 +17,7 @@ import (
 
 	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/metrics"
+	"github.com/dortort/wawarden/internal/safego"
 )
 
 const (
@@ -137,6 +138,17 @@ func (c *gatedClock) advance(d time.Duration) {
 		w.ch <- c.now
 	}
 	c.waiters = kept
+}
+
+func (c *gatedClock) due(within time.Duration) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, w := range c.waiters {
+		if !w.at.After(c.now.Add(within)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *gatedClock) waiting() int {
@@ -421,3 +433,23 @@ func (r *rig) counter(name string, labels ...string) float64 {
 }
 
 func (r *rig) alerts(event string) []map[string]any { return r.logs.events(event) }
+
+func (r *rig) reportPanics() {
+	r.t.Helper()
+	safego.Install(r.opts.Logger, r.reg)
+	r.t.Cleanup(func() { safego.Install(logx.New(logx.NewWriter(io.Discard), slog.LevelError), metrics.NewRegistry()) })
+}
+
+func crashes(t *testing.T, fn func()) {
+	t.Helper()
+	finished := make(chan bool)
+	go func() {
+		returned := false
+		defer func() { finished <- returned }()
+		fn()
+		returned = true
+	}()
+	if <-finished {
+		t.Fatal("the worker did not reach the crash")
+	}
+}

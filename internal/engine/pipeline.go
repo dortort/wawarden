@@ -168,10 +168,15 @@ func (p *pipeline) process(ctx context.Context, item ingest.InboxItem) {
 		p.quarantine(run, item.Seq, attempts-1)
 		return
 	}
-	if p.beforeApply != nil {
-		p.beforeApply(item.Seq)
-	}
-	out, err := p.apply(run, item)
+	var out outcome
+	err := guarded("engine.ingest", func() error {
+		if p.beforeApply != nil {
+			p.beforeApply(item.Seq)
+		}
+		var err error
+		out, err = p.apply(run, item)
+		return err
+	})
 	switch {
 	case err == nil:
 		p.record(out)

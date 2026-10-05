@@ -498,7 +498,8 @@ but `shutdown` also logs `disconnected` at every log level. The gauges
   that; a successful connection resets it. Only the connection being opened
   counts: a late report that the dropped connection came up changes nothing, and
   a drop reported while a connection is being opened is followed by another
-  attempt.
+  attempt. A version fetch or a connection attempt that panics fails like any
+  other.
 - **Stops that wait for the operator.** When another client replaces the session
   (`replaced`), WhatsApp bans the account temporarily (`temporary_ban`), a
   connection token cannot be refreshed (`cat_refresh`) or WhatsApp refuses the
@@ -533,8 +534,9 @@ every other kind) is acknowledged and dropped before it reaches the inbox.
 One worker applies the inbox in order. It records each attempt in the archive
 before applying the row, then applies the row and removes it from the inbox in
 one transaction, so that a row is applied once even when the process stops in
-between. A failed attempt is retried after 1 and then 2 seconds; after three
-failed attempts, attempts cut short by a crash included, the row is quarantined:
+between. A failed attempt, an attempt that panics included, is retried after 1
+and then 2 seconds; after three failed attempts, attempts cut short by a crash
+included, the row is quarantined:
 its content is removed, the row stays as a record, and `quarantine` is logged at
 every log level with `queue` `inbox`. A row whose content the archive refuses,
 such as a message identifier with spaces, is dropped at once.
@@ -602,7 +604,8 @@ reference and inline content, deletes its file and flushes the directory. Blobs
 not yet processed are taken up again at the next start, and each start of the
 engine first deletes every `history/<id>.bin` and `history/<id>.part` whose blob
 is not waiting to be processed, such as a file that a crash left behind after
-its blob was marked processed or quarantined. After three failed attempts, attempts cut
+its blob was marked processed or quarantined. An attempt that panics while it
+downloads, decodes or applies a blob fails like any other. After three failed attempts, attempts cut
 short by a crash or a stop included, a blob is quarantined: its reference and
 files are deleted and `quarantine` is logged at every log level with `queue`
 `history`.
@@ -953,7 +956,10 @@ Labelled counters appear once they count their first event.
 Panic names in M0: `api.client`, `api.admin` and `api.health` for the handlers;
 `listeners.client`, `listeners.admin`, `listeners.health`, `listeners.shutdown`
 and `signals` for goroutines. A build with an engine adds `engine.supervisor`,
-`engine.ingest` and `engine.logout`.
+`engine.ingest` and `engine.logout`; the first two also count a panic of one
+version fetch or connection attempt (`engine.supervisor`) or of one inbox row's
+or history blob's attempt (`engine.ingest`), which the engine treats as a failed
+attempt.
 
 Anything that scrapes `/metrics` holds the full admin token, which from M1 can
 start pairing and from M2 can create clients. Treat a scrape configuration as

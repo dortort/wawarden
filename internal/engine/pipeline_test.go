@@ -6,8 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -172,13 +174,41 @@ func TestInvalidContentIsDroppedWithoutRetries(t *testing.T) {
 
 func (r *pipeRig) crashBeforeApply() {
 	r.t.Helper()
-	r.p.beforeApply = func(int64) { panic("synthetic crash between the attempt and the apply") }
-	defer func() {
-		if recover() == nil {
-			r.t.Fatal("the worker did not reach the apply")
+	r.p.beforeApply = func(int64) { runtime.Goexit() }
+	crashes(r.t, r.drain)
+}
+
+func TestAPanicWhileApplyingIsAFailedAttempt(t *testing.T) {
+	r := newPipeRig(t)
+	r.reportPanics()
+	canary := "canary panic value 15550100001@s.whatsapp.net"
+	r.deliver(dm("M1", alice, "panics on every attempt"), dm("M2", alice, "applied after the quarantine"))
+	var poison int64
+	r.p.beforeApply = func(seq int64) {
+		if poison == 0 {
+			poison = seq
 		}
-	}()
+		if seq == poison {
+			panic(canary)
+		}
+	}
 	r.drain()
+	r.must(alice, "M2", alice)
+	if _, ok := r.find(alice, "M1", alice); ok {
+		t.Fatal("the row that panicked was applied")
+	}
+	if !slices.Equal(r.clock.slept(), []time.Duration{time.Second, 2 * time.Second}) {
+		t.Fatalf("waits %v, want 1s and 2s between attempts", r.clock.slept())
+	}
+	if a := r.alerts("quarantine"); len(a) != 1 || a[0]["queue"] != "inbox" || a[0]["attempts"] != float64(3) {
+		t.Fatalf("quarantine alerts %v", a)
+	}
+	if r.counter("wawarden_panics_total", "name", "engine.ingest") != 3 || len(r.logs.events("panic")) != 3 {
+		t.Fatalf("panics counted %v, reported %d, want 3", r.counter("wawarden_panics_total", "name", "engine.ingest"), len(r.logs.events("panic")))
+	}
+	if strings.Contains(r.logs.String(), "canary") {
+		t.Fatalf("the panic value reached the log: %s", r.logs)
+	}
 }
 
 func (r *pipeRig) inboxAttempts() int {

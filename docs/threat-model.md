@@ -153,8 +153,9 @@ These are stated so that nobody relies on WaWarden for them:
    History-sync notifications are accepted only from the owner's primary device
    (device 0); blobs are downloaded through a size cap, persisted before the
    receipt and before parsing, decompressed under the same cap, and quarantined
-   after three failed attempts, so a poison payload is set aside rather than
-   replayed forever; inbox rows are quarantined the same way. A blob's plaintext
+   after three failed attempts, an attempt that panics included, so a poison
+   payload is set aside rather than replayed forever; inbox rows are quarantined
+   the same way. A blob's plaintext
    file is deleted once the blob is processed or quarantined, and each start of
    the engine deletes any such file that a crash left behind. Live traffic waits
    in a durable inbox and is acknowledged only once written, so a full inbox or a

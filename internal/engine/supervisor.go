@@ -233,7 +233,12 @@ func (s *supervisor) refresh(ctx context.Context, gen uint64, outdated bool) {
 	delay := versionBackoff
 	for try := 0; ; try++ {
 		have := s.client.Version()
-		v, err := s.versions.Latest(ctx)
+		var v Version
+		err := guarded("engine.supervisor", func() error {
+			var err error
+			v, err = s.versions.Latest(ctx)
+			return err
+		})
 		usable := err == nil && !v.IsZero() && !v.Less(have) && (v != have || !outdated)
 		if usable && v != have {
 			if !s.current(gen) {
@@ -302,7 +307,7 @@ func (s *supervisor) connect(ctx context.Context, gen uint64, attempt int) {
 	}
 	s.dialing = true
 	s.mu.Unlock()
-	err := s.client.Connect(ctx)
+	err := guarded("engine.supervisor", func() error { return s.client.Connect(ctx) })
 	s.mu.Lock()
 	superseded := s.gen != gen
 	stale := superseded && err == nil && s.state == StateDisconnected

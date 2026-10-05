@@ -296,18 +296,11 @@ func TestADownloadCutShortIsDownloadedAgain(t *testing.T) {
 	writes := 0
 	r.client.onWrite = func() {
 		if writes++; writes == 2 {
-			panic("synthetic crash during the download")
+			runtime.Goexit()
 		}
 	}
 	r.notify(HistoryRef{ID: "HS1"})
-	func() {
-		defer func() {
-			if recover() == nil {
-				t.Fatal("the download was not cut short")
-			}
-		}()
-		r.drainHistory()
-	}()
+	crashes(t, r.drainHistory)
 	if len(r.client.acks) != 0 {
 		t.Fatal("a receipt was sent for a blob cut short")
 	}

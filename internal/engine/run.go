@@ -22,7 +22,16 @@ type Engine struct {
 	stopping sync.Once
 }
 
-var errOptions = errors.New("engine: a client, a version source, a history decoder, an archive, a data directory, loggers and a metrics registry are required, and the history cap must be from 1 byte to 256 MiB")
+var (
+	errOptions  = errors.New("engine: a client, a version source, a history decoder, an archive, a data directory, loggers and a metrics registry are required, and the history cap must be from 1 byte to 256 MiB")
+	errPanicked = errors.New("engine: the call panicked")
+)
+
+func guarded(name string, fn func() error) (err error) {
+	err = errPanicked
+	defer safego.Recover(name)
+	return fn()
+}
 
 type systemClock struct{}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -132,6 +133,58 @@ func TestEnginePausesAndResumesWithTheFreeSpace(t *testing.T) {
 	}
 	if !r.client.emit(dm("M2", alice, "after the pause")) {
 		t.Fatal("the engine refused a message after ingest resumed")
+	}
+}
+
+type panickingDecoder struct{}
+
+func (panickingDecoder) Decode([]byte) (History, error) {
+	panic("synthetic canary decoder panic 15550100001@s.whatsapp.net")
+}
+
+func TestADecoderPanicIsAFailedAttemptAndIngestGoesOn(t *testing.T) {
+	r := newHistRig(t)
+	clock := newGatedClock()
+	o := r.opts
+	o.Decoder, o.Clock, o.Metrics = panickingDecoder{}, clock, metrics.NewRegistry()
+	r.reg = o.Metrics
+	e, err := New(o)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	r.reportPanics()
+	e.Start(t.Context(), MaxRecentStarts+1)
+	t.Cleanup(func() { _ = e.Stop(context.Background()) })
+	if !r.client.emit(HistoryNotification{Sender: owner, FromMe: true, Ref: HistoryRef{ID: "HS1", Inline: deflate(t, []byte("synthetic blob"))}}) {
+		t.Fatal("the history notification was not acknowledged")
+	}
+	eventually(t, "the first attempt waits for its retry", func() bool { return clock.due(time.Second) })
+	if !r.client.emit(dm("M1", alice, "live after the panic")) {
+		t.Fatal("a live message was not acknowledged")
+	}
+	clock.advance(time.Second)
+	eventually(t, "the live message is applied", func() bool {
+		_, ok := r.find(alice, "M1", alice)
+		return ok
+	})
+	eventually(t, "the second attempt waits for its retry", func() bool { return clock.due(2 * time.Second) })
+	clock.advance(2 * time.Second)
+	eventually(t, "the blob is quarantined", func() bool { return len(r.alerts("quarantine")) == 1 })
+	if err := e.Stop(t.Context()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if a := r.alerts("quarantine"); a[0]["queue"] != "history" || a[0]["attempts"] != float64(3) || len(r.logs.events("ingest_failed")) != 3 {
+		t.Fatalf("quarantine alerts %v, failures %d", a, len(r.logs.events("ingest_failed")))
+	}
+	if r.counter("wawarden_panics_total", "name", "engine.ingest") != 3 {
+		t.Fatalf("panics counted %v, want 3", r.counter("wawarden_panics_total", "name", "engine.ingest"))
+	}
+	if strings.Contains(r.logs.String(), "canary") {
+		t.Fatalf("the panic value reached the log: %s", r.logs)
+	}
+	db := r.inspect()
+	if got := query[string](t, db, "SELECT attempts || ' ' || quarantined FROM history_blobs"); got != "3 1" {
+		t.Fatalf("blob row %q", got)
 	}
 }
 

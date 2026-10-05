@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -404,6 +405,40 @@ func TestConnectFailuresRetry(t *testing.T) {
 	}
 	h.deliver(Connected{})
 	h.want(StateConnected, "")
+}
+
+type panicFirst struct {
+	panicked bool
+	then     VersionSource
+}
+
+func (p *panicFirst) Latest(ctx context.Context) (Version, error) {
+	if !p.panicked {
+		p.panicked = true
+		panic("synthetic canary version source panic")
+	}
+	return p.then.Latest(ctx)
+}
+
+func TestPanicsInTheClientAreFailedAttempts(t *testing.T) {
+	h := newSupRig(t)
+	h.reportPanics()
+	h.s.versions = &panicFirst{then: &fakeVersions{results: []versionResult{{v: current}}}}
+	var once sync.Once
+	h.client.onConnect = func() { once.Do(func() { panic("synthetic canary connect panic") }) }
+	h.s.begin(t.Context(), 1)
+	h.steps()
+	if h.client.count("connect") != 2 || !slices.Equal(h.clock.slept(), []time.Duration{time.Second, time.Second}) {
+		t.Fatalf("calls %v waits %v, want a second fetch and a second connect, each after 1s", h.client.history(), h.clock.slept())
+	}
+	if len(h.logs.events("version_refresh_failed")) != 1 || len(h.logs.events("connect_failed")) != 1 {
+		t.Fatalf("the panics were not failed attempts: %s", h.logs)
+	}
+	h.deliver(Connected{})
+	h.want(StateConnected, "")
+	if h.counter("wawarden_panics_total", "name", "engine.supervisor") != 2 || strings.Contains(h.logs.String(), "canary") {
+		t.Fatalf("panics counted %v; log %s", h.counter("wawarden_panics_total", "name", "engine.supervisor"), h.logs)
+	}
 }
 
 func TestRestartBudgetStartsDisconnected(t *testing.T) {

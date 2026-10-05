@@ -153,7 +153,7 @@ func (h *historian) process(ctx context.Context, b ingest.Blob) {
 		h.quarantine(run, b.ID, attempts-1)
 		return
 	}
-	err := h.ingest(ctx, b)
+	err := guarded("engine.ingest", func() error { return h.ingest(ctx, b) })
 	if err == nil || ctx.Err() != nil {
 		return
 	}
