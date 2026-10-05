@@ -251,6 +251,10 @@ var networkEntryPoints = set("ConnectContext", "Download", "DownloadAny", "Downl
 
 var transportSetters = set("SetMediaHTTPClient", "SetPreLoginHTTPClient", "SetWebsocketHTTPClient")
 
+const whatsmeowSocket = whatsmeowModule + "/socket"
+
+var frameSocket = set("FrameSocket", "NewFrameSocket")
+
 var offlineTestRule = rule{
 	name:  "offline-tests",
 	check: checkOfflineTests,
@@ -278,7 +282,7 @@ func f(ctx context.Context, cli *whatsmeow.Client) {
 	_ = cli.DownloadToFile(ctx, nil, nil)
 }
 `},
-		{name: "the client constructor, its transport setters, downloads, uploads and state fetches in a test", rel: "internal/engine/wa/x_test.go", want: 10, src: `package wa
+		{name: "the client constructor, its frame socket, its transport setters, downloads, uploads and state fetches in a test", rel: "internal/engine/wa/x_test.go", want: 12, src: `package wa
 
 import (
 	"context"
@@ -286,9 +290,12 @@ import (
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/appstate"
+	"go.mau.fi/whatsmeow/socket"
 )
 
 func f(ctx context.Context, cli *whatsmeow.Client) {
+	_ = socket.NewFrameSocket(nil, nil).Connect(ctx)
+	_ = (&socket.FrameSocket{URL: socket.URL}).Connect(ctx)
 	other := whatsmeow.NewClient(cli.Store, nil)
 	build := whatsmeow.NewClient
 	_ = build
@@ -302,13 +309,16 @@ func f(ctx context.Context, cli *whatsmeow.Client) {
 	_ = cli.FetchAppState(ctx, appstate.WAPatchRegular, false, false)
 }
 `},
-		{name: "the adapter's own methods in a test, whose names the library's client shares", rel: "internal/engine/wa/x_test.go", src: `package wa
+		{name: "the adapter's own methods in a test, whose names the library's client shares, and the library's socket constants", rel: "internal/engine/wa/x_test.go", src: `package wa
 
 import (
 	"context"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/socket"
 )
+
+var origin = socket.Origin
 
 type adapter interface {
 	Connect(context.Context) error
@@ -401,6 +411,8 @@ func checkOfflineTests(f *sourceFile) []string {
 			out = append(out, f.at(sel, "GetLatestVersion fetches from WhatsApp: test the version source through an injected transport"))
 		case s != nil && p == whatsmeowModule && s.Sel.Name == "NewClient":
 			out = append(out, f.at(sel, "NewClient builds a protocol client whose transports do not dial through the adapter's guard: build test clients with newClient"))
+		case s != nil && p == whatsmeowSocket && frameSocket[s.Sel.Name]:
+			out = append(out, f.at(sel, "%s builds the protocol library's own WebSocket, which dials WhatsApp without the adapter's guard", s.Sel.Name))
 		case transportSetters[sel.Sel.Name]:
 			out = append(out, f.at(sel, "%s replaces a transport that dials through the adapter's guard", sel.Sel.Name))
 		case networkEntryPoints[sel.Sel.Name]:
