@@ -91,6 +91,9 @@ func TestEveryEventIsOneLineWithAFixedSetOfFields(t *testing.T) {
 		{event: EventQuarantine, level: "WARN", fire: func(n *Notifier) { n.Quarantine("history", 3) }, fields: map[string]any{"queue": "history", "attempts": float64(3)}},
 		{event: EventRekeyConflict, level: "WARN", fire: func(n *Notifier) { n.RekeyConflict("mapping_contradicts") }, fields: map[string]any{"conflict": "mapping_contradicts"}},
 		{event: EventIngestPaused, level: "WARN", fire: func(n *Notifier) { n.IngestPaused(1024, 268435456) }, fields: map[string]any{"free_bytes": float64(1024), "floor_bytes": float64(268435456)}},
+		{event: EventBackupDone, level: "INFO", fire: func(n *Notifier) { n.BackupDone(4096, 8192, 2048, 1500*time.Millisecond) },
+			fields: map[string]any{"bytes": float64(4096), "archive_bytes": float64(8192), "session_bytes": float64(2048), "duration_ms": float64(1500)}},
+		{event: EventBackupFailed, level: "WARN", fire: func(n *Notifier) { n.BackupFailed("archive") }, fields: map[string]any{"reason": "archive"}},
 		{event: EventAdminMutation, level: "INFO", fire: func(n *Notifier) { n.AdminMutation("pair", "already_paired") }, fields: map[string]any{"action": "pair", "outcome": "already_paired"}},
 		{event: EventAdminAuthFailure, level: "WARN", fire: (*Notifier).AdminAuthFailure, fields: map[string]any{"count": float64(1)}},
 	}
@@ -121,7 +124,7 @@ func TestEveryEventIsOneLineWithAFixedSetOfFields(t *testing.T) {
 		})
 	}
 	for _, event := range []string{EventAdminMutation, EventAdminAuthFailure, EventUnpaired, EventDisconnected, EventPairRejected,
-		EventLogoutFailed, EventQuarantine, EventRekeyConflict, EventIngestPaused} {
+		EventLogoutFailed, EventQuarantine, EventRekeyConflict, EventIngestPaused, EventBackupDone, EventBackupFailed} {
 		if !seen[event] {
 			t.Errorf("no case for %s", event)
 		}
@@ -138,6 +141,7 @@ func TestValuesThatAreNotCodesNeverLeave(t *testing.T) {
 		n.RekeyConflict(v)
 		n.AdminMutation(v, v)
 		n.LogoutFailed(1, v)
+		n.BackupFailed(v)
 	}
 	if strings.Contains(out.String(), canary) || strings.Contains(out.String(), "Alice") || strings.Contains(out.String(), "Logged_Out") {
 		t.Fatalf("a value that is not a code reached the output:\n%s", out)

@@ -24,6 +24,8 @@ const (
 	EventQuarantine       = "quarantine"
 	EventRekeyConflict    = "rekey_conflict"
 	EventIngestPaused     = "ingest_paused"
+	EventBackupDone       = "backup_done"
+	EventBackupFailed     = "backup_failed"
 )
 
 const (
@@ -150,6 +152,16 @@ func (n *Notifier) RekeyConflict(conflict string) {
 func (n *Notifier) IngestPaused(freeBytes, floorBytes uint64) {
 	n.emit(slog.LevelWarn, "ingest paused: the data directory is below its free-space floor", EventIngestPaused,
 		slog.Uint64("free_bytes", freeBytes), slog.Uint64("floor_bytes", floorBytes))
+}
+
+func (n *Notifier) BackupDone(bytes, archiveBytes, sessionBytes int64, took time.Duration) {
+	n.emit(slog.LevelInfo, "an encrypted backup was written", EventBackupDone,
+		slog.Int64("bytes", bytes), slog.Int64("archive_bytes", archiveBytes), slog.Int64("session_bytes", sessionBytes),
+		slog.Int64("duration_ms", took.Milliseconds()))
+}
+
+func (n *Notifier) BackupFailed(reason string) {
+	n.emit(slog.LevelWarn, "a backup failed and its partial output was removed", EventBackupFailed, code("reason", reason))
 }
 
 func (n *Notifier) AdminMutation(action, outcome string) {

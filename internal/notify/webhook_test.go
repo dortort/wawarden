@@ -150,12 +150,13 @@ func TestEventsArePostedSignedWithTheSameFields(t *testing.T) {
 	r.n.Start(t.Context())
 	r.n.Quarantine("history", 3)
 	r.n.AdminMutation("pair", "ok")
+	r.n.BackupDone(4096, 8192, 2048, time.Second)
 	r.stop(t)
 
 	got := recv.requests()
 	lines := r.out.records(t)
-	if len(got) != 2 || len(lines) != 2 {
-		t.Fatalf("%d posts and %d lines, want two of each", len(got), len(lines))
+	if len(got) != 3 || len(lines) != 3 {
+		t.Fatalf("%d posts and %d lines, want three of each", len(got), len(lines))
 	}
 	ids := map[string]bool{}
 	for i, req := range got {
@@ -182,7 +183,7 @@ func TestEventsArePostedSignedWithTheSameFields(t *testing.T) {
 			t.Fatalf("posted keys %v, line keys %v: the body is the line's event and fields plus id and time", body, lines[i])
 		}
 	}
-	if len(ids) != 2 {
+	if len(ids) != 3 {
 		t.Fatal("two events shared an id")
 	}
 	tampered := got[0].body
@@ -478,14 +479,16 @@ func TestNoPostedEventCarriesACanary(t *testing.T) {
 		r.n.Quarantine(v, 3)
 		r.n.RekeyConflict(v)
 		r.n.AdminMutation(v, v)
+		r.n.BackupFailed(v)
 	}
 	r.n.Unpaired()
 	r.n.IngestPaused(1, 2)
+	r.n.BackupDone(1, 2, 3, time.Second)
 	r.n.AdminAuthFailure()
 	r.stop(t)
 	got := recv.requests()
-	if len(got) != 21 {
-		t.Fatalf("%d posts, want 21", len(got))
+	if len(got) != 25 {
+		t.Fatalf("%d posts, want 25", len(got))
 	}
 	for _, req := range got {
 		if strings.Contains(string(req.body), canary) || strings.Contains(fmt.Sprint(req.header), canary) {
