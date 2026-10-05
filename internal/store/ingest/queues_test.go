@@ -145,6 +145,17 @@ func TestHistoryBlobs(t *testing.T) {
 	if attempts != 1 {
 		t.Fatalf("RecordBlobAttempt = %d", attempts)
 	}
+	write(t, s, func(tx *Tx) error { return tx.ReleaseBlobAttempt("blob-b") })
+	if b := pending()[0]; b.ID != "blob-b" || b.Attempts != 0 {
+		t.Fatalf("pending blob %+v after its attempt was released", b)
+	}
+	if err := s.Write(t.Context(), "test.blob", func(tx *Tx) error { return tx.ReleaseBlobAttempt("blob-b") }); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("releasing an attempt not recorded = %v, want ErrNotFound", err)
+	}
+	write(t, s, func(tx *Tx) error {
+		_, err := tx.RecordBlobAttempt("blob-b")
+		return err
+	})
 	write(t, s, func(tx *Tx) error {
 		if err := tx.MarkBlobProcessed("blob-b", epoch.Add(time.Hour)); err != nil {
 			return err
@@ -173,6 +184,7 @@ func TestHistoryBlobs(t *testing.T) {
 		"process a processed blob":    func(tx *Tx) error { return tx.MarkBlobProcessed("blob-b", epoch) },
 		"quarantine a processed blob": func(tx *Tx) error { return tx.QuarantineBlob("blob-b") },
 		"attempt a processed blob":    func(tx *Tx) error { _, err := tx.RecordBlobAttempt("blob-b"); return err },
+		"release a processed blob":    func(tx *Tx) error { return tx.ReleaseBlobAttempt("blob-b") },
 	} {
 		if err := s.Write(t.Context(), "test.blob", call); !errors.Is(err, ErrNotFound) {
 			t.Errorf("%s = %v, want ErrNotFound", name, err)

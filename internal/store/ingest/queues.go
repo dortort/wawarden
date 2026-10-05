@@ -39,6 +39,7 @@ const (
 	selectPending     = "SELECT id, received_at, ref, attempts FROM history_blobs WHERE processed_at IS NULL AND quarantined = 0 ORDER BY received_at, id LIMIT ?"
 	selectBlobPending = "SELECT EXISTS (SELECT 1 FROM history_blobs WHERE id = ? AND processed_at IS NULL AND quarantined = 0)"
 	bumpBlobAttempt   = "UPDATE history_blobs SET attempts = attempts + 1 WHERE id = ? AND processed_at IS NULL AND quarantined = 0 RETURNING attempts"
+	dropBlobAttempt   = "UPDATE history_blobs SET attempts = attempts - 1 WHERE id = ? AND attempts > 0 AND processed_at IS NULL AND quarantined = 0"
 	markBlobProcessed = "UPDATE history_blobs SET processed_at = ?, ref = NULL WHERE id = ? AND processed_at IS NULL AND quarantined = 0"
 	quarantineBlob    = "UPDATE history_blobs SET quarantined = 1, ref = NULL WHERE id = ? AND processed_at IS NULL"
 )
@@ -138,6 +139,10 @@ func (tx *Tx) RecordBlobAttempt(id string) (int, error) {
 		return 0, ErrNotFound
 	}
 	return attempts, err
+}
+
+func (tx *Tx) ReleaseBlobAttempt(id string) error {
+	return oneRow(tx.q.ExecContext(tx.ctx, dropBlobAttempt, id))
 }
 
 func (tx *Tx) MarkBlobProcessed(id string, at time.Time) error {
