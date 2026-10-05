@@ -286,6 +286,10 @@ func (a *applier) edit(m Message, chat, sender policy.CanonicalChat) error {
 		}
 		return err
 	}
+	if !found.EditedAt.IsZero() && m.Timestamp.UnixMilli() <= found.EditedAt.UnixMilli() {
+		a.drop(dropStaleEdit)
+		return nil
+	}
 	return a.tx.ApplyEdit(found.Ref, m.Text, m.Timestamp)
 }
 

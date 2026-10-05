@@ -11,6 +11,7 @@ const (
 	dropForeign      = "foreign_reference"
 	dropTargetAbsent = "target_unknown"
 	dropTargetKind   = "target_kind"
+	dropStaleEdit    = "stale_edit"
 	dropNotOriginal  = "not_original_sender"
 	dropNotAdmin     = "not_admin"
 	dropAdminUnknown = "admin_unknown"

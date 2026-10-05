@@ -144,7 +144,8 @@ These are stated so that nobody relies on WaWarden for them:
    the server asserts a field. An edit, revocation, reaction or poll vote is
    applied only to a message found in the chat it arrived in, by identifier and
    sender; an edit or revocation only from the message's sender, or, for a
-   revocation in a group, from a member the archive records as an admin. A chat
+   revocation in a group, from a member the archive records as an admin; an
+   edit only when it is newer than the last edit applied to that message. A chat
    named in a message key or a reply reference is never followed unless it is
    the event's own chat (or, in a direct chat, the owner's number, which is how
    the other side names it). LID-to-number mappings are learned only from

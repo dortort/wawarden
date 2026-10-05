@@ -108,6 +108,22 @@ func TestFixtureEdit(t *testing.T) {
 	}
 }
 
+func TestFixtureStaleEditIsDropped(t *testing.T) {
+	r := newPipeRig(t)
+	newer := change(KindEdit, alice, "E2", alice, Key{FromMe: true, ID: "M1"})
+	newer.Timestamp, newer.Text = epoch.Add(2*time.Minute), "second edit wording"
+	older := change(KindEdit, alice, "E1", alice, Key{FromMe: true, ID: "M1"})
+	older.Timestamp, older.Text = epoch.Add(time.Minute), "first edit wording"
+	r.ingest(dm("M1", alice, "original wording"), newer, older)
+	if f := r.must(alice, "M1", alice); f.Text != "second edit wording" || !f.EditedAt.Equal(newer.Timestamp) {
+		t.Fatalf("after an older edit arrived late: %+v", f)
+	}
+	r.ingest(newer)
+	if r.dropped(dropStaleEdit) != 2 || len(r.logs.events("ingest_failed")) != 0 {
+		t.Fatalf("stale edit drops %v, failures %d", r.dropped(dropStaleEdit), len(r.logs.events("ingest_failed")))
+	}
+}
+
 func TestFixtureEditByAnotherSenderIsRefused(t *testing.T) {
 	r := newPipeRig(t)
 	r.ingest(inGroup("M1", alice, "alice wrote this"))

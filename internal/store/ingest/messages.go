@@ -65,12 +65,13 @@ type Message struct {
 }
 
 type Found struct {
-	Ref     Ref
-	Sender  policy.CanonicalChat
-	FromMe  bool
-	Kind    Kind
-	Text    string
-	Revoked bool
+	Ref      Ref
+	Sender   policy.CanonicalChat
+	FromMe   bool
+	Kind     Kind
+	Text     string
+	Revoked  bool
+	EditedAt time.Time
 }
 
 const (
@@ -79,7 +80,7 @@ const (
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (chat_jid, id, sender_jid) DO NOTHING RETURNING seq`
 	selectSeq       = "SELECT seq FROM messages WHERE chat_jid = ? AND id = ? AND sender_jid = ?"
-	selectFound     = "SELECT seq, from_me, kind, text, revoked FROM messages WHERE chat_jid = ? AND id = ? AND sender_jid = ?"
+	selectFound     = "SELECT seq, from_me, kind, text, revoked, edited_ts FROM messages WHERE chat_jid = ? AND id = ? AND sender_jid = ?"
 	selectChatOfSeq = "SELECT chat_jid FROM messages WHERE seq = ?"
 	selectForChange = "SELECT chat_jid, kind, text, revoked FROM messages WHERE seq = ?"
 	selectExpired   = "SELECT seq, text FROM messages WHERE expires_at <= ? AND text IS NOT NULL ORDER BY expires_at, seq LIMIT ?"
@@ -213,13 +214,18 @@ func (r *Reader) ResolveInChat(chat policy.CanonicalChat, id string, sender poli
 	var fromMe, revoked bool
 	var kind string
 	var text sql.NullString
-	switch err := r.q.QueryRowContext(r.ctx, selectFound, chat.JID(), id, sender.JID()).Scan(&seq, &fromMe, &kind, &text, &revoked); {
+	var edited sql.NullInt64
+	switch err := r.q.QueryRowContext(r.ctx, selectFound, chat.JID(), id, sender.JID()).Scan(&seq, &fromMe, &kind, &text, &revoked, &edited); {
 	case errors.Is(err, sql.ErrNoRows):
 		return Found{}, false, nil
 	case err != nil:
 		return Found{}, false, err
 	}
-	return Found{Ref: Ref{seq: seq, chat: chat}, Sender: sender, FromMe: fromMe, Kind: Kind(kind), Text: text.String, Revoked: revoked}, true, nil
+	f := Found{Ref: Ref{seq: seq, chat: chat}, Sender: sender, FromMe: fromMe, Kind: Kind(kind), Text: text.String, Revoked: revoked}
+	if edited.Valid {
+		f.EditedAt = fromMS(edited.Int64)
+	}
+	return f, true, nil
 }
 
 type changeable struct {

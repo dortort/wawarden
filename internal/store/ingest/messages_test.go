@@ -78,7 +78,7 @@ func TestInsertAndResolveInTheChat(t *testing.T) {
 		t.Fatalf("a duplicate insert = %v, %v, want the existing row and false", again, inserted)
 	}
 	f, ok := resolve(t, s, alice, m.ID, alice)
-	if !ok || f.Ref != ref || f.Text != m.Text || f.Kind != KindText || f.FromMe || f.Revoked || f.Sender != chat(t, alice) {
+	if !ok || f.Ref != ref || f.Text != m.Text || f.Kind != KindText || f.FromMe || f.Revoked || f.Sender != chat(t, alice) || !f.EditedAt.IsZero() {
 		t.Fatalf("ResolveInChat = %+v, %v", f, ok)
 	}
 	for _, miss := range []struct{ chat, id, sender string }{
@@ -187,7 +187,7 @@ func TestEditsAndRevokesApplyOnlyInTheirChat(t *testing.T) {
 	other := insert(t, s, textMessage(t, group2JID, "M1", alice, "untouched"))
 	write(t, s, func(tx *Tx) error { return tx.ApplyEdit(ref, "second wording", epoch.Add(time.Minute)) })
 	f, _ := resolve(t, s, groupJID, "M1", alice)
-	if f.Text != "second wording" || matches(t, s, "first wording") != 0 || matches(t, s, "second wording") != 1 {
+	if f.Text != "second wording" || !f.EditedAt.Equal(epoch.Add(time.Minute)) || matches(t, s, "first wording") != 0 || matches(t, s, "second wording") != 1 {
 		t.Fatalf("after the edit: %+v", f)
 	}
 	if edited := scalar[int64](t, s, "SELECT edited_ts FROM messages WHERE seq = ?", ref.seq); edited != ms(epoch.Add(time.Minute)) {
