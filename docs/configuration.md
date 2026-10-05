@@ -152,13 +152,16 @@ Flags:
 | `--token-stdin` | off | Reads the token from standard input, at most 4096 bytes. Refused when standard input is a terminal or another character device: pipe the token in instead of typing it. |
 | `--token-command COMMAND` | | Runs `COMMAND` and reads the token from its standard output, for example `--token-command 'op read op://vault/wawarden/token'`. |
 
-Give exactly one of `--token-file`, `--token-stdin` and `--token-command`. The
+Give exactly one of `--token-file`, `--token-stdin` and `--token-command`, the
+first and the last with a value that is not empty. The
 token is never taken from a command-line argument or an environment variable,
 and the commands read no `WAWARDEN_` variable, so they can run in the same
 environment as `serve`. White space around the token is removed; what remains
 must have the exact form `admin init` prints, or the command stops before it
 sends anything. No error message repeats the file's content or the command's
-output.
+output. A flag the command does not know, or one given wrongly, such as a value
+for `--token-stdin`, is reported with a fixed message that names at most one of
+the four flags, never with what was typed, followed by the usage text.
 
 The token command is split into words without a shell: single and double
 quotes group words, and a backslash outside single quotes escapes the next
@@ -171,7 +174,7 @@ capped at 4096 bytes. A command that leaves a process holding its output open
 fails after 2 seconds.
 
 The HTTP client ignores the proxy variables, follows no redirect (a redirect
-is reported as an unexpected answer), uses TLS 1.2 or later for `https`, gives
+is reported as a refusal with its `3xx` status and exits `1`), uses TLS 1.2 or later for `https`, gives
 up after 40 seconds, and reads at most 64 KiB of an answer. Everything it prints
 from an answer, a refusal's code included, passes through a terminal sanitiser
 that replaces every control, format, line-separator and paragraph-separator
@@ -187,7 +190,7 @@ standard error; see the [exit codes](#exit-codes).
 |---|---|
 | `0` | `serve` stopped cleanly after `SIGTERM` or `SIGINT`; `healthcheck` got `200`; `version` and `admin init` printed their output; `admin status`, `pair` or `reconnect` got `200` and printed the answer. |
 | `1` | `serve` failed after its configuration was accepted: the [archive](#message-archive) or the [device store](#device-store) could not be opened or its lock was not acquired within five minutes, the device store could not be brought up to date, or a listener could not be opened (`startup_failed`), a listener failed while running (`listener_failed`), or shutdown ended with errors, for example when the grace period ran out. `healthcheck` failed for any reason, including extra arguments. `version` or `admin init` could not write to standard output. An admin command's request failed: no connection, no answer within 40 seconds, an answer over 64 KiB or not in the expected shape, a redirect, or any status other than those of codes `0`, `4` and `5`, such as `engine_unavailable` (`503`), `pair_failed` (`502`) or `internal_error` (`500`). |
-| `2` | `serve` refused to start (`startup_refused`, see [Startup refusals](#startup-refusals)). Or a usage error: an unknown subcommand, or an unknown flag or extra argument given to `serve`, `version` or `admin`, an admin command without exactly one token source, or an invalid `--addr`; the usage text goes to standard error. |
+| `2` | `serve` refused to start (`startup_refused`, see [Startup refusals](#startup-refusals)). Or a usage error: an unknown subcommand, or an unknown flag or extra argument given to `serve`, `version` or `admin`, an admin command without exactly one token source or with an empty `--token-file` or `--token-command`, or an invalid `--addr`; the usage text goes to standard error. |
 | `3` | An admin command could not use its token: the file or standard input could not be read, held more than 4096 bytes or was a terminal; the token command could not start, failed, timed out, left a process holding its output or printed more than 4096 bytes; or what it read is not an admin token. Nothing was sent. |
 | `4` | The admin listener refused the token: `401` (`unauthorized`), or `429` with `too_many_requests` (the failure budget is spent, see [Failed authentication](#failed-authentication)). |
 | `5` | The service refused the operation in its current state: `409` (`already_paired`, `already_connected`, `not_paired`, `owner_phone_missing` or `owner_mismatch`) or `429` with `rate_limited`; see [Admin routes](#admin-routes). |
@@ -215,7 +218,7 @@ These are all the variables this build reads.
 | `WAWARDEN_HISTORY_MAX_BYTES` | `33554432` (32 MiB) | The largest history-sync blob, in bytes, before and after decompression: a number in decimal digits from `1` to `268435456` (256 MiB), with no sign, unit, separator or white space. The memory that history sync needs grows with it; see [History sync](#history-sync). | `history_max_bytes_invalid` |
 | `WAWARDEN_UNSAFE_DEBUG` | unset | A window, in minutes, during which the protocol library's debug output is logged: a number in decimal digits from `1` to `60`. Unset, that output is discarded at every log level. See [Protocol library logs](#protocol-library-logs) before setting it. | `unsafe_debug_invalid` |
 | `WAWARDEN_METRICS_EMF` | unset | `1` writes [metrics in embedded metric format](#embedded-metric-format) on standard output; `0` or unset writes none. | `metrics_emf_invalid` |
-| `WAWARDEN_NOTIFY_URL` | unset | The [webhook](#webhook) that receives every notification event: an `https` URL with a host, optionally a port, a path and a query, without credentials or a fragment. Treat it as a secret when its path or query holds one; the service never logs it. Unset, events go to standard output only. | `notify_url_invalid` |
+| `WAWARDEN_NOTIFY_URL` | unset | The [webhook](#webhook) that receives every notification event: an `https` URL with a host, optionally a port, a path and a query, without credentials, a fragment or an IPv6 zone. Treat it as a secret when its path or query holds one; the service never logs it. Unset, events go to standard output only. | `notify_url_invalid` |
 | `WAWARDEN_NOTIFY_SECRET_FILE` | unset | A path to the webhook's signing secret, required with `WAWARDEN_NOTIFY_URL` and refused without it: a regular file (symbolic links are followed) with no write permission for its group and no permission at all for others (`0400`, `0440`, `0600` and `0640` pass; `0644` and `0444` do not), of at most 4096 bytes, holding at least 32 bytes apart from surrounding white space. Generate one with `openssl rand -hex 32`. | `notify_url_missing`, `notify_secret_missing`, `notify_secret_unreadable`, `notify_secret_permissions`, `notify_secret_invalid` |
 | `WAWARDEN_NOTIFY_ALLOW_PRIVATE` | unset | `1` lets the webhook reach loopback, private (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`) and shared (`100.64.0.0/10`, which mesh VPNs use) addresses; `0` or unset refuses them. Only with `WAWARDEN_NOTIFY_URL`. | `notify_allow_private_invalid`, `notify_url_missing` |
 
@@ -300,7 +303,7 @@ The checks run in this order:
 | 15 | `history_max_bytes_invalid` | `WAWARDEN_HISTORY_MAX_BYTES` | The value is not a number of bytes in decimal digits from 1 to 268435456. |
 | 16 | `unsafe_debug_invalid` | `WAWARDEN_UNSAFE_DEBUG` | The value is not a number of minutes in decimal digits from 1 to 60. |
 | 17 | `metrics_emf_invalid` | `WAWARDEN_METRICS_EMF` | The value is not `0` or `1`. |
-| 18 | `notify_url_invalid` | `WAWARDEN_NOTIFY_URL` | The value is not an `https` URL with a host, or it holds credentials or a fragment. |
+| 18 | `notify_url_invalid` | `WAWARDEN_NOTIFY_URL` | The value is not an `https` URL with a host, or it holds credentials, a fragment or an IPv6 zone. |
 | 19 | `notify_allow_private_invalid` | `WAWARDEN_NOTIFY_ALLOW_PRIVATE` | The value is not `0` or `1`. |
 | 20 | `notify_url_missing` | `WAWARDEN_NOTIFY_SECRET_FILE`, else `WAWARDEN_NOTIFY_ALLOW_PRIVATE` | That variable is set without `WAWARDEN_NOTIFY_URL`. |
 | 21 | `notify_secret_missing` | `WAWARDEN_NOTIFY_SECRET_FILE` | `WAWARDEN_NOTIFY_URL` is set without a secret file. |
@@ -1121,7 +1124,7 @@ accepted. The `dev_build` and `listener_not_loopback` warnings are written at
 every level, `error` included, because they are the only signal that a
 development binary is running or that a listener is reachable beyond loopback.
 So are the [notification events](#notifications), which an operator must see,
-the `notify_failed` warning, and the `unsafe_debug` and `unsafe_debug_ended`
+the `notify_failed` and `notify_dropped` warnings, and the `unsafe_debug` and `unsafe_debug_ended`
 notices of a [debug window](#protocol-library-logs). Lines in
 [embedded metric format](#embedded-metric-format) have none of the four keys.
 
@@ -1172,6 +1175,7 @@ notices of a [debug window](#protocol-library-logs). Lines in
 | `admin_mutation` | `INFO`, at every log level | `action`, `outcome` | A [notification event](#notifications). |
 | `admin_auth_failure` | `WARN`, at every log level | `count` | A [notification event](#notifications). |
 | `notify_failed` | `WARN`, at every log level | `attempts`, `reason`, `status` | The [webhook](#webhook) did not take an event, which is dropped. |
+| `notify_dropped` | `WARN`, at every log level | `count` | At shutdown, the [webhook](#webhook) dropped `count` events it had not delivered, and `serve` exits `1`. |
 | `emf_failed` | `WARN` | `error_type` | Writing the [embedded-metric-format](#embedded-metric-format) lines failed. |
 
 What is never logged: requests (there is no access log), request bodies, header
@@ -1190,11 +1194,12 @@ address, and the `error` texts of `startup_failed` and `listener_failed` come
 from the operating system and can contain a listen address.
 
 The CLI writes to standard error only its usage text, the flag parser's one-line
-error for an unknown flag or an invalid flag value (it repeats the flag as typed,
+error when `serve` gets an unknown flag or an invalid flag value (it repeats the flag as typed,
 for example `flag provided but not defined: -nope`), `healthcheck` failures,
 the `admin init` reminder, and the fixed messages of the
 [admin commands](#admin-status-admin-pair-and-admin-reconnect): their warning
-about plain HTTP, the reason a token could not be used, the reason a request
+about plain HTTP, the flag they could not parse, named but never repeated as
+typed, the reason a token could not be used, the reason a request
 failed, a refusal's code and status, and the hint where to enter a pairing
 code. The Go runtime writes crash output to standard error.
 
@@ -1323,7 +1328,7 @@ the [webhook](#webhook).
 
 | Event | Level | Other keys | Reported when |
 |---|---|---|---|
-| `unpaired` | `WARN` | | The engine starts without a paired device, so it makes no connection until pairing is requested, or a paired device is lost: WhatsApp logged it out, or a rejected device was logged out. |
+| `unpaired` | `WARN` | | The engine starts without a paired device, so it makes no connection until pairing is requested, also when the [restart budget](#engine-states) holds the start, or a paired device is lost: WhatsApp logged it out, or a rejected device was logged out. |
 | `disconnected` | `WARN` | `reason` | The engine entered `disconnected` for any reason but `shutdown`; `reason` as under [Engine states](#engine-states). |
 | `pair_rejected` | `WARN` | `stage`: `before_save`, `after_pairing` | Pairing linked or tried to link an account other than the owner's; see [Pairing](#pairing). |
 | `logout_failed` | `WARN` | `attempt`, `error_type` | Logging out a rejected device failed; the engine tries again. `error_type` is the Go type of the error. |
@@ -1411,8 +1416,12 @@ Before it connects, the sender checks the address it resolved. It always
 refuses link-local addresses (`169.254.0.0/16`, `fe80::/10`, which hold the
 cloud metadata and container credential endpoints), the metadata addresses
 `fd00:ec2::254`, `100.100.100.200` and `192.0.0.192`, multicast, broadcast,
-reserved and unspecified addresses; it refuses loopback, private and shared
-(`100.64.0.0/10`) addresses unless `WAWARDEN_NOTIFY_ALLOW_PRIVATE` is `1`. A
+reserved and unspecified addresses, every IPv6 address with a zone (such as
+`fe80::1%eth0`), and the local-use NAT64 prefix `64:ff9b:1::/48`, whose
+embedded IPv4 address depends on the network; it refuses loopback, private and shared
+(`100.64.0.0/10`) addresses unless `WAWARDEN_NOTIFY_ALLOW_PRIVATE` is `1`. An
+address in the well-known NAT64 prefix `64:ff9b::/96` is checked as the IPv4
+address it embeds, so `64:ff9b::a9fe:a9fe` counts as `169.254.169.254`. A
 refused destination is not tried again. The check runs on every connection,
 after name resolution, so a name that resolves to a refused address is refused
 too.
@@ -1422,7 +1431,9 @@ with `reason` `queue_full`, `failed` (after its last attempt, or a final answer
 or refused destination, logged as `notify_failed` with `attempts`, `reason`:
 `destination_refused`, `http_status` or `network_error`, and `status`, `0`
 without an answer) or `shutdown`. At shutdown the sender delivers what is
-queued within the [grace period](#shutdown), then gives up on the rest.
+queued within the [grace period](#shutdown), then gives up on the rest: it
+cancels the attempt in progress, logs `notify_dropped` with the number of
+events dropped at shutdown, and `serve` exits `1`.
 
 ## Metrics
 
@@ -1527,7 +1538,8 @@ from the start of the process; a restart starts the counts again.
    [embedded-metric-format](#embedded-metric-format) lines are written.
 5. Held-back admin authentication failures are reported as
    `admin_auth_failure`, and the [webhook](#webhook) delivers what is queued;
-   whatever remains when the grace period runs out is dropped and counted.
+   whatever remains when the grace period runs out is dropped, counted and
+   reported in `notify_dropped`.
 6. The [archive](#message-archive) and the [device store](#device-store) are
    closed, which releases their locks. Each waits up to 1 second for a call
    still in progress to give its connection back, then closes it.
