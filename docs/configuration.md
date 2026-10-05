@@ -355,7 +355,9 @@ only the derived keys:
 | `chat-hmac` | 32 bytes | Derived but not used yet; it is reserved for the chat references in notification events (M1). |
 
 Apart from the log pseudonyms, the key id is the only value derived from the
-master key that the service writes; no key is ever written. Replacing or
+master key that the service writes out. No key reaches a log, an event, a
+metric or a response; the service writes the master key only to `keys/master`,
+through the temporary name in step 3, and never writes a derived key. Replacing or
 deleting the master key changes the key id and every log pseudonym; this build
 has no command to rotate it. To provide your own key, write
 32 random bytes to `keys/master` with mode `0600` or `0400`, owned by the service's
