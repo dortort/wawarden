@@ -910,7 +910,7 @@ func (h *supRig) refusesTheStoredDevice(connects int) {
 	if h.counter("wawarden_paired") != 1 || h.counter("wawarden_connected") != 0 {
 		h.t.Fatal("the gauges do not show a paired, disconnected engine")
 	}
-	if strings.Contains(h.logs.String(), "15550100002") {
+	if account := accountOf(h.client.Account()); account != "" && strings.Contains(h.logs.String(), account) {
 		h.t.Fatal("the stored account reached the log")
 	}
 }
@@ -944,6 +944,16 @@ func TestTheStoredDeviceMustBeTheOwnersBeforeEveryConnect(t *testing.T) {
 		h.steps()
 		h.refusesTheStoredDevice(0)
 	})
+	for _, account := range []string{"155501000091", "1555010000", ownerDev, owner} {
+		t.Run("not "+account, func(t *testing.T) {
+			h := newSupRig(t)
+			h.client.account = account
+			h.versions(versionResult{v: current})
+			h.s.begin(t.Context(), 1)
+			h.steps()
+			h.refusesTheStoredDevice(0)
+		})
+	}
 	t.Run("on an explicit reconnect", func(t *testing.T) {
 		h := newSupRig(t)
 		h.connectedNow()
