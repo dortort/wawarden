@@ -60,6 +60,8 @@ hostarch=$(go env GOHOSTARCH)
 
 marker=$(sed -nE 's/.*devMarker[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' internal/buildinfo/dev.go)
 [ -n "$marker" ] || die "cannot read devMarker from internal/buildinfo/dev.go"
+fake_marker=$(sed -nE 's/.*fakeMarker[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' internal/engine/fake/fake.go)
+[ -n "$fake_marker" ] || die "cannot read fakeMarker from internal/engine/fake/fake.go"
 
 revision=$(git rev-parse HEAD)
 SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)
@@ -73,7 +75,7 @@ build_setting() {
 }
 
 check_binary() {
-  local bin=$1 arch=$2 meta tags
+  local bin=$1 arch=$2 meta tags symbols
   meta=$(go version -m "$bin")
   tags=$(build_setting -tags "$meta")
   if [[ ,$tags, == *,dev,* ]]; then
@@ -85,6 +87,13 @@ check_binary() {
   [ "$(build_setting GOARCH "$meta")" = "$arch" ] || die "$bin does not record GOARCH=$arch"
   if LC_ALL=C grep -qaF -- "$marker" "$bin"; then
     die "$bin contains the dev build marker"
+  fi
+  if LC_ALL=C grep -qaF -- "$fake_marker" "$bin"; then
+    die "$bin contains the fake engine's marker"
+  fi
+  symbols=$(go tool nm "$bin") || die "go tool nm cannot read $bin"
+  if grep -F -- "$module/internal/engine/fake" <<< "$symbols" > /dev/null; then
+    die "$bin contains symbols of $module/internal/engine/fake"
   fi
   go tool nm "$bin" | grep -E "[[:space:]]$module/internal/buildinfo\.Version\$" > /dev/null ||
     die "$bin lacks $module/internal/buildinfo.Version, the -X target symbol"
