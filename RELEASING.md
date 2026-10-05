@@ -141,9 +141,10 @@ release workflow, by CI and by anyone reproducing a release:
 - Before packaging, the script checks each binary: its embedded build settings
   must show no `dev` tag, `vcs.revision` equal to the commit, `vcs.modified=false`,
   `CGO_ENABLED=0` and the right architecture; the binary must not contain the
-  marker string that only dev builds carry; and it must contain the version
-  variable that the link step sets (`go tool nm` lists
-  `internal/buildinfo.Version`). On a Linux host, and only in its `binaries`
+  marker string that only dev builds carry, nor the marker string of the
+  development-only fake engine, and `go tool nm` must list no symbol of
+  `internal/engine/fake`; and it must contain the version variable that the
+  link step sets (`go tool nm` lists `internal/buildinfo.Version`). On a Linux host, and only in its `binaries`
   and `oci` modes, the script also runs the binary built for the host's
   architecture, with an empty environment (`env -i`): `wawarden version` must
   print exactly the requested version, the commit and `dev build false`. In the
