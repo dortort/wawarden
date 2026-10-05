@@ -240,6 +240,10 @@ func TestRefusals(t *testing.T) {
 		{name: "signed debug window", vars: map[string]string{envUnsafeDebug: "+5"}, reason: "unsafe_debug_invalid", variable: envUnsafeDebug},
 		{name: "debug window as a flag", vars: map[string]string{envUnsafeDebug: "true"}, reason: "unsafe_debug_invalid", variable: envUnsafeDebug},
 
+		{name: "metrics as a word", vars: map[string]string{envMetricsEMF: "true"}, reason: "metrics_emf_invalid", variable: envMetricsEMF},
+		{name: "empty metrics switch", vars: map[string]string{envMetricsEMF: ""}, reason: "metrics_emf_invalid", variable: envMetricsEMF},
+		{name: "metrics switch with a space", vars: map[string]string{envMetricsEMF: "1 "}, reason: "metrics_emf_invalid", variable: envMetricsEMF},
+
 		{name: "plain http webhook", vars: map[string]string{envNotifyURL: "http://hooks.example.test/x", envNotifySecret: secretFile(t, 0o600)}, reason: "notify_url_invalid", variable: envNotifyURL},
 		{name: "webhook with credentials", vars: map[string]string{envNotifyURL: (&url.URL{Scheme: "https", User: url.UserPassword("synthetic", "synthetic"), Host: "hooks.example.test"}).String(), envNotifySecret: secretFile(t, 0o600)}, reason: "notify_url_invalid", variable: envNotifyURL},
 		{name: "webhook with a fragment", vars: map[string]string{envNotifyURL: "https://hooks.example.test/x#f", envNotifySecret: secretFile(t, 0o600)}, reason: "notify_url_invalid", variable: envNotifyURL},
@@ -712,6 +716,15 @@ func TestAccepted(t *testing.T) {
 	}
 }
 
+func TestMetricsEMF(t *testing.T) {
+	for value, want := range map[string]bool{"1": true, "0": false} {
+		cfg, r := Load(environ(withDataDir(t, map[string]string{envMetricsEMF: value})), testOptions())
+		if r != nil || cfg.MetricsEMF != want {
+			t.Fatalf("WAWARDEN_METRICS_EMF=%s: MetricsEMF %v, %v", value, cfg.MetricsEMF, r)
+		}
+	}
+}
+
 func TestNotifySettings(t *testing.T) {
 	for _, mode := range []fs.FileMode{0o600, 0o400, 0o640, 0o440} {
 		path := secretFile(t, mode)
@@ -755,6 +768,7 @@ func TestRefusalsNeverEchoValues(t *testing.T) {
 		{envOwnerPhone: secret},
 		{envHistoryMax: secret},
 		{envUnsafeDebug: secret},
+		{envMetricsEMF: secret},
 		{envNotifyURL: "http://" + secret + ".example.test/x"},
 		{envNotifyURL: "https://hooks.example.test/x", envNotifyPrivate: secret},
 		{envNotifyURL: "https://hooks.example.test/x", envNotifySecret: writeFile(t, secret[:20])},

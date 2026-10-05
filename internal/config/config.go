@@ -37,6 +37,7 @@ const (
 	envOwnerPhone     = "WAWARDEN_OWNER_PHONE"
 	envHistoryMax     = "WAWARDEN_HISTORY_MAX_BYTES"
 	envUnsafeDebug    = "WAWARDEN_UNSAFE_DEBUG"
+	envMetricsEMF     = "WAWARDEN_METRICS_EMF"
 	envNotifyURL      = "WAWARDEN_NOTIFY_URL"
 	envNotifySecret   = "WAWARDEN_NOTIFY_SECRET_FILE"
 	envNotifyPrivate  = "WAWARDEN_NOTIFY_ALLOW_PRIVATE"
@@ -83,6 +84,7 @@ const (
 	reasonOwnerPhoneInvalid        = "owner_phone_invalid"
 	reasonHistoryMaxBytesInvalid   = "history_max_bytes_invalid"
 	reasonUnsafeDebugInvalid       = "unsafe_debug_invalid"
+	reasonMetricsEMFInvalid        = "metrics_emf_invalid"
 	reasonNotifyURLInvalid         = "notify_url_invalid"
 	reasonNotifyPrivateInvalid     = "notify_allow_private_invalid"
 	reasonNotifyURLMissing         = "notify_url_missing"
@@ -93,7 +95,7 @@ const (
 )
 
 var known = []string{envDataDir, envListen, envAdminListen, envHealthListen, envAdminHash, envAdminHashFile, envLogLevel, envStorageProfile, envMinFreeBytes,
-	envOwnerPhone, envHistoryMax, envUnsafeDebug, envNotifyURL, envNotifySecret, envNotifyPrivate}
+	envOwnerPhone, envHistoryMax, envUnsafeDebug, envMetricsEMF, envNotifyURL, envNotifySecret, envNotifyPrivate}
 
 type StorageProfile string
 
@@ -124,6 +126,7 @@ type Config struct {
 	OwnerPhone      string
 	HistoryMaxBytes int64
 	UnsafeDebug     time.Duration
+	MetricsEMF      bool
 	Notify          Notify
 }
 
@@ -193,6 +196,9 @@ func Load(environ []string, opts Options) (Config, *Refusal) {
 		return Config{}, r
 	}
 	if cfg.UnsafeDebug, r = unsafeDebug(env); r != nil {
+		return Config{}, r
+	}
+	if cfg.MetricsEMF, r = metricsEMF(env); r != nil {
 		return Config{}, r
 	}
 	if cfg.Notify, r = notifySettings(env); r != nil {
@@ -436,6 +442,14 @@ func unsafeDebug(env map[string]string) (time.Duration, *Refusal) {
 		return 0, &Refusal{Reason: reasonUnsafeDebugInvalid, Variable: envUnsafeDebug, detail: "must be a number of minutes written in decimal digits, from 1 to 60"}
 	}
 	return time.Duration(n) * time.Minute, nil
+}
+
+func metricsEMF(env map[string]string) (bool, *Refusal) {
+	v, ok := env[envMetricsEMF]
+	if ok && v != "0" && v != "1" {
+		return false, &Refusal{Reason: reasonMetricsEMFInvalid, Variable: envMetricsEMF, detail: "must be 0 or 1"}
+	}
+	return v == "1", nil
 }
 
 func notifySettings(env map[string]string) (Notify, *Refusal) {

@@ -15,6 +15,7 @@ import (
 	"github.com/dortort/wawarden/internal/engine"
 	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/policy"
+	"github.com/dortort/wawarden/internal/safego"
 	"github.com/dortort/wawarden/internal/store/ingest"
 	"github.com/dortort/wawarden/internal/token"
 )
@@ -173,5 +174,58 @@ func TestTheWebhookIsWiredFromTheConfiguration(t *testing.T) {
 	}
 	if strings.Contains(logs.buf.String(), "169.254") {
 		t.Fatal("the webhook URL reached the log")
+	}
+}
+
+func emfLines(logs *syncBuffer) []map[string]any {
+	var out []map[string]any
+	for _, rec := range logs.events() {
+		if _, ok := rec["_aws"]; ok {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+func TestEMFLinesGoThroughTheScrubbingWriter(t *testing.T) {
+	cfg := testConfig(t, "")
+	cfg.OwnerPhone, cfg.HistoryMaxBytes, cfg.MetricsEMF = "+15550100009", config.DefaultHistoryMaxBytes, true
+	client := newStubClient()
+	logs := &syncBuffer{}
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), noClients{}, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
+	if err != nil {
+		t.Fatalf("newAppWith: %v", err)
+	}
+	stop := run(t, a)
+	<-client.connected
+	safego.Go("probe 15550100042@s.whatsapp.net", func() { panic("synthetic") })
+	logs.waitFor(t, "panic")
+	if err := stop(); err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	lines := emfLines(logs)
+	if len(lines) != 2 {
+		t.Fatalf("%d embedded-metric-format lines, want the shutdown line and one for the panic's name: %v", len(lines), lines)
+	}
+	total, named := lines[0], lines[1]
+	if total["Paired"] != float64(1) || total["Panics"] != float64(1) || total["MessagesIngested"] != float64(0) || total["PolicyDenials"] != float64(0) {
+		t.Fatalf("shutdown line %v", total)
+	}
+	if name, _ := named["name"].(string); named["Panics"] != float64(1) || !strings.HasPrefix(name, "probe jid:") {
+		t.Fatalf("per-name line %v, want the panic's name pseudonymised", named)
+	}
+	if strings.Contains(logs.buf.String(), "15550100042") {
+		t.Fatal("an identifier reached standard output")
+	}
+}
+
+func TestNoEMFLinesUnlessEnabled(t *testing.T) {
+	a, logs, stop := start(t, testConfig(t, ""), noClients{})
+	logs.waitFor(t, "ready")
+	if err := stop(); err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	if lines := emfLines(logs); len(lines) != 0 || a.emf != nil {
+		t.Fatalf("embedded-metric-format lines %v without WAWARDEN_METRICS_EMF", lines)
 	}
 }

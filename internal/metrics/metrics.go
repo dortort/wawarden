@@ -36,12 +36,14 @@ type Counter struct{ n atomic.Uint64 }
 func (c *Counter) Inc()           { c.n.Add(1) }
 func (c *Counter) Value() uint64  { return c.n.Load() }
 func (c *Counter) format() string { return strconv.FormatUint(c.Value(), 10) }
+func (c *Counter) value() float64 { return float64(c.Value()) }
 
 type Gauge struct{ bits atomic.Uint64 }
 
 func (g *Gauge) Set(v float64)  { g.bits.Store(math.Float64bits(v)) }
 func (g *Gauge) Value() float64 { return math.Float64frombits(g.bits.Load()) }
 func (g *Gauge) format() string { return strconv.FormatFloat(g.Value(), 'g', -1, 64) }
+func (g *Gauge) value() float64 { return g.Value() }
 
 type CounterVec struct{ f *family }
 
@@ -84,7 +86,10 @@ func (r *Registry) WriteText(w io.Writer) error {
 	return err
 }
 
-type sample interface{ format() string }
+type sample interface {
+	format() string
+	value() float64
+}
 
 func newCounter() sample { return new(Counter) }
 func newGauge() sample   { return new(Gauge) }
@@ -157,6 +162,27 @@ func (f *family) with(labelValues []string) sample {
 		f.series[key] = s
 	}
 	return s.sample
+}
+
+type reading struct {
+	labelValues []string
+	value       float64
+}
+
+func (r *Registry) read(name string) (labels []string, readings []reading) {
+	r.mu.Lock()
+	f, ok := r.families[name]
+	r.mu.Unlock()
+	if !ok {
+		return nil, nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, s := range f.series {
+		readings = append(readings, reading{labelValues: s.labelValues, value: s.sample.value()})
+	}
+	slices.SortFunc(readings, func(a, b reading) int { return slices.Compare(a.labelValues, b.labelValues) })
+	return f.labels, readings
 }
 
 func (f *family) write(b *strings.Builder) {
