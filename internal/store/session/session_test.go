@@ -62,6 +62,9 @@ func TestOpenCreatesAPrivateUpgradedDeviceStore(t *testing.T) {
 	if err := s.db.RawHandle().QueryRowContext(t.Context(), "SELECT version FROM whatsmeow_version").Scan(&version); err != nil || version < 1 {
 		t.Fatalf("the device store's schema version = %d, %v, want an upgraded store", version, err)
 	}
+	if s.SchemaVersion() != version {
+		t.Fatalf("SchemaVersion = %d, the store holds %d", s.SchemaVersion(), version)
+	}
 	d, err := s.Device(t.Context())
 	if err != nil {
 		t.Fatalf("Device: %v", err)
@@ -148,6 +151,25 @@ func TestOpenUsesANewerStoreThatDeclaresItselfCompatible(t *testing.T) {
 	}
 	if gotVersion != version+1 || gotCompat != version {
 		t.Fatalf("the reopened store is at version %d, compatible down to %d, want %d and %d unchanged", gotVersion, gotCompat, version+1, version)
+	}
+	if again.SchemaVersion() != version+1 {
+		t.Fatalf("SchemaVersion = %d, want the stored %d", again.SchemaVersion(), version+1)
+	}
+}
+
+func TestBackupHandsOverTheDeviceStore(t *testing.T) {
+	s := open(t, t.TempDir())
+	save(t, s, "15550100001")
+	var out bytes.Buffer
+	var name string
+	var size int64
+	err := s.Backup(t.Context(), filepath.Join(t.TempDir(), "staging"), func(n string, sz int64, r io.Reader) error {
+		name, size = n, sz
+		_, err := io.Copy(&out, r)
+		return err
+	})
+	if err != nil || name != "session.db" || size != int64(out.Len()) || !bytes.HasPrefix(out.Bytes(), []byte("SQLite format 3\x00")) {
+		t.Fatalf("Backup = %v, %q of %d bytes with %d read", err, name, size, out.Len())
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"time"
 
@@ -22,6 +23,8 @@ const upgradeTimeout = time.Minute
 
 const dialect = "sqlite"
 
+const selectVersion = "SELECT version FROM whatsmeow_version"
+
 type Options struct {
 	DataDir string
 	UID     int
@@ -32,6 +35,7 @@ type Options struct {
 type Store struct {
 	db        *db.DB
 	container *sqlstore.Container
+	version   int
 }
 
 func Open(ctx context.Context, opts Options) (*Store, error) {
@@ -45,7 +49,13 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 	if err := container.Upgrade(upgrade); err != nil {
 		return nil, errors.Join(fmt.Errorf("session: upgrade the device store: %w", err), d.Close())
 	}
-	return &Store{db: d, container: container}, nil
+	var version int
+	if err := d.Read(ctx, "session.version", func(ctx context.Context, q db.Querier) error {
+		return q.QueryRowContext(ctx, selectVersion).Scan(&version)
+	}); err != nil {
+		return nil, errors.Join(fmt.Errorf("session: read the device store's schema version: %w", err), d.Close())
+	}
+	return &Store{db: d, container: container, version: version}, nil
 }
 
 func (s *Store) Device(ctx context.Context) (*store.Device, error) {
@@ -66,5 +76,11 @@ var errManyDevices = errors.New("session: session.db holds more than one device"
 func (s *Store) NewDevice() *store.Device { return s.container.NewDevice() }
 
 func (s *Store) Healthy() bool { return s.db.Healthy() }
+
+func (s *Store) SchemaVersion() int { return s.version }
+
+func (s *Store) Backup(ctx context.Context, staging string, write func(name string, size int64, r io.Reader) error) error {
+	return s.db.Backup(ctx, staging, write)
+}
 
 func (s *Store) Close() error { return s.db.Close() }
