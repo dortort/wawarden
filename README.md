@@ -284,7 +284,8 @@ the full container contract.
 `go test -race ./...` runs the suite, and `go test -race -tags dev ./...` runs it
 against a development build. No test contacts WhatsApp: the protocol adapter is
 tested with hand-built events, protobuf fixtures and injected transports, and its
-dialer refuses every connection inside a test binary. `hack/offline-test.sh`
+dialer, like every transport it builds whatever dial function it is handed,
+refuses every connection inside a test binary. `hack/offline-test.sh`
 proves it: it fetches the modules that `go.sum` pins, then runs both suites in a
 container that has no network, so it needs Docker.
 
