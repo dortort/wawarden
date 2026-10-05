@@ -16,13 +16,19 @@ func inflate(compressed []byte, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = zr.Close() }()
-	out, err := io.ReadAll(io.LimitReader(zr, limit+1))
+	n, err := io.Copy(io.Discard, io.LimitReader(zr, limit+1))
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(out)) > limit {
+	if n > limit {
 		return nil, errTooLarge
+	}
+	if zr, err = zlib.NewReader(bytes.NewReader(compressed)); err != nil {
+		return nil, err
+	}
+	out := make([]byte, n)
+	if _, err := io.ReadFull(zr, out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -48,12 +54,16 @@ func readCapped(path string, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
-	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	fi, err := f.Stat()
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(data)) > limit {
+	if fi.Size() > limit {
 		return nil, errTooLarge
+	}
+	data := make([]byte, fi.Size())
+	if _, err := io.ReadFull(f, data); err != nil {
+		return nil, err
 	}
 	return data, nil
 }

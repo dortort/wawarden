@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"compress/zlib"
 	"errors"
+	"fmt"
 	"io/fs"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -400,19 +403,81 @@ func TestDownloadIsCapped(t *testing.T) {
 	}
 }
 
-func TestZipBombIsRefusedWithBoundedMemory(t *testing.T) {
-	const limit = 8 << 20
-	bomb := deflate(t, make([]byte, 64<<20))
+const (
+	historyMemoryFactor = 2
+	historyMemorySlack  = 1 << 20
+)
+
+func allocated(t *testing.T, fn func()) uint64 {
+	t.Helper()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	var before, after runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&before)
-	_, err := inflate(bomb, limit)
+	fn()
 	runtime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+func TestHistoryMemoryBoundIsTheDocumentedOne(t *testing.T) {
+	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "configuration.md"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	want := fmt.Sprintf("at most %d times `WAWARDEN_HISTORY_MAX_BYTES` plus %d MiB", historyMemoryFactor, historyMemorySlack>>20)
+	if !strings.Contains(strings.Join(strings.Fields(string(doc)), " "), want) {
+		t.Fatalf("docs/configuration.md does not state %q", want)
+	}
+}
+
+func TestReadingAndInflatingABlobStaysWithinTheMemoryBound(t *testing.T) {
+	const limit = 8 << 20
+	raw := []byte(incompressible(limit - 4096))
+	path := filepath.Join(t.TempDir(), "HS1.bin")
+	if err := os.WriteFile(path, deflate(t, raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out []byte
+	alloc := allocated(t, func() {
+		data, err := readCapped(path, limit)
+		if err == nil {
+			out, err = inflate(data, limit)
+		}
+		if err != nil {
+			t.Errorf("read and inflate: %v", err)
+		}
+	})
+	if !bytes.Equal(out, raw) {
+		t.Fatal("the blob did not round-trip")
+	}
+	if alloc > historyMemoryFactor*limit+historyMemorySlack {
+		t.Fatalf("reading and inflating a blob at an 8 MiB cap allocated %d KiB, over the documented bound", alloc>>10)
+	}
+}
+
+func TestReadCappedRefusesAFileOverTheCap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "HS1.bin")
+	if err := os.WriteFile(path, make([]byte, 101), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readCapped(path, 100); !errors.Is(err, errTooLarge) {
+		t.Fatalf("a file one byte over the cap = %v, want errTooLarge", err)
+	}
+	if data, err := readCapped(path, 101); err != nil || len(data) != 101 {
+		t.Fatalf("a file at the cap = %d bytes, %v", len(data), err)
+	}
+}
+
+func TestZipBombIsRefusedWithBoundedMemory(t *testing.T) {
+	const limit = 8 << 20
+	bomb := deflate(t, make([]byte, 64<<20))
+	var err error
+	alloc := allocated(t, func() { _, err = inflate(bomb, limit) })
 	if !errors.Is(err, errTooLarge) {
 		t.Fatalf("inflate = %v, want errTooLarge", err)
 	}
-	if alloc := after.TotalAlloc - before.TotalAlloc; alloc > 48<<20 {
-		t.Fatalf("inflating with an 8 MiB cap allocated %d MiB", alloc>>20)
+	if alloc > historyMemorySlack {
+		t.Fatalf("refusing a bomb at an 8 MiB cap allocated %d KiB", alloc>>10)
 	}
 
 	r := newHistRig(t, withHistoryMax(limit))

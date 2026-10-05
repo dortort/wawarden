@@ -155,7 +155,7 @@ These are all the variables this build reads.
 | `WAWARDEN_STORAGE_PROFILE` | `local` | `local` or `nfs`, in lower case; see [Storage profiles](#storage-profiles). | `storage_profile_invalid` |
 | `WAWARDEN_MIN_FREE_BYTES` | `268435456` (256 MiB) | A number of bytes in decimal digits, from `0` to `18446744073709551615`: no sign, unit, separator or white space. `0` turns the floor off. See [Free space](#free-space). | `min_free_bytes_invalid` |
 | `WAWARDEN_OWNER_PHONE` | unset | The phone number of the WhatsApp account that WaWarden may link to, in E.164 form: `+`, then 7 to 15 digits, the first not `0`, and nothing else (no spaces or separators), for example `+15550100001`. Unset, the service starts but refuses to pair; see [Pairing](#pairing). | `owner_phone_invalid` |
-| `WAWARDEN_HISTORY_MAX_BYTES` | `33554432` (32 MiB) | The largest history-sync blob, in bytes, before and after decompression: a number in decimal digits from `1` to `268435456` (256 MiB), with no sign, unit, separator or white space. See [History sync](#history-sync). | `history_max_bytes_invalid` |
+| `WAWARDEN_HISTORY_MAX_BYTES` | `33554432` (32 MiB) | The largest history-sync blob, in bytes, before and after decompression: a number in decimal digits from `1` to `268435456` (256 MiB), with no sign, unit, separator or white space. The memory that history sync needs grows with it; see [History sync](#history-sync). | `history_max_bytes_invalid` |
 
 Rules that apply to all of them:
 
@@ -604,6 +604,16 @@ its blob was marked processed or quarantined. After three failed attempts, attem
 short by a crash or a stop included, a blob is quarantined: its reference and
 files are deleted and `quarantine` is logged at every log level with `queue`
 `history`.
+
+The engine processes one blob at a time. Reading a downloaded blob from
+`history/` and decompressing it, which it does in two passes so that it can
+size the output exactly, allocates at most 2 times `WAWARDEN_HISTORY_MAX_BYTES`
+plus 1 MiB: about 65 MiB at the default and 513 MiB at the maximum of 256 MiB. A
+blob that decompresses to more than the cap is refused after the first pass,
+which allocates at most 1 MiB. Decoding the blob and holding its
+conversations while they are applied come on top of that and grow with the
+blob's content, so leave the process's memory limit well above this figure when
+raising the cap.
 
 ## Listeners
 
