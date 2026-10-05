@@ -86,7 +86,7 @@ What works today:
   by that key and drops lines carrying XML in the recognised shapes (see
   [logging](docs/configuration.md#pseudonyms-and-dropped-lines)). Internally:
   sanitisers for display text and terminal output, and a strict JSON decoder for
-  request bodies, which no route uses yet.
+  request bodies, which the admin routes below use.
 - Also on `main`: `serve` opens the message archive, `archive.db` in the data
   directory, in SQLite through one connection that holds an exclusive lock and
   whose settings it verifies, and `/healthz` answers `200` only while it holds
@@ -105,11 +105,21 @@ What works today:
   history-sync worker with its size cap (`WAWARDEN_HISTORY_MAX_BYTES`); and the
   adapter to the WhatsApp protocol library, `go.mau.fi/whatsmeow`, whose device
   store `serve` keeps in `session.db` beside the archive, under the same lock
-  and health rules. The admin route that
-  starts pairing arrives later in M1, so for now `serve` logs `unpaired` once
-  and makes no connection to WhatsApp. The library's debug output is discarded
-  unless `WAWARDEN_UNSAFE_DEBUG` opens a window of a few minutes. See
-  [the WhatsApp engine](docs/configuration.md#whatsapp-engine).
+  and health rules. Without a paired device, `serve` reports `unpaired` and
+  makes no connection to WhatsApp until pairing is requested. The library's
+  debug output is discarded unless `WAWARDEN_UNSAFE_DEBUG` opens a window of a
+  few minutes. See [the WhatsApp engine](docs/configuration.md#whatsapp-engine).
+- Also on `main`: the admin listener serves the engine's status, pairing and
+  reconnection, and `wawarden admin status`, `pair` and `reconnect` call them
+  with the admin token taken from a file, standard input or a command, never
+  from an argument or the environment (see
+  [admin routes](docs/configuration.md#admin-routes)). Operational events such
+  as `unpaired`, `disconnected` and `admin_mutation` are written as JSON lines
+  on standard output and, with `WAWARDEN_NOTIFY_URL`, posted with an HMAC
+  signature to a webhook (see [notifications](docs/configuration.md#notifications)).
+  With `WAWARDEN_METRICS_EMF=1`, metrics are also written on standard output in
+  CloudWatch's embedded metric format, which needs no token (see
+  [metrics](docs/configuration.md#embedded-metric-format)).
 
 Planned:
 
@@ -188,7 +198,8 @@ Date: <date>
 {"error":"unauthorized"}
 ```
 
-The metrics are the failed-authentication counters and the build information:
+The metrics are the failed-authentication counters, the build information and
+the engine's counters and gauges:
 
 ```text
 # HELP wawarden_admin_auth_failures_total Failed admin authentications.
@@ -209,6 +220,20 @@ wawarden_messages_ingested_total 0
 # HELP wawarden_paired 1 while a WhatsApp device is paired, 0 otherwise.
 # TYPE wawarden_paired gauge
 wawarden_paired 0
+# HELP wawarden_policy_denials_total Client requests that the client's grant did not allow.
+# TYPE wawarden_policy_denials_total counter
+wawarden_policy_denials_total 0
+# HELP wawarden_sends_rejected_total Sends refused by a scope, budget or rate limit.
+# TYPE wawarden_sends_rejected_total counter
+wawarden_sends_rejected_total 0
+```
+
+The admin commands call the admin listener with the token from a file; this one
+prints the engine's state and the archive's counts:
+
+```sh
+sed -n 's/^token: //p' "$demo/admin.txt" > "$demo/admin.token"
+./wawarden admin status --token-file "$demo/admin.token"
 ```
 
 Stop the service; it shuts down gracefully and exits `0`. Then delete the
