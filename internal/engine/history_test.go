@@ -594,6 +594,22 @@ func TestHistoryBatchesSkipInvalidRows(t *testing.T) {
 	}
 }
 
+func TestAFailedWriteRefusesSoWhatsAppRedelivers(t *testing.T) {
+	r := newHistRig(t)
+	if err := r.archive.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if r.p.accept(dm("M1", alice, "never written")) {
+		t.Fatal("a message was acknowledged although the inbox write failed")
+	}
+	if r.h.accept(HistoryNotification{Sender: owner, FromMe: true, Ref: HistoryRef{ID: "HS1", Inline: []byte("x")}}) {
+		t.Fatal("a history notification was acknowledged although its record failed")
+	}
+	if r.counter("wawarden_ingest_refused_total", "reason", "store_error") != 2 {
+		t.Fatalf("store_error refusals %v, want 2", r.counter("wawarden_ingest_refused_total", "reason", "store_error"))
+	}
+}
+
 func TestHistoryRecordingRespectsThePause(t *testing.T) {
 	r := newHistRig(t)
 	r.p.paused.Store(true)
