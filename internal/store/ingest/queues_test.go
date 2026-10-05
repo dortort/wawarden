@@ -102,6 +102,37 @@ func TestInboxBacklogIsBounded(t *testing.T) {
 	}
 }
 
+func TestLastBlobArrivalSurvivesProcessingAndQuarantine(t *testing.T) {
+	s := openStore(t)
+	last := func() (time.Time, bool) {
+		var at time.Time
+		var ok bool
+		read(t, s, func(r *Reader) error {
+			var err error
+			at, ok, err = r.LastBlobAt()
+			return err
+		})
+		return at, ok
+	}
+	if at, ok := last(); ok || !at.IsZero() {
+		t.Fatalf("LastBlobAt with no blob = %v, %v", at, ok)
+	}
+	write(t, s, func(tx *Tx) error {
+		for i, id := range []string{"blob-a", "blob-b", "blob-c"} {
+			if _, err := tx.RecordBlob(id, []byte("ref"), epoch.Add(time.Duration(2-i)*time.Minute)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	write(t, s, func(tx *Tx) error {
+		return errors.Join(tx.MarkBlobProcessed("blob-a", epoch.Add(time.Hour)), tx.QuarantineBlob("blob-b"))
+	})
+	if at, ok := last(); !ok || !at.Equal(epoch.Add(2*time.Minute)) {
+		t.Fatalf("LastBlobAt = %v, %v, want the latest arrival whatever became of the blob", at, ok)
+	}
+}
+
 func TestHistoryBlobs(t *testing.T) {
 	s := openStore(t)
 	write(t, s, func(tx *Tx) error {

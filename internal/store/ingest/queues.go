@@ -38,6 +38,7 @@ const (
 	insertBlob        = "INSERT INTO history_blobs (id, received_at, ref) VALUES (?, ?, ?) ON CONFLICT (id) DO NOTHING"
 	selectPending     = "SELECT id, received_at, ref, attempts FROM history_blobs WHERE processed_at IS NULL AND quarantined = 0 ORDER BY received_at, id LIMIT ?"
 	selectBlobPending = "SELECT EXISTS (SELECT 1 FROM history_blobs WHERE id = ? AND processed_at IS NULL AND quarantined = 0)"
+	selectLastBlob    = "SELECT max(received_at) FROM history_blobs"
 	bumpBlobAttempt   = "UPDATE history_blobs SET attempts = attempts + 1 WHERE id = ? AND processed_at IS NULL AND quarantined = 0 RETURNING attempts"
 	dropBlobAttempt   = "UPDATE history_blobs SET attempts = attempts - 1 WHERE id = ? AND attempts > 0 AND processed_at IS NULL AND quarantined = 0"
 	markBlobProcessed = "UPDATE history_blobs SET processed_at = ?, ref = NULL WHERE id = ? AND processed_at IS NULL AND quarantined = 0"
@@ -130,6 +131,14 @@ func (r *Reader) BlobPending(id string) (bool, error) {
 	var pending bool
 	err := r.q.QueryRowContext(r.ctx, selectBlobPending, id).Scan(&pending)
 	return pending, err
+}
+
+func (r *Reader) LastBlobAt() (time.Time, bool, error) {
+	var at sql.NullInt64
+	if err := r.q.QueryRowContext(r.ctx, selectLastBlob).Scan(&at); err != nil || !at.Valid {
+		return time.Time{}, false, err
+	}
+	return fromMS(at.Int64), true, nil
 }
 
 func (tx *Tx) RecordBlobAttempt(id string) (int, error) {
