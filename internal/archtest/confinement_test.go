@@ -10,10 +10,13 @@ import (
 )
 
 const (
-	storeDir   = "internal/store"
-	dbDir      = storeDir + "/internal/db"
-	sqliteMod  = "modernc.org/sqlite"
-	libcModule = "modernc.org/libc"
+	storeDir        = "internal/store"
+	dbDir           = storeDir + "/internal/db"
+	sessionDir      = storeDir + "/session"
+	sqliteMod       = "modernc.org/sqlite"
+	libcModule      = "modernc.org/libc"
+	whatsmeowModule = "go.mau.fi/whatsmeow"
+	protobufModule  = "google.golang.org/protobuf"
 )
 
 type confinement struct {
@@ -24,7 +27,11 @@ type confinement struct {
 var confinements = []confinement{
 	{pkg: "database/sql", dirs: []string{storeDir}},
 	{pkg: sqliteMod, dirs: []string{dbDir}},
+	{pkg: whatsmeowModule, dirs: []string{adapterDir, sessionDir}},
+	{pkg: protobufModule, dirs: []string{adapterDir}},
 }
+
+var sessionImports = set(whatsmeowModule+"/store", whatsmeowModule+"/store/sqlstore")
 
 var confinementRule = rule{
 	name:  "confined-imports",
@@ -75,7 +82,49 @@ import (
 import (
 	_ "database/sqlx"
 	_ "modernc.org/sqlitex"
+	_ "go.mau.fi/whatsmeowx"
+	_ "google.golang.org/protobufx"
 )
+`},
+		{name: "the protocol library and protobuf outside the adapter", rel: "internal/app/x.go", want: 4, src: `package app
+
+import (
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
+	"google.golang.org/protobuf/proto"
+)
+`},
+		{name: "the adapter", rel: "internal/engine/wa/x.go", src: `package wa
+
+import (
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/store"
+	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/proto"
+)
+`},
+		{name: "the session store imports its two packages", rel: "internal/store/session/x.go", src: `package session
+
+import (
+	"database/sql"
+	"go.mau.fi/whatsmeow/store"
+	"go.mau.fi/whatsmeow/store/sqlstore"
+)
+`},
+		{name: "the session store imports more of the protocol library and protobuf", rel: "internal/store/session/x.go", want: 5, src: `package session
+
+import (
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/store/sqlstore/upgrades"
+	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/util/log"
+	"google.golang.org/protobuf/proto"
+)
+`},
+		{name: "a protocol library test elsewhere", rel: "internal/app/x_test.go", src: `package app
+
+import "go.mau.fi/whatsmeow/types"
 `},
 	},
 }
@@ -95,6 +144,10 @@ func checkConfinement(f *sourceFile) []string {
 		}
 		if best != nil && !slices.ContainsFunc(best.dirs, func(d string) bool { return within(f.dir, d) }) {
 			out = append(out, f.at(imp.node, "%q may be imported only under %s", imp.path, strings.Join(best.dirs, ", ")))
+			continue
+		}
+		if within(f.dir, sessionDir) && within(imp.path, whatsmeowModule) && !sessionImports[imp.path] {
+			out = append(out, f.at(imp.node, "%s may import only the protocol library's device store packages, not %q", sessionDir, imp.path))
 		}
 	}
 	return out

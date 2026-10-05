@@ -64,6 +64,30 @@ linters:
               desc: the engine core handles plain data; only internal/engine/wa imports the protocol library
             - pkg: google.golang.org/protobuf
               desc: the engine core handles plain data; only internal/engine/wa decodes protocol messages
+        protocol-library:
+          files:
+            - $all
+            - "!$test"
+            - "!${base-path}/internal/engine/wa/**"
+            - "!${base-path}/internal/store/session/**"
+          deny:
+            - pkg: go.mau.fi/whatsmeow
+              desc: only internal/engine/wa uses the protocol library, and internal/store/session its device store
+            - pkg: google.golang.org/protobuf
+              desc: only internal/engine/wa decodes protocol messages
+        session-store:
+          list-mode: lax
+          files:
+            - ${base-path}/internal/store/session/**
+            - "!$test"
+          allow:
+            - go.mau.fi/whatsmeow/store$
+            - go.mau.fi/whatsmeow/store/sqlstore$
+          deny:
+            - pkg: go.mau.fi/whatsmeow
+              desc: internal/store/session uses only the protocol library's device store packages
+            - pkg: google.golang.org/protobuf
+              desc: only internal/engine/wa decodes protocol messages
         no-multipart:
           files:
             - $all

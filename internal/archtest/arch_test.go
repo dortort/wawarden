@@ -54,7 +54,7 @@ var rules = []rule{
 	goroutineRule, netHTTPRule, dotImportRule, socketRule, muxRule, serverRule, handlerRule,
 	inListRule, bannedImportRule, reflectionRule, fenceRule, chatMethodRule, thirdPartyRule, hiddenPackageRule, nolintRule, generatedRule, wildcardRule,
 	credentialRule, preludeRule, secretComparisonRule, formRule, shadowRule, sealRule, keysDirectoryRule, standardLibraryOnlyRule, logHandlerRule, logOutputRule,
-	confinementRule, databaseFileRule, constantSQLRule, sqliteStatementRule,
+	confinementRule, databaseFileRule, constantSQLRule, sqliteStatementRule, protocolCallRule, offlineTestRule,
 }
 
 var majorVersion = regexp.MustCompile(`^v([2-9]|[1-9][0-9]+)$`)
