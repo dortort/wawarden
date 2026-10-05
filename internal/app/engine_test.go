@@ -30,6 +30,7 @@ type stubClient struct {
 	calls     []string
 	connected chan struct{}
 	unpaired  bool
+	pairCode  string
 }
 
 func newStubClient() *stubClient { return &stubClient{connected: make(chan struct{}, 16)} }
@@ -68,7 +69,11 @@ func (c *stubClient) Paired() bool {
 
 func (c *stubClient) Account() string { return "15550100009" }
 func (c *stubClient) PairPhone(context.Context, string) (string, error) {
-	return "", errors.New("synthetic")
+	c.record("pair_phone")
+	if c.pairCode == "" {
+		return "", errors.New("synthetic")
+	}
+	return c.pairCode, nil
 }
 func (c *stubClient) Logout(context.Context) error { return nil }
 func (c *stubClient) Version() engine.Version      { return engine.Version{2, 3000, 1} }

@@ -17,17 +17,10 @@ const (
 	byteOrderMark = "\xef\xbb\xbf"
 )
 
-type bodyError struct {
-	status int
-	code   string
-}
-
-func (e *bodyError) Error() string { return "api: request body refused: " + e.code }
-
 var (
-	errMediaType = &bodyError{status: http.StatusUnsupportedMediaType, code: codeUnsupportedMediaType}
-	errTooLarge  = &bodyError{status: http.StatusRequestEntityTooLarge, code: codeBodyTooLarge}
-	errBadBody   = &bodyError{status: http.StatusBadRequest, code: codeInvalidBody}
+	errMediaType = &codedError{status: http.StatusUnsupportedMediaType, code: codeUnsupportedMediaType}
+	errTooLarge  = &codedError{status: http.StatusRequestEntityTooLarge, code: codeBodyTooLarge}
+	errBadBody   = &codedError{status: http.StatusBadRequest, code: codeInvalidBody}
 )
 
 func (r *Request) DecodeJSON(dst any) error {

@@ -22,11 +22,16 @@ func init() {
 func TestRoutesMatchTheGoldenList(t *testing.T) {
 	golden := map[string][]route{
 		"client": nil,
-		"admin":  {{pattern: "GET /metrics", class: classAdmin}},
+		"admin": {
+			{pattern: "GET /metrics", class: classAdmin},
+			{pattern: "GET /admin/v1/status", class: classAdmin},
+			{pattern: "POST /admin/v1/pair", class: classAdmin},
+			{pattern: "POST /admin/v1/reconnect", class: classAdmin},
+		},
 	}
 	handlers := map[string]http.Handler{
 		"client": NewClientHandler(ClientDeps{Authenticator: fakeAuthenticator{}, Metrics: metrics.NewRegistry()}),
-		"admin":  NewAdminHandler(AdminDeps{Metrics: metrics.NewRegistry()}),
+		"admin":  NewAdminHandler(AdminDeps{Metrics: metrics.NewRegistry(), Service: &fakeAdmin{}, Events: &fakeEvents{}}),
 	}
 	if len(handlers) != len(golden) {
 		t.Fatalf("%d handlers for %d golden lists", len(handlers), len(golden))
@@ -68,7 +73,7 @@ func TestDebugEndpointsAreNeverServed(t *testing.T) {
 		header  http.Header
 	}{
 		{name: "client", handler: newClientFixture(t).handler, header: bearer(keyLive)},
-		{name: "admin", handler: NewAdminHandler(AdminDeps{Credential: cred, Metrics: metrics.NewRegistry(), Now: fixedNow}), header: bearer(adminSecret)},
+		{name: "admin", handler: NewAdminHandler(AdminDeps{Credential: cred, Metrics: metrics.NewRegistry(), Service: &fakeAdmin{}, Events: &fakeEvents{}, Now: fixedNow}), header: bearer(adminSecret)},
 		{name: "health", handler: NewHealthHandler(func() bool { return true })},
 	}
 	for _, h := range handlers {

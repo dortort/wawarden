@@ -50,6 +50,38 @@ type Health struct {
 
 func (h Health) encode() (string, []byte, error) { return encodeJSON(h) }
 
+type Status struct {
+	State        string       `json:"state"`
+	Reason       string       `json:"reason"`
+	Paired       bool         `json:"paired"`
+	Counts       StatusCounts `json:"counts"`
+	LastIngestAt *string      `json:"last_ingest_at"`
+	Version      string       `json:"version"`
+}
+
+type StatusCounts struct {
+	Chats            int64 `json:"chats"`
+	Messages         int64 `json:"messages"`
+	BlobsPending     int64 `json:"history_blobs_pending"`
+	BlobsQuarantined int64 `json:"history_blobs_quarantined"`
+	InboxBacklog     int64 `json:"inbox_backlog"`
+	InboxQuarantined int64 `json:"inbox_quarantined"`
+}
+
+func (s Status) encode() (string, []byte, error) { return encodeJSON(s) }
+
+type Pairing struct {
+	Code string `json:"code"`
+}
+
+func (p Pairing) encode() (string, []byte, error) { return encodeJSON(p) }
+
+type Accepted struct {
+	Status string `json:"status"`
+}
+
+func (a Accepted) encode() (string, []byte, error) { return encodeJSON(a) }
+
 type Prometheus struct {
 	reg *metrics.Registry
 }

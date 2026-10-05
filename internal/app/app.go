@@ -135,9 +135,14 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth a
 	}}
 	if cfg.AdminCredential != nil {
 		specs = append(specs, listeners.Spec{
-			Name:    listenerAdmin,
-			Addr:    cfg.AdminListen,
-			Handler: api.NewAdminHandler(api.AdminDeps{Credential: *cfg.AdminCredential, Metrics: reg}),
+			Name: listenerAdmin,
+			Addr: cfg.AdminListen,
+			Handler: api.NewAdminHandler(api.AdminDeps{
+				Credential: *cfg.AdminCredential,
+				Metrics:    reg,
+				Service:    adminService{engine: a.engine, archive: archive, version: info.Version},
+				Events:     notifier,
+			}),
 		})
 	}
 	serving, err := listeners.Open(ctx, logger, specs)
@@ -188,12 +193,12 @@ func (a *App) Inventory() []listeners.Bound {
 
 func (a *App) Run(ctx context.Context) error {
 	a.notify.Start(context.WithoutCancel(ctx))
-	a.ready.Store(true)
-	a.serving.Serve()
-	a.health.Serve()
 	if a.engine != nil {
 		a.engine.Start(context.WithoutCancel(ctx), a.starts)
 	}
+	a.ready.Store(true)
+	a.serving.Serve()
+	a.health.Serve()
 	a.logger.Info("ready", slog.String("event", "ready"))
 
 	var failure error

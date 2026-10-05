@@ -13,6 +13,7 @@ type pipeline struct {
 	router       *router
 	authenticate func(*http.Request) (*http.Request, bool)
 	failures     *metrics.Counter
+	failed       func()
 	throttle     *bucket
 }
 
@@ -33,6 +34,9 @@ func (p *pipeline) serve(w http.ResponseWriter, r *http.Request) {
 	authenticated, ok := p.authenticate(r)
 	if !ok {
 		p.failures.Inc()
+		if p.failed != nil {
+			p.failed()
+		}
 		if !p.throttle.allow() {
 			refuse(w, r, http.StatusTooManyRequests, codeTooManyRequests)
 			return

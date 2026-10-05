@@ -30,7 +30,7 @@ var bannedImports = set("net/http/pprof", "expvar", "net/http/cgi", "net/http/fc
 
 var engineDenied = []string{"go.mau.fi/whatsmeow", "google.golang.org/protobuf", "database/sql", "modernc.org/sqlite"}
 
-var apiDenied = []string{"database/sql", "html/template", "text/template", "modernc.org/sqlite", "go.mau.fi/whatsmeow", module + "/internal/store"}
+var apiDenied = []string{"database/sql", "html/template", "text/template", "modernc.org/sqlite", "go.mau.fi/whatsmeow", module + "/internal/store", module + "/internal/engine"}
 
 var policyAllowed = set("bytes", "cmp", "crypto/sha256", "crypto/subtle", "encoding/base64", "encoding/binary", "encoding/hex",
 	"errors", "hash/crc32", "iter", "maps", "slices", "sort", "strconv", "strings", "time", "unicode", "unicode/utf8", "unique")
@@ -193,7 +193,7 @@ var fenceRule = rule{
 	name:  "import-fences",
 	check: checkFences,
 	cases: []snippet{
-		{name: "api imports past its fence", rel: "internal/api/x.go", want: 11, src: `package api
+		{name: "api imports past its fence", rel: "internal/api/x.go", want: 13, src: `package api
 
 import (
 	"database/sql"
@@ -207,6 +207,8 @@ import (
 	"modernc.org/sqlite/lib"
 	"github.com/dortort/wawarden/internal/store/admin"
 	"github.com/dortort/wawarden/internal/store/ingest"
+	"github.com/dortort/wawarden/internal/engine"
+	"github.com/dortort/wawarden/internal/engine/wa"
 )
 `},
 		{name: "an api subpackage imports past the fence", rel: "internal/api/dto/x.go", want: 2, src: `package dto
@@ -227,6 +229,7 @@ import (
 
 import (
 	"database/sql"
+	"github.com/dortort/wawarden/internal/engine"
 	"github.com/dortort/wawarden/internal/store/ingest"
 	"html/template"
 	"text/template"

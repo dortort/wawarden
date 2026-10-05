@@ -19,6 +19,13 @@ const (
 	codeUnsupportedMediaType = "unsupported_media_type"
 )
 
+type codedError struct {
+	status int
+	code   string
+}
+
+func (e *codedError) Error() string { return "api: request refused: " + e.code }
+
 func setSecurityHeaders(h http.Header) {
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Content-Type-Options", "nosniff")

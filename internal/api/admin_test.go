@@ -17,16 +17,18 @@ type adminFixture struct {
 	reg         *metrics.Registry
 	clock       *clock
 	adminSecret string
+	service     *fakeAdmin
+	events      *fakeEvents
 }
 
 func newAdminFixture(t *testing.T) *adminFixture {
 	t.Helper()
-	f := &adminFixture{reg: metrics.NewRegistry(), clock: newClock(), adminSecret: token.NewAdmin()}
+	f := &adminFixture{reg: metrics.NewRegistry(), clock: newClock(), adminSecret: token.NewAdmin(), service: &fakeAdmin{}, events: &fakeEvents{}}
 	cred, err := policy.ParseAdminCredential(token.Hash(f.adminSecret))
 	if err != nil {
 		t.Fatalf("ParseAdminCredential: %v", err)
 	}
-	f.handler = NewAdminHandler(AdminDeps{Credential: cred, Metrics: f.reg, Now: f.clock.now})
+	f.handler = NewAdminHandler(AdminDeps{Credential: cred, Metrics: f.reg, Service: f.service, Events: f.events, Now: f.clock.now})
 	return f
 }
 
@@ -64,8 +66,8 @@ func TestAdminRefusesEveryOtherCredential(t *testing.T) {
 			count++
 		}
 	}
-	if got := f.failures(t); got != strconv.Itoa(count) {
-		t.Fatalf("admin authentication failures = %s, want %d", got, count)
+	if got := f.failures(t); got != strconv.Itoa(count) || f.events.authFailures() != count {
+		t.Fatalf("admin authentication failures = %s, reported %d, want %d", got, f.events.authFailures(), count)
 	}
 
 	for range failureBurst - count {
@@ -163,17 +165,26 @@ func TestAdminRoutingErrorsAreUniform(t *testing.T) {
 
 func TestUnconfiguredAdminCredentialRefusesEverything(t *testing.T) {
 	reg := metrics.NewRegistry()
-	h := NewAdminHandler(AdminDeps{Metrics: reg, Now: fixedNow})
+	h := NewAdminHandler(AdminDeps{Metrics: reg, Service: &fakeAdmin{}, Events: &fakeEvents{}, Now: fixedNow})
 	for _, header := range []http.Header{nil, bearer(token.NewAdmin()), bearer("")} {
 		requireError(t, serve(h, newRequest(t, http.MethodGet, "/metrics", header)), http.StatusUnauthorized, codeUnauthorized)
 	}
 }
 
-func TestNewAdminHandlerRequiresARegistry(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected a panic")
-		}
-	}()
-	NewAdminHandler(AdminDeps{})
+func TestNewAdminHandlerRequiresItsDependencies(t *testing.T) {
+	for name, d := range map[string]AdminDeps{
+		"nothing":     {},
+		"no registry": {Service: &fakeAdmin{}, Events: &fakeEvents{}},
+		"no service":  {Metrics: metrics.NewRegistry(), Events: &fakeEvents{}},
+		"no events":   {Metrics: metrics.NewRegistry(), Service: &fakeAdmin{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("expected a panic")
+				}
+			}()
+			NewAdminHandler(d)
+		})
+	}
 }

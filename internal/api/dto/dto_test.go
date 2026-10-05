@@ -19,10 +19,14 @@ import (
 var forbiddenKeys = []string{"raw", "media_meta", "sender_alt", "seq", "token"}
 
 func samples() []dto.Response {
+	last := "2026-10-05T12:00:00Z"
 	return []dto.Response{
 		dto.Error{Code: "not_found"},
 		dto.Health{Status: "ok"},
 		dto.Metrics(metrics.NewRegistry()),
+		dto.Status{State: "connected", Paired: true, Counts: dto.StatusCounts{Chats: 1}, LastIngestAt: &last, Version: "dev"},
+		dto.Pairing{Code: "ABCD1234"},
+		dto.Accepted{Status: "accepted"},
 	}
 }
 
@@ -46,6 +50,24 @@ func TestEncode(t *testing.T) {
 			response:        dto.Health{Status: "unavailable"},
 			wantContentType: "application/json; charset=utf-8",
 			wantBody:        `{"status":"unavailable"}`,
+		},
+		{
+			name:            "status",
+			response:        dto.Status{State: "disconnected", Reason: "replaced", Paired: true, Counts: dto.StatusCounts{Chats: 2, Messages: 3, BlobsPending: 4, BlobsQuarantined: 5, InboxBacklog: 6, InboxQuarantined: 7}, Version: "v0.2.0"},
+			wantContentType: "application/json; charset=utf-8",
+			wantBody:        `{"state":"disconnected","reason":"replaced","paired":true,"counts":{"chats":2,"messages":3,"history_blobs_pending":4,"history_blobs_quarantined":5,"inbox_backlog":6,"inbox_quarantined":7},"last_ingest_at":null,"version":"v0.2.0"}`,
+		},
+		{
+			name:            "pairing",
+			response:        dto.Pairing{Code: "ABCD1234"},
+			wantContentType: "application/json; charset=utf-8",
+			wantBody:        `{"code":"ABCD1234"}`,
+		},
+		{
+			name:            "accepted",
+			response:        dto.Accepted{Status: "accepted"},
+			wantContentType: "application/json; charset=utf-8",
+			wantBody:        `{"status":"accepted"}`,
 		},
 		{
 			name:            "metrics",

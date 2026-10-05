@@ -38,6 +38,8 @@ linters:
               desc: the protocol client is confined to internal/engine
             - pkg: github.com/dortort/wawarden/internal/store
               desc: internal/api depends on interfaces that internal/app wires, never on a store package
+            - pkg: github.com/dortort/wawarden/internal/engine
+              desc: internal/api depends on interfaces that internal/app wires, never on the engine
         store-sql:
           files:
             - $all

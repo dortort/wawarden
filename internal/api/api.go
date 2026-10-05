@@ -47,18 +47,21 @@ func NewClientHandler(d ClientDeps) http.Handler {
 type AdminDeps struct {
 	Credential policy.AdminCredential
 	Metrics    *metrics.Registry
+	Service    AdminService
+	Events     AdminEvents
 	Now        func() time.Time
 }
 
 func NewAdminHandler(d AdminDeps) http.Handler {
-	if d.Metrics == nil {
-		panic("api: NewAdminHandler needs a metrics registry")
+	if d.Metrics == nil || d.Service == nil || d.Events == nil {
+		panic("api: NewAdminHandler needs a metrics registry, an admin service and an event sink")
 	}
 	now := clockOrSystem(d.Now)
 	p := &pipeline{
 		name:     "api.admin",
 		router:   newRouter(now, d.Credential),
 		failures: d.Metrics.Counter("wawarden_admin_auth_failures_total", "Failed admin authentications."),
+		failed:   d.Events.AdminAuthFailure,
 		throttle: newBucket(now),
 		authenticate: func(r *http.Request) (*http.Request, bool) {
 			presented, _ := bearerToken(r.Header)
@@ -69,6 +72,7 @@ func NewAdminHandler(d AdminDeps) http.Handler {
 	p.router.admin("GET /metrics", func(context.Context, policy.AdminGrant, *Request) (dto.Response, error) {
 		return dto.Metrics(d.Metrics), nil
 	})
+	registerAdmin(p.router, d.Service, d.Events)
 	return p
 }
 
