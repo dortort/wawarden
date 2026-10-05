@@ -56,6 +56,14 @@ linters:
           deny:
             - pkg: modernc.org/sqlite
               desc: the SQLite driver is confined to internal/store/internal/db, the only holder of a database handle
+        age-encryption:
+          files:
+            - $all
+            - "!$test"
+            - "!${base-path}/internal/backup/**"
+          deny:
+            - pkg: filippo.io/age
+              desc: age is confined to internal/backup, which encrypts to a recipient and holds no identity
         neutral-engine:
           files:
             - ${base-path}/internal/engine/**

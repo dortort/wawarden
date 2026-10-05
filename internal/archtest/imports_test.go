@@ -35,10 +35,11 @@ var apiDenied = []string{"database/sql", "html/template", "text/template", "mode
 var policyAllowed = set("bytes", "cmp", "crypto/sha256", "crypto/subtle", "encoding/base64", "encoding/binary", "encoding/hex",
 	"errors", "hash/crc32", "iter", "maps", "slices", "sort", "strconv", "strings", "time", "unicode", "unicode/utf8", "unique")
 
-var importableModules = []string{"go.mau.fi/libsignal", "go.mau.fi/whatsmeow", "google.golang.org/protobuf", "modernc.org/sqlite"}
+var importableModules = []string{"filippo.io/age", "go.mau.fi/libsignal", "go.mau.fi/whatsmeow", "google.golang.org/protobuf", "modernc.org/sqlite"}
 
 var indirectOnlyModules = []string{
 	"filippo.io/edwards25519",
+	"filippo.io/hpke",
 	"github.com/beeper/argo-go",
 	"github.com/coder/websocket",
 	"github.com/dustin/go-humanize",

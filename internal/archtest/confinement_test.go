@@ -31,6 +31,7 @@ var confinements = []confinement{
 	{pkg: whatsmeowModule, dirs: []string{adapterDir, sessionDir}},
 	{pkg: protobufModule, dirs: []string{adapterDir}},
 	{pkg: signalModule, dirs: []string{adapterDir}},
+	{pkg: ageModule, dirs: []string{backupDir}},
 }
 
 var (
@@ -89,6 +90,21 @@ import (
 	_ "modernc.org/sqlitex"
 	_ "go.mau.fi/whatsmeowx"
 	_ "google.golang.org/protobufx"
+	_ "filippo.io/agex"
+)
+`},
+		{name: "age outside the backup package", rel: "internal/app/x.go", want: 2, src: `package app
+
+import (
+	"filippo.io/age"
+	"filippo.io/age/armor"
+)
+`},
+		{name: "the backup package", rel: "internal/backup/x.go", src: `package backup
+
+import (
+	"filippo.io/age"
+	"filippo.io/age/armor"
 )
 `},
 		{name: "the protocol library and protobuf outside the adapter", rel: "internal/app/x.go", want: 4, src: `package app
