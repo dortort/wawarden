@@ -20,6 +20,8 @@ var bannedProtocolCalls = map[string]string{
 	"GetQRChannel":                   "logs the pairing QR codes, which carry the device secret",
 	"EnableDecryptedEventBuffer":     "keeps decrypted message plaintext in session.db",
 	"SendMexIQ":                      "can end the process inside the protocol library",
+	"DangerousInternals":             "reaches raw queries that can end the process and internal handlers that can dial",
+	"AddEventHandler":                "registers a handler whose answer the protocol library ignores, so a message the engine refused would be acknowledged",
 	"DefaultContextLogger":           "attaches a logger that bypasses the scrubbing writer",
 	"CreateNewsletter":               "is a newsletter call, which can end the process inside the protocol library",
 	"FollowNewsletter":               "is a newsletter call, which can end the process inside the protocol library",
@@ -65,7 +67,7 @@ func f(ctx context.Context, cli *whatsmeow.Client) {
 	_ = read
 }
 `},
-		{name: "newsletter calls, the status message, raw GraphQL queries and loggers that bypass the writer", rel: "internal/engine/wa/x_test.go", want: 9, src: `package wa
+		{name: "newsletter calls, the status message, raw GraphQL queries and loggers that bypass the writer", rel: "internal/engine/wa/x_test.go", want: 10, src: `package wa
 
 import (
 	"context"
@@ -86,11 +88,14 @@ func f(ctx context.Context, cli *whatsmeow.Client, z any) {
 	_ = z.(interface{ DefaultContextLogger() }).DefaultContextLogger
 }
 `},
-		{name: "the internals that reach raw queries outside a test", rel: "internal/engine/wa/x.go", want: 1, src: `package wa
+		{name: "the internals and a handler whose answer is ignored", rel: "internal/engine/wa/x.go", want: 2, src: `package wa
 
 import "go.mau.fi/whatsmeow"
 
-func f(cli *whatsmeow.Client) { _ = cli.DangerousInternals() }
+func f(cli *whatsmeow.Client) {
+	_ = cli.DangerousInternals()
+	_ = cli.AddEventHandler(func(any) {})
+}
 `},
 		{name: "the calls the adapter makes", rel: "internal/engine/wa/x.go", src: `package wa
 
@@ -112,7 +117,7 @@ func f(ctx context.Context, cli *whatsmeow.Client, log waLog.Logger) error {
 	return cli.SendProtocolMessageReceipt(ctx, "", types.ReceiptTypeHistorySync)
 }
 `},
-		{name: "the internals in a test, and other packages' Stdout", rel: "internal/engine/wa/x_test.go", src: `package wa
+		{name: "a handler with its answer, and other packages' Stdout", rel: "internal/engine/wa/x_test.go", src: `package wa
 
 import (
 	"os"
@@ -121,7 +126,7 @@ import (
 )
 
 func f(cli *whatsmeow.Client) {
-	_ = cli.DangerousInternals().DispatchEvent(nil)
+	_ = cli.AddEventHandlerWithSuccessStatus(func(any) bool { return true })
 	_ = os.Stdout
 }
 `},
@@ -141,9 +146,6 @@ func checkProtocolCalls(f *sourceFile) []string {
 		}
 		if s, p := f.ref(sel); s != nil && p == waLogPath && bannedProtocolLogging[name] {
 			out = append(out, f.at(sel, "the protocol library's %s logger bypasses the scrubbing writer: log through the adapter over logx", name))
-		}
-		if name == "DangerousInternals" && !f.test {
-			out = append(out, f.at(sel, "DangerousInternals reaches raw queries that can end the process inside the protocol library; only tests may use it, to dispatch hand-built events"))
 		}
 		return true
 	})
