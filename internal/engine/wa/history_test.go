@@ -33,6 +33,7 @@ func decoded(t *testing.T, h *waHistorySync.HistorySync) engine.History {
 }
 
 func TestFixtureHistoryBlobWithALIDMapping(t *testing.T) {
+	victimLID := types.NewJID("100000000000003", types.HiddenUserServer)
 	got := decoded(t, &waHistorySync.HistorySync{
 		SyncType: waHistorySync.HistorySync_INITIAL_BOOTSTRAP.Enum(),
 		Conversations: []*waHistorySync.Conversation{
@@ -47,18 +48,21 @@ func TestFixtureHistoryBlobWithALIDMapping(t *testing.T) {
 				},
 				Messages: []*waHistorySync.HistorySyncMsg{webMessage(group, false, "3EB0HG", &waE2E.Message{Conversation: proto.String("synthetic group text")}, &victim)},
 			},
+			{ID: proto.String(victimLID.String()), PnJID: proto.String(victim.String()), LidJID: proto.String(victimLID.String())},
+			{ID: proto.String(other.String()), PnJID: proto.String(other.String())},
+			{ID: proto.String(admin.String()), LidJID: proto.String("100000000000002@lid")},
 		},
 		PhoneNumberToLidMappings: []*waHistorySync.PhoneNumberToLIDMapping{{PnJID: proto.String(peer.String()), LidJID: proto.String(peerLID.String())}},
 		Pushnames:                []*waHistorySync.Pushname{{ID: proto.String(peer.String()), Pushname: proto.String("Synthetic Peer")}, {ID: proto.String(other.String())}},
 		ChunkOrder:               proto.Uint32(1),
 	})
-	if !reflect.DeepEqual(got.LIDMappings, []engine.LIDMapping{{PN: peer.String(), LID: peerLID.String()}}) {
-		t.Fatalf("LID mappings %+v", got.LIDMappings)
+	if !reflect.DeepEqual(got.LIDMappings, []engine.LIDMapping{{PN: peer.String(), LID: peerLID.String()}, {PN: victim.String(), LID: victimLID.String()}}) {
+		t.Fatalf("LID mappings %+v, want the blob's pair and the pair of the one conversation that names both identifiers", got.LIDMappings)
 	}
 	if !reflect.DeepEqual(got.Contacts, []engine.Contact{{User: peer.String(), PushName: "Synthetic Peer"}}) {
 		t.Fatalf("contacts %+v", got.Contacts)
 	}
-	if len(got.Conversations) != 2 {
+	if len(got.Conversations) != 5 {
 		t.Fatalf("conversations %+v", got.Conversations)
 	}
 	dm, grp := got.Conversations[0], got.Conversations[1]
