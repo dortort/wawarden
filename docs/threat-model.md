@@ -103,8 +103,9 @@ These are stated so that nobody relies on WaWarden for them:
 - A compromised phone, or a compromised other device linked to the same account.
 - Readers of backups, when the operator chooses unencrypted backups.
 - Delivery receipts: the protocol library sends them automatically.
-- Deletion residuals in backups, in filesystem blocks the service cannot scrub, and
-  in full-text index page keys shorter than a trigram.
+- Deletion residuals in backups, in filesystem blocks the service cannot scrub,
+  in full-text index page keys shorter than a trigram, and in messages that
+  history sync stores after their revocation or edit arrived.
 - Agents that pass message text into tools. WaWarden marks the text as untrusted;
   what an agent does with it is the agent's responsibility.
 
@@ -302,9 +303,10 @@ mechanisms that enforce them.
   expires a message has returned without error, neither the old text nor any of
   its trigrams (the three-character runs the full-text index stores) is in the
   database, its journal or the full-text index, page keys included. Backups, a
-  page key that holds less than a whole trigram, and a trigram left by a stop or
-  a failure between the deletion and the index rewrite it requires are the
-  exceptions (see residual risks).
+  page key that holds less than a whole trigram, a trigram left by a stop or
+  a failure between the deletion and the index rewrite it requires, and a
+  revocation or edit that arrives before history sync has stored its target are
+  the exceptions (see residual risks).
 - **I-9 Panics are contained.** A panic in a goroutine that WaWarden starts, or in
   one of its HTTP handlers, is recovered, counted and logged without its value.
   Goroutines that dependencies start are not covered (see residual risks).
@@ -458,7 +460,11 @@ These remain at v1.0, after every control above is in place.
   characters, or part of a character, stays until a later rewrite. A trigram that
   is a key also stays from the commit of the deletion until the rewrite commits,
   and, when the process stops or the rewrite fails in between, until the next
-  start or the next rewrite.
+  start or the next rewrite. A revocation or an edit whose target is not yet in
+  the archive is dropped and not kept for later; when history sync stores the
+  target afterwards, as it can during the initial sync, where live traffic is
+  applied while blobs wait for their download, the target keeps its original
+  text, and nothing that arrives later removes it.
 - **Prompt injection through message text.** Message text, contact names and group
   subjects are written by third parties and reach agents by design. WaWarden limits
   what a manipulated agent can do (per-chat scopes, no write access for read-all

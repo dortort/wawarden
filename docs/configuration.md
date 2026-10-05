@@ -407,7 +407,8 @@ and source positions only).
 Revoked, edited and expired message text will be removed from the database file,
 its journal and the full-text index, as described in the
 [threat model](threat-model.md#security-invariants) (I-8); backups are
-outside that guarantee. The index stores every three-character run of the text
+outside that guarantee, and so is a revocation or edit that arrives before
+history sync has stored its target (see [Ingest](#ingest)). The index stores every three-character run of the text
 and finds them through page keys, which copy the start of the first run on each
 of its pages, and deleting a run keeps its key. When a deletion leaves a key that
 is a whole run of the old text and no other message holds that run, the service
@@ -582,6 +583,13 @@ when it drops an event:
 | An edit or revocation must come from the target's sender. In a group, a revocation by someone else is applied only when the archive records that member as an admin of the group; a member it does not record is refused. | `not_original_sender`, `not_admin`, `admin_unknown` |
 | An edit needs new text and a target that is neither revoked, a reaction nor a poll vote. | `invalid`, `target_kind` |
 | An edit must be newer than the last edit applied to its target, so that an edit delivered late or again never brings back text the sender has since replaced. | `stale_edit` |
+
+A revocation or edit whose target is not in the archive yet is dropped
+(`target_unknown`) and not kept for later. When history sync stores the target
+afterwards, as it can during the initial sync, because live traffic is applied
+while blobs wait for their download, the target keeps its original text: a
+revoked message its text, an edited one its earlier wording (see the
+[threat model's residual risks](threat-model.md#residual-risks)).
 
 Further, the worker:
 
