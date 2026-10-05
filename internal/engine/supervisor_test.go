@@ -367,11 +367,42 @@ func TestOrdinaryDropsReconnectWithCappedBackoff(t *testing.T) {
 	}
 	h.deliver(Connected{})
 	h.want(StateConnected, "")
+	h.clock.advance(stableAfter)
 	h.deliver(Disconnected{})
 	before := len(h.clock.slept())
 	h.steps()
 	if got := h.clock.slept()[before:]; !slices.Equal(got, []time.Duration{time.Second}) {
-		t.Fatalf("after a success the backoff restarted at %v, want 1s", got)
+		t.Fatalf("after a connection that stayed up the backoff restarted at %v, want 1s", got)
+	}
+}
+
+func TestConnectionsThatDropSoonKeepTheBackoffGrowing(t *testing.T) {
+	h := newSupRig(t)
+	h.connectedNow()
+	for range 11 {
+		h.clock.advance(stableAfter - time.Millisecond)
+		h.deliver(Disconnected{})
+		h.want(StateConnecting, "")
+		h.steps()
+		h.deliver(Connected{})
+		h.want(StateConnected, "")
+	}
+	var want []time.Duration
+	for _, d := range []time.Duration{2, 4, 8, 16, 32, 64, 128, 256, 300, 300, 300} {
+		want = append(want, d*time.Second/2)
+	}
+	if got := h.clock.slept(); !slices.Equal(got, want) {
+		t.Fatalf("waits %v, want %v", got, want)
+	}
+	if h.client.count("connect") != 12 {
+		t.Fatalf("calls %v", h.client.history())
+	}
+	h.clock.advance(stableAfter)
+	h.deliver(Disconnected{})
+	before := len(h.clock.slept())
+	h.steps()
+	if got := h.clock.slept()[before:]; !slices.Equal(got, []time.Duration{time.Second}) {
+		t.Fatalf("after a connection that stayed up a minute the backoff restarted at %v, want 1s", got)
 	}
 }
 

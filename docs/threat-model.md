@@ -423,7 +423,7 @@ account before anything is saved and wipes a logged-out device.
 | Raw protocol messages are not retained unless configured, and their media keys and message secrets are stripped first. | M1 |
 | Never sends read receipts, presence or typing indicators. | M1 |
 | No first contact (a DM with no prior inbound message) unless the client is allowed it; sends are paced, idempotent and budgeted per client, with `429` rather than queueing. | M3 |
-| Disconnections from WhatsApp never exit the process, and `/healthz` does not depend on them; more than five starts within ten minutes start the engine disconnected, and reconnection after a drop backs off exponentially, with jitter, up to five minutes, to avoid reconnect storms. A replaced session, a temporary ban, a refused connection or a failed token refresh waits for the operator. | M1, on `main`, in the engine core, which no build runs before the protocol adapter (M1) |
+| Disconnections from WhatsApp never exit the process, and `/healthz` does not depend on them; more than five starts within ten minutes start the engine disconnected, and reconnection after a drop backs off exponentially, with jitter, up to five minutes, to avoid reconnect storms; a connection that drops within a minute of coming up counts as a failed attempt and does not reset the delay. A replaced session, a temporary ban, a refused connection or a failed token refresh waits for the operator. | M1, on `main`, in the engine core, which no build runs before the protocol adapter (M1) |
 | Backups are encrypted to an age recipient; plaintext backups of `archive.db` alone require an explicit flag. | M1 |
 
 ## Residual risks

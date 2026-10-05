@@ -59,6 +59,7 @@ const (
 	versionBackoff  = time.Second
 	reconnectBase   = 2 * time.Second
 	reconnectCap    = 5 * time.Minute
+	stableAfter     = time.Minute
 	logoutTimeout   = 30 * time.Second
 )
 
@@ -99,6 +100,7 @@ type supervisor struct {
 	next       intent
 	outdated   bool
 	attempt    int
+	up         time.Time
 	dialing    bool
 	dropped    bool
 	early      bool
@@ -374,7 +376,7 @@ func (s *supervisor) connect(ctx context.Context, gen uint64, attempt int) {
 	case superseded:
 	case err == nil && early && !dropped:
 		s.setLocked(StateConnected, "")
-		s.attempt = 0
+		s.up = s.clock.Now()
 	case err == nil && !dropped:
 		s.awaiting = true
 	default:
@@ -408,7 +410,7 @@ func (s *supervisor) handle(ev Event) {
 		case s.state != StateConnecting:
 		case s.awaiting:
 			s.setLocked(StateConnected, "")
-			s.attempt = 0
+			s.up = s.clock.Now()
 		case s.dialing:
 			s.early = true
 		}
@@ -419,6 +421,9 @@ func (s *supervisor) handle(ev Event) {
 			s.setLocked(StateUnpaired, "")
 		case s.state == StateConnected || s.awaiting:
 			attempt := s.attempt + 1
+			if s.state == StateConnected && s.clock.Now().Sub(s.up) >= stableAfter {
+				attempt = 1
+			}
 			s.setLocked(StateConnecting, "")
 			s.next, s.attempt = connect, attempt
 			s.wake()
