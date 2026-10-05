@@ -84,7 +84,7 @@ type engineParts struct {
 type engineSource func(ctx context.Context, cfg config.Config, out *logx.Writer, logger, alerts *slog.Logger) (engineParts, error)
 
 func New(ctx context.Context, cfg config.Config, out *logx.Writer) (*App, error) {
-	return newAppWith(ctx, cfg, out, noClients{}, openWhatsApp)
+	return newAppWith(ctx, cfg, out, noClients{}, engineFor(cfg))
 }
 
 func newApp(ctx context.Context, cfg config.Config, out *logx.Writer, auth api.Authenticator) (*App, error) {
