@@ -130,12 +130,13 @@ func f(cli *whatsmeow.Client) {
 	_ = cli.AddEventHandler(func(any) {})
 }
 `},
-		{name: "the calls the adapter makes, and its installer setting the client and registering its handler", rel: "internal/engine/wa/x.go", src: `package wa
+		{name: "the calls the adapter makes, and its installer building and setting the client and registering its handler", rel: "internal/engine/wa/x.go", src: `package wa
 
 import (
 	"context"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
@@ -150,7 +151,8 @@ func (c *Client) handlerFor(gen uint64) whatsmeow.EventHandlerWithSuccessStatus 
 	return func(any) bool { return gen == c.gen }
 }
 
-func (c *Client) installLocked(cli *whatsmeow.Client) {
+func (c *Client) installLocked(device *store.Device) {
+	cli := whatsmeow.NewClient(device, waLog.Noop)
 	cli.ManualHistorySyncDownload = true
 	cli.DisableManualHistorySyncReceipt = true
 	cli.EnableAutoReconnect, cli.InitialAutoReconnect = false, false
@@ -288,6 +290,28 @@ func installLocked(c *Client, cli *whatsmeow.Client) {
 	cli.AddEventHandlerWithSuccessStatus(c.handlerFor(c.gen))
 }
 `},
+		{name: "clients built outside the installer", rel: "internal/engine/wa/x.go", want: 4, src: `package wa
+
+import (
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/store"
+)
+
+type Client struct{ cli *whatsmeow.Client }
+
+func (c *Client) installLocked(device *store.Device) {
+	c.cli = whatsmeow.NewClient(device, nil)
+	defer func() { c.cli = whatsmeow.NewClient(device, nil) }()
+}
+
+func (c *Client) replace(device *store.Device) *whatsmeow.Client {
+	build := whatsmeow.NewClient
+	_ = build
+	return whatsmeow.NewClient(device, nil)
+}
+
+func installLocked(device *store.Device) *whatsmeow.Client { return whatsmeow.NewClient(device, nil) }
+`},
 		{name: "a document decoder in the device store", rel: "internal/store/session/x.go", want: 1, src: `package session
 
 import "encoding/json/v2"
@@ -345,7 +369,7 @@ func checkProtocolCalls(f *sourceFile) []string {
 		}
 	}
 	var targets []ast.Expr
-	var registries []*ast.SelectorExpr
+	var registries, constructors []*ast.SelectorExpr
 	registered := map[*ast.SelectorExpr]*ast.CallExpr{}
 	fields, pointed := map[*ast.Ident]bool{}, map[ast.Expr]bool{}
 	ast.Inspect(f.file, func(n ast.Node) bool {
@@ -376,6 +400,9 @@ func checkProtocolCalls(f *sourceFile) []string {
 			if s, p := f.ref(e); s != nil && p == waLogPath && bannedProtocolLogging[e.Sel.Name] {
 				out = append(out, f.at(e, "the protocol library's %s logger bypasses the scrubbing writer: log through the adapter over logx", e.Sel.Name))
 			}
+			if s, p := f.ref(e); s != nil && p == whatsmeowModule && e.Sel.Name == "NewClient" {
+				constructors = append(constructors, e)
+			}
 			if s, p := f.ref(e); s != nil && p == whatsmeowModule && e.Sel.Name == "Client" && !pointed[e] {
 				out = append(out, f.at(e, "a protocol client that is not a pointer can be built by a literal, new or a zero value, without the transports and settings the adapter gives it: only whatsmeow.NewClient in the adapter builds one"))
 			}
@@ -400,6 +427,11 @@ func checkProtocolCalls(f *sourceFile) []string {
 		}
 		if name, setting := protocolSettingNames[strings.ToLower(sel.Sel.Name)]; setting && (!inside(sel, writers) || inside(sel, closures)) {
 			out = append(out, f.at(sel, "%s is a protocol client setting that only (*Client).%s in %s writes, so nothing undoes it after the client is built", name, settingWriter, adapterDir))
+		}
+	}
+	for _, sel := range constructors {
+		if !f.test && (!inside(sel, writers) || inside(sel, closures)) {
+			out = append(out, f.at(sel, "only (*Client).%s in %s builds a protocol client, outside any function literal, so every client the adapter holds has its settings, guarded transports and handler", settingWriter, adapterDir))
 		}
 	}
 	for _, sel := range registries {
