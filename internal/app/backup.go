@@ -46,6 +46,7 @@ func (b *initialBackup) run(ctx context.Context, every time.Duration, logger *sl
 func (b *initialBackup) check(ctx context.Context) error {
 	st := b.status()
 	if !st.Paired {
+		b.tried = false
 		return b.forget(ctx)
 	}
 	if st.State == engine.StateUnpaired || st.Reason == engine.ReasonOwnerMismatch {

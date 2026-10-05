@@ -163,6 +163,26 @@ func TestTheInitialBackupWaitsForTheHistorySyncToSettle(t *testing.T) {
 	}
 }
 
+func TestADeviceRepairedWithoutARestartIsBackedUpInTurn(t *testing.T) {
+	archive := triggerArchive(t)
+	tr := newTrigger(t, archive)
+	tr.status = pairedStatus
+	tr.at(t, 0)
+	if tr.at(t, settleAfter) != 1 {
+		t.Fatal("the first device was not backed up")
+	}
+	tr.status = engine.Status{State: engine.StateUnpaired}
+	tr.at(t, time.Hour)
+	tr.status = pairedStatus
+	tr.at(t, 2*time.Hour)
+	if tr.at(t, 2*time.Hour+settleAfter-time.Millisecond) != 1 {
+		t.Fatal("the next device was backed up before its sync settled")
+	}
+	if tr.at(t, 2*time.Hour+settleAfter) != 2 || syncValue(t, archive, takenAtKey) == "" {
+		t.Fatal("the next paired device was not backed up in the same process")
+	}
+}
+
 func TestAFailedInitialBackupIsRetriedOnlyAfterARestart(t *testing.T) {
 	archive := triggerArchive(t)
 	tr := newTrigger(t, archive)
