@@ -66,7 +66,7 @@ func TestAdminRoutesDriveTheEngine(t *testing.T) {
 	const canary = "CANA-RY77"
 	adminToken := token.NewAdmin()
 	cfg := testConfig(t, adminToken)
-	cfg.OwnerPhone, cfg.HistoryMaxBytes = "+15550100009", config.DefaultHistoryMaxBytes
+	cfg.OwnerPhone, cfg.HistoryMaxBytes, cfg.MetricsEMF = "+15550100009", config.DefaultHistoryMaxBytes, true
 	client := newStubClient()
 	client.unpaired, client.pairCode = true, canary
 	logs := &syncBuffer{}
@@ -120,6 +120,9 @@ func TestAdminRoutesDriveTheEngine(t *testing.T) {
 	}
 	if f := logs.find("admin_auth_failure"); len(f) != 1 || f[0]["count"] != float64(1) {
 		t.Fatalf("admin_auth_failure events %v", f)
+	}
+	if e := emfLines(logs); len(e) != 1 || e[0]["AdminAuthFailures"] != float64(1) {
+		t.Fatalf("embedded-metric-format lines %v, want the shutdown line counting the failed authentication", e)
 	}
 	for name, out := range map[string]string{"standard output": logs.buf.String(), "metrics": metricsBody} {
 		if strings.Contains(out, canary) || strings.Contains(out, strings.ReplaceAll(canary, "-", "")) {
