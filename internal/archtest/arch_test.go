@@ -334,6 +334,7 @@ func TestArchitecture(t *testing.T) {
 		"cmd/wawarden/main.go",
 		"internal/api/register.go",
 		"internal/archtest/arch_test.go",
+		"internal/engine/engine.go",
 		"internal/keys/keys.go",
 		"internal/listeners/listeners.go",
 		"internal/logx/logx.go",

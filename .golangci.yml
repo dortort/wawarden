@@ -54,6 +54,16 @@ linters:
           deny:
             - pkg: modernc.org/sqlite
               desc: the SQLite driver is confined to internal/store/internal/db, the only holder of a database handle
+        neutral-engine:
+          files:
+            - ${base-path}/internal/engine/**
+            - "!${base-path}/internal/engine/wa/**"
+            - "!$test"
+          deny:
+            - pkg: go.mau.fi/whatsmeow
+              desc: the engine core handles plain data; only internal/engine/wa imports the protocol library
+            - pkg: google.golang.org/protobuf
+              desc: the engine core handles plain data; only internal/engine/wa decodes protocol messages
         no-multipart:
           files:
             - $all

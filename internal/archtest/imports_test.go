@@ -17,14 +17,18 @@ import (
 )
 
 const (
-	apiDir    = "internal/api"
-	appDir    = "internal/app"
-	policyDir = "internal/policy"
-	sealDir   = policyDir + "/internal/seal"
-	sealPath  = module + "/" + sealDir
+	apiDir     = "internal/api"
+	appDir     = "internal/app"
+	engineDir  = "internal/engine"
+	adapterDir = engineDir + "/wa"
+	policyDir  = "internal/policy"
+	sealDir    = policyDir + "/internal/seal"
+	sealPath   = module + "/" + sealDir
 )
 
 var bannedImports = set("net/http/pprof", "expvar", "net/http/cgi", "net/http/fcgi", "plugin", "unsafe", "C")
+
+var engineDenied = []string{"go.mau.fi/whatsmeow", "google.golang.org/protobuf", "database/sql", "modernc.org/sqlite"}
 
 var apiDenied = []string{"database/sql", "html/template", "text/template", "modernc.org/sqlite", "go.mau.fi/whatsmeow", module + "/internal/store"}
 
@@ -299,6 +303,40 @@ import "github.com/dortort/wawarden/internal/listeners"
 
 import "github.com/dortort/wawarden/internal/listeners/listenertest"
 `},
+		{name: "the engine core imports the protocol library, protobuf and the database", rel: "internal/engine/x.go", want: 6, src: `package engine
+
+import (
+	"database/sql"
+	"database/sql/driver"
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/proto"
+	"modernc.org/sqlite"
+)
+`},
+		{name: "an engine subpackage other than the adapter imports the protocol library", rel: "internal/engine/fake/x.go", want: 1, src: `package fake
+
+import "go.mau.fi/whatsmeow/types"
+`},
+		{name: "the adapter imports the protocol library and protobuf", rel: "internal/engine/wa/x.go", src: `package wa
+
+import (
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/proto"
+)
+`},
+		{name: "an engine test inspects the archive, and a neighbouring directory", rel: "internal/engine/x_test.go", src: `package engine
+
+import (
+	"database/sql"
+	_ "modernc.org/sqlite"
+)
+`},
+		{name: "a directory that only starts like the engine", rel: "internal/enginex/x.go", src: `package enginex
+
+import "go.mau.fi/whatsmeow"
+`},
 	},
 }
 
@@ -318,6 +356,10 @@ func checkFences(f *sourceFile) []string {
 		case within(f.dir, apiDir):
 			if slices.ContainsFunc(apiDenied, func(denied string) bool { return within(imp.path, denied) }) {
 				out = append(out, f.at(imp.node, "%s may not import %q", apiDir, imp.path))
+			}
+		case within(f.dir, engineDir) && !within(f.dir, adapterDir):
+			if slices.ContainsFunc(engineDenied, func(denied string) bool { return within(imp.path, denied) }) {
+				out = append(out, f.at(imp.node, "%s handles plain data only: it may not import %q, which belongs to %s or internal/store", engineDir, imp.path, adapterDir))
 			}
 		case within(f.dir, policyDir):
 			if !policyAllowed[imp.path] && (imp.path != sealPath || f.dir != policyDir) {
