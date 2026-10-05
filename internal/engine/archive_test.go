@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -13,6 +14,8 @@ import (
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/store/ingest"
 )
+
+const testDeadline = 5 * time.Minute
 
 type pipeRig struct {
 	*rig
@@ -24,7 +27,8 @@ type pipeRig struct {
 func newPipeRig(t *testing.T, options ...option) *pipeRig {
 	t.Helper()
 	r := &pipeRig{rig: newRig(t, options...)}
-	r.ingestOpts = ingest.Options{DataDir: r.opts.DataDir, UID: os.Geteuid(), Profile: ingest.ProfileLocal, MinFreeBytes: 1, Logger: r.opts.Logger}
+	r.ingestOpts = ingest.Options{DataDir: r.opts.DataDir, UID: os.Geteuid(), Profile: ingest.ProfileLocal, MinFreeBytes: 1, Logger: r.opts.Logger,
+		ReadTimeout: testDeadline, WriteTimeout: testDeadline, RewriteTimeout: testDeadline}
 	r.open()
 	r.opts.Archive = r.archive
 	r.p = newPipeline(r.opts)

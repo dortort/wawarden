@@ -85,7 +85,8 @@ func hits(raw []byte, set map[string]bool) []string {
 
 func buildBaseline(dir string) ([]byte, error) {
 	ctx := context.Background()
-	s, err := Open(ctx, Options{DataDir: dir, UID: os.Geteuid(), Profile: ProfileLocal, MinFreeBytes: 1, Logger: testLogger()})
+	s, err := Open(ctx, Options{DataDir: dir, UID: os.Geteuid(), Profile: ProfileLocal, MinFreeBytes: 1, Logger: testLogger(),
+		ReadTimeout: testDeadline, WriteTimeout: testDeadline, RewriteTimeout: testDeadline})
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +133,6 @@ func newProof(t *testing.T) *proof {
 	t.Helper()
 	base := baseline(t)
 	opts := testOptions(t)
-	opts.readTimeout = time.Minute
 	if err := os.WriteFile(filepath.Join(opts.DataDir, "archive.db"), base, 0o600); err != nil {
 		t.Fatalf("copy the baseline archive: %v", err)
 	}
@@ -168,7 +168,7 @@ func newProof(t *testing.T) *proof {
 
 func TestTheProofsReadDeadlineReachesTheDatabase(t *testing.T) {
 	opts := testOptions(t)
-	opts.readTimeout = time.Nanosecond
+	opts.ReadTimeout = time.Nanosecond
 	s, err := Open(t.Context(), opts)
 	if err == nil {
 		_ = s.Close()
@@ -441,7 +441,7 @@ func TestAnIndexRewriteCutShortRunsAtTheNextOpen(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	instant := p.opts
-	instant.writeTimeout = time.Nanosecond
+	instant.WriteTimeout = time.Nanosecond
 	reopened, err := Open(t.Context(), instant)
 	if err != nil {
 		t.Fatalf("Open with a write deadline of 1 ns = %v, want the rewrite to run under its own deadline", err)
@@ -462,7 +462,7 @@ func TestAFailedIndexRewriteStaysDueUntilTheNextOpen(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	failing := p.opts
-	failing.rewriteTimeout = time.Nanosecond
+	failing.RewriteTimeout = time.Nanosecond
 	p.s = openWith(t, failing)
 	err := p.s.Write(t.Context(), "test.revoke", func(tx *Tx) error { return tx.ApplyRevoke(ref) })
 	if !errors.Is(err, ErrRewritePending) || !errors.Is(err, context.DeadlineExceeded) {

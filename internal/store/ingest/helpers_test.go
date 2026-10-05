@@ -52,9 +52,12 @@ func chat(t *testing.T, jid string) policy.CanonicalChat {
 	return c
 }
 
+const testDeadline = 5 * time.Minute
+
 func testOptions(t *testing.T) Options {
 	t.Helper()
-	return Options{DataDir: t.TempDir(), UID: os.Geteuid(), Profile: ProfileLocal, MinFreeBytes: 1, Logger: testLogger()}
+	return Options{DataDir: t.TempDir(), UID: os.Geteuid(), Profile: ProfileLocal, MinFreeBytes: 1, Logger: testLogger(),
+		ReadTimeout: testDeadline, WriteTimeout: testDeadline, RewriteTimeout: testDeadline}
 }
 
 func openStore(t *testing.T) *Store {
