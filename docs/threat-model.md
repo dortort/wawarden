@@ -553,16 +553,19 @@ These remain at v1.0, after every control above is in place.
   release ships. Reads of the archive keep working. The engine refreshes the client
   version at runtime for the common case (M1, on `main`).
 - **Upstream dependency.** The protocol library has a single maintainer and no
-  tagged releases. It is pinned to an exact pseudo-version
-  (`v0.0.0-20260929112325-8b41cfe6d9c4`), and `go.sum` pins its content: the go command checks every download against that hash
+  tagged releases. `go.mod` pins it to an exact pseudo-version, and `go.sum`
+  pins its content: the go command checks every download against that hash
   and, with default settings, checks a new hash against the Go checksum database
   before recording it. Modules are never vendored (the build script, the CI
   `modules` job and an architecture test refuse a `vendor` directory), so a
-  build needs the Go module proxy, or whatever `GOPROXY` names, and each update
-  will be reviewed from the upstream commit log, diffstat and diff of the
-  watched paths that a planned bump workflow will put into its pull request
-  (M1). It links `go.mau.fi/libsignal`, licensed under GPL-3.0, which is why
-  WaWarden is licensed under GPL-3.0-or-later from M1 on.
+  build needs the Go module proxy, or whatever `GOPROXY` names. A scheduled
+  workflow proposes each update as a pull request and never merges one. The
+  pull request carries the upstream commit log, a diffstat and the diff of the
+  watched paths between the two module versions' sources, complete in an
+  artifact of the run when GitHub's limit on a description cuts it; its CI runs
+  only once a maintainer approves them, and a maintainer reviews and merges it
+  by hand (`RELEASING.md`). It links `go.mau.fi/libsignal`, licensed under
+  GPL-3.0, which is why WaWarden is licensed under GPL-3.0-or-later from M1 on.
 - **Deletion residuals.** Backups taken before a message was revoked, edited or
   expired keep its old text until they are deleted; this release has no
   retention, so that is the operator's task. Filesystem blocks,
