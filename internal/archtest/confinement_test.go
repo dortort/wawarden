@@ -17,6 +17,7 @@ const (
 	libcModule      = "modernc.org/libc"
 	whatsmeowModule = "go.mau.fi/whatsmeow"
 	protobufModule  = "google.golang.org/protobuf"
+	signalModule    = "go.mau.fi/libsignal"
 )
 
 type confinement struct {
@@ -29,9 +30,13 @@ var confinements = []confinement{
 	{pkg: sqliteMod, dirs: []string{dbDir}},
 	{pkg: whatsmeowModule, dirs: []string{adapterDir, sessionDir}},
 	{pkg: protobufModule, dirs: []string{adapterDir}},
+	{pkg: signalModule, dirs: []string{adapterDir}},
 }
 
-var sessionImports = set(whatsmeowModule+"/store", whatsmeowModule+"/store/sqlstore")
+var (
+	sessionImports = set(whatsmeowModule+"/store", whatsmeowModule+"/store/sqlstore")
+	adapterSignal  = set(signalModule + "/logger")
+)
 
 var confinementRule = rule{
 	name:  "confined-imports",
@@ -126,6 +131,26 @@ import (
 
 import "go.mau.fi/whatsmeow/types"
 `},
+		{name: "the signal library outside the adapter", rel: "internal/store/session/x.go", want: 2, src: `package session
+
+import (
+	"go.mau.fi/libsignal/logger"
+	"go.mau.fi/libsignal/session"
+)
+`},
+		{name: "the adapter imports the signal library beyond its logger", rel: "internal/engine/wa/x.go", want: 2, src: `package wa
+
+import (
+	"go.mau.fi/libsignal"
+	"go.mau.fi/libsignal/logger"
+	"go.mau.fi/libsignal/protocol"
+	_ "go.mau.fi/libsignalx"
+)
+`},
+		{name: "a signal library test in the adapter", rel: "internal/engine/wa/x_test.go", src: `package wa
+
+import "go.mau.fi/libsignal/protocol"
+`},
 	},
 }
 
@@ -148,6 +173,9 @@ func checkConfinement(f *sourceFile) []string {
 		}
 		if within(f.dir, sessionDir) && within(imp.path, whatsmeowModule) && !sessionImports[imp.path] {
 			out = append(out, f.at(imp.node, "%s may import only the protocol library's device store packages, not %q", sessionDir, imp.path))
+		}
+		if within(f.dir, adapterDir) && within(imp.path, signalModule) && !adapterSignal[imp.path] {
+			out = append(out, f.at(imp.node, "%s may import only the signal library's logger package, to route its lines through the scrubbing writer, not %q", adapterDir, imp.path))
 		}
 	}
 	return out

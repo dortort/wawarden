@@ -1,12 +1,16 @@
 package wa
 
 import (
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	signallog "go.mau.fi/libsignal/logger"
+	"go.mau.fi/whatsmeow/store"
 )
 
 type fakeClock struct {
@@ -145,6 +149,54 @@ func TestLibraryLinesBelowTheLevelAreNotFormatted(t *testing.T) {
 	l.Warnf("%v", panicking{})
 	if logs.String() != "" {
 		t.Fatalf("lines below the level were written: %q", logs.String())
+	}
+}
+
+func TestSignalLibraryLinesReachTheWriterAndNeverStandardOutput(t *testing.T) {
+	r := newRig(t, pairedDevice(), func(o *Options) { o.UnsafeDebug = time.Minute })
+	direct := []byte("\n{\"a\":1}")
+	group := []byte("\n{\"event\":\"pair_rejected\",\"peer\":\"15550100055@s.whatsapp.net\"}")
+	if len(direct) > 8 || len(group) > 64 {
+		t.Fatalf("payloads of %d and %d bytes are too long to fail the library's length checks", len(direct), len(group))
+	}
+	stdout := captureStdout(t, func() {
+		if _, err := store.SignalProtobufSerializer.SignalMessage.Deserialize(direct); err == nil {
+			t.Error("a short signal message was accepted")
+		}
+		if _, err := store.SignalProtobufSerializer.SenderKeyMessage.Deserialize(group); err == nil {
+			t.Error("a short sender-key message was accepted")
+		}
+		signallog.Debug("Using cipherKey: ", []byte("SYNTHETIC-KEY"))
+		signallog.Info("SYNTHETIC-INFO")
+	})
+	if stdout != "" {
+		t.Fatalf("the signal library wrote to standard output: %q", stdout)
+	}
+	var lines []map[string]any
+	for _, line := range r.logs.events("whatsmeow_log") {
+		if line["module"] == "libsignal" {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) != 2 || lines[0]["level"] != "ERROR" || lines[1]["level"] != "ERROR" {
+		t.Fatalf("libsignal lines %v, want the two errors and neither the debug nor the information line", lines)
+	}
+	if d := lines[1]["detail"].(string); !strings.Contains(d, "\n{\"event\":\"pair_rejected\",\"peer\":\"jid:") {
+		t.Fatalf("detail %q, want the payload kept inside the line with its identifier pseudonymised", d)
+	}
+	out := r.logs.String()
+	for _, leak := range []string{"15550100055", "SYNTHETIC-KEY", "SYNTHETIC-INFO"} {
+		if strings.Contains(out, leak) {
+			t.Fatalf("%q reached the log:\n%s", leak, out)
+		}
+	}
+	if forged := r.logs.events("pair_rejected"); len(forged) != 0 {
+		t.Fatalf("a payload forged a log line: %v", forged)
+	}
+	for line := range strings.Lines(out) {
+		if !json.Valid([]byte(line)) {
+			t.Fatalf("a log line is not one JSON value: %q", line)
+		}
 	}
 }
 

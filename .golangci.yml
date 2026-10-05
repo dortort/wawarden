@@ -75,6 +75,8 @@ linters:
               desc: only internal/engine/wa uses the protocol library, and internal/store/session its device store
             - pkg: google.golang.org/protobuf
               desc: only internal/engine/wa decodes protocol messages
+            - pkg: go.mau.fi/libsignal
+              desc: only internal/engine/wa uses the signal library, to route its log lines through the scrubbing writer
         session-store:
           list-mode: lax
           files:
@@ -88,6 +90,18 @@ linters:
               desc: internal/store/session uses only the protocol library's device store packages
             - pkg: google.golang.org/protobuf
               desc: only internal/engine/wa decodes protocol messages
+            - pkg: go.mau.fi/libsignal
+              desc: only internal/engine/wa uses the signal library, to route its log lines through the scrubbing writer
+        signal-logger:
+          list-mode: lax
+          files:
+            - ${base-path}/internal/engine/wa/**
+            - "!$test"
+          allow:
+            - go.mau.fi/libsignal/logger$
+          deny:
+            - pkg: go.mau.fi/libsignal
+              desc: internal/engine/wa uses only the signal library's logger package, to route its lines through the scrubbing writer
         no-multipart:
           files:
             - $all

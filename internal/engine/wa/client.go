@@ -113,6 +113,7 @@ func newClient(opts Options, dial dialFunc, download downloader, now func() time
 		http:     newHTTPClients(dial, opts.HistoryMaxBytes+mediaOverhead),
 		download: download,
 	}
+	routeSignalLogs(logger{out: opts.Logger, module: "libsignal", gate: c.log.gate})
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.installLocked(opts.Device)

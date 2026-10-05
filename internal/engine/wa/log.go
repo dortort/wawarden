@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	signallog "go.mau.fi/libsignal/logger"
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
@@ -77,6 +79,34 @@ func (l logger) write(level slog.Level, format string, args []any) {
 	}
 	detail := clip(maskNumbers(fmt.Sprintf(format, args...)))
 	l.out.LogAttrs(ctx, level, "protocol library log", slog.String("event", "whatsmeow_log"), slog.String("module", l.module), slog.String("detail", detail))
+}
+
+var (
+	signalOut   atomic.Pointer[logger]
+	signalSetup = sync.OnceFunc(func() {
+		var l signallog.Loggable = signalLogger{}
+		signallog.Setup(&l)
+	})
+)
+
+// Without a logger of its own, the signal library prints its lines to standard output.
+func routeSignalLogs(l logger) {
+	signalOut.Store(&l)
+	signalSetup()
+}
+
+type signalLogger struct{}
+
+func (signalLogger) Debug(string, string)       {}
+func (signalLogger) Info(string, string)        {}
+func (signalLogger) Configure(string)           {}
+func (signalLogger) Warning(caller, msg string) { signalLine(slog.LevelWarn, caller, msg) }
+func (signalLogger) Error(caller, msg string)   { signalLine(slog.LevelError, caller, msg) }
+
+func signalLine(level slog.Level, caller, msg string) {
+	if l := signalOut.Load(); l != nil {
+		l.write(level, "%s: %s", []any{caller, msg})
+	}
 }
 
 func maskNumbers(s string) string {

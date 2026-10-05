@@ -1072,6 +1072,15 @@ the log of that period as holding chat data. The library's second logging
 channel, a logger attached to a context, stays off: nothing in WaWarden attaches
 one, and an architecture test refuses the calls that would.
 
+The signal library that the protocol library uses for its encryption logs
+through the same adapter, as `whatsmeow_log` events with `module` `libsignal`
+and its source file and line at the start of `detail`. Its error and warning
+lines follow `WAWARDEN_LOG_LEVEL`; its debug and information lines are
+discarded at every log level, during a `WAWARDEN_UNSAFE_DEBUG` window too,
+because they print key material. An error line can quote up to 64 bytes of a
+malformed message as it arrived: the quoted bytes stay inside `detail`, and the
+changes described above apply to them like any other text.
+
 ### Pseudonyms and dropped lines
 
 Every line `serve` writes to standard output passes through one writer, which
