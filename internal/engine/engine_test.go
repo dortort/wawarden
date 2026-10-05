@@ -161,6 +161,21 @@ func TestContentIsDroppedWhileNoDeviceIsPaired(t *testing.T) {
 		t.Fatalf("not_paired drops %v, want 3", got)
 	}
 	r.client.waitFor(t, "logout")
+	eventually(t, "the rejected device is logged out", func() bool {
+		e.sup.mu.Lock()
+		defer e.sup.mu.Unlock()
+		return !e.sup.rejected && !e.sup.loggingOut
+	})
+	r.client.emit(LoggedOut{})
+	if !r.client.emit(dm("M3", bob, "in flight from the rejected account")) {
+		t.Fatal("a message after the LoggedOut was refused instead of dropped")
+	}
+	if st := e.Status(); st != (Status{State: StateDisconnected, Reason: ReasonLoggedOut}) {
+		t.Fatalf("status %+v", st)
+	}
+	if got := r.counter("wawarden_ingest_dropped_total", "reason", "not_paired"); got != 4 {
+		t.Fatalf("not_paired drops after the LoggedOut %v, want 4", got)
+	}
 	if _, err := e.Pair(t.Context()); err != nil {
 		t.Fatalf("Pair: %v", err)
 	}

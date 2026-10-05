@@ -157,9 +157,10 @@ func (s *supervisor) status() Status {
 }
 
 func (s *supervisor) accepting() bool {
+	paired := s.client.Paired()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return !s.rejected && s.state != StateUnpaired
+	return paired && !s.rejected && s.state != StateUnpaired
 }
 
 func (s *supervisor) setLocked(state State, reason Reason) {

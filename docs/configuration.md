@@ -544,8 +544,9 @@ when the inbox already holds 5,000 rows that wait to be applied, when ingest is
 user, a LID user or a group (status updates, broadcast lists, newsletters and
 every other kind) is acknowledged and dropped before it reaches the inbox. So
 is every message, group change and history-sync notification that arrives
-while the engine is `unpaired`, such as from an account that
-[pairing](#pairing) rejected (`not_paired`), and every message whose
+while the engine is `unpaired`, while no device is stored, such as after
+WhatsApp logged the device out, or while a device that [pairing](#pairing)
+rejected is still stored (`not_paired`), and every message whose
 identifiers, push name, text and quoted text add up to more than 512 KiB
 (`too_large`). Accepting and applying one message therefore allocates at most
 48 MiB of Go memory, besides SQLite's own; only text made of control characters
