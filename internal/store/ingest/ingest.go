@@ -33,7 +33,9 @@ type Options struct {
 	MinFreeBytes uint64
 	Logger       *slog.Logger
 
-	readTimeout time.Duration
+	readTimeout    time.Duration
+	writeTimeout   time.Duration
+	rewriteTimeout time.Duration
 }
 
 type Store struct {
@@ -47,7 +49,7 @@ type Store struct {
 }
 
 func Open(ctx context.Context, opts Options) (*Store, error) {
-	d, err := db.Open(ctx, db.Archive, db.Options{DataDir: opts.DataDir, UID: opts.UID, Profile: opts.Profile, Logger: opts.Logger, ReadTimeout: opts.readTimeout})
+	d, err := db.Open(ctx, db.Archive, db.Options{DataDir: opts.DataDir, UID: opts.UID, Profile: opts.Profile, Logger: opts.Logger, ReadTimeout: opts.readTimeout, WriteTimeout: opts.writeTimeout, RewriteTimeout: opts.rewriteTimeout})
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +57,11 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 	if err != nil {
 		return nil, errors.Join(err, d.Close())
 	}
-	return &Store{db: d, version: version, floor: opts.MinFreeBytes, admin: admin.New(d)}, nil
+	s := &Store{db: d, version: version, floor: opts.MinFreeBytes, admin: admin.New(d)}
+	if err := s.finishRewrite(ctx); err != nil {
+		return nil, errors.Join(err, d.Close())
+	}
+	return s, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -79,7 +85,10 @@ type Reader struct {
 	q   db.Querier
 }
 
-type Tx struct{ Reader }
+type Tx struct {
+	Reader
+	forgotten bool
+}
 
 func (s *Store) Read(ctx context.Context, op string, fn func(*Reader) error) error {
 	return s.db.Read(ctx, op, func(ctx context.Context, q db.Querier) error {
@@ -88,17 +97,31 @@ func (s *Store) Read(ctx context.Context, op string, fn func(*Reader) error) err
 }
 
 func (s *Store) Write(ctx context.Context, op string, fn func(*Tx) error) error {
-	return s.db.Write(ctx, op, func(ctx context.Context, q db.Querier) error {
-		return fn(&Tx{Reader{ctx: ctx, q: q}})
-	})
+	var stale bool
+	if err := s.db.Write(ctx, op, func(ctx context.Context, q db.Querier) error {
+		tx := &Tx{Reader: Reader{ctx: ctx, q: q}}
+		if err := fn(tx); err != nil {
+			return err
+		}
+		var err error
+		stale, err = tx.markStaleKeys()
+		return err
+	}); err != nil || !stale {
+		return err
+	}
+	if err := s.rewriteIndex(ctx); err != nil {
+		return fmt.Errorf("%w: %w", ErrRewritePending, err)
+	}
+	return nil
 }
 
 var (
-	ErrInvalid     = errors.New("ingest: invalid input")
-	ErrNotFound    = errors.New("ingest: no such row")
-	ErrWrongChat   = errors.New("ingest: the reference belongs to another chat")
-	ErrRevoked     = errors.New("ingest: the message is revoked")
-	errCorruptChat = errors.New("ingest: a stored identifier is not canonical")
+	ErrInvalid        = errors.New("ingest: invalid input")
+	ErrNotFound       = errors.New("ingest: no such row")
+	ErrWrongChat      = errors.New("ingest: the reference belongs to another chat")
+	ErrRevoked        = errors.New("ingest: the message is revoked")
+	ErrRewritePending = errors.New("ingest: the write committed, but the full-text index rewrite it requires failed and stays due")
+	errCorruptChat    = errors.New("ingest: a stored identifier is not canonical")
 )
 
 func invalid(what string) error { return fmt.Errorf("%w: %s", ErrInvalid, what) }

@@ -250,6 +250,11 @@ func (tx *Tx) forget(seq int64, old sql.NullString) error {
 	if _, err := tx.q.ExecContext(tx.ctx, deleteFTS, seq, old); err != nil {
 		return err
 	}
+	if old.Valid {
+		if err := tx.noteForgotten(old.String); err != nil {
+			return err
+		}
+	}
 	_, err := tx.q.ExecContext(tx.ctx, forgetText, seq)
 	return err
 }
