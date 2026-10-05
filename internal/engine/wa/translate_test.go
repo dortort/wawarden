@@ -181,6 +181,37 @@ func TestFixtureInlineBootstrapPayload(t *testing.T) {
 	}
 }
 
+func TestFixtureEditsResentByThePhoneKeepTheirOwnIdentifier(t *testing.T) {
+	r := newRig(t, pairedDevice())
+	for _, tt := range []struct {
+		name   string
+		fromMe bool
+		sender string
+		target types.JID
+	}{
+		{name: "the peer's edit", sender: peer.String(), target: owner},
+		{name: "the owner's edit", fromMe: true, sender: owner.String(), target: peer},
+	} {
+		evt := resent(t, r.c.current(), peer, tt.fromMe, "3EB0E9", editContent(msgKey(tt.target, true, "3EB0A1", nil), "synthetic edited via resend"))
+		if evt.Info.ID != "3EB0A1" || evt.Message.GetConversation() != "synthetic edited via resend" || evt.Message.GetProtocolMessage() != nil {
+			t.Fatalf("%s: the library built %+v around %v: the trap this test covers is gone, so it needs another look", tt.name, evt.Info, evt.Message)
+		}
+		got := asMessage(t, evt)
+		want := engine.Key{RemoteJID: tt.target.String(), FromMe: true, ID: "3EB0A1"}
+		if got.Kind != engine.KindEdit || got.ID != "3EB0E9" || got.Chat != peer.String() || got.Sender != tt.sender || got.FromMe != tt.fromMe ||
+			got.Text != "synthetic edited via resend" || got.Target == nil || *got.Target != want {
+			t.Fatalf("%s = %+v (target %+v): it must stay an edit under its own identifier, not become a message colliding with its target", tt.name, got, got.Target)
+		}
+		if evt.Info.ID != "3EB0A1" || evt.Message.GetConversation() != "synthetic edited via resend" {
+			t.Fatalf("%s: translating changed the library's event to %+v", tt.name, evt.Info)
+		}
+	}
+	plain := asMessage(t, resent(t, r.c.current(), peer, false, "3EB0P1", &waE2E.Message{Conversation: proto.String("synthetic resent text")}))
+	if plain.Kind != engine.KindText || plain.ID != "3EB0P1" || plain.Text != "synthetic resent text" || plain.Sender != peer.String() {
+		t.Fatalf("a resent text = %+v", plain)
+	}
+}
+
 func TestFixtureTheRevokeZeroValueTrap(t *testing.T) {
 	untyped := live(t, peer, peer, "3EB0Z1", &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{Key: msgKey(peer, false, "3EB0A1", nil)}})
 	if untyped.Message.GetProtocolMessage().GetType() != waE2E.ProtocolMessage_REVOKE {

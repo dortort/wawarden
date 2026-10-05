@@ -174,6 +174,27 @@ func TestFixturesTakeEffectThroughTheEngine(t *testing.T) {
 	}
 }
 
+func TestAnEditResentByThePhoneTakesEffectThroughTheEngine(t *testing.T) {
+	w := wireEngine(t)
+	w.send(t, textMessage(t, peer, peer, "3EB0A1", "synthetic original"))
+	w.send(t, resent(t, w.c.current(), peer, false, "3EB0E9", editContent(msgKey(owner, true, "3EB0A1", nil), "synthetic edited via resend")))
+	w.send(t, resent(t, w.c.current(), peer, false, "3EB0E8", editContent(msgKey(owner, true, "3EB0A2", nil), "synthetic edit of an unknown message")))
+	w.send(t, textMessage(t, peer, peer, "3EB0LAST", "synthetic marker"))
+	eventually(t, "the last message is stored", func() bool { _, ok := w.find(t, peer, "3EB0LAST", peer); return ok })
+	edited, ok := w.find(t, peer, "3EB0A1", peer)
+	if !ok || edited.Text != "synthetic edited via resend" || edited.EditedAt.IsZero() {
+		t.Fatalf("the edited message = %+v, %v: an edit the phone resends must apply to its target", edited, ok)
+	}
+	if stray, ok := w.find(t, peer, "3EB0A2", peer); ok {
+		t.Fatalf("an edit of an unknown message was stored as its target: %+v", stray)
+	}
+	for _, id := range []string{"3EB0E9", "3EB0E8"} {
+		if row, ok := w.find(t, peer, id, peer); ok && row.Text != "" {
+			t.Fatalf("the edit %s was stored with text %+v", id, row)
+		}
+	}
+}
+
 func TestAHistoryBlobTakesEffectThroughTheEngine(t *testing.T) {
 	w := wireEngine(t)
 	blob := compress(t, historyBlob(t, &waHistorySync.HistorySync{

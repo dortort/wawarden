@@ -5,8 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
@@ -65,15 +67,33 @@ func textMessage(t testing.TB, chat, sender types.JID, id, body string) *events.
 }
 
 func editMessage(t testing.TB, chat, sender types.JID, id string, key *waCommon.MessageKey, body string) *events.Message {
-	evt := live(t, chat, sender, id, &waE2E.Message{EditedMessage: &waE2E.FutureProofMessage{Message: &waE2E.Message{
-		ProtocolMessage: &waE2E.ProtocolMessage{
-			Key:           key,
-			Type:          waE2E.ProtocolMessage_MESSAGE_EDIT.Enum(),
-			EditedMessage: &waE2E.Message{Conversation: proto.String(body)},
-			TimestampMS:   proto.Int64(epoch.UnixMilli()),
-		},
-	}}})
+	evt := live(t, chat, sender, id, editContent(key, body))
 	evt.Info.Edit = types.EditAttributeMessageEdit
+	return evt
+}
+
+func editContent(key *waCommon.MessageKey, body string) *waE2E.Message {
+	return &waE2E.Message{EditedMessage: &waE2E.FutureProofMessage{Message: &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
+		Key:           key,
+		Type:          waE2E.ProtocolMessage_MESSAGE_EDIT.Enum(),
+		EditedMessage: &waE2E.Message{Conversation: proto.String(body)},
+		TimestampMS:   proto.Int64(epoch.UnixMilli()),
+	}}}}
+}
+
+func resent(t testing.TB, cli *whatsmeow.Client, chat types.JID, fromMe bool, id string, raw *waE2E.Message) *events.Message {
+	t.Helper()
+	web := wire(t, &waWeb.WebMessageInfo{
+		Key:              msgKey(chat, fromMe, id, nil),
+		Message:          raw,
+		MessageTimestamp: proto.Uint64(epochSeconds),
+		PushName:         proto.String("Synthetic Peer"),
+	})
+	evt, err := cli.ParseWebMessage(types.EmptyJID, web)
+	if err != nil {
+		t.Fatalf("ParseWebMessage: %v", err)
+	}
+	evt.UnavailableRequestID = "3EB0RQ1"
 	return evt
 }
 

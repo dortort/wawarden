@@ -59,6 +59,11 @@ func translate(evt any) (engine.Event, bool) {
 }
 
 func message(e *events.Message) (engine.Event, bool) {
+	if web := e.SourceWebMsg; web != nil {
+		restored := *e
+		restored.Info.ID = web.GetKey().GetID()
+		e = restored.UnwrapRaw()
+	}
 	if e.Message == nil {
 		return nil, false
 	}

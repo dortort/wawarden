@@ -786,7 +786,9 @@ raising the cap. The adapter decodes a blob with a nesting limit of 28 levels:
 conversation's rows under the conversation's own chat, never under the chat a
 row's key names; it keeps an edit row's own identifier, so that it is applied as
 an edit of its target; and it passes the blob's phone-number-to-LID mappings and
-push names to the engine, which applies them by the rules above.
+push names to the engine, which applies them by the rules above. A message that
+the owner's phone sends again on request, which the protocol library builds the
+same way, keeps an edit's own identifier too.
 
 ### Traffic the protocol library sends by itself
 
