@@ -501,7 +501,8 @@ func (s *supervisor) reconnect() error {
 		return ErrStopped
 	case s.state == StateDisconnected && s.reason == ReasonOutdated:
 		s.setLocked(StateConnecting, "")
-		s.next, s.outdated = refresh, true
+		// s.outdated still holds the mode of the refresh that failed.
+		s.next = refresh
 	case !paired:
 		return ErrNotPaired
 	case s.state == StateConnected:

@@ -489,7 +489,9 @@ but `shutdown` also logs `disconnected` at every log level. The gauges
   reports the client as outdated, the engine fetches again the same way and then
   needs a strictly newer version. When no fetch succeeds, it stays in
   `disconnected` with reason `outdated`, and an explicit reconnect fetches again
-  before it connects.
+  before it connects, with the same need: a strictly newer version after
+  WhatsApp reported the client as outdated, an equal one too after the fetches
+  at the start failed, for example because the network was not up yet.
 - **Reconnection.** After an ordinary drop or a failed connection attempt, the
   engine reconnects after a delay that starts at 2 seconds, doubles after each
   failed attempt up to 5 minutes, and is randomised to between half and all of

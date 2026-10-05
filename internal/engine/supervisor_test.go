@@ -563,6 +563,16 @@ func TestReconnect(t *testing.T) {
 	h.deliver(ClientOutdated{})
 	h.steps()
 	h.want(StateDisconnected, ReasonOutdated)
+	connects := h.client.count("connect")
+	h.versions(versionResult{v: current})
+	if err := h.s.reconnect(); err != nil {
+		t.Fatalf("Reconnect when outdated = %v", err)
+	}
+	h.steps()
+	h.want(StateDisconnected, ReasonOutdated)
+	if h.client.count("connect") != connects {
+		t.Fatalf("a version the server called outdated was used again: %v", h.client.history())
+	}
 	h.versions(versionResult{v: newer})
 	if err := h.s.reconnect(); err != nil {
 		t.Fatalf("Reconnect when outdated = %v", err)
@@ -576,6 +586,24 @@ func TestReconnect(t *testing.T) {
 	if err := h.s.reconnect(); !errors.Is(err, ErrNotPaired) {
 		t.Fatalf("Reconnect when unpaired = %v", err)
 	}
+}
+
+func TestReconnectAfterAFailedStartTakesAnEqualVersion(t *testing.T) {
+	h := newSupRig(t)
+	h.versions(versionResult{err: errors.New("synthetic: offline")})
+	h.s.begin(t.Context(), 1)
+	h.steps()
+	h.want(StateDisconnected, ReasonOutdated)
+	h.versions(versionResult{v: current})
+	if err := h.s.reconnect(); err != nil {
+		t.Fatalf("Reconnect = %v", err)
+	}
+	h.steps()
+	if got := h.client.history(); !slices.Equal(got, []string{"connect"}) {
+		t.Fatalf("calls %v, want one connect with the current version", got)
+	}
+	h.deliver(Connected{})
+	h.want(StateConnected, "")
 }
 
 func TestStopEndsEveryTransition(t *testing.T) {
