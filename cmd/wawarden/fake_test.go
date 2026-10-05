@@ -140,7 +140,7 @@ func TestFakeEnginePairsIngestsAndArchives(t *testing.T) {
 	}
 	s.pair()
 	st := s.waitForStatus("the script is ingested and both bad blobs are quarantined", func(st map[string]string) bool {
-		return st["history blobs quarantined"] == "2" && st["history blobs pending"] == "0" && st["inbox backlog"] == "0"
+		return st["history blobs quarantined"] == "2" && st["history blobs pending"] == "0" && st["inbox backlog"] == "0" && len(s.events("quarantine")) == 2
 	})
 	want := map[string]string{"state": "connected", "reason": "none", "paired": "true", "chats": "3", "messages": "17", "inbox quarantined": "0"}
 	for k, v := range want {
@@ -261,7 +261,7 @@ func TestFakeEngineRejectsAWrongAccount(t *testing.T) {
 	s := serveFake(t, "wrong_account")
 	s.pair()
 	s.waitForStatus("the wrong account is logged out", func(st map[string]string) bool {
-		return st["state"] == "unpaired" && st["paired"] == "false" && len(s.events("pair_rejected")) == 1
+		return st["state"] == "unpaired" && st["paired"] == "false" && len(s.events("pair_rejected")) == 1 && strings.Contains(s.metrics(), "wawarden_paired 0\n")
 	})
 	if r := s.events("pair_rejected"); r[0]["stage"] != "after_pairing" {
 		t.Fatalf("pair_rejected events %v", r)
