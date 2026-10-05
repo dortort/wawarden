@@ -17,30 +17,32 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dortort/wawarden/internal/backup"
 	"github.com/dortort/wawarden/internal/buildinfo"
 	"github.com/dortort/wawarden/internal/notify"
 	"github.com/dortort/wawarden/internal/policy"
 )
 
 const (
-	envDataDir        = "WAWARDEN_DATA_DIR"
-	envListen         = "WAWARDEN_LISTEN"
-	envAdminListen    = "WAWARDEN_ADMIN_LISTEN"
-	envHealthListen   = "WAWARDEN_HEALTH_LISTEN"
-	envAdminHash      = "WAWARDEN_ADMIN_TOKEN_SHA256"
-	envAdminHashFile  = "WAWARDEN_ADMIN_TOKEN_SHA256_FILE"
-	envLogLevel       = "WAWARDEN_LOG_LEVEL"
-	envPlaintextAdmin = "WAWARDEN_ADMIN_TOKEN"
-	envTraceback      = "GOTRACEBACK"
-	envStorageProfile = "WAWARDEN_STORAGE_PROFILE"
-	envMinFreeBytes   = "WAWARDEN_MIN_FREE_BYTES"
-	envOwnerPhone     = "WAWARDEN_OWNER_PHONE"
-	envHistoryMax     = "WAWARDEN_HISTORY_MAX_BYTES"
-	envUnsafeDebug    = "WAWARDEN_UNSAFE_DEBUG"
-	envMetricsEMF     = "WAWARDEN_METRICS_EMF"
-	envNotifyURL      = "WAWARDEN_NOTIFY_URL"
-	envNotifySecret   = "WAWARDEN_NOTIFY_SECRET_FILE"
-	envNotifyPrivate  = "WAWARDEN_NOTIFY_ALLOW_PRIVATE"
+	envDataDir         = "WAWARDEN_DATA_DIR"
+	envListen          = "WAWARDEN_LISTEN"
+	envAdminListen     = "WAWARDEN_ADMIN_LISTEN"
+	envHealthListen    = "WAWARDEN_HEALTH_LISTEN"
+	envAdminHash       = "WAWARDEN_ADMIN_TOKEN_SHA256"
+	envAdminHashFile   = "WAWARDEN_ADMIN_TOKEN_SHA256_FILE"
+	envLogLevel        = "WAWARDEN_LOG_LEVEL"
+	envPlaintextAdmin  = "WAWARDEN_ADMIN_TOKEN"
+	envTraceback       = "GOTRACEBACK"
+	envStorageProfile  = "WAWARDEN_STORAGE_PROFILE"
+	envMinFreeBytes    = "WAWARDEN_MIN_FREE_BYTES"
+	envOwnerPhone      = "WAWARDEN_OWNER_PHONE"
+	envHistoryMax      = "WAWARDEN_HISTORY_MAX_BYTES"
+	envUnsafeDebug     = "WAWARDEN_UNSAFE_DEBUG"
+	envMetricsEMF      = "WAWARDEN_METRICS_EMF"
+	envNotifyURL       = "WAWARDEN_NOTIFY_URL"
+	envNotifySecret    = "WAWARDEN_NOTIFY_SECRET_FILE"
+	envNotifyPrivate   = "WAWARDEN_NOTIFY_ALLOW_PRIVATE"
+	envBackupRecipient = "WAWARDEN_BACKUP_AGE_RECIPIENT"
 
 	prefix    = "WAWARDEN_"
 	devPrefix = "WAWARDEN_DEV_"
@@ -92,10 +94,11 @@ const (
 	reasonNotifySecretUnreadable   = "notify_secret_unreadable"
 	reasonNotifySecretPermissions  = "notify_secret_permissions"
 	reasonNotifySecretInvalid      = "notify_secret_invalid"
+	reasonBackupRecipientInvalid   = "backup_recipient_invalid"
 )
 
 var known = []string{envDataDir, envListen, envAdminListen, envHealthListen, envAdminHash, envAdminHashFile, envLogLevel, envStorageProfile, envMinFreeBytes,
-	envOwnerPhone, envHistoryMax, envUnsafeDebug, envMetricsEMF, envNotifyURL, envNotifySecret, envNotifyPrivate}
+	envOwnerPhone, envHistoryMax, envUnsafeDebug, envMetricsEMF, envNotifyURL, envNotifySecret, envNotifyPrivate, envBackupRecipient}
 
 type StorageProfile string
 
@@ -104,7 +107,7 @@ const (
 	StorageNFS   StorageProfile = "nfs"
 )
 
-var dataSubdirectories = []string{"history", "backups"}
+var dataSubdirectories = []string{"history", backup.Dir}
 
 var logLevels = map[string]slog.Level{
 	"debug": slog.LevelDebug,
@@ -128,6 +131,7 @@ type Config struct {
 	UnsafeDebug     time.Duration
 	MetricsEMF      bool
 	Notify          Notify
+	BackupRecipient string
 }
 
 type Notify struct {
@@ -202,6 +206,9 @@ func Load(environ []string, opts Options) (Config, *Refusal) {
 		return Config{}, r
 	}
 	if cfg.Notify, r = notifySettings(env); r != nil {
+		return Config{}, r
+	}
+	if cfg.BackupRecipient, r = backupRecipient(env); r != nil {
 		return Config{}, r
 	}
 	uids := processUIDs
@@ -480,6 +487,14 @@ func notifySettings(env map[string]string) (Notify, *Refusal) {
 	}
 	n.URL, n.Secret = url, secret
 	return n, nil
+}
+
+func backupRecipient(env map[string]string) (string, *Refusal) {
+	v, ok := env[envBackupRecipient]
+	if ok && backup.CheckRecipient(v) != nil {
+		return "", &Refusal{Reason: reasonBackupRecipientInvalid, Variable: envBackupRecipient, detail: "must be one age recipient, age1 followed by its key, without spaces or other text"}
+	}
+	return v, nil
 }
 
 func readNotifySecret(path string) ([]byte, *Refusal) {

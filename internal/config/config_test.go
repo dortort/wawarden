@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"filippo.io/age"
+
 	"github.com/dortort/wawarden/internal/buildinfo"
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/token"
@@ -55,6 +57,14 @@ func withDataDir(t *testing.T, vars map[string]string) map[string]string {
 }
 
 const syntheticSecret = "synthetic-webhook-secret-of-forty-two-bytes"
+
+var syntheticAgeSecret, syntheticAgeRecipient = func() (string, string) {
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		panic(err)
+	}
+	return id.String(), id.Recipient().String()
+}()
 
 func secretFile(t *testing.T, mode fs.FileMode) string {
 	t.Helper()
@@ -260,6 +270,12 @@ func TestRefusals(t *testing.T) {
 		{name: "group-writable secret", vars: map[string]string{envNotifyURL: "https://hooks.example.test/x", envNotifySecret: secretFile(t, 0o620)}, reason: "notify_secret_permissions", variable: envNotifySecret},
 		{name: "short secret", vars: map[string]string{envNotifyURL: "https://hooks.example.test/x", envNotifySecret: writeFile(t, " "+strings.Repeat("s", 31)+"\n")}, reason: "notify_secret_invalid", variable: envNotifySecret},
 		{name: "secret file over its size limit", vars: map[string]string{envNotifyURL: "https://hooks.example.test/x", envNotifySecret: writeFile(t, strings.Repeat("s", 4097))}, reason: "notify_secret_invalid", variable: envNotifySecret},
+
+		{name: "empty backup recipient", vars: map[string]string{envBackupRecipient: ""}, reason: "backup_recipient_invalid", variable: envBackupRecipient},
+		{name: "backup recipient that is not age", vars: map[string]string{envBackupRecipient: "ssh-ed25519 AAAASynthetic"}, reason: "backup_recipient_invalid", variable: envBackupRecipient},
+		{name: "age secret key as the backup recipient", vars: map[string]string{envBackupRecipient: syntheticAgeSecret}, reason: "backup_recipient_invalid", variable: envBackupRecipient},
+		{name: "two backup recipients", vars: map[string]string{envBackupRecipient: syntheticAgeRecipient + "\n" + syntheticAgeRecipient}, reason: "backup_recipient_invalid", variable: envBackupRecipient},
+		{name: "backup recipient with a space", vars: map[string]string{envBackupRecipient: syntheticAgeRecipient + " "}, reason: "backup_recipient_invalid", variable: envBackupRecipient},
 
 		{name: "uid 0 without --allow-root", opts: func(o *Options) { o.UIDs = uids(0, 0); o.FileOwner = owned(0) }, reason: "running_as_root"},
 		{name: "effective uid 0 without --allow-root", opts: func(o *Options) { o.UIDs = uids(testUID, 0); o.FileOwner = owned(0) }, reason: "running_as_root"},
@@ -725,6 +741,17 @@ func TestMetricsEMF(t *testing.T) {
 	}
 }
 
+func TestBackupRecipient(t *testing.T) {
+	cfg, r := Load(environ(withDataDir(t, nil)), testOptions())
+	if r != nil || cfg.BackupRecipient != "" {
+		t.Fatalf("Load without a recipient = %q, %v", cfg.BackupRecipient, r)
+	}
+	cfg, r = Load(environ(withDataDir(t, map[string]string{envBackupRecipient: syntheticAgeRecipient})), testOptions())
+	if r != nil || cfg.BackupRecipient != syntheticAgeRecipient {
+		t.Fatalf("Load with a recipient = %q, %v", cfg.BackupRecipient, r)
+	}
+}
+
 func TestNotifySettings(t *testing.T) {
 	for _, mode := range []fs.FileMode{0o600, 0o400, 0o640, 0o440} {
 		path := secretFile(t, mode)
@@ -772,6 +799,8 @@ func TestRefusalsNeverEchoValues(t *testing.T) {
 		{envNotifyURL: "http://" + secret + ".example.test/x"},
 		{envNotifyURL: "https://hooks.example.test/x", envNotifyPrivate: secret},
 		{envNotifyURL: "https://hooks.example.test/x", envNotifySecret: writeFile(t, secret[:20])},
+		{envBackupRecipient: secret},
+		{envBackupRecipient: "age1" + secret},
 	}
 	for _, vars := range tests {
 		_, r := Load(environ(withDataDir(t, vars)), testOptions())
@@ -781,6 +810,10 @@ func TestRefusalsNeverEchoValues(t *testing.T) {
 		if strings.Contains(r.Error(), secret) {
 			t.Fatalf("refusal %q echoes the configured value", r.Error())
 		}
+	}
+	_, r := Load(environ(withDataDir(t, map[string]string{envBackupRecipient: syntheticAgeSecret})), testOptions())
+	if r == nil || strings.Contains(r.Error(), syntheticAgeSecret) || strings.Contains(r.Error(), syntheticAgeSecret[16:40]) {
+		t.Fatalf("a pasted age secret key gave %v, want a refusal that does not repeat it", r)
 	}
 }
 
