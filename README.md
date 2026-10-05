@@ -1,8 +1,9 @@
 # WaWarden
 
-WaWarden is a self-hosted WhatsApp gateway whose link to a WhatsApp account and
-REST and MCP interfaces are planned and not built yet: the current milestone,
-M0, is a scaffold (see [Status](#status)). When complete, it will link to one
+WaWarden is a self-hosted WhatsApp gateway whose REST and MCP interfaces are
+planned and not built yet: the latest release, M0, is a scaffold, and the link
+to a WhatsApp account is being built on `main` (see [Status](#status)). When
+complete, it will link to one
 personal WhatsApp account as a companion device and expose that account to your
 own AI agents and applications, over REST and MCP, with access scoped per client
 and per chat: each client will get a token that may read, or read and write,
@@ -49,6 +50,12 @@ It is not:
   listener carrying an `Origin` or `Sec-Fetch-Site` header gets `403`.
 - **Your WhatsApp account is at risk.** See the residual risks in the
   [threat model](docs/threat-model.md#residual-risks).
+- **The protocol library sends some traffic by itself.** Once a device is
+  linked, it acknowledges what it receives and sends WhatsApp, with no way to
+  switch them off: delivery receipts in their inactive form, retry receipts for
+  messages it cannot decrypt, acknowledgements, session telemetry after pairing,
+  pre-key uploads and application-state fetches. WaWarden never sends read
+  receipts, presence or typing indicators.
 
 ## Status
 
@@ -89,15 +96,18 @@ What works today:
   disk, rewriting the full-text index when one of its page keys still holds a
   trigram of that text. See
   [the message archive](docs/configuration.md#message-archive).
-- Also on `main`: the core of the WhatsApp engine, tested with plain-data events
-  and a stand-in client: the state machine that refreshes the protocol version,
-  reconnects with backoff, stops on a replaced session or a ban and guards
-  pairing with the owner's number (`WAWARDEN_OWNER_PHONE`); the durable inbox and
-  the ingest rules that apply edits, revocations, reactions and poll votes only
-  inside their own chat; and the history-sync worker with its size cap
-  (`WAWARDEN_HISTORY_MAX_BYTES`). `serve` does not run it yet and says so with an
-  `engine_absent` warning: the adapter to the WhatsApp protocol library arrives
-  later in M1. See [the WhatsApp engine](docs/configuration.md#whatsapp-engine).
+- Also on `main`: the WhatsApp engine, which `serve` runs: the state machine
+  that refreshes the protocol version, reconnects with backoff, stops on a
+  replaced session or a ban and guards pairing with the owner's number
+  (`WAWARDEN_OWNER_PHONE`); the durable inbox and the ingest rules that apply
+  edits, revocations, reactions and poll votes only inside their own chat; the
+  history-sync worker with its size cap (`WAWARDEN_HISTORY_MAX_BYTES`); and the
+  adapter to the WhatsApp protocol library, `go.mau.fi/whatsmeow`, whose device
+  store `serve` keeps in `session.db` beside the archive. The admin route that
+  starts pairing arrives later in M1, so for now `serve` logs `unpaired` once
+  and makes no connection to WhatsApp. The library's debug output is discarded
+  unless `WAWARDEN_UNSAFE_DEBUG` opens a window of a few minutes. See
+  [the WhatsApp engine](docs/configuration.md#whatsapp-engine).
 
 Planned:
 
@@ -188,6 +198,15 @@ wawarden_auth_failures_total 1
 # HELP wawarden_build_info Build metadata of the running binary.
 # TYPE wawarden_build_info gauge
 wawarden_build_info{version="dev",revision="<commit>",dev="false"} 1
+# HELP wawarden_connected 1 while the engine is connected to WhatsApp, 0 otherwise.
+# TYPE wawarden_connected gauge
+wawarden_connected 0
+# HELP wawarden_messages_ingested_total Messages, reactions and poll updates stored in the archive, live and from history.
+# TYPE wawarden_messages_ingested_total counter
+wawarden_messages_ingested_total 0
+# HELP wawarden_paired 1 while a WhatsApp device is paired, 0 otherwise.
+# TYPE wawarden_paired gauge
+wawarden_paired 0
 ```
 
 Stop the service; it shuts down gracefully and exits `0`. Then delete the
@@ -260,6 +279,15 @@ the full container contract.
 | [`SECURITY.md`](SECURITY.md) | How to report a vulnerability, supported versions and scope. |
 | [`RELEASING.md`](RELEASING.md) | How releases are built, what they contain, and how to verify and reproduce one. |
 
+## Running the tests
+
+`go test -race ./...` runs the suite, and `go test -race -tags dev ./...` runs it
+against a development build. No test contacts WhatsApp: the protocol adapter is
+tested with hand-built events, protobuf fixtures and injected transports, and its
+dialer refuses every connection inside a test binary. `hack/offline-test.sh`
+proves it: it fetches the modules that `go.sum` pins, then runs both suites in a
+container that has no network, so it needs Docker.
+
 ## Verifying a release
 
 Every release is built from `main` by a workflow that needs the maintainer's
@@ -275,11 +303,22 @@ From milestone M1 on, WaWarden is licensed under the GNU General Public License,
 version 3 or (at your option) any later version (`GPL-3.0-or-later`); the
 licence text is in [`LICENSE`](LICENSE). `v0.1.0` was released under the MIT
 licence, which still applies to that release. The licence changed because
-the WhatsApp protocol library that WaWarden will link depends on a component
+the WhatsApp protocol library that WaWarden links depends on a component
 licensed under GPL-3.0.
 
 The binaries link the Go standard library and third-party Go modules under
-their own licences, such as the SQLite driver and the C library translation it
-builds on. Every release ships their licence files, and WaWarden's, as `wawarden_<version>_licenses.tar.gz` and under
+their own licences:
+
+| Licence | Linked modules |
+|---|---|
+| GPL-3.0 | `go.mau.fi/libsignal` |
+| MPL-2.0 | `go.mau.fi/whatsmeow`, `go.mau.fi/util` |
+| Apache-2.0 | `github.com/petermattis/goid` |
+| ISC | `github.com/coder/websocket` |
+| MIT | `github.com/beeper/argo-go`, `github.com/dustin/go-humanize`, `github.com/elliotchance/orderedmap/v3`, `github.com/mattn/go-colorable`, `github.com/mattn/go-isatty`, `github.com/rs/zerolog`, `github.com/vektah/gqlparser/v2` |
+| BSD-3-Clause | the Go standard library, `filippo.io/edwards25519`, `github.com/google/uuid`, `github.com/remyoudompheng/bigfft`, `golang.org/x/crypto`, `golang.org/x/exp`, `golang.org/x/net`, `golang.org/x/sync`, `golang.org/x/sys`, `golang.org/x/text`, `google.golang.org/protobuf`, and the SQLite driver `modernc.org/sqlite` with `modernc.org/libc`, `modernc.org/mathutil` and `modernc.org/memory`, which also carry the licences of the C code they translate, SQLite's public-domain dedication among them |
+
+Every release ships their licence files, and WaWarden's, as
+`wawarden_<version>_licenses.tar.gz` and under
 `/licenses` in the image; [`RELEASING.md`](RELEASING.md#licences) describes how
 they are collected.
