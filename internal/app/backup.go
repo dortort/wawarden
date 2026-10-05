@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/dortort/wawarden/internal/engine"
@@ -23,9 +24,21 @@ const (
 type initialBackup struct {
 	archive *ingest.Store
 	status  func() engine.Status
+	unpairs func() uint64
 	take    func(context.Context) error
 	now     func() time.Time
 	tried   bool
+	seen    uint64
+}
+
+type unpairCounter struct {
+	engine.Notifier
+	count atomic.Uint64
+}
+
+func (u *unpairCounter) Unpaired() {
+	u.count.Add(1)
+	u.Notifier.Unpaired()
 }
 
 func (b *initialBackup) run(ctx context.Context, every time.Duration, logger *slog.Logger) {
@@ -44,10 +57,15 @@ func (b *initialBackup) run(ctx context.Context, every time.Duration, logger *sl
 }
 
 func (b *initialBackup) check(ctx context.Context) error {
+	unpairs := b.unpairs()
 	st := b.status()
-	if !st.Paired {
+	if !st.Paired || unpairs != b.seen {
 		b.tried = false
-		return b.forget(ctx)
+		if err := b.forget(ctx); err != nil {
+			return err
+		}
+		b.seen = unpairs
+		return nil
 	}
 	if st.State == engine.StateUnpaired || st.Reason == engine.ReasonOwnerMismatch {
 		return nil

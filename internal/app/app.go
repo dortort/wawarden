@@ -136,6 +136,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth a
 	if cfg.MetricsEMF {
 		a.emf = metrics.NewEMF(reg, out, time.Now)
 	}
+	unpairs := &unpairCounter{Notifier: notifier}
 	if source == nil {
 		alerts.Warn("this build has no WhatsApp engine: nothing pairs, connects or ingests", slog.String("event", "engine_absent"))
 	} else {
@@ -146,7 +147,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth a
 		a.session = parts.session
 		if a.engine, err = engine.New(engine.Options{
 			Client: parts.client, Versions: parts.versions, Decoder: parts.decoder, Archive: archive, DataDir: cfg.DataDir,
-			OwnerPhone: cfg.OwnerPhone, HistoryMaxBytes: cfg.HistoryMaxBytes, Logger: logger, Notify: notifier, Metrics: reg,
+			OwnerPhone: cfg.OwnerPhone, HistoryMaxBytes: cfg.HistoryMaxBytes, Logger: logger, Notify: unpairs, Metrics: reg,
 		}); err != nil {
 			return nil, errors.Join(err, a.closeStores())
 		}
@@ -162,7 +163,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth a
 		if err != nil {
 			return nil, errors.Join(err, a.closeStores())
 		}
-		a.backup = &initialBackup{archive: archive, status: a.engine.Status, take: taker.Take, now: time.Now}
+		a.backup = &initialBackup{archive: archive, status: a.engine.Status, unpairs: unpairs.count.Load, take: taker.Take, now: time.Now}
 	}
 	specs := []listeners.Spec{{
 		Name:    listenerClient,

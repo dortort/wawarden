@@ -41,11 +41,12 @@ func (c *testClock) set(t time.Time) {
 }
 
 type trigger struct {
-	b      *initialBackup
-	clock  *testClock
-	status engine.Status
-	takes  int
-	fail   bool
+	b       *initialBackup
+	clock   *testClock
+	status  engine.Status
+	unpairs uint64
+	takes   int
+	fail    bool
 }
 
 func newTrigger(t *testing.T, archive *ingest.Store) *trigger {
@@ -56,7 +57,7 @@ func newTrigger(t *testing.T, archive *ingest.Store) *trigger {
 }
 
 func (tr *trigger) restart(archive *ingest.Store) *initialBackup {
-	tr.b = &initialBackup{archive: archive, status: func() engine.Status { return tr.status }, now: tr.clock.Now, take: func(context.Context) error {
+	tr.b = &initialBackup{archive: archive, status: func() engine.Status { return tr.status }, unpairs: func() uint64 { return tr.unpairs }, now: tr.clock.Now, take: func(context.Context) error {
 		tr.takes++
 		if tr.fail {
 			return errors.New("synthetic backup failure")
@@ -183,6 +184,35 @@ func TestADeviceRepairedWithoutARestartIsBackedUpInTurn(t *testing.T) {
 	}
 }
 
+func TestADeviceRepairedBetweenTwoChecksIsBackedUpInTurn(t *testing.T) {
+	archive := triggerArchive(t)
+	tr := newTrigger(t, archive)
+	tr.status = pairedStatus
+	tr.at(t, 0)
+	if tr.at(t, settleAfter) != 1 {
+		t.Fatal("the first device was not backed up")
+	}
+	tr.unpairs++
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := tr.b.check(cancelled); err == nil {
+		t.Fatal("clearing the record succeeded on a cancelled context")
+	}
+	if tr.at(t, time.Hour) != 1 || syncValue(t, archive, pairedAtKey) != "" || syncValue(t, archive, takenAtKey) != "" {
+		t.Fatal("an unpairing reported between two checks did not clear the record")
+	}
+	tr.at(t, 2*time.Hour)
+	if tr.at(t, 2*time.Hour+settleAfter-time.Millisecond) != 1 {
+		t.Fatal("the next device was backed up before its sync settled")
+	}
+	if tr.at(t, 2*time.Hour+settleAfter) != 2 || syncValue(t, archive, takenAtKey) == "" {
+		t.Fatal("a device paired again between two checks was not backed up")
+	}
+	if tr.at(t, 3*time.Hour) != 2 {
+		t.Fatal("an unpairing was counted twice")
+	}
+}
+
 func TestAFailedInitialBackupIsRetriedOnlyAfterARestart(t *testing.T) {
 	archive := triggerArchive(t)
 	tr := newTrigger(t, archive)
@@ -218,7 +248,7 @@ func TestPairingTimeSurvivesARestart(t *testing.T) {
 	}
 }
 
-func pairedApp(t *testing.T, recipient string) (*App, *syncBuffer, *testClock, string) {
+func pairedApp(t *testing.T, client *stubClient, recipient string) (*App, *syncBuffer, *testClock, string) {
 	t.Helper()
 	cfg := testConfig(t, "")
 	cfg.OwnerPhone, cfg.HistoryMaxBytes, cfg.BackupRecipient = "+15550100009", config.DefaultHistoryMaxBytes, recipient
@@ -229,7 +259,7 @@ func pairedApp(t *testing.T, recipient string) (*App, *syncBuffer, *testClock, s
 	}
 	logs := &syncBuffer{}
 	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), noClients{},
-		fixed(engineParts{client: newStubClient(), versions: stubVersions{}, decoder: stubDecoder{}, session: sess}))
+		fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}, session: sess}))
 	if err != nil {
 		_ = sess.Close()
 		t.Fatalf("newAppWith: %v", err)
@@ -247,7 +277,7 @@ func TestTheServiceTakesOneEncryptedBackupOnceTheSyncSettles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateX25519Identity: %v", err)
 	}
-	a, logs, clock, dir := pairedApp(t, id.Recipient().String())
+	a, logs, clock, dir := pairedApp(t, newStubClient(), id.Recipient().String())
 	if a.backup == nil || len(logs.find("backup_disabled")) != 0 {
 		t.Fatal("a configured recipient did not enable the backup")
 	}
@@ -284,8 +314,34 @@ func TestTheServiceTakesOneEncryptedBackupOnceTheSyncSettles(t *testing.T) {
 	}
 }
 
+func TestTheEngineReportsEveryUnpairingToTheBackupTrigger(t *testing.T) {
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatalf("GenerateX25519Identity: %v", err)
+	}
+	client := newStubClient()
+	a, _, _, _ := pairedApp(t, client, id.Recipient().String())
+	a.backupEvery = time.Hour
+	stop := run(t, a)
+	waitUntil(t, "the pairing is recorded", func() bool { return syncValue(t, a.archive, pairedAtKey) != "" })
+	setPaired := func(paired bool) {
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		client.unpaired = !paired
+	}
+	setPaired(false)
+	client.emit(engine.Disconnected{})
+	setPaired(true)
+	if n := a.backup.unpairs(); n != 1 {
+		t.Fatalf("the backup trigger saw %d unpairings, want 1", n)
+	}
+	if err := stop(); err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+}
+
 func TestWithoutARecipientNoBackupIsEverTaken(t *testing.T) {
-	a, logs, _, dir := pairedApp(t, "")
+	a, logs, _, dir := pairedApp(t, newStubClient(), "")
 	if a.backup != nil {
 		t.Fatal("a backup trigger exists without a recipient")
 	}
