@@ -25,10 +25,20 @@ type Options struct {
 	OwnerPhone      string
 	HistoryMaxBytes int64
 	Logger          *slog.Logger
-	Alerts          *slog.Logger
+	Notify          Notifier
 	Metrics         *metrics.Registry
 	Clock           Clock
 	Jitter          func(time.Duration) time.Duration
+}
+
+type Notifier interface {
+	Unpaired()
+	Disconnected(reason string)
+	PairRejected(stage string)
+	LogoutFailed(attempt int, errorType string)
+	Quarantine(queue string, attempts int)
+	RekeyConflict(conflict string)
+	IngestPaused(freeBytes, floorBytes uint64)
 }
 
 type Version [3]uint32

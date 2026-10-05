@@ -372,6 +372,27 @@ func TestLoggedOutWinsInEitherOrder(t *testing.T) {
 	}
 }
 
+func TestLosingTheDeviceReportsUnpairedOnce(t *testing.T) {
+	h := newSupRig(t)
+	h.connectedNow()
+	if u := h.alerts("unpaired"); len(u) != 0 {
+		t.Fatalf("unpaired events %v while paired", u)
+	}
+	h.client.setPaired(false)
+	h.deliver(LoggedOut{}, StreamReplaced{}, Disconnected{})
+	h.want(StateDisconnected, ReasonLoggedOut)
+	if u := h.alerts("unpaired"); len(u) != 1 || u[0]["level"] != "WARN" || h.counter("wawarden_paired") != 0 {
+		t.Fatalf("unpaired events %v, Paired gauge %v: losing the device reports it once and drops the gauge", u, h.counter("wawarden_paired"))
+	}
+	h.client.setPaired(true)
+	h.deliver(Paired{JID: ownerDev})
+	h.client.setPaired(false)
+	h.deliver(LoggedOut{})
+	if u := h.alerts("unpaired"); len(u) != 2 {
+		t.Fatalf("unpaired events %v, want one for each time the device was lost", u)
+	}
+}
+
 func TestOrdinaryDropsReconnectWithCappedBackoff(t *testing.T) {
 	h := newSupRig(t)
 	h.connectedNow()

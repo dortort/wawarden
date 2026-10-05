@@ -83,7 +83,7 @@ type supervisor struct {
 	versions  VersionSource
 	owner     string
 	logger    *slog.Logger
-	alerts    *slog.Logger
+	notify    Notifier
 	clock     Clock
 	jitter    func(time.Duration) time.Duration
 	paired    *metrics.Gauge
@@ -108,13 +108,14 @@ type supervisor struct {
 	awaiting   bool
 	rejected   bool
 	loggingOut bool
+	wasPaired  bool
 	pairs      []time.Time
 	cancelStep context.CancelFunc
 }
 
 func newSupervisor(o Options) *supervisor {
 	return &supervisor{
-		client: o.Client, versions: o.Versions, owner: ownerDigits(o.OwnerPhone), logger: o.Logger, alerts: o.Alerts,
+		client: o.Client, versions: o.Versions, owner: ownerDigits(o.OwnerPhone), logger: o.Logger, notify: o.Notify,
 		clock: o.Clock, jitter: o.Jitter, kick: make(chan struct{}, 1), done: make(chan struct{}), state: StateUnpaired,
 		paired:    o.Metrics.Gauge("wawarden_paired", "1 while a WhatsApp device is paired, 0 otherwise."),
 		connected: o.Metrics.Gauge("wawarden_connected", "1 while the engine is connected to WhatsApp, 0 otherwise."),
@@ -142,7 +143,7 @@ func (s *supervisor) begin(ctx context.Context, recentStarts int) {
 		s.setLocked(StateDisconnected, ReasonRestartBudget)
 	case !paired:
 		s.setLocked(StateUnpaired, "")
-		s.alerts.Warn("no WhatsApp device is paired: the engine makes no connection until pairing is requested", slog.String("event", "unpaired"))
+		s.notify.Unpaired()
 	default:
 		s.setLocked(StateConnecting, "")
 		s.next, s.outdated = refresh, false
@@ -187,7 +188,7 @@ func (s *supervisor) setLocked(state State, reason Reason) {
 	s.state, s.reason = state, reason
 	s.logger.Info("engine state changed", slog.String("event", "engine_state"), slog.String("state", string(state)), slog.String("reason", string(reason)))
 	if state == StateDisconnected && reason != ReasonShutdown {
-		s.alerts.Warn("the engine is disconnected from WhatsApp", slog.String("event", "disconnected"), slog.String("reason", string(reason)))
+		s.notify.Disconnected(string(reason))
 	}
 }
 
@@ -202,9 +203,14 @@ func (s *supervisor) updateGauges() {
 	paired := s.client.Paired()
 	s.mu.Lock()
 	connected := s.state == StateConnected
+	lost := s.wasPaired && !paired
+	s.wasPaired = paired
 	s.mu.Unlock()
 	s.paired.Set(gauge(paired))
 	s.connected.Set(gauge(connected))
+	if lost {
+		s.notify.Unpaired()
+	}
 }
 
 func gauge(b bool) float64 {
@@ -342,7 +348,7 @@ func (s *supervisor) admitLocked(paired, foreign bool) bool {
 }
 
 func (s *supervisor) rejectLocked() bool {
-	s.alerts.Warn("pairing was rejected: the account is not the owner's", slog.String("event", "pair_rejected"), slog.String("stage", stageAfterPairing))
+	s.notify.PairRejected(stageAfterPairing)
 	s.rejected = true
 	s.setLocked(StateUnpaired, "")
 	start := !s.loggingOut
@@ -462,7 +468,7 @@ func (s *supervisor) handle(ev Event) {
 		if paired {
 			break
 		}
-		s.alerts.Warn("pairing was rejected: the account is not the owner's", slog.String("event", "pair_rejected"), slog.String("stage", stageBeforeSave))
+		s.notify.PairRejected(stageBeforeSave)
 		s.setLocked(StateUnpaired, "")
 	case Paired:
 		if s.isOwner(e.JID) {
@@ -533,7 +539,7 @@ func (s *supervisor) logout(ctx context.Context) {
 			s.mu.Unlock()
 			return
 		}
-		s.alerts.Warn("logging out the rejected device failed", slog.String("event", "logout_failed"), slog.Int("attempt", attempt), slog.String("error_type", fmt.Sprintf("%T", err)))
+		s.notify.LogoutFailed(attempt, fmt.Sprintf("%T", err))
 		if wait(ctx, s.clock, s.backoff(attempt)) != nil {
 			return
 		}

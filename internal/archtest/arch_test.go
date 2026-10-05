@@ -55,6 +55,7 @@ var rules = []rule{
 	inListRule, bannedImportRule, reflectionRule, fenceRule, chatMethodRule, thirdPartyRule, hiddenPackageRule, nolintRule, generatedRule, wildcardRule,
 	credentialRule, preludeRule, secretComparisonRule, formRule, shadowRule, sealRule, keysDirectoryRule, standardLibraryOnlyRule, logHandlerRule, logOutputRule,
 	confinementRule, databaseFileRule, constantSQLRule, sqliteStatementRule, protocolCallRule, offlineTestRule, rawHandleRule,
+	notifyEventRule,
 }
 
 var majorVersion = regexp.MustCompile(`^v([2-9]|[1-9][0-9]+)$`)
@@ -339,6 +340,7 @@ func TestArchitecture(t *testing.T) {
 		"internal/keys/keys.go",
 		"internal/listeners/listeners.go",
 		"internal/logx/logx.go",
+		"internal/notify/notify.go",
 		"internal/policy/decide.go",
 		"internal/policy/internal/seal/seal.go",
 		"internal/safego/safego.go",

@@ -17,6 +17,7 @@ import (
 
 	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/metrics"
+	"github.com/dortort/wawarden/internal/notify"
 	"github.com/dortort/wawarden/internal/safego"
 )
 
@@ -434,9 +435,13 @@ func newRig(t *testing.T, options ...option) *rig {
 	w := logx.NewWriter(logs)
 	w.SetKey(make([]byte, 32))
 	r := &rig{t: t, client: newClient(true), clock: newClock(), reg: metrics.NewRegistry(), logs: logs}
+	notifier, err := notify.New(notify.Options{Writer: w})
+	if err != nil {
+		t.Fatalf("notify.New: %v", err)
+	}
 	r.opts = Options{
 		Client: r.client, Versions: &fakeVersions{}, DataDir: t.TempDir(), OwnerPhone: ownerPhone, HistoryMaxBytes: DefaultHistoryMaxBytes,
-		Logger: logx.New(w, slog.LevelDebug), Alerts: logx.New(w, slog.LevelWarn), Metrics: r.reg, Clock: r.clock,
+		Logger: logx.New(w, slog.LevelDebug), Notify: notifier, Metrics: r.reg, Clock: r.clock,
 		Jitter: func(time.Duration) time.Duration { return 0 },
 	}
 	for _, o := range options {

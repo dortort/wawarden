@@ -471,7 +471,7 @@ func TestNewRefusesIncompleteOptions(t *testing.T) {
 		"no archive":       func(o *Options) { o.Archive = nil },
 		"no data dir":      func(o *Options) { o.DataDir = "" },
 		"no logger":        func(o *Options) { o.Logger = nil },
-		"no alerts":        func(o *Options) { o.Alerts = nil },
+		"no notifier":      func(o *Options) { o.Notify = nil },
 		"no metrics":       func(o *Options) { o.Metrics = nil },
 		"no history cap":   func(o *Options) { o.HistoryMaxBytes = 0 },
 		"history cap over": func(o *Options) { o.HistoryMaxBytes = MaxHistoryMaxBytes + 1 },

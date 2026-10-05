@@ -17,6 +17,7 @@ import (
 	"github.com/dortort/wawarden/internal/engine"
 	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/metrics"
+	"github.com/dortort/wawarden/internal/notify"
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/store/ingest"
 )
@@ -50,9 +51,13 @@ func wireEngine(t *testing.T) *wired {
 		t.Fatalf("newClient: %v", err)
 	}
 	reg := metrics.NewRegistry()
+	notifier, err := notify.New(notify.Options{Writer: w})
+	if err != nil {
+		t.Fatalf("notify.New: %v", err)
+	}
 	e, err := engine.New(engine.Options{
 		Client: c, Versions: noVersions{t}, Decoder: c, Archive: archive, DataDir: dir, OwnerPhone: ownerPhone,
-		HistoryMaxBytes: 1 << 20, Logger: logger, Alerts: logger, Metrics: reg,
+		HistoryMaxBytes: 1 << 20, Logger: logger, Notify: notifier, Metrics: reg,
 	})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)

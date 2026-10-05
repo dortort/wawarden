@@ -23,7 +23,7 @@ type Engine struct {
 }
 
 var (
-	errOptions  = errors.New("engine: a client, a version source, a history decoder, an archive, a data directory, loggers and a metrics registry are required, and the history cap must be from 1 byte to 256 MiB")
+	errOptions  = errors.New("engine: a client, a version source, a history decoder, an archive, a data directory, a logger, a notifier and a metrics registry are required, and the history cap must be from 1 byte to 256 MiB")
 	errPanicked = errors.New("engine: the call panicked")
 )
 
@@ -47,7 +47,7 @@ func randomJitter(d time.Duration) time.Duration {
 
 func New(opts Options) (*Engine, error) {
 	if opts.Client == nil || opts.Versions == nil || opts.Decoder == nil || opts.Archive == nil || opts.DataDir == "" ||
-		opts.Logger == nil || opts.Alerts == nil || opts.Metrics == nil || opts.HistoryMaxBytes <= 0 || opts.HistoryMaxBytes > MaxHistoryMaxBytes {
+		opts.Logger == nil || opts.Notify == nil || opts.Metrics == nil || opts.HistoryMaxBytes <= 0 || opts.HistoryMaxBytes > MaxHistoryMaxBytes {
 		return nil, errOptions
 	}
 	if opts.Clock == nil {

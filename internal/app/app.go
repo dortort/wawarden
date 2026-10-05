@@ -16,6 +16,7 @@ import (
 	"github.com/dortort/wawarden/internal/listeners"
 	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/metrics"
+	"github.com/dortort/wawarden/internal/notify"
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/safego"
 	"github.com/dortort/wawarden/internal/store/ingest"
@@ -46,6 +47,7 @@ type App struct {
 	archive *ingest.Store
 	session deviceStore
 	engine  *engine.Engine
+	notify  *notify.Notifier
 	starts  int
 	serving listenerSet
 	health  listenerSet
@@ -88,6 +90,10 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth a
 	reg.GaugeVec("wawarden_build_info", "Build metadata of the running binary.", "version", "revision", "dev").
 		With(info.Version, info.Revision, strconv.FormatBool(info.Dev)).Set(1)
 
+	notifier, err := notify.New(notify.Options{Writer: out})
+	if err != nil {
+		return nil, err
+	}
 	archive, err := ingest.Open(ctx, ingest.Options{
 		DataDir:      cfg.DataDir,
 		UID:          cfg.UID,
@@ -106,7 +112,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth a
 		slog.Int("schema_version", archive.SchemaVersion()), slog.String("profile", string(archive.Profile())),
 		slog.Bool("ofd_locking", archive.OFDLocking()), slog.Int("recent_starts", starts))
 
-	a := &App{logger: logger, archive: archive, starts: starts, grace: shutdownGrace}
+	a := &App{logger: logger, archive: archive, notify: notifier, starts: starts, grace: shutdownGrace}
 	if source == nil {
 		alerts.Warn("this build has no WhatsApp engine: nothing pairs, connects or ingests", slog.String("event", "engine_absent"))
 	} else {
@@ -117,7 +123,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth a
 		a.session = parts.session
 		if a.engine, err = engine.New(engine.Options{
 			Client: parts.client, Versions: parts.versions, Decoder: parts.decoder, Archive: archive, DataDir: cfg.DataDir,
-			OwnerPhone: cfg.OwnerPhone, HistoryMaxBytes: cfg.HistoryMaxBytes, Logger: logger, Alerts: alerts, Metrics: reg,
+			OwnerPhone: cfg.OwnerPhone, HistoryMaxBytes: cfg.HistoryMaxBytes, Logger: logger, Notify: notifier, Metrics: reg,
 		}); err != nil {
 			return nil, errors.Join(err, a.closeStores())
 		}
@@ -181,6 +187,7 @@ func (a *App) Inventory() []listeners.Bound {
 }
 
 func (a *App) Run(ctx context.Context) error {
+	a.notify.Start(context.WithoutCancel(ctx))
 	a.ready.Store(true)
 	a.serving.Serve()
 	a.health.Serve()
@@ -211,7 +218,7 @@ func (a *App) Run(ctx context.Context) error {
 	if a.engine != nil {
 		stopped = a.engine.Stop(grace)
 	}
-	err := errors.Join(failure, drained, stopped, a.closeStores(), a.health.Shutdown(grace))
+	err := errors.Join(failure, drained, stopped, a.notify.Stop(grace), a.closeStores(), a.health.Shutdown(grace))
 	if err != nil {
 		a.logger.Error("stopped with errors", slog.String("event", "stopped"), slog.String("error", err.Error()))
 		return err

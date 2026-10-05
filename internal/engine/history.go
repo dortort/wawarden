@@ -351,7 +351,7 @@ func (h *historian) quarantine(ctx context.Context, id string, attempts int) {
 	}
 	h.remove(id)
 	p.counts.quarantined.With(queueHistory).Inc()
-	p.alerts.Warn("a history blob failed three times and was quarantined", slog.String("event", "quarantine"), slog.String("queue", queueHistory), slog.Int("attempts", attempts))
+	p.notify.Quarantine(queueHistory, attempts)
 }
 
 func (h *historian) apply(ctx context.Context, hist History, received time.Time) error {

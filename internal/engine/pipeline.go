@@ -26,7 +26,7 @@ type pipeline struct {
 	clock   Clock
 	owner   policy.CanonicalChat
 	logger  *slog.Logger
-	alerts  *slog.Logger
+	notify  Notifier
 	counts  *counters
 	kick    chan struct{}
 	paused  atomic.Bool
@@ -45,7 +45,7 @@ func newPipeline(o Options) *pipeline {
 		owner, _ = policy.Normalize(digits + "@s.whatsapp.net")
 	}
 	return &pipeline{
-		archive: o.Archive, clock: o.Clock, owner: owner, logger: o.Logger, alerts: o.Alerts,
+		archive: o.Archive, clock: o.Clock, owner: owner, logger: o.Logger, notify: o.Notify,
 		counts: newCounters(o.Metrics), kick: make(chan struct{}, 1),
 	}
 }
@@ -75,7 +75,7 @@ func (p *pipeline) record(out outcome) {
 	}
 	for _, c := range out.conflicts {
 		p.counts.conflicts.With(string(c)).Inc()
-		p.alerts.Warn("an identity mapping contradicts the archive and was not applied", slog.String("event", "rekey_conflict"), slog.String("conflict", string(c)))
+		p.notify.RekeyConflict(string(c))
 	}
 }
 
@@ -133,7 +133,7 @@ func (p *pipeline) checkSpace() {
 	p.paused.Store(space.Paused)
 	switch {
 	case space.Changed && space.Paused:
-		p.alerts.Warn("ingest paused: the data directory is below its free-space floor", slog.String("event", "ingest_paused"), slog.Uint64("free_bytes", space.Free), slog.Uint64("floor_bytes", space.Floor))
+		p.notify.IngestPaused(space.Free, space.Floor)
 	case space.Changed:
 		p.logger.Info("ingest resumed: the data directory has free space again", slog.String("event", "ingest_resumed"), slog.Uint64("free_bytes", space.Free), slog.Uint64("floor_bytes", space.Floor))
 	}
@@ -246,7 +246,7 @@ func (p *pipeline) quarantine(ctx context.Context, seq int64, attempts int) {
 		return
 	}
 	p.counts.quarantined.With(queueInbox).Inc()
-	p.alerts.Warn("an inbox row failed three times and was quarantined", slog.String("event", "quarantine"), slog.String("queue", queueInbox), slog.Int("attempts", attempts))
+	p.notify.Quarantine(queueInbox, attempts)
 }
 
 func (p *pipeline) sweep(ctx context.Context) {
