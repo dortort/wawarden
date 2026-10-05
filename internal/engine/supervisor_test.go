@@ -639,6 +639,28 @@ func TestPairingIsRateLimited(t *testing.T) {
 	}
 }
 
+func TestFailedPairingAttemptsCountTowardTheLimit(t *testing.T) {
+	h := newSupRig(t)
+	h.client.setPaired(false)
+	h.client.connectErrs = []error{errors.New("synthetic: unreachable")}
+	if _, err := h.s.pair(t.Context()); !errors.Is(err, ErrPairFailed) {
+		t.Fatalf("Pair with a failing connect = %v, want ErrPairFailed", err)
+	}
+	h.client.pairErr = errors.New("synthetic: refused")
+	for range 2 {
+		if _, err := h.s.pair(t.Context()); !errors.Is(err, ErrPairFailed) {
+			t.Fatalf("Pair with a failing request = %v, want ErrPairFailed", err)
+		}
+	}
+	h.client.pairErr = nil
+	if _, err := h.s.pair(t.Context()); !errors.Is(err, ErrPairRateLimited) {
+		t.Fatalf("a fourth attempt after three failures = %v, want ErrPairRateLimited", err)
+	}
+	if h.client.count("connect") != 2 || h.client.count("pair:15550100009") != 2 {
+		t.Fatalf("calls %v", h.client.history())
+	}
+}
+
 func TestPairingFailureIsFixed(t *testing.T) {
 	h := newSupRig(t)
 	h.client.setPaired(false)
@@ -811,6 +833,40 @@ func TestARejectedDeviceIsLoggedOutUntilItIsGone(t *testing.T) {
 	if strings.Contains(h.logs.String(), "15550100002") {
 		t.Fatal("the rejected account reached the log")
 	}
+}
+
+func TestTheOwnersPairingEndsARejection(t *testing.T) {
+	h := newSupRig(t)
+	clock := newGatedClock()
+	h.s.clock = clock
+	h.client.setPaired(false)
+	if _, err := h.s.pair(t.Context()); err != nil {
+		t.Fatalf("Pair = %v", err)
+	}
+	h.client.failLogouts(1)
+	h.client.pairAs(bobDev)
+	h.deliver(Paired{JID: bobDev})
+	eventually(t, "the logout failed and its retry waits", func() bool { return clock.waiting() == 1 })
+	h.client.setPaired(false)
+	if _, err := h.s.pair(t.Context()); err != nil {
+		t.Fatalf("Pair after the rejected device disappeared = %v", err)
+	}
+	h.client.pairAs(ownerDev)
+	h.deliver(Paired{JID: ownerDev}, Connected{})
+	h.want(StateConnected, "")
+	if !h.s.accepting() {
+		t.Fatal("the owner's traffic is not accepted after the owner paired")
+	}
+	clock.advance(time.Second)
+	eventually(t, "the logout loop ends", func() bool {
+		h.s.mu.Lock()
+		defer h.s.mu.Unlock()
+		return !h.s.loggingOut
+	})
+	if h.client.count("logout") != 0 || h.client.count("logout_failed") != 1 || !h.client.Paired() {
+		t.Fatalf("calls %v: the owner's device was logged out", h.client.history())
+	}
+	h.want(StateConnected, "")
 }
 
 func TestTheStoredDeviceMustBeTheOwnersBeforeEveryConnect(t *testing.T) {

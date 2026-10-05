@@ -173,6 +173,9 @@ func TestHistoryIsPersistedAckedThenIngested(t *testing.T) {
 	if got := query[string](t, db, "SELECT name || ' ' || name_source FROM chats WHERE jid = ?", group); got != "From History group_subject" {
 		t.Fatalf("group %q", got)
 	}
+	if got := query[string](t, db, "SELECT group_concat(user_jid || ' ' || is_admin, ',') FROM (SELECT user_jid, is_admin FROM group_participants WHERE group_jid = ? ORDER BY user_jid)", group); got != alice+" 1,"+bob+" 0" {
+		t.Fatalf("group members %q, want alice as an admin and bob as a member", got)
+	}
 	if got := query[string](t, db, "SELECT (processed_at IS NOT NULL) || ' ' || (ref IS NULL) || ' ' || attempts FROM history_blobs"); got != "1 1 1" {
 		t.Fatalf("blob row %q", got)
 	}
