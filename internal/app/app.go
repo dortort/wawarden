@@ -5,12 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strconv"
 	"sync/atomic"
 	"time"
 
 	"github.com/dortort/wawarden/internal/api"
+	"github.com/dortort/wawarden/internal/backup"
 	"github.com/dortort/wawarden/internal/buildinfo"
 	"github.com/dortort/wawarden/internal/config"
 	"github.com/dortort/wawarden/internal/engine"
@@ -32,7 +34,10 @@ const (
 	emfInterval   = time.Minute
 )
 
-var errHealthNotLoopback = errors.New("app: the unauthenticated health listener must be bound to a loopback address")
+var (
+	errHealthNotLoopback = errors.New("app: the unauthenticated health listener must be bound to a loopback address")
+	errBackupNotStopped  = errors.New("app: the backup did not stop in time")
+)
 
 type Refusal = ingest.Refusal
 
@@ -44,18 +49,20 @@ type listenerSet interface {
 }
 
 type App struct {
-	logger   *slog.Logger
-	ready    atomic.Bool
-	archive  *ingest.Store
-	session  deviceStore
-	engine   *engine.Engine
-	notify   *notify.Notifier
-	emf      *metrics.EMF
-	emfEvery time.Duration
-	starts   int
-	serving  listenerSet
-	health   listenerSet
-	grace    time.Duration
+	logger      *slog.Logger
+	ready       atomic.Bool
+	archive     *ingest.Store
+	session     deviceStore
+	engine      *engine.Engine
+	notify      *notify.Notifier
+	emf         *metrics.EMF
+	emfEvery    time.Duration
+	backup      *initialBackup
+	backupEvery time.Duration
+	starts      int
+	serving     listenerSet
+	health      listenerSet
+	grace       time.Duration
 
 	afterDrain func()
 }
@@ -63,6 +70,8 @@ type App struct {
 type deviceStore interface {
 	Healthy() bool
 	Close() error
+	Backup(ctx context.Context, staging string, write func(name string, size int64, r io.Reader) error) error
+	SchemaVersion() int
 }
 
 type engineParts struct {
@@ -116,11 +125,14 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth a
 	if err != nil {
 		return nil, errors.Join(err, archive.Close())
 	}
+	if err := backup.RemoveStaging(cfg.DataDir); err != nil {
+		return nil, errors.Join(fmt.Errorf("app: remove the staging of an interrupted backup: %w", err), archive.Close())
+	}
 	logger.Info("archive opened", slog.String("event", "archive_opened"),
 		slog.Int("schema_version", archive.SchemaVersion()), slog.String("profile", string(archive.Profile())),
 		slog.Bool("ofd_locking", archive.OFDLocking()), slog.Int("recent_starts", starts))
 
-	a := &App{logger: logger, archive: archive, notify: notifier, emfEvery: emfInterval, starts: starts, grace: shutdownGrace}
+	a := &App{logger: logger, archive: archive, notify: notifier, emfEvery: emfInterval, backupEvery: backupInterval, starts: starts, grace: shutdownGrace}
 	if cfg.MetricsEMF {
 		a.emf = metrics.NewEMF(reg, out, time.Now)
 	}
@@ -138,6 +150,19 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth a
 		}); err != nil {
 			return nil, errors.Join(err, a.closeStores())
 		}
+	}
+	switch {
+	case cfg.BackupRecipient == "":
+		alerts.Warn("no backup recipient is configured: no backup is ever taken", slog.String("event", "backup_disabled"))
+	case a.engine != nil && a.session != nil:
+		taker, err := backup.New(backup.Options{
+			DataDir: cfg.DataDir, UID: cfg.UID, Recipient: cfg.BackupRecipient, Version: info.Version,
+			Archive: archive, Session: a.session, Notify: notifier,
+		})
+		if err != nil {
+			return nil, errors.Join(err, a.closeStores())
+		}
+		a.backup = &initialBackup{archive: archive, status: a.engine.Status, take: taker.Take, now: time.Now}
 	}
 	specs := []listeners.Spec{{
 		Name:    listenerClient,
@@ -218,6 +243,17 @@ func (a *App) Run(ctx context.Context) error {
 	} else {
 		close(emitted)
 	}
+	backingUp, stopBackingUp := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopBackingUp()
+	backedUp := make(chan struct{})
+	if a.backup != nil {
+		safego.Go("backup.initial", func() {
+			defer close(backedUp)
+			a.backup.run(backingUp, a.backupEvery, a.logger)
+		})
+	} else {
+		close(backedUp)
+	}
 	a.ready.Store(true)
 	a.serving.Serve()
 	a.health.Serve()
@@ -245,12 +281,19 @@ func (a *App) Run(ctx context.Context) error {
 	if a.engine != nil {
 		stopped = a.engine.Stop(grace)
 	}
+	stopBackingUp()
+	var backupStopped error
+	select {
+	case <-backedUp:
+	case <-grace.Done():
+		backupStopped = errBackupNotStopped
+	}
 	stopEmitting()
 	<-emitted
 	if a.emf != nil {
 		a.emit()
 	}
-	err := errors.Join(failure, drained, stopped, a.notify.Stop(grace), a.closeStores(), a.health.Shutdown(grace))
+	err := errors.Join(failure, drained, stopped, backupStopped, a.notify.Stop(grace), a.closeStores(), a.health.Shutdown(grace))
 	if err != nil {
 		a.logger.Error("stopped with errors", slog.String("event", "stopped"), slog.String("error", err.Error()))
 		return err

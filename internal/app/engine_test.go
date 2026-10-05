@@ -271,8 +271,12 @@ type stubSession struct {
 	closed  atomic.Int32
 }
 
-func (s *stubSession) Healthy() bool { return s.healthy.Load() }
-func (s *stubSession) Close() error  { s.closed.Add(1); return nil }
+func (s *stubSession) Healthy() bool      { return s.healthy.Load() }
+func (s *stubSession) Close() error       { s.closed.Add(1); return nil }
+func (s *stubSession) SchemaVersion() int { return 1 }
+func (s *stubSession) Backup(context.Context, string, func(string, int64, io.Reader) error) error {
+	return errors.New("synthetic: no device store to back up")
+}
 
 func TestAnUnpairedEngineStaysIdleAndSaysSoOnce(t *testing.T) {
 	cfg := testConfig(t, "")
