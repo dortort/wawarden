@@ -59,7 +59,7 @@ Most sensitive first.
 | Asset | Why it matters | Present from |
 |---|---|---|
 | `session.db` | The linked device's keys and the protocol library's state: signal sessions, sender keys, message secrets, identity mappings and contact names. Whoever holds it can act as the account until the device is unlinked on the phone. | M1, on `main` |
-| `archive.db` and history blobs | Every archived chat, in plaintext. `archive.db` is created and locked by `serve` on `main`; nothing writes WhatsApp traffic into it yet. | M1, on `main`, for `archive.db`; M1 for history blobs |
+| `archive.db` and history blobs | Every archived chat, in plaintext. `serve` creates and locks `archive.db` and runs the engine, which, once a device is paired, writes WhatsApp traffic into it and keeps each history blob under `history/` until it is processed or quarantined. The admin route that starts pairing arrives later in M1; until a device is paired, the engine makes no connection and writes no WhatsApp traffic. | M1, on `main` |
 | Admin credential | Gates the admin listener (M0), starts pairing (M1) and mints clients (M2). It does not expire. The service holds only its SHA-256. | M0 |
 | Client tokens | Bearer credentials: whoever holds one and can reach the client listener has its access. The service stores only their hashes. | M2 |
 | Master key (`keys/master` in the data directory) | The key of the log pseudonyms is derived from it (M1, on `main`), and so will be the chat-reference key of notification events (M1) and the cursor-sealing and audit keys (M2). Whoever holds it can test a guessed identifier against the pseudonyms in the logs. | M1, on `main` |
@@ -142,8 +142,8 @@ These are stated so that nobody relies on WaWarden for them:
 3. **Loopback health (M0).** The health listener has no authentication, so the
    service refuses to start when its address is not loopback, and checks again
    before opening it. It answers only `GET /healthz`, with whether the process is
-   up and serving (M0) and its databases open and locked by the service (M1, on
-   `main`, for the archive).
+   up and serving (M0) and its databases (the archive and the device store)
+   open and locked by the service (M1, on `main`).
 4. **WhatsApp to engine (M1, on `main`).** Everything that arrives from WhatsApp is untrusted,
    including payloads attributed to the account's own other devices, except where
    the server asserts a field. An edit, revocation, reaction or poll vote is

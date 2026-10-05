@@ -90,8 +90,9 @@ What works today:
 - Also on `main`: `serve` opens the message archive, `archive.db` in the data
   directory, in SQLite through one connection that holds an exclusive lock and
   whose settings it verifies, and `/healthz` answers `200` only while it holds
-  it; a second instance waits for the lock. Nothing writes WhatsApp traffic into
-  the archive yet. Internally: the archive's schema and write side, which keys
+  it; a second instance waits for the lock. The engine below writes WhatsApp
+  traffic into it once a device is paired. Internally: the archive's schema and
+  write side, which keys
   every chat canonically and removes revoked, edited and expired text from the
   disk, rewriting the full-text index when one of its page keys still holds a
   trigram of that text. See
@@ -103,7 +104,8 @@ What works today:
   edits, revocations, reactions and poll votes only inside their own chat; the
   history-sync worker with its size cap (`WAWARDEN_HISTORY_MAX_BYTES`); and the
   adapter to the WhatsApp protocol library, `go.mau.fi/whatsmeow`, whose device
-  store `serve` keeps in `session.db` beside the archive. The admin route that
+  store `serve` keeps in `session.db` beside the archive, under the same lock
+  and health rules. The admin route that
   starts pairing arrives later in M1, so for now `serve` logs `unpaired` once
   and makes no connection to WhatsApp. The library's debug output is discarded
   unless `WAWARDEN_UNSAFE_DEBUG` opens a window of a few minutes. See
