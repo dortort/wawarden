@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"errors"
 	"io/fs"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -168,6 +169,91 @@ func TestHistoryIsPersistedAckedThenIngested(t *testing.T) {
 	if got := query[string](t, db, "SELECT (processed_at IS NOT NULL) || ' ' || (ref IS NULL) || ' ' || attempts FROM history_blobs"); got != "1 1 1" {
 		t.Fatalf("blob row %q", got)
 	}
+}
+
+func (r *histRig) trace() *[]string {
+	var steps []string
+	step := func(s string) {
+		if len(steps) == 0 || steps[len(steps)-1] != s {
+			steps = append(steps, s)
+		}
+	}
+	r.client.onWrite = func() { step("write") }
+	r.client.onAck = func(HistoryRef) { step("ack") }
+	r.h.fsyncFile = func(f *os.File) error { step("sync_file"); return f.Sync() }
+	r.h.closeFile = func(f *os.File) error { step("close"); return f.Close() }
+	r.h.renameFile = func(from, to string) error {
+		step("rename " + filepath.Base(from) + " " + filepath.Base(to))
+		return os.Rename(from, to)
+	}
+	r.h.fsyncDir = func(dir string) error { step("sync_dir"); return syncDir(dir) }
+	return &steps
+}
+
+func incompressible(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.NewChaCha8([32]byte{5, 8}).Read(b)
+	return string(b)
+}
+
+func TestHistoryIsDurableBeforeItsReceipt(t *testing.T) {
+	r := newHistRig(t)
+	r.online.Store(true)
+	r.client.blobs["HS1"] = r.blob(incompressible(3*4096), History{Conversations: []Conversation{{Chat: alice, Messages: []Message{{ID: "D1", Sender: alice, Timestamp: epoch, Kind: KindText}}}}})
+	steps := r.trace()
+	write := r.client.onWrite
+	r.client.onWrite = func() {
+		write()
+		if _, err := os.Lstat(r.file("HS1")); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("the blob has its final name while it downloads: %v", err)
+		}
+	}
+	r.notify(HistoryRef{ID: "HS1"})
+	r.drainHistory()
+	r.must(alice, "D1", alice)
+	if want := []string{"write", "sync_file", "close", "rename HS1.part HS1.bin", "sync_dir", "ack"}; !slices.Equal(*steps, want) {
+		t.Fatalf("steps %v, want %v", *steps, want)
+	}
+}
+
+func TestADownloadCutShortIsDownloadedAgain(t *testing.T) {
+	r := newHistRig(t)
+	r.online.Store(true)
+	compressed := r.blob(incompressible(3*4096), History{Conversations: []Conversation{{Chat: alice, Messages: []Message{{ID: "C1", Sender: alice, Timestamp: epoch, Kind: KindText}}}}})
+	r.client.blobs["HS1"] = compressed
+	writes := 0
+	r.client.onWrite = func() {
+		if writes++; writes == 2 {
+			panic("synthetic crash during the download")
+		}
+	}
+	r.notify(HistoryRef{ID: "HS1"})
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("the download was not cut short")
+			}
+		}()
+		r.drainHistory()
+	}()
+	if len(r.client.acks) != 0 {
+		t.Fatal("a receipt was sent for a blob cut short")
+	}
+	r.restart()
+	steps := r.trace()
+	var atAck []byte
+	r.client.onAck = func(HistoryRef) {
+		atAck, _ = os.ReadFile(filepath.Clean(r.file("HS1")))
+		(*steps) = append(*steps, "ack")
+	}
+	r.drainHistory()
+	if r.client.count("download:HS1") != 2 || len(r.client.acks) != 1 || !bytes.Equal(atAck, compressed) {
+		t.Fatalf("calls %v; the receipt saw %d of %d bytes", r.client.history(), len(atAck), len(compressed))
+	}
+	if i := slices.Index(*steps, "ack"); i < 1 || (*steps)[i-1] != "sync_dir" || !slices.Contains((*steps)[:i], "rename HS1.part HS1.bin") {
+		t.Fatalf("steps %v, want the receipt only after the rename", *steps)
+	}
+	r.must(alice, "C1", alice)
 }
 
 func TestHistoryFromAnotherDeviceIsDropped(t *testing.T) {

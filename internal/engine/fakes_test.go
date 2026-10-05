@@ -157,6 +157,7 @@ type fakeClient struct {
 	blobs       map[string][]byte
 	downloadErr error
 	onAck       func(HistoryRef)
+	onWrite     func()
 	onConnect   func()
 	acks        []string
 	called      chan string
@@ -253,13 +254,16 @@ func (f *fakeClient) SetVersion(v Version) {
 
 func (f *fakeClient) DownloadHistory(_ context.Context, ref HistoryRef, dst io.Writer) error {
 	f.mu.Lock()
-	data, err := f.blobs[ref.ID], f.downloadErr
+	data, err, hook := f.blobs[ref.ID], f.downloadErr, f.onWrite
 	f.record("download:" + ref.ID)
 	f.mu.Unlock()
 	if err != nil {
 		return err
 	}
 	for chunk := range slices.Chunk(data, 4096) {
+		if hook != nil {
+			hook()
+		}
 		if _, err := dst.Write(chunk); err != nil {
 			return err
 		}

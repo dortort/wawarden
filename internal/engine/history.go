@@ -37,12 +37,18 @@ type historian struct {
 	max       int64
 	connected func() bool
 	acked     map[string]bool
+
+	fsyncFile  func(*os.File) error
+	closeFile  func(*os.File) error
+	renameFile func(oldpath, newpath string) error
+	fsyncDir   func(dir string) error
 }
 
 func newHistorian(o Options, p *pipeline, connected func() bool) *historian {
 	return &historian{
 		p: p, client: o.Client, decoder: o.Decoder, dir: filepath.Join(o.DataDir, historyDir), max: o.HistoryMaxBytes,
 		connected: connected, acked: map[string]bool{},
+		fsyncFile: (*os.File).Sync, closeFile: (*os.File).Close, renameFile: os.Rename, fsyncDir: syncDir,
 	}
 }
 
@@ -227,16 +233,16 @@ func (h *historian) download(ctx context.Context, id string, ref HistoryRef) err
 	}
 	err = h.client.DownloadHistory(ctx, ref, &cappedWriter{w: f, limit: h.max})
 	if err == nil {
-		err = f.Sync()
+		err = h.fsyncFile(f)
 	}
-	if err = errors.Join(err, f.Close()); err != nil {
+	if err = errors.Join(err, h.closeFile(f)); err != nil {
 		_ = os.Remove(partial)
 		return err
 	}
-	if err := os.Rename(partial, h.path(id, blobFileSuffix)); err != nil {
+	if err := h.renameFile(partial, h.path(id, blobFileSuffix)); err != nil {
 		return err
 	}
-	return syncDir(h.dir)
+	return h.fsyncDir(h.dir)
 }
 
 func syncDir(dir string) error {
