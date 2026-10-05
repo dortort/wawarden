@@ -5,14 +5,17 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -72,6 +75,10 @@ func (s *fakeService) status() map[string]string {
 	if code != 0 {
 		s.t.Fatalf("admin status = %d %q", code, errText)
 	}
+	return statusFields(out)
+}
+
+func statusFields(out string) map[string]string {
 	fields := map[string]string{}
 	for line := range strings.Lines(out) {
 		k, v, _ := strings.Cut(strings.TrimSuffix(line, "\n"), ": ")
@@ -84,12 +91,22 @@ func (s *fakeService) waitForStatus(what string, cond func(map[string]string) bo
 	s.t.Helper()
 	deadline := time.Now().Add(time.Minute)
 	for {
-		st := s.status()
-		if cond(st) {
+		var last string
+		if code, out, errText := s.adminCLI("status"); code != 0 {
+			last = fmt.Sprintf("admin status = %d %q", code, errText)
+		} else if st := statusFields(out); cond(st) {
 			return st
+		} else {
+			last = fmt.Sprintf("status %v", st)
 		}
 		if time.Now().After(deadline) {
-			s.t.Fatalf("timed out waiting until %s: status %v", what, st)
+			for line := range strings.Lines(s.stdout.String()) {
+				var rec map[string]any
+				if json.Unmarshal([]byte(line), &rec) != nil || rec["level"] != "INFO" {
+					s.t.Logf("service output: %s", strings.TrimSuffix(line, "\n"))
+				}
+			}
+			s.t.Fatalf("timed out waiting until %s: %s", what, last)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -130,6 +147,25 @@ func (s *fakeService) pair() {
 	code, out, errText := s.adminCLI("pair")
 	if code != 0 || out != "pairing code: FAKE-C0DE\n" {
 		s.t.Fatalf("admin pair = %d %q %q", code, out, errText)
+	}
+}
+
+func TestWaitForStatusOutlastsAFailedStatus(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"error":"internal_error"}`)
+			return
+		}
+		_, _ = io.WriteString(w, statusBody)
+	}))
+	t.Cleanup(srv.Close)
+	s := &fakeService{t: t, admin: strings.TrimPrefix(srv.URL, "http://"), token: tokenFile(t, token.NewAdmin()), stdout: newOutput()}
+	st := s.waitForStatus("the service answers", func(st map[string]string) bool { return st["state"] == "connected" })
+	if st["messages"] != "120" || calls.Load() != 2 {
+		t.Fatalf("status %v after %d calls, want the answer that followed one internal_error", st, calls.Load())
 	}
 }
 
