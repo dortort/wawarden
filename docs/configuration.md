@@ -340,9 +340,10 @@ only the derived keys:
 | `log-redact` | 32 bytes | The key of the [log pseudonyms](#pseudonyms-and-dropped-lines). |
 | `chat-hmac` | 32 bytes | Derived but not used yet; it is reserved for the chat references in notification events (M1). |
 
-The key id is the only value derived from the master key that the service ever
-writes. Replacing or deleting the master key changes the key id and every log
-pseudonym; this build has no command to rotate it. To provide your own key, write
+Apart from the log pseudonyms, the key id is the only value derived from the
+master key that the service writes; no key is ever written. Replacing or
+deleting the master key changes the key id and every log pseudonym; this build
+has no command to rotate it. To provide your own key, write
 32 random bytes to `keys/master` with mode `0600` or `0400`, owned by the service's
 user, before the first start. A crash or power loss during the first start can
 leave a `keys/.master-<random>` file behind, with mode `0600`. It holds either an
