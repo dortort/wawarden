@@ -159,7 +159,7 @@ func TestTheClientIsBuiltForASupervisedDesktopCompanion(t *testing.T) {
 		}
 	}
 	if err := cli.RefreshCAT(t.Context()); !errors.Is(err, errCATRefresh) {
-		t.Errorf("RefreshCAT = %v, want errCATRefresh", err)
+		t.Errorf("the connection-token refresh = %v, want errCATRefresh", err)
 	}
 	if cli.AutoReconnectHook(errNoDial) {
 		t.Error("the reconnect hook allows a reconnect")
@@ -230,7 +230,7 @@ func TestThePrePairCallbackAcceptsOnlyTheOwnersNumber(t *testing.T) {
 		{types.JID{User: "", Server: types.DefaultUserServer}, false},
 	} {
 		if got := pre(tt.jid, "Synthetic", ""); got != tt.want {
-			t.Errorf("PrePairCallback(%v) = %v, want %v", tt.jid, got, tt.want)
+			t.Errorf("the pre-pair callback for %v = %v, want %v", tt.jid, got, tt.want)
 		}
 	}
 	unset := newRig(t, &store.Device{}, func(o *Options) { o.OwnerPhone = "" })

@@ -2,8 +2,10 @@ package archtest
 
 import (
 	"go/ast"
+	"maps"
 	"net/netip"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -37,9 +39,29 @@ var bannedProtocolCalls = map[string]string{
 	"NewsletterToggleMute":           "is a newsletter call, which can end the process inside the protocol library",
 	"UploadNewsletter":               "is a newsletter call, which can end the process inside the protocol library",
 	"UploadNewsletterReader":         "is a newsletter call, which can end the process inside the protocol library",
+	"SetProxy":                       "routes the protocol library's traffic through a proxy",
+	"SetProxyAddress":                "routes the protocol library's traffic through a proxy",
+	"SetSOCKSProxy":                  "routes the protocol library's traffic through a proxy",
 }
 
-var bannedProtocolLogging = set("Stdout", "Zerolog")
+var protocolSettings = set("AutoReconnectHook", "AutomaticMessageRerequestFromPhone", "DisableLoginAutoReconnect", "DisableManualHistorySyncReceipt",
+	"EnableAutoReconnect", "InitialAutoReconnect", "ManualHistorySyncDownload", "PrePairCallback", "RefreshCAT", "SendReportingTokens", "SynchronousAck",
+	"UseRetryMessageStore")
+
+var (
+	bannedProtocolLogging = set("Stdout", "Zerolog")
+	bannedProtocolNames   = lowerKeys(bannedProtocolCalls)
+	protocolSettingNames  = lowerKeys(protocolSettings)
+	protocolNameInText    = regexp.MustCompile(`(?i)\b(` + strings.Join(slices.Sorted(maps.Keys(bannedProtocolCalls)), "|") + "|" + strings.Join(slices.Sorted(maps.Keys(protocolSettings)), "|") + `)\b`)
+)
+
+func lowerKeys[V any](m map[string]V) map[string]string {
+	out := make(map[string]string, len(m))
+	for k := range m {
+		out[strings.ToLower(k)] = k
+	}
+	return out
+}
 
 var protocolCallRule = rule{
 	name:  "protocol-calls",
@@ -67,7 +89,7 @@ func f(ctx context.Context, cli *whatsmeow.Client) {
 	_ = read
 }
 `},
-		{name: "newsletter calls, the status message, raw GraphQL queries and loggers that bypass the writer", rel: "internal/engine/wa/x_test.go", want: 10, src: `package wa
+		{name: "newsletter calls, the status message, raw GraphQL queries, loggers that bypass the writer and proxies", rel: "internal/engine/wa/x_test.go", want: 12, src: `package wa
 
 import (
 	"context"
@@ -86,6 +108,7 @@ func f(ctx context.Context, cli *whatsmeow.Client, z any) {
 	_ = waLog.Stdout("x", "DEBUG", false)
 	_ = waLog.Zerolog
 	_ = z.(interface{ DefaultContextLogger() }).DefaultContextLogger
+	cli.SetProxyAddress("socks5://127.0.0.1:1080")
 }
 `},
 		{name: "the internals and a handler whose answer is ignored", rel: "internal/engine/wa/x.go", want: 2, src: `package wa
@@ -130,24 +153,86 @@ func f(cli *whatsmeow.Client) {
 	_ = os.Stdout
 }
 `},
+		{name: "clients built without the constructor, and banned names reached by reflection, decoding or declarations", rel: "internal/engine/wa/x_test.go", want: 12, src: `package wa
+
+import (
+	"encoding/json"
+	"reflect"
+
+	"go.mau.fi/whatsmeow"
+)
+
+type options struct {
+	SynchronousAck bool ` + "`json:\"enableDecryptedEventBuffer\"`" + `
+}
+
+func markread() {}
+
+func f(cli *whatsmeow.Client, v reflect.Value) {
+	_ = &whatsmeow.Client{EnableAutoReconnect: true}
+	_ = new(whatsmeow.Client)
+	var zero whatsmeow.Client
+	_ = zero
+	_ = reflect.TypeFor[whatsmeow.Client]()
+	_ = json.Unmarshal([]byte(` + "`{\"ManualHistorySyncDownload\":false}`" + `), cli)
+	_ = v.MethodByName("Send" + "Presence")
+	_ = v.FieldByName("enabledecryptedeventbuffer")
+	_ = options{SynchronousAck: true}
+}
+`},
+		{name: "pointers to clients, settings as fields and text near the names", rel: "internal/engine/wa/x.go", src: `package wa
+
+import "go.mau.fi/whatsmeow"
+
+type holder struct{ cli *whatsmeow.Client }
+
+func f(cli *whatsmeow.Client, h holder) []string {
+	h.cli = cli
+	cli.SynchronousAck = false
+	cli.RefreshCAT = nil
+	_ = (*whatsmeow.Client).AddEventHandlerWithSuccessStatus
+	_ = []*whatsmeow.Client{cli}
+	return []string{"manual history sync", "SendPresenceNow", "the read marker", "AddEventHandlerWithSuccessStatus", "markReadable"}
+}
+`},
+		{name: "the architecture tests' own snippets", rel: archtestDir + "/x_test.go", src: `package archtest
+
+var calls = map[string]string{"SendPresence": "x", "EnableDecryptedEventBuffer": "y", "cli.MarkRead(ctx)": "z"}
+`},
 	},
 }
 
 func checkProtocolCalls(f *sourceFile) []string {
 	var out []string
+	fields, pointed := map[*ast.Ident]bool{}, map[ast.Expr]bool{}
 	ast.Inspect(f.file, func(n ast.Node) bool {
-		sel, ok := n.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		name := sel.Sel.Name
-		if why, banned := bannedProtocolCalls[name]; banned {
-			out = append(out, f.at(sel, "%s %s, so it is never used", name, why))
-		}
-		if s, p := f.ref(sel); s != nil && p == waLogPath && bannedProtocolLogging[name] {
-			out = append(out, f.at(sel, "the protocol library's %s logger bypasses the scrubbing writer: log through the adapter over logx", name))
+		switch e := n.(type) {
+		case *ast.SelectorExpr:
+			fields[e.Sel] = true
+			if s, p := f.ref(e); s != nil && p == waLogPath && bannedProtocolLogging[e.Sel.Name] {
+				out = append(out, f.at(e, "the protocol library's %s logger bypasses the scrubbing writer: log through the adapter over logx", e.Sel.Name))
+			}
+			if s, p := f.ref(e); s != nil && p == whatsmeowModule && e.Sel.Name == "Client" && !pointed[e] {
+				out = append(out, f.at(e, "a protocol client that is not a pointer can be built by a literal, new or a zero value, without the transports and settings the adapter gives it: only whatsmeow.NewClient in the adapter builds one"))
+			}
+		case *ast.StarExpr:
+			pointed[ast.Unparen(e.X)] = true
+		case *ast.Ident:
+			if name, banned := bannedProtocolNames[strings.ToLower(e.Name)]; banned {
+				out = append(out, f.at(e, "%s %s, so it is never used, named or declared", name, bannedProtocolCalls[name]))
+			} else if name, setting := protocolSettingNames[strings.ToLower(e.Name)]; setting && !fields[e] {
+				out = append(out, f.at(e, "%s is a protocol client setting that the adapter fixes: it may be named only as a field of a value, so that no literal, declaration or decoded document sets it", name))
+			}
 		}
 		return true
+	})
+	if f.dir == archtestDir {
+		return out
+	}
+	literalRuns(f.file, func(at ast.Node, s string) {
+		if m := protocolNameInText.FindString(s); m != "" {
+			out = append(out, f.at(at, "%q spells %s, a banned protocol call or a protocol client setting, which reflection or a decoded document could reach by name", s, m))
+		}
 	})
 	return out
 }
