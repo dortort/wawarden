@@ -23,7 +23,7 @@ Settings planned for later milestones are listed under
 > typo, a variable meant for a later release, or a leftover from another
 > deployment stops the service with the reason code `unknown_variable` instead of
 > being ignored. An empty value counts as set:
-> `WAWARDEN_BACKUP_AGE_RECIPIENT=` is refused as well.
+> `WAWARDEN_SEND_GLOBAL_PER_HOUR=` is refused as well.
 
 Only the names in [Environment variables](#environment-variables) are accepted.
 Names are matched exactly, so a lower-case `wawarden_listen` is not recognised as a
@@ -37,7 +37,6 @@ with `unknown_variable`.
 
 | Variable | Planned purpose | Becomes valid in |
 |---|---|---|
-| `WAWARDEN_BACKUP_AGE_RECIPIENT` | The age recipient that backups are encrypted to | M1 |
 | `WAWARDEN_SEND_PER_CLIENT_PER_MINUTE` | Per-client send rate limit | M3 |
 | `WAWARDEN_SEND_GLOBAL_PER_HOUR` | Global send rate limit | M3 |
 
@@ -221,6 +220,7 @@ These are all the variables this build reads.
 | `WAWARDEN_NOTIFY_URL` | unset | The [webhook](#webhook) that receives every notification event: an `https` URL with a host, optionally a port, a path and a query, without credentials, a fragment or an IPv6 zone. Treat it as a secret when its path or query holds one; the service never logs it. Unset, events go to standard output only. | `notify_url_invalid` |
 | `WAWARDEN_NOTIFY_SECRET_FILE` | unset | A path to the webhook's signing secret, required with `WAWARDEN_NOTIFY_URL` and refused without it: a regular file (symbolic links are followed) with no write permission for its group and no permission at all for others (`0400`, `0440`, `0600` and `0640` pass; `0644` and `0444` do not), of at most 4096 bytes, holding at least 32 bytes apart from surrounding white space. Generate one with `openssl rand -hex 32`. | `notify_url_missing`, `notify_secret_missing`, `notify_secret_unreadable`, `notify_secret_permissions`, `notify_secret_invalid` |
 | `WAWARDEN_NOTIFY_ALLOW_PRIVATE` | unset | `1` lets the webhook reach loopback, private (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`) and shared (`100.64.0.0/10`, which mesh VPNs use) addresses; `0` or unset refuses them. Only with `WAWARDEN_NOTIFY_URL`. | `notify_allow_private_invalid`, `notify_url_missing` |
+| `WAWARDEN_BACKUP_AGE_RECIPIENT` | unset | The one [age](https://age-encryption.org) recipient that [backups](#backups) are encrypted to: an X25519 recipient (`age1` followed by 58 characters, as `age-keygen` prints it) or a post-quantum hybrid one (`age1pq1...`), with no white space, comment or second recipient. An SSH key, a plugin recipient or an age secret key is refused, and the refusal never repeats the value. Unset, no backup is ever taken and `backup_disabled` is logged at start. | `backup_recipient_invalid` |
 
 Rules that apply to all of them:
 
@@ -310,56 +310,57 @@ The checks run in this order:
 | 22 | `notify_secret_unreadable` | `WAWARDEN_NOTIFY_SECRET_FILE` | The file cannot be opened or read, or is not a regular file. |
 | 23 | `notify_secret_permissions` | `WAWARDEN_NOTIFY_SECRET_FILE` | The file grants write permission to its group or any permission to others. |
 | 24 | `notify_secret_invalid` | `WAWARDEN_NOTIFY_SECRET_FILE` | The file holds more than 4096 bytes, or less than 32 bytes apart from surrounding white space. |
-| 25 | `running_as_root` | none | The real or the effective user ID is 0 and `--allow-root` was not given. |
-| 26 | `data_dir_unusable` | `WAWARDEN_DATA_DIR` | The directory does not exist and cannot be created, or cannot be inspected; the path is empty. |
-| 27 | `data_dir_not_directory` | `WAWARDEN_DATA_DIR` | The path is not a directory, or its last component is a symbolic link. |
-| 28 | `data_dir_foreign_owner` | `WAWARDEN_DATA_DIR` | The directory is not owned by the process's effective user ID. |
-| 29 | `data_dir_permissions` | `WAWARDEN_DATA_DIR` | The directory's mode is not exactly `0700`. |
-| 30 | `history_dir_unusable` | none; the error names `history/` | `history` exists in the data directory but cannot be inspected. |
-| 31 | `history_dir_not_directory` | none; the error names `history/` | `history` exists but is not a directory, or is a symbolic link. |
-| 32 | `history_dir_foreign_owner` | none; the error names `history/` | `history` is not owned by the process's effective user ID. |
-| 33 | `history_dir_permissions` | none; the error names `history/` | The mode of `history` is not exactly `0700`. |
-| 34 | `backups_dir_unusable` | none; the error names `backups/` | `backups` exists in the data directory but cannot be inspected. |
-| 35 | `backups_dir_not_directory` | none; the error names `backups/` | `backups` exists but is not a directory, or is a symbolic link. |
-| 36 | `backups_dir_foreign_owner` | none; the error names `backups/` | `backups` is not owned by the process's effective user ID. |
-| 37 | `backups_dir_permissions` | none; the error names `backups/` | The mode of `backups` is not exactly `0700`. |
-| 38 | `keys_dir_unusable` | none; the error names `keys/` | `keys` in the data directory does not exist and cannot be created, or cannot be inspected. |
-| 39 | `keys_dir_not_directory` | none; the error names `keys/` | `keys` is not a directory, or is a symbolic link. |
-| 40 | `keys_dir_foreign_owner` | none; the error names `keys/` | `keys` is not owned by the process's effective user ID. |
-| 41 | `keys_dir_permissions` | none; the error names `keys/` | The mode of `keys` is not exactly `0700`. |
-| 42 | `master_key_unusable` | none; the error names `keys/master` | `keys/master` does not exist and cannot be created, or cannot be inspected, opened or read. |
-| 43 | `master_key_not_regular` | none; the error names `keys/master` | `keys/master` is not a regular file: a symbolic link (even to a valid key), a directory or a named pipe, for example. |
-| 44 | `master_key_foreign_owner` | none; the error names `keys/master` | `keys/master` is not owned by the process's effective user ID. |
-| 45 | `master_key_permissions` | none; the error names `keys/master` | `keys/master` grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 46 | `master_key_size` | none; the error names `keys/master` | `keys/master` does not hold exactly 32 bytes. |
-| 47 | `storage_filesystem_unknown` | none | The filesystem of the data directory cannot be inspected (`statfs`). |
-| 48 | `storage_network_filesystem` | none | The storage profile is `local` and the data directory is on a network filesystem; see [Storage profiles](#storage-profiles). |
-| 49 | `archive_db_unusable` | none; the error names `archive.db` | `archive.db` does not exist and cannot be created, or cannot be inspected. |
-| 50 | `archive_db_not_regular` | none; the error names `archive.db` | `archive.db` is not a regular file: a symbolic link or a directory, for example. |
-| 51 | `archive_db_foreign_owner` | none; the error names `archive.db` | `archive.db` is not owned by the process's effective user ID. |
-| 52 | `archive_db_permissions` | none; the error names `archive.db` | `archive.db` grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 53 | `archive_journal_unusable` | none; the error names `archive.db-journal` | `archive.db-journal` exists but cannot be inspected. |
-| 54 | `archive_journal_not_regular` | none; the error names `archive.db-journal` | `archive.db-journal` exists but is not a regular file. |
-| 55 | `archive_journal_foreign_owner` | none; the error names `archive.db-journal` | `archive.db-journal` is not owned by the process's effective user ID. |
-| 56 | `archive_journal_permissions` | none; the error names `archive.db-journal` | `archive.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 57 | `storage_ofd_unavailable` | none | On Linux, the storage profile is `local` and the kernel or the data directory's filesystem refused open-file-description locks; see [Storage profiles](#storage-profiles). |
-| 58 | `archive_schema_newer` | none; the error names `archive.db` | The archive's schema version is newer than this build knows: a newer release wrote it. |
-| 59 | `session_db_unusable` | none; the error names `session.db` | `session.db` does not exist and cannot be created, or cannot be inspected. |
-| 60 | `session_db_not_regular` | none; the error names `session.db` | `session.db` is not a regular file: a symbolic link or a directory, for example. |
-| 61 | `session_db_foreign_owner` | none; the error names `session.db` | `session.db` is not owned by the process's effective user ID. |
-| 62 | `session_db_permissions` | none; the error names `session.db` | `session.db` grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 63 | `session_journal_unusable` | none; the error names `session.db-journal` | `session.db-journal` exists but cannot be inspected. |
-| 64 | `session_journal_not_regular` | none; the error names `session.db-journal` | `session.db-journal` exists but is not a regular file. |
-| 65 | `session_journal_foreign_owner` | none; the error names `session.db-journal` | `session.db-journal` is not owned by the process's effective user ID. |
-| 66 | `session_journal_permissions` | none; the error names `session.db-journal` | `session.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 25 | `backup_recipient_invalid` | `WAWARDEN_BACKUP_AGE_RECIPIENT` | The value is not exactly one age X25519 or hybrid recipient: it is empty, holds white space, a comment, a second recipient or an age secret key, or fails age's parser. The value is never repeated. |
+| 26 | `running_as_root` | none | The real or the effective user ID is 0 and `--allow-root` was not given. |
+| 27 | `data_dir_unusable` | `WAWARDEN_DATA_DIR` | The directory does not exist and cannot be created, or cannot be inspected; the path is empty. |
+| 28 | `data_dir_not_directory` | `WAWARDEN_DATA_DIR` | The path is not a directory, or its last component is a symbolic link. |
+| 29 | `data_dir_foreign_owner` | `WAWARDEN_DATA_DIR` | The directory is not owned by the process's effective user ID. |
+| 30 | `data_dir_permissions` | `WAWARDEN_DATA_DIR` | The directory's mode is not exactly `0700`. |
+| 31 | `history_dir_unusable` | none; the error names `history/` | `history` exists in the data directory but cannot be inspected. |
+| 32 | `history_dir_not_directory` | none; the error names `history/` | `history` exists but is not a directory, or is a symbolic link. |
+| 33 | `history_dir_foreign_owner` | none; the error names `history/` | `history` is not owned by the process's effective user ID. |
+| 34 | `history_dir_permissions` | none; the error names `history/` | The mode of `history` is not exactly `0700`. |
+| 35 | `backups_dir_unusable` | none; the error names `backups/` | `backups` exists in the data directory but cannot be inspected. |
+| 36 | `backups_dir_not_directory` | none; the error names `backups/` | `backups` exists but is not a directory, or is a symbolic link. |
+| 37 | `backups_dir_foreign_owner` | none; the error names `backups/` | `backups` is not owned by the process's effective user ID. |
+| 38 | `backups_dir_permissions` | none; the error names `backups/` | The mode of `backups` is not exactly `0700`. |
+| 39 | `keys_dir_unusable` | none; the error names `keys/` | `keys` in the data directory does not exist and cannot be created, or cannot be inspected. |
+| 40 | `keys_dir_not_directory` | none; the error names `keys/` | `keys` is not a directory, or is a symbolic link. |
+| 41 | `keys_dir_foreign_owner` | none; the error names `keys/` | `keys` is not owned by the process's effective user ID. |
+| 42 | `keys_dir_permissions` | none; the error names `keys/` | The mode of `keys` is not exactly `0700`. |
+| 43 | `master_key_unusable` | none; the error names `keys/master` | `keys/master` does not exist and cannot be created, or cannot be inspected, opened or read. |
+| 44 | `master_key_not_regular` | none; the error names `keys/master` | `keys/master` is not a regular file: a symbolic link (even to a valid key), a directory or a named pipe, for example. |
+| 45 | `master_key_foreign_owner` | none; the error names `keys/master` | `keys/master` is not owned by the process's effective user ID. |
+| 46 | `master_key_permissions` | none; the error names `keys/master` | `keys/master` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 47 | `master_key_size` | none; the error names `keys/master` | `keys/master` does not hold exactly 32 bytes. |
+| 48 | `storage_filesystem_unknown` | none | The filesystem of the data directory cannot be inspected (`statfs`). |
+| 49 | `storage_network_filesystem` | none | The storage profile is `local` and the data directory is on a network filesystem; see [Storage profiles](#storage-profiles). |
+| 50 | `archive_db_unusable` | none; the error names `archive.db` | `archive.db` does not exist and cannot be created, or cannot be inspected. |
+| 51 | `archive_db_not_regular` | none; the error names `archive.db` | `archive.db` is not a regular file: a symbolic link or a directory, for example. |
+| 52 | `archive_db_foreign_owner` | none; the error names `archive.db` | `archive.db` is not owned by the process's effective user ID. |
+| 53 | `archive_db_permissions` | none; the error names `archive.db` | `archive.db` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 54 | `archive_journal_unusable` | none; the error names `archive.db-journal` | `archive.db-journal` exists but cannot be inspected. |
+| 55 | `archive_journal_not_regular` | none; the error names `archive.db-journal` | `archive.db-journal` exists but is not a regular file. |
+| 56 | `archive_journal_foreign_owner` | none; the error names `archive.db-journal` | `archive.db-journal` is not owned by the process's effective user ID. |
+| 57 | `archive_journal_permissions` | none; the error names `archive.db-journal` | `archive.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 58 | `storage_ofd_unavailable` | none | On Linux, the storage profile is `local` and the kernel or the data directory's filesystem refused open-file-description locks; see [Storage profiles](#storage-profiles). |
+| 59 | `archive_schema_newer` | none; the error names `archive.db` | The archive's schema version is newer than this build knows: a newer release wrote it. |
+| 60 | `session_db_unusable` | none; the error names `session.db` | `session.db` does not exist and cannot be created, or cannot be inspected. |
+| 61 | `session_db_not_regular` | none; the error names `session.db` | `session.db` is not a regular file: a symbolic link or a directory, for example. |
+| 62 | `session_db_foreign_owner` | none; the error names `session.db` | `session.db` is not owned by the process's effective user ID. |
+| 63 | `session_db_permissions` | none; the error names `session.db` | `session.db` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 64 | `session_journal_unusable` | none; the error names `session.db-journal` | `session.db-journal` exists but cannot be inspected. |
+| 65 | `session_journal_not_regular` | none; the error names `session.db-journal` | `session.db-journal` exists but is not a regular file. |
+| 66 | `session_journal_foreign_owner` | none; the error names `session.db-journal` | `session.db-journal` is not owned by the process's effective user ID. |
+| 67 | `session_journal_permissions` | none; the error names `session.db-journal` | `session.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
 
-When the data directory is missing, it is created only after checks 1 to 25 pass,
-so a start refused by checks 1 to 25 leaves nothing behind. `history/` and
-`backups/` are checked only when they exist; `serve` itself creates neither (see
+When the data directory is missing, it is created only after checks 1 to 26 pass,
+so a start refused by checks 1 to 26 leaves nothing behind. `history/` and
+`backups/` are checked only when they exist; `serve` creates neither at start (see
 [Data directory](#data-directory)). `keys/` and the master key are created, when
-missing, only after checks 26 to 37 pass, an empty `archive.db` only after
-checks 26 to 48 pass, and an empty `session.db` only once the archive is open.
-Checks 59 to 66 run on `session.db` after the archive is open; the
+missing, only after checks 27 to 38 pass, an empty `archive.db` only after
+checks 27 to 49 pass, and an empty `session.db` only once the archive is open.
+Checks 60 to 67 run on `session.db` after the archive is open; the
 [storage profile](#storage-profiles) is checked again for it, which passes once it
 passed for the archive. A refusal by a later check (on a filesystem that forces
 its own ownership or mode, for example), or a `startup_failed` exit, leaves what
@@ -383,14 +384,16 @@ The data directory is `WAWARDEN_DATA_DIR`, by default `/data`.
 
 The checks run once, at start. When they exist, `history/` and `backups/` in the
 data directory must also be directories, not symbolic links, owned by the
-effective user ID with mode exactly `0700` (refusals 30 to 37). Then `serve`
+effective user ID with mode exactly `0700` (refusals 31 to 38). Then `serve`
 creates the [master key](#master-key) when it is missing and opens the
 [message archive](#message-archive), `archive.db`, and the
 [device store](#device-store), `session.db`. The
 [engine](#whatsapp-engine) creates `history/` with mode `0700` when it first
 downloads a [history-sync blob](#history-sync), and keeps each blob there as
 `history/<id>.bin`, mode `0600`, only until it is processed or quarantined.
-Nothing creates `backups/` yet. The directory must be on a writable, persistent
+A [backup](#backups) creates `backups/` and `backups/tmp/` with mode `0700` when
+it is first taken, and `serve` removes `backups/tmp/` at every start once
+`archive.db` is locked. The directory must be on a writable, persistent
 filesystem that supports hard links and that only the service's user can read.
 
 Mechanisms that add group permissions or the setgid bit to a volume, such as
@@ -402,7 +405,7 @@ Kubernetes `fsGroup`, make the directory fail the mode check.
 bytes. Right after the data directory checks, `serve`:
 
 1. creates `keys/` with mode `0700` when it does not exist;
-2. checks `keys/` (refusals 38 to 41): a directory, not a symbolic link, owned by
+2. checks `keys/` (refusals 39 to 42): a directory, not a symbolic link, owned by
    the effective user ID, with mode exactly `0700`;
 3. when `keys/master` does not exist, writes 32 bytes from the operating system's
    cryptographic random source to a new temporary file `keys/.master-<random>`
@@ -410,7 +413,7 @@ bytes. Right after the data directory checks, `serve`:
    the temporary name and flushes the directory. When two processes start at once,
    the second link fails, and both use the key that was linked first. An existing
    key is never replaced;
-4. checks `keys/master` (refusals 42 to 46): a regular file, not a symbolic link,
+4. checks `keys/master` (refusals 43 to 47): a regular file, not a symbolic link,
    owned by the effective user ID, without any permission for group or others and
    without the setuid, setgid or sticky bit, holding exactly 32 bytes. Mode `0600`
    and mode `0400` are both accepted.
@@ -450,8 +453,8 @@ Right after the master key, `serve`:
 1. checks the data directory's filesystem against the
    [storage profile](#storage-profiles) (refusals 47 and 48);
 2. creates `archive.db` empty with mode `0600` when it does not exist, and
-   refuses (49 to 52) one that is not a regular file, belongs to another user,
-   or grants any access to group or others; then refuses (53 to 56) an
+   refuses (50 to 53) one that is not a regular file, belongs to another user,
+   or grants any access to group or others; then refuses (54 to 57) an
    `archive.db-journal` that exists and fails the same checks;
 3. opens one connection and reads back every setting it applies, refusing the
    connection on any difference: foreign keys on, the rollback journal in
@@ -518,7 +521,7 @@ linked device that the WhatsApp protocol library (`go.mau.fi/whatsmeow`) keeps,
 in its own tables, through the same SQLite engine. Right after the archive,
 `serve` opens it with every step the archive gets: the storage profile is
 checked, the file is created empty with mode `0600` when it does not exist, the
-file and its journal must pass refusals 59 to 66, the connection reads back the
+file and its journal must pass refusals 60 to 67, the connection reads back the
 same fixed settings and takes the same exclusive lock, kept the same way, with
 `db_lock_wait` naming `session` and `db_lost` too. Then the protocol library
 brings its tables up to date, within one minute. A store written by a newer
@@ -570,6 +573,99 @@ once ingest resumes. Pausing reports the
 `ingest_resumed`. With profile `nfs` the floor
 never applies, because a network filesystem such as Amazon EFS grows on demand;
 watch its own capacity metrics instead.
+
+### Backups
+
+With `WAWARDEN_BACKUP_AGE_RECIPIENT` set, the service writes encrypted backups of
+the [archive](#message-archive) and the [device store](#device-store) to
+`backups/` in the data directory. It holds only the
+[age](https://age-encryption.org) recipient, a public key: it encrypts to it and
+can never read a backup back. Without the variable no backup is ever taken, and
+every start logs the warning `backup_disabled`.
+
+**When.** This release takes exactly one backup automatically for each paired
+device, once its initial [history sync](#history-sync) has settled, and nothing
+else: no schedule, no retention, no admin route and no restore tool. Every 30
+seconds the service checks whether the owner's device is paired. The first time
+it sees it paired, it records that moment in the archive's `sync_state` table as
+`backup_paired_at`, so a restart does not start the wait again; a device paired
+before this release counts from the first start of this release. The backup is
+taken once no history blob is waiting to be processed (a
+[quarantined](#history-sync) blob does not count) and 10 minutes have passed
+since the later of that moment and the arrival of the latest history blob. A
+successful backup is recorded as `backup_taken_at`, and no further backup is
+taken for that device. When the device is no longer paired, both keys are
+cleared, so the next paired device is backed up once in turn. A failed backup
+reports `backup_failed` and is tried again only after the next start.
+
+**How.** Each database is copied online, in steps of 256 pages on its own
+connection, each step bound by the 10-second write deadline, so ingest goes on
+between steps; the archive is copied first, then the device store, so the two
+copies are separate points in time. Each copy is staged as a plaintext file of
+mode `0600` in `backups/tmp/` (`archive.stage`, then `session.stage`, one at a
+time) and then streamed, without a second plaintext copy, through age into
+`backups/tmp/<time>.age`. That file is flushed to disk with `fsync`, renamed to
+`backups/<time>.age` and the directory is flushed in turn; `backups/tmp/` is then
+removed. `<time>` is the UTC time the backup began, as `20261005T120000Z`. A
+backup whose name already exists is refused. Any failure removes `backups/tmp/`
+with the staging copies and the partial file, and a file renamed into place but
+not flushed, then reports `backup_failed`; success reports `backup_done`.
+
+| `backups/` entry | Mode | Holds |
+|---|---|---|
+| `backups/` | `0700` | Created at the first backup; checked at start like the data directory when it exists. |
+| `backups/tmp/` | `0700` | Only while a backup runs: one plaintext staging copy at a time and the encrypted file being written. |
+| `backups/<time>.age` | `0600` | One finished backup: a binary (not armoured) age file. |
+
+Decrypted, a backup is a tar archive of three files: `archive.db`, `session.db`
+and `manifest.json`. The manifest holds `format` (`1`), the build `version`, the
+`created` time in UTC and, for each database, its `name`, `schema_version` and
+size in `bytes`; it holds no identifier. The two databases hold everything the
+archive and the device store hold, the linked device's keys included.
+
+| `backup_failed` reason | The backup failed because |
+|---|---|
+| `directory` | `backups/` or `backups/tmp/` cannot be created or inspected, or is not a directory owned by the service's user with mode exactly `0700` (a symbolic link is refused). |
+| `exists` | A file with the backup's name already exists in `backups/`, or its absence cannot be checked. |
+| `output` | The encrypted file cannot be created in `backups/tmp/`. |
+| `archive` | Copying `archive.db` or writing it into the encrypted file failed, for example on a full disk. |
+| `session` | The same for `session.db`. |
+| `manifest` | Writing the manifest failed. |
+| `encrypt` | Starting or finishing the encryption failed, for example when its last chunk cannot be written. |
+| `sync` | Flushing the file or `backups/` to disk failed. |
+| `rename` | Renaming the file into `backups/` failed. |
+| `cleanup` | Removing `backups/tmp/` failed after the file was in place; the file is removed too. |
+| `cancelled` | The service began shutting down during the backup. |
+
+**Decrypting and inspecting a backup offline.** Create the key pair on a machine
+other than the service's host with the [age](https://github.com/FiloSottile/age)
+tools, keep the identity file there, and set the public key it prints as the
+recipient:
+
+```sh
+age-keygen -o backup-identity.txt     # prints "Public key: age1..."
+```
+
+Copy a backup off the host and, on that machine:
+
+```sh
+mkdir restore
+age --decrypt -i backup-identity.txt 20261005T120000Z.age | tar -x -C restore
+cat restore/manifest.json
+sqlite3 -readonly restore/archive.db 'PRAGMA integrity_check'
+sqlite3 -readonly restore/session.db 'PRAGMA integrity_check'
+```
+
+A truncated or altered file fails to decrypt. The decrypted files hold the
+whole archive and the linked device's keys: keep them as private as the data
+directory, and delete them when done.
+
+**Restoring.** There is no restore tool yet. Restore only into a stopped
+service: stop it, replace `archive.db` and `session.db` in the data directory
+with the two files of one backup, mode `0600` and owned by the service's user,
+remove any `archive.db-journal` and `session.db-journal`, then start it. Never
+start two instances from one `session.db`, for example a restored copy while the
+original still runs: both would act as the same linked device.
 
 ## WhatsApp engine
 
@@ -1163,6 +1259,8 @@ notices of a [debug window](#protocol-library-logs). Lines in
 | `quarantine` | `WARN`, at every log level | `queue`, `attempts` | A [notification event](#notifications). |
 | `rekey_conflict` | `WARN`, at every log level | `conflict` | A [notification event](#notifications). |
 | `ingest_paused` | `WARN`, at every log level | `free_bytes`, `floor_bytes` | A [notification event](#notifications). |
+| `backup_done` | `INFO`, at every log level | `bytes`, `archive_bytes`, `session_bytes`, `duration_ms` | A [notification event](#notifications). |
+| `backup_failed` | `WARN`, at every log level | `reason` | A [notification event](#notifications). |
 | `ingest_resumed` | `INFO` | `free_bytes`, `floor_bytes` | The free space reached 1.25 times the floor again. |
 | `free_space_unknown` | `WARN` | `error_type` | The free space of the data directory could not be read. |
 | `index_rewrite_pending` | `WARN` | `operation` | A change committed, but the full-text index rewrite it requires failed; it stays due and runs at the next start. |
@@ -1177,6 +1275,8 @@ notices of a [debug window](#protocol-library-logs). Lines in
 | `notify_failed` | `WARN`, at every log level | `attempts`, `reason`, `status` | The [webhook](#webhook) did not take an event, which is dropped. |
 | `notify_dropped` | `WARN`, at every log level | `count` | At shutdown, the [webhook](#webhook) dropped `count` events it had not delivered, and `serve` exits `1`. |
 | `emf_failed` | `WARN` | `error_type` | Writing the [embedded-metric-format](#embedded-metric-format) lines failed. |
+| `backup_disabled` | `WARN` | | `WAWARDEN_BACKUP_AGE_RECIPIENT` is not set, so no [backup](#backups) is ever taken. Logged once per start. |
+| `backup_check_failed` | `WARN` | `error_type` | Reading or recording whether the [backup](#backups) is due failed; the check runs again 30 seconds later. |
 
 What is never logged: requests (there is no access log), request bodies, header
 values, tokens, failed authentications other than the count in
@@ -1336,6 +1436,8 @@ the [webhook](#webhook).
 | `rekey_conflict` | `WARN` | `conflict`: `mapping_contradicts`, `both_chats_have_messages`, `message_collision` | A LID mapping was refused; the event that carried it is still applied. |
 | `ingest_paused` | `WARN` | `free_bytes`, `floor_bytes` | The data directory fell below its [free-space floor](#free-space). |
 | `admin_mutation` | `INFO` | `action`: `pair`, `reconnect`; `outcome` | A `POST` [admin route](#admin-routes) was called with the admin token; `outcome` is `ok` or the error code it answered, such as `already_paired` or `invalid_body`. |
+| `backup_done` | `INFO` | `bytes`, `archive_bytes`, `session_bytes`, `duration_ms` | A [backup](#backups) was written: `bytes` is the size of the encrypted file, the others the sizes of the two database copies and the time it took. |
+| `backup_failed` | `WARN` | `reason` | A [backup](#backups) failed and what it had written was removed; `reason` as in the table under [Backups](#backups). |
 | `admin_auth_failure` | `WARN` | `count` | Authentication failed on the admin listener. The first failure is reported at once with `count` `1`; further failures within the next minute are held back, and reported together once the minute has passed, within ten seconds, or at shutdown. `count` is the number of failures since the previous `admin_auth_failure`. |
 
 No event carries an identifier, a name, message text, a token, a key or a
@@ -1534,16 +1636,19 @@ from the start of the process; a restart starts the counts again.
    flight are allowed to finish.
 3. The [WhatsApp engine](#whatsapp-engine) disconnects from WhatsApp and its
    workers stop after the row or batch in hand.
-4. With `WAWARDEN_METRICS_EMF=1`, the last
+4. A [backup](#backups) still copying stops after the step or the read in
+   hand, removes what it had written and reports `backup_failed` with reason
+   `cancelled`; one already flushing its file to disk finishes first.
+5. With `WAWARDEN_METRICS_EMF=1`, the last
    [embedded-metric-format](#embedded-metric-format) lines are written.
-5. Held-back admin authentication failures are reported as
+6. Held-back admin authentication failures are reported as
    `admin_auth_failure`, and the [webhook](#webhook) delivers what is queued;
    whatever remains when the grace period runs out is dropped, counted and
    reported in `notify_dropped`.
-6. The [archive](#message-archive) and the [device store](#device-store) are
+7. The [archive](#message-archive) and the [device store](#device-store) are
    closed, which releases their locks. Each waits up to 1 second for a call
    still in progress to give its connection back, then closes it.
-7. The health listener stops.
+8. The health listener stops.
 
 One grace period of 10 seconds bounds the whole shutdown, apart from those waits
 of up to 1 second for each database. When it runs out, the remaining
