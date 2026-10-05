@@ -990,12 +990,27 @@ func TestTheStoredDeviceMustBeTheOwnersBeforeEveryConnect(t *testing.T) {
 			t.Fatalf("%d fetches, want only the 4 of the start", v.count())
 		}
 	})
-	t.Run("on an explicit reconnect under the restart budget", func(t *testing.T) {
+	t.Run("at the start before the restart budget", func(t *testing.T) {
 		h := newSupRig(t)
 		h.client.pairAs(bobDev)
 		v := h.versions(versionResult{v: current})
 		h.s.begin(t.Context(), MaxRecentStarts+1)
+		h.refusesTheStoredDevice(0)
+		for _, a := range h.alerts("disconnected") {
+			if a["reason"] == string(ReasonRestartBudget) {
+				t.Fatalf("disconnected alerts %v: the restart budget hid the owner mismatch", h.alerts("disconnected"))
+			}
+		}
+		if v.count() != 0 {
+			t.Fatalf("%d fetches, want none", v.count())
+		}
+	})
+	t.Run("on an explicit reconnect under the restart budget", func(t *testing.T) {
+		h := newSupRig(t)
+		v := h.versions(versionResult{v: current})
+		h.s.begin(t.Context(), MaxRecentStarts+1)
 		h.want(StateDisconnected, ReasonRestartBudget)
+		h.client.pairAs(bobDev)
 		if err := h.s.reconnect(); !errors.Is(err, ErrOwnerMismatch) {
 			t.Fatalf("Reconnect under the restart budget with another account's device = %v, want ErrOwnerMismatch", err)
 		}

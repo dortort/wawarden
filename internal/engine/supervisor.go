@@ -132,10 +132,12 @@ func (s *supervisor) start(ctx context.Context, recentStarts int) {
 }
 
 func (s *supervisor) begin(ctx context.Context, recentStarts int) {
-	paired := s.client.Paired()
+	paired, foreign := s.device()
 	s.mu.Lock()
 	s.ctx = ctx
 	switch {
+	case foreign:
+		s.setLocked(StateDisconnected, ReasonOwnerMismatch)
 	case recentStarts > MaxRecentStarts:
 		s.setLocked(StateDisconnected, ReasonRestartBudget)
 	case !paired:

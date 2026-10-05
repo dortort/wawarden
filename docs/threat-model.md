@@ -422,8 +422,8 @@ number; otherwise the engine raises a `pair_rejected` alert and logs the new
 device out, retrying with backoff and a `logout_failed` alert for as long as
 the logout fails. Until the device is gone, the engine connects it neither on
 its own nor on an explicit reconnect, and drops what its connection delivers
-before it is written. Before every connection, and at the start before it
-fetches the protocol version, it also checks that the stored device's number is
+before it is written. Before every connection, and at the start before the
+restart budget and the version fetch, it also checks that the stored device's number is
 exactly the owner's. When it is not, as for a rejected device whose
 logout never succeeded before a restart, or an owner's number that differs from
 the paired one, the engine stays disconnected (`owner_mismatch`) with an alert,

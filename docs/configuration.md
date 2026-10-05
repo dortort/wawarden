@@ -531,7 +531,9 @@ but `shutdown` also logs `disconnected` at every log level. The gauges
 - **Restart budget.** When the archive has recorded more than 5 starts in the
   last ten minutes, this one included (`recent_starts` in `archive_opened`), the
   engine starts in `disconnected` with reason `restart_budget` and makes no
-  connection, so that a crash loop does not become a reconnect storm. A start
+  connection, so that a crash loop does not become a reconnect storm; a stored
+  device that fails the [owner check](#pairing), which comes first, starts it in
+  `owner_mismatch` instead. A start
   recorded at a later time than the current one, as after the system clock was
   set back, is forgotten, so it cannot hold the engine in `restart_budget`
   until the clock catches up.
@@ -601,9 +603,10 @@ drops what its connection delivers before it is written (see
 [Ingest](#ingest)); pairing stays refused while it is stored.
 
 Before every connection the engine also checks that the stored device's number
-is exactly the one in `WAWARDEN_OWNER_PHONE`: at the start before it fetches
-the protocol version, so that a failed fetch cannot hide a mismatch behind
-`outdated`; on an explicit reconnect, also one from `outdated` or
+is exactly the one in `WAWARDEN_OWNER_PHONE`: at the start before the restart
+budget and before it fetches the protocol version, so that neither the budget
+nor a failed fetch can hide a mismatch behind `restart_budget` or `outdated`; on
+an explicit reconnect, also one from `outdated` or
 `restart_budget`; and after a drop. The stored number is compared and never
 logged. When it is not, as for a device whose logout failed before the process
 stopped, or when `WAWARDEN_OWNER_PHONE` names another number than the one that
