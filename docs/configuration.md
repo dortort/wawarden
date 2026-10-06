@@ -61,8 +61,17 @@ wawarden [serve] [--allow-root]  run the gateway (the default)
 wawarden healthcheck             exit 0 only when the local /healthz answers 200
 wawarden version                 print the version and build flavour
 wawarden admin init              generate an admin token and its SHA-256
-wawarden admin status|pair|reconnect [--addr URL] --token-file PATH | --token-stdin | --token-command COMMAND
-                                 call the admin listener (default --addr http://127.0.0.1:8082)
+wawarden admin status|pair|reconnect ADMIN
+wawarden admin clients create --name NAME (--read CHAT... | --all-chats) [--write CHAT...]
+                              [--allow-first-contact] [--expires-days DAYS] ADMIN
+wawarden admin clients list ADMIN
+wawarden admin clients show|revoke --id ID ADMIN
+wawarden admin chats list [--match TEXT] ADMIN
+                                 call the admin listener; ADMIN is [--addr URL] and one of
+                                 --token-file PATH, --token-stdin or --token-command COMMAND
+                                 (default --addr http://127.0.0.1:8082)
+wawarden audit verify --db PATH --master-key-file PATH [--log PATH]
+                                 verify the audit chain of a copy of the archive, offline
 ```
 
 ### `serve`
@@ -188,16 +197,101 @@ cursor, rewrite the screen, set a link or write the clipboard.
 A refusal prints `admin <command>: refused with <code> (HTTP <status>)` on
 standard error; see the [exit codes](#exit-codes).
 
+`admin status` also prints `clients active`, `clients expired`, `clients
+revoked` and `all-chats clients active`, after `inbox quarantined`, and writes
+`admin status: warning: <code>` on standard error for each code in the
+answer's `warnings`.
+
+### `admin clients` and `admin chats`
+
+These commands take the same `--addr` and token flags as `admin status` and use
+the same HTTP client, sanitiser and refusal message. Each makes the request of
+the [admin route](#admin-routes) named here:
+
+| Command | Request | Prints on standard output |
+|---|---|---|
+| `admin clients create --name NAME (--read CHAT... \| --all-chats) [--write CHAT...] [--allow-first-contact] [--expires-days DAYS]` | `POST /admin/v1/clients` | The client's lines, then `token: ww_...` |
+| `admin clients list` | `GET /admin/v1/clients` | For each client, its lines from `id` to `allow first contact`, then `read chats` and `write chats` with the number of each; a blank line separates two clients. |
+| `admin clients show --id ID` | `GET /admin/v1/clients/ID` | The client's lines. |
+| `admin clients revoke --id ID` | `POST /admin/v1/clients/ID/revoke` with the body `{}` | The revoked client's lines. |
+| `admin chats list [--match TEXT]` | `GET /admin/v1/chats`, with `?match=TEXT` when `--match` is given | For each chat, `id`, `kind`, `ref` and `name` (`none` when the chat has none); a blank line separates two chats. |
+
+A client's lines are `id`, `name`, `state`, `created`, `expires`, `revoked`
+(`never` until it is revoked), `all chats`, `allow first contact`, then one
+`read chat` line per read chat and one `write chat` line per write chat, each
+with the chat's identifier, its kind, `seen` or `not yet seen`, and its name
+when the archive knows one.
+
+`--read` and `--write` can be repeated, and `--expires-days` defaults to 90.
+Each chat value is one of:
+
+- a chat identifier as the [admin routes](#admin-routes) accept it, such as
+  `15550100001@s.whatsapp.net`, `100000000000001@lid` or
+  `120363000000000001@g.us`;
+- a phone number in `+E.164` form, such as `+15550100001`, which becomes
+  `15550100001@s.whatsapp.net`;
+- a chat reference, the 32 lower-case hexadecimal digits that `admin chats
+  list` prints under `ref`: the command first looks it up with `GET
+  /admin/v1/chats?match=<reference>`, and stops with exit `5` when no chat has
+  it.
+
+A value that is none of these stops the command with exit `2` before the client
+is created. The message names the flag and the value's position, such as
+`--write value 2`, never the value. `--id` must be a client id, 8 characters of
+`a` to `z` and `2` to `7`, or the command stops with exit `2` before it sends
+anything.
+
+`clients create` prints the client token once, on standard output, and nothing
+else ever shows it again: standard error reminds you to hand it to the client
+and store it now. Standard error also warns about each chat the archive has not
+seen yet and, with `--all-chats`, that the client reads every chat, including
+chats that appear later; the flag is the confirmation, there is no prompt.
+`chats list` lists at most 100 chats, most recent first, and says on standard
+error when more match.
+
+### `audit verify`
+
+`wawarden audit verify` checks the [audit chain](#audit-chain) of a copy of the
+archive. It runs offline: it needs neither the service nor the network, and it
+never changes its inputs.
+
+| Flag | Effect |
+|---|---|
+| `--db PATH` | The copy of the archive to check, for example the `archive.db` of a decrypted [backup](#backups). It is opened read-only, without a lock: never point it at the archive of a running service. |
+| `--master-key-file PATH` | A copy of the master key the rows were written with: any regular file of exactly 32 bytes. Nothing is created when it is missing. |
+| `--log PATH` | Optional: a capture of the service's standard output, one JSON object per line. Each line with a `chain_head` of 32 hexadecimal digits is one shipped head; every other line is skipped. |
+
+It prints:
+
+```text
+rows: 1204
+verified: 1204
+rows failing: 0
+first failing row: none
+problem: none
+chain head: 3fa8c2d14be0917a5c6e2b8f0d4a7c19
+shipped heads: 1180
+shipped heads missing: 0
+first missing head: none
+```
+
+`problem` is `id_gap` when a row's id is not one more than the previous row's,
+`unknown_key` when the row was written under another key id than the master
+key's, and `hmac_mismatch` when its HMAC is not the one the key gives. Without
+`--log` it warns on standard error that rows removed from the end of the chain
+go unnoticed.
+
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
-| `0` | `serve` stopped cleanly after `SIGTERM` or `SIGINT`; `healthcheck` got `200`; `version` and `admin init` printed their output; `admin status`, `pair` or `reconnect` got `200` and printed the answer. |
-| `1` | `serve` failed after its configuration was accepted: the [archive](#message-archive) or the [device store](#device-store) could not be opened or its lock was not acquired within five minutes, the device store could not be brought up to date, or a listener could not be opened (`startup_failed`), a listener failed while running (`listener_failed`), or shutdown ended with errors, for example when the grace period ran out. `healthcheck` failed for any reason, including extra arguments. `version` or `admin init` could not write to standard output. An admin command's request failed: no connection, no answer within 40 seconds, an answer over 64 KiB or not in the expected shape, a redirect, or any status other than those of codes `0`, `4` and `5`, such as `engine_unavailable` (`503`), `pair_failed` (`502`) or `internal_error` (`500`). |
-| `2` | `serve` refused to start (`startup_refused`, see [Startup refusals](#startup-refusals)). Or a usage error: an unknown subcommand, or an unknown flag or extra argument given to `serve`, `version` or `admin`, an admin command without exactly one token source or with an empty `--token-file` or `--token-command`, or an invalid `--addr`; the usage text goes to standard error. |
+| `0` | `serve` stopped cleanly after `SIGTERM` or `SIGINT`; `healthcheck` got `200`; `version` and `admin init` printed their output; an admin command got `200` and printed the answer; `audit verify` verified every row and found every shipped head. |
+| `1` | `serve` failed after its configuration was accepted: the [archive](#message-archive) or the [device store](#device-store) could not be opened or its lock was not acquired within five minutes, the device store could not be brought up to date, or a listener could not be opened (`startup_failed`), a listener failed while running (`listener_failed`), or shutdown ended with errors, for example when the grace period ran out. `healthcheck` failed for any reason, including extra arguments. `version` or `admin init` could not write to standard output. An admin command's request failed: no connection, no answer within 40 seconds, an answer over 64 KiB or not in the expected shape, a redirect, or any status other than those of codes `0`, `4` and `5`, such as `engine_unavailable` (`503`), `pair_failed` (`502`), `invalid_query` (`400`) or `internal_error` (`500`). `audit verify` could not open the copy, the master key file or the log. |
+| `2` | `serve` refused to start (`startup_refused`, see [Startup refusals](#startup-refusals)). Or a usage error: an unknown subcommand, or an unknown flag or extra argument given to `serve`, `version`, `admin` or `audit`, an admin command without exactly one token source or with an empty `--token-file` or `--token-command`, an invalid `--addr`, a `clients create` without `--name` or with a chat value it cannot use, a `--id` that is not a client id, or an `audit verify` without `--db` or `--master-key-file`; the usage text goes to standard error. |
 | `3` | An admin command could not use its token: the file or standard input could not be read, held more than 4096 bytes or was a terminal; the token command could not start, failed, timed out, left a process holding its output or printed more than 4096 bytes; or what it read is not an admin token. Nothing was sent. |
 | `4` | The admin listener refused the token: `401` (`unauthorized`), or `429` with `too_many_requests` (the failure budget is spent, see [Failed authentication](#failed-authentication)). |
-| `5` | The service refused the operation in its current state: `409` (`already_paired`, `already_connected`, `not_paired`, `owner_phone_missing` or `owner_mismatch`) or `429` with `rate_limited`; see [Admin routes](#admin-routes). |
+| `5` | The service refused the operation: `409` (`already_paired`, `already_connected`, `not_paired`, `owner_phone_missing`, `owner_mismatch` or `name_taken`), `422` (a [client refusal](#admin-routes)), `404` (`not_found`, such as an unknown client id) or `429` with `rate_limited`; see [Admin routes](#admin-routes). `clients create` also exits `5` when no chat has a reference it was given. |
+| `6` | `audit verify` read everything but found a row that does not verify or a shipped head that the copy lacks. |
 
 `healthcheck` never exits `2`, because container runtimes reserve that code in
 health checks. A process stopped by a second signal during shutdown ends with
@@ -434,14 +528,20 @@ only the derived keys:
 |---|---|---|
 | `key-id` | 4 bytes | The key id: logged as 8 hexadecimal digits in the `keys_loaded` event, so that log lines can be grouped by the key their pseudonyms were made with. |
 | `log-redact` | 32 bytes | The key of the [log pseudonyms](#pseudonyms-and-dropped-lines). |
-| `chat-hmac` | 32 bytes | Derived but not used: no [notification event](#notifications) of this build names a chat. It is reserved for chat references in events and audit records. |
+| `chat-hmac` | 32 bytes | The `chat_hmac` of [audit lines](#audit-chain): the first 16 bytes of HMAC-SHA256 under this key over the chat's canonical identifier. No [notification event](#notifications) names a chat. |
+| `cursor-seal` | 32 bytes | Derived but not used in this build. Reserved for sealing the cursors of client reads. |
+| `mref` | 32 bytes | Derived but not used in this build. Reserved for sealing message references. |
+| `audit-chain` | 32 bytes | The key of the [audit chain](#audit-chain)'s row HMACs. |
 
-Apart from the log pseudonyms, the key id is the only value derived from the
-master key that the service writes out. No key reaches a log, an event, a
+Apart from the log pseudonyms, the chat HMACs and the chain heads of audit
+lines, the key id is the only value derived from the master key that the
+service writes out. No key reaches a log, an event, a
 metric or a response; the service writes the master key only to `keys/master`,
 through the temporary name in step 3, and never writes a derived key. Replacing or
-deleting the master key changes the key id and every log pseudonym; this build
-has no command to rotate it. To provide your own key, write
+deleting the master key changes the key id and every log pseudonym, and audit
+rows written afterwards carry the new key id, so `audit verify` reports the
+older rows as `unknown_key` unless it is given the old key: keep a copy of every
+master key the service ran with. This build has no command to rotate it. To provide your own key, write
 32 random bytes to `keys/master` with mode `0600` or `0400`, owned by the service's
 user, before the first start. A crash or power loss during the first start can
 leave a `keys/.master-<random>` file behind, with mode `0600`. It holds either an
@@ -535,8 +635,9 @@ queue, it holds:
   moves them from the phone number to the LID (see [Ingest](#ingest));
 - the audit table, whose rows triggers refuse to update or delete.
 
-No part of the service writes clients, saved names or audit rows yet. The
-service never runs `ANALYZE` or `PRAGMA optimize` on the archive: planner
+The [admin routes](#admin-routes) create and revoke clients, and each change
+appends a row to the [audit chain](#audit-chain). No part of the service writes
+saved names yet. The service never runs `ANALYZE` or `PRAGMA optimize` on the archive: planner
 statistics could make SQLite read a whole table where its read queries now
 search an index.
 
@@ -1196,8 +1297,24 @@ The credential is taken from exactly one `Authorization` header of the form
 `Bearer <token>`: the scheme in any letter case, one space, and a token without
 spaces or tabs. A request with two `Authorization` headers is not authenticated.
 
-**Client listener.** This build knows no client tokens, so every request that passes
-checks 1 and 2 is answered `401` (or `429`):
+**Client listener.** The client listener accepts the token of a client the
+[admin routes](#admin-routes) created: `ww_`, the client id (8 characters of `a`
+to `z` and `2` to `7`, from 5 random bytes), `_`, 43 characters of unpadded
+base64url encoding 32 random bytes, `_`, and the CRC-32 of everything before it
+in 8 lower-case hexadecimal digits: 64 characters in all, in exactly this form.
+The archive keeps only the token's SHA-256. Every request takes the same path:
+the token is parsed, its id looked up in a copy of the clients held in memory,
+the presented token hashed once and compared once, in constant time, with the
+stored digest, or with a random digest drawn at start when the token is
+malformed or its id unknown; only then are revocation and expiry checked. A
+malformed, unknown, wrong, revoked or expired token is one failure, answered as
+below. The in-memory copy is reloaded on the first request after a client is
+created or revoked, or after a re-key moved a client's chat, so a revocation
+takes effect on the next request; a request that was already authenticated
+finishes with the grant it holds, within the 2-second read deadline. This
+build serves no client route yet: an authenticated request is answered `404`
+(`not_found`), and every other request that passes checks 1 and 2 `401` (or
+`429`):
 
 ```text
 HTTP/1.1 401 Unauthorized
@@ -1239,11 +1356,49 @@ and its outcome: `ok` or the error code it answered.
 | `GET /admin/v1/status` | none | `200` with the fixed object below. |
 | `POST /admin/v1/pair` | exactly `{}`, see [Request bodies](#request-bodies) | `200` `{"code":"<pairing code>"}`; see [Pairing](#pairing). |
 | `POST /admin/v1/reconnect` | exactly `{}` | `200` `{"status":"accepted"}`: the engine connects again at once, after an explicit reconnect as described under [Engine states](#engine-states). |
+| `POST /admin/v1/clients` | the client to create, below | `200` `{"client":<client>,"credential":"ww_..."}`. The `credential` is the client token: this answer is the only one that carries it. |
+| `GET /admin/v1/clients` | none | `200` `{"clients":[...]}`, oldest first: each client's `id`, `name`, `state`, `created_at`, `expires_at`, `revoked_at`, `all_chats`, `allow_first_contact`, `read_chat_count` and `write_chat_count`. |
+| `GET /admin/v1/clients/{id}` | none | `200` with the client. |
+| `POST /admin/v1/clients/{id}/revoke` | exactly `{}` | `200` with the revoked client. Revoking a revoked client changes nothing and answers the same. |
+| `GET /admin/v1/chats` | none; the query may hold one `match` | `200` `{"chats":[{"id","kind","ref","name"}...],"truncated":false}`: at most 100 chats, most recent message first, whose name or identifier contains `match` (letter case is ignored for ASCII letters) or whose reference is `match`; every chat without `match`. `truncated` is `true` when more match. |
+
+A client is:
+
+```json
+{"id":"aaaqeaye","name":"agent","state":"active","created_at":"2026-10-06T12:00:00Z","expires_at":"2027-01-04T12:00:00Z","revoked_at":null,"all_chats":false,"allow_first_contact":false,"read_chats":[{"id":"120363000000000001@g.us","kind":"group","known":true,"name":"Synthetic Group"}],"write_chats":[]}
+```
+
+`state` is `active`, `expired` once `expires_at` has passed, or `revoked`.
+Each chat carries its canonical identifier, its `kind` (`phone`, `lid` or
+`group`), whether the archive has seen it (`known`), and its name in the
+archive, or `null`. The administrator sees chat identifiers and names by
+design; no client route ever answers them.
+
+The body of `POST /admin/v1/clients` is an object with these keys, every one
+optional:
+
+| Key | Content |
+|---|---|
+| `name` | 1 to 64 characters without control characters, unique among all clients, revoked ones included, ignoring the letter case of ASCII letters. |
+| `read_chats` | The chats the client may read: at most 256 chat identifiers. |
+| `write_chats` | The chats a later release will let the client write to: at most 256, each also in `read_chats`. |
+| `all_chats` | `true` lets the client read every chat, including chats that appear later; then `read_chats` and `write_chats` must be empty. |
+| `allow_first_contact` | `true` lets a write chat be a direct chat the archive has not seen yet. |
+| `expires_in_days` | 1 to 365; `0` or no key means 90. A client never lives longer than 365 days, so a token cannot be made that never expires. |
+
+A chat identifier is `<digits>@s.whatsapp.net`, `<digits>@lid` or
+`<digits>[-<digits>]@g.us`; `@c.us` is read as `@s.whatsapp.net`, and a device
+or agent suffix (`:<device>`) is dropped. A phone number that the archive has
+already mapped to a LID is stored as the LID. A read chat the archive has not
+seen yet is allowed and answered with `known` `false`: the client reads it once
+messages arrive. A write chat must be readable, because a client that could
+write to a chat it cannot read could learn from the answer to a reply whether a
+message exists.
 
 The status object carries no identifier, name or text:
 
 ```json
-{"state":"connected","reason":"","paired":true,"counts":{"chats":12,"messages":3456,"history_blobs_pending":0,"history_blobs_quarantined":0,"inbox_backlog":0,"inbox_quarantined":0},"last_ingest_at":"2026-10-05T08:00:00Z","version":"v0.2.0"}
+{"state":"connected","reason":"","paired":true,"counts":{"chats":12,"messages":3456,"history_blobs_pending":0,"history_blobs_quarantined":0,"inbox_backlog":0,"inbox_quarantined":0},"clients":{"active":2,"expired":0,"revoked":1,"all_chats_active":1},"warnings":["all_chats_client"],"last_ingest_at":"2026-10-05T08:00:00Z","version":"v0.2.0"}
 ```
 
 | Key | Content |
@@ -1251,6 +1406,8 @@ The status object carries no identifier, name or text:
 | `state`, `reason` | The [engine state](#engine-states); `reason` is empty unless the state is `disconnected`. |
 | `paired` | Whether a device is stored. |
 | `counts` | Chats and messages in the archive; history blobs waiting to be processed and quarantined; inbox rows waiting to be applied and quarantined. |
+| `clients` | Clients that are active, expired and not revoked, and revoked; and active clients that read every chat. |
+| `warnings` | Fixed codes, empty when nothing needs attention: `all_chats_client` while a client that reads every chat is active. |
 | `last_ingest_at` | When the engine last stored a message, in UTC to the second, or `null` before the first. |
 | `version` | The build's version, as `wawarden version` prints it. |
 
@@ -1266,7 +1423,22 @@ The routes refuse with fixed codes:
 | `409` `{"error":"not_paired"}` | reconnect | No device is stored, or the stored device was rejected and is being logged out. |
 | `409` `{"error":"owner_mismatch"}` | reconnect | The stored device's number is not `WAWARDEN_OWNER_PHONE`; see [Pairing](#pairing). |
 | `503` `{"error":"engine_unavailable"}` | pair, reconnect | The engine has stopped because the service is shutting down. |
-| `500` `{"error":"internal_error"}` | all three | Anything else, such as an archive read that failed; the cause is never sent. |
+| `422` `{"error":"name_invalid"}` | create client | The name is empty, longer than 64 characters, not UTF-8 or holds a control character. |
+| `422` `{"error":"expiry_out_of_range"}` | create client | `expires_in_days` is negative or above 365. |
+| `422` `{"error":"too_many_chats"}` | create client | `read_chats` or `write_chats` holds more than 256 values. |
+| `422` `{"error":"chat_invalid"}` | create client | A value is not a chat identifier. |
+| `422` `{"error":"all_chats_with_write"}` | create client | `all_chats` comes with a write chat. |
+| `422` `{"error":"read_scope_conflict"}` | create client | `all_chats` comes with a read chat. |
+| `422` `{"error":"read_scope_missing"}` | create client | Neither `all_chats` nor a read chat is given. |
+| `422` `{"error":"write_not_readable"}` | create client | A write chat is not among the read chats. |
+| `409` `{"error":"name_taken"}` | create client | Another client has the name. |
+| `422` `{"error":"write_chat_unknown"}` | create client | The archive has not seen a write chat, and it is a group or `allow_first_contact` is not set. |
+| `404` `{"error":"not_found"}` | show and revoke client | No client has the id. |
+| `400` `{"error":"invalid_query"}` | list chats | The query holds another key, `match` twice, a malformed escape, or a `match` longer than 64 characters, not UTF-8 or with a control character. |
+| `500` `{"error":"internal_error"}` | all | Anything else, such as an archive read that failed; the cause is never sent. |
+
+After the body is decoded, the create route checks these in the order of the
+table and answers the first that applies.
 
 #### Failed authentication
 
@@ -1281,25 +1453,29 @@ instead of `401`.
 The budget changes only the answer to a failure. Authentication still runs for
 every request, and a valid credential is accepted whether or not the budget is
 empty, so legitimate callers cannot be locked out. For the same reason the budget
-does not slow down guessing: what protects the admin token against guessing is its
-256 random bits. Anyone who can reach a listener can keep its budget empty, after
+does not slow down guessing: what protects the admin and client tokens against
+guessing are their 256 random bits. Anyone who can reach a listener can keep its budget empty, after
 which a caller presenting a wrong token sees `429` rather than `401`.
 
-Failed authentications are counted, and those of the admin listener reported
+On the client listener, a revoked or expired client's token is a failure like
+any other, and spends the budget. Failed authentications write no
+[audit](#audit-chain) row. Failed authentications are counted, and those of the admin listener reported
 in `admin_auth_failure` events, which carry a count and nothing about the
 requests.
 
 #### Request bodies
 
-The admin routes `pair` and `reconnect` read their body, which must be the empty
-object `{}`, and later client routes will read theirs, with one decoder. Only a
+The admin routes `pair`, `reconnect` and the client revoke route read their
+body, which must be the empty object `{}`, the client create route reads the
+client to create, and later client routes will read theirs, all with one
+decoder. Only a
 route handler can call it, so it runs only after authentication and after the
 route's grant was decided. It answers with a fixed error and reads no further when:
 
 | Answer | Refused when |
 |---|---|
 | `415` `{"error":"unsupported_media_type"}` | The request does not carry exactly one `Content-Type` header, or that header is not `application/json`, optionally with the single parameter `charset=utf-8` (media type and charset in any letter case). A body the request announces is not read, and the connection is closed. |
-| `413` `{"error":"body_too_large"}` | The body is longer than 16384 bytes, as announced by `Content-Length` (the body is not read) or found while reading; the connection is closed. |
+| `413` `{"error":"body_too_large"}` | The body is longer than 16384 bytes, or 65536 bytes for the client create route so that two sets of 256 chats fit, as announced by `Content-Length` (the body is not read) or found while reading; the connection is closed. |
 | `400` `{"error":"invalid_body"}` | The body is not valid UTF-8, starts with a byte-order mark, or is not exactly one JSON object with nothing but white space after it; it nests objects and arrays more than 8 levels deep, counting the outer object; an object holds a key that is not lower-case `snake_case` (a letter `a` to `z`, then letters, digits and `_`), or holds the same key twice once escapes are decoded (`"te\u0078t"` is `"text"`); a key is not a field of the route's request; or a value does not fit its field. |
 
 ### Health listener
@@ -1356,6 +1532,9 @@ has these keys:
 | `level` | `DEBUG`, `INFO`, `WARN` or `ERROR` |
 | `msg` | A human-readable sentence; it may change between releases |
 | `event` | A stable, machine-readable event name; match on this, not on `msg` |
+
+The [audit lines](#audit-chain) are the one exception: they have their own
+fixed keys, and a `chain_head` instead of an `event`.
 
 `WAWARDEN_LOG_LEVEL` sets the lowest level written, with exceptions that ignore
 the setting. The `startup_refused` line is written before the configuration is
@@ -1565,6 +1744,55 @@ line; and a protocol message or a URL, whatever its methods, and every other
 value as its Go type in brackets, such as `[seal.Chat]` or `[*waE2E.Message]`,
 never as its content.
 
+## Audit chain
+
+The archive's `audit` table records every change of a client: creating one
+(`client_create`) and revoking one (`client_revoke`, once; repeating it records
+nothing). Later releases record each client read in it too. Failed
+authentications are not recorded. A row holds an id one more than the
+previous row's, the time in milliseconds, the client id, the action, the chat
+(none for these two actions), its `chat-hmac` value, whether the action was
+allowed, a reason code (`ok` here), the peer address when one is known, the
+key id, and the row's HMAC: HMAC-SHA256 under the `audit-chain` key derived
+from the [master key](#master-key), over the domain string
+`wawarden/audit-row/v1`, a zero byte, the id and the time as 8-byte big-endian
+integers, each other field with a presence byte and its length, and the
+previous row's HMAC (32 zero bytes before the first row). The row is appended
+inside the same write transaction as the change it records, so a change whose
+row cannot be written does not happen. Triggers refuse to update or delete a
+row.
+
+After the transaction commits, the service writes one line on standard output,
+through the same scrubbing writer as every log line:
+
+```json
+{"ts":"2026-10-06T12:00:00.000Z","client":"aaaqeaye","action":"client_create","chat_hmac":null,"ok":true,"reason":"ok","chain_head":"3fa8c2d14be0917a5c6e2b8f0d4a7c19"}
+```
+
+`chat_hmac` is the first 16 bytes, in hexadecimal, of HMAC-SHA256 under the
+`chat-hmac` key over the chat's canonical identifier, or `null`; `chain_head`
+is the first 16 bytes of the row's HMAC. The line names no chat, person or
+message, and the peer address stays in the archive.
+
+**What verification proves.** [`audit verify`](#audit-verify) recomputes every
+row's HMAC from a copy of the archive and the master key, and reports a row
+whose content, HMAC or id sequence was changed, a row removed from the middle
+(as an `id_gap` on the next row) and a row written under another key. The
+triggers do not stop someone who holds the database file, and whoever holds
+`keys/master` can recompute the whole chain after changing it, or remove rows
+from its end without leaving a trace in the table. The chain heads on standard
+output are the anchor against both: ship the service's standard output to a
+store the host cannot rewrite, and give a capture of it to `audit verify
+--log`, which reports every shipped head the copy lacks. Rows removed from the
+end of the chain are detectable only this way. The master key is not part of a
+[backup](#backups): keep a copy of it apart from the backups to verify them.
+
+**Growth.** A row takes about 200 bytes. Client changes add a handful of rows;
+once client reads are recorded, a client that reads continuously at the
+highest rate the service allows could add up to about 170 MB a day. Nothing
+removes audit rows yet: retention and checkpoints are decided in a later
+release, and until then the table grows with the archive and its backups.
+
 ## Notifications
 
 The service reports what an operator must act on as notification events. Each
@@ -1582,7 +1810,7 @@ the [webhook](#webhook).
 | `quarantine` | `WARN` | `queue`: `inbox`, `history`; `attempts` | An inbox row or a history blob was set aside after three failed attempts. |
 | `rekey_conflict` | `WARN` | `conflict`: `mapping_contradicts`, `both_chats_have_messages`, `message_collision`, `scoped_chat` | A LID mapping was refused; the event that carried it is still applied. Reported once per refused mapping, as described under [Ingest](#ingest). |
 | `ingest_paused` | `WARN` | `free_bytes`, `floor_bytes` | The data directory fell below its [free-space floor](#free-space). |
-| `admin_mutation` | `INFO` | `action`: `pair`, `reconnect`; `outcome` | A `POST` [admin route](#admin-routes) was called with the admin token; `outcome` is `ok` or the error code it answered, such as `already_paired` or `invalid_body`. |
+| `admin_mutation` | `INFO` | `action`: `pair`, `reconnect`, `client_create`, `client_revoke`; `outcome` | A `POST` [admin route](#admin-routes) was called with the admin token; `outcome` is `ok` or the error code it answered, such as `already_paired`, `name_taken` or `invalid_body`. The event never names the client: the [audit chain](#audit-chain) records its id. |
 | `backup_done` | `INFO` | `bytes`, `archive_bytes`, `session_bytes`, `duration_ms` | A [backup](#backups) was written: `bytes` is the size of the encrypted file, the others the sizes of the two database copies and the time it took. |
 | `backup_failed` | `WARN` | `reason` | A [backup](#backups) failed and what it had written was removed; `reason` as in the table under [Backups](#backups). |
 | `admin_auth_failure` | `WARN` | `count` | Authentication failed on the admin listener. The first failure is reported at once with `count` `1`; further failures within the next minute are held back, and reported together once the minute has passed, within ten seconds, or at shutdown. `count` is the number of failures since the previous `admin_auth_failure`. |
