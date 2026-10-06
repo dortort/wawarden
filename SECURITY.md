@@ -58,8 +58,13 @@ checksums, signature and attestations.
 The security design, its invariants and the parts already implemented are
 described in [`docs/threat-model.md`](docs/threat-model.md); the exact behaviour
 of the current build is in [`docs/configuration.md`](docs/configuration.md).
-WaWarden is under construction: some of the areas below have no code yet. Flaws in
-the documented design are welcome as reports too.
+WaWarden is under construction. The latest release, `v0.1.0`, is the M0
+scaffold. `main` holds milestone M1, not released yet: the WhatsApp engine and
+its pairing guard, the message archive and the device store, the admin routes
+and `wawarden admin`, notification events and the webhook, and encrypted
+backups. Client tokens and the REST and MCP interfaces arrive in M2 and M3;
+until then the client listener refuses every request. Reports against `main`
+and flaws in the documented design are welcome too.
 
 ### In scope
 
@@ -77,11 +82,25 @@ the documented design are welcome as reports too.
   revoke, reaction or poll update) changing data in another chat, crafted protocol
   messages or history payloads that crash the process, corrupt the archive or
   re-key chats.
+- Pairing flaws: linking, or keeping linked, an account other than the one in
+  `WAWARDEN_OWNER_PHONE`, or a pairing code reaching anyone but the caller of
+  the admin route that requested it.
+- Message text left on disk after a revocation, an edit or an expiry beyond the
+  exceptions the threat model lists.
+- Traffic to WhatsApp that the threat model says WaWarden never causes, such as
+  read receipts or presence, or a connection from a service without a paired
+  device before pairing is requested.
+- A notification webhook post that reaches an address its destination check
+  refuses.
+- A backup that can be decrypted without the age identity it was encrypted to,
+  or a plaintext copy of a database that outlives a backup beyond the cases the
+  threat model lists.
 - Supply-chain and release-integrity issues: a release artifact that does not
   match its source, a provenance attestation or signature that verifies for the
   wrong workflow, a release that cannot be reproduced with the toolchain and
-  builder documented in `RELEASING.md`, or weaknesses in the CI and release
-  workflows.
+  builder documented in `RELEASING.md`, a release binary or image that contains
+  the development-only fake engine, or weaknesses in the CI, release and
+  dependency-update workflows.
 - Anything that defeats an invariant documented in `docs/threat-model.md`.
 
 ### Out of scope
@@ -99,12 +118,15 @@ the documented design are welcome as reports too.
   the threat model.
 - Dev builds (built with the `dev` build tag) and behaviour that requires a
   setting or flag the documentation marks as unsafe.
-- Vulnerabilities in dependencies such as `go.mau.fi/whatsmeow`, unless WaWarden's
-  use of them makes the issue exploitable. Report those upstream.
+- Vulnerabilities in the third-party modules WaWarden links, such as
+  `go.mau.fi/whatsmeow`, `go.mau.fi/libsignal`, `modernc.org/sqlite` or
+  `filippo.io/age`, unless WaWarden's use of them makes the issue exploitable.
+  Report those upstream.
 - Everything else the threat model lists as out of scope: processes running as the
   same user on a client host, a compromised device linked to the same account,
-  readers of backups the operator chose not to encrypt, delivery receipts,
-  deletion residuals in backups and filesystem blocks, and what an agent does with
+  whoever holds both a backup and the age identity it was encrypted to, delivery
+  receipts and the other traffic the protocol library sends by itself, deletion
+  residuals in backups and filesystem blocks, and what an agent does with
   message text it reads.
 
 ## Verifying a release
