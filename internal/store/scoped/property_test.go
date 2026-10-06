@@ -377,10 +377,179 @@ func TestPropertyScopedReadsMatchTheOracle(t *testing.T) {
 			checkSearch(t, a, g, set, messages)
 			checkMessage(t, a, g, set, messages)
 		}
+		checkReplay(t, a, chats, messages)
 		cov.add(a.seen)
 	})
 	cov.require(t, "re-key moved a scope", "re-key refused for a scope", "a client sees some messages and not others", "revoke", "edit", "dead canary",
-		"changes from a time skipped a change", "changes from a time kept a later change dated before it", "saved name shown", "saved name hidden")
+		"changes from a time skipped a change", "changes from a time kept a later change dated before it", "saved name shown", "saved name hidden",
+		"a position replayed under another grant")
+}
+
+func replay[P any](t *rapid.T, pos P, next func(P) ([]int64, P, bool, error)) []int64 {
+	var got []int64
+	for range 100 {
+		rows, p, more, err := next(pos)
+		if err != nil {
+			t.Fatalf("replay: %v", err)
+		}
+		got = append(got, rows...)
+		if !more {
+			return got
+		}
+		pos = p
+	}
+	t.Fatal("a replay never ended")
+	return nil
+}
+
+func checkReplay(t *rapid.T, a *archive, chats []scoped.DumpChat, messages []scoped.DumpMessage) {
+	r, ctx := a.store.Scoped(), t.Context()
+	i := rapid.IntRange(0, len(a.clients)-1).Draw(t, "position of")
+	fromSet := scopeOfClient(t, a.store, a.clients[i])
+	from := grantOf(t, a.clients[i], fromSet)
+	type grantee struct {
+		g     policy.ReadGrant
+		set   scopeSet
+		other bool
+	}
+	to := []grantee{{g: grantOf(t, propClient{id: "client09", revoked: true}, scopeSet{})}}
+	if len(a.clients) > 1 {
+		j := (i + rapid.IntRange(1, len(a.clients)-1).Draw(t, "replayed by")) % len(a.clients)
+		set := scopeOfClient(t, a.store, a.clients[j])
+		to = append(to, grantee{grantOf(t, a.clients[j], set), set, true})
+	}
+	limit := rapid.IntRange(1, 5).Draw(t, "replay limit")
+	check := func(name string, e grantee, got, want []int64) {
+		if !slices.Equal(got, want) {
+			t.Fatalf("%s replayed under another grant = %v, want %v", name, got, want)
+		}
+		a.seen["a position replayed under another grant"] = a.seen["a position replayed under another grant"] || e.other
+	}
+
+	chatPage, err := r.Chats(from, ctx, scoped.ChatPosition{}, 1)
+	if err != nil {
+		t.Fatalf("Chats: %v", err)
+	}
+	if chatPage.More {
+		p := chatPage.Next
+		at := scoped.DumpChat{Row: p.Row, LastTS: p.LastTS, Dated: !p.Undated}
+		sorted := slices.SortedFunc(slices.Values(chats), chatOrder)
+		for _, e := range to {
+			var want []int64
+			for _, c := range sorted {
+				if e.set.has(c.JID) && chatOrder(c, at) > 0 {
+					want = append(want, c.Row)
+				}
+			}
+			check("Chats", e, replay(t, p, func(p scoped.ChatPosition) ([]int64, scoped.ChatPosition, bool, error) {
+				page, err := r.Chats(e.g, ctx, p, limit)
+				var rows []int64
+				for _, c := range page.Chats {
+					rows = append(rows, c.Position.Row)
+				}
+				return rows, page.Next, page.More, err
+			}), want)
+		}
+	}
+
+	visible := slices.DeleteFunc(slices.Clone(chats), func(c scoped.DumpChat) bool { return !fromSet.has(c.JID) })
+	if len(visible) > 0 {
+		c := rapid.SampledFrom(visible).Draw(t, "replayed chat")
+		dir := rapid.SampledFrom([]scoped.Direction{scoped.Older, scoped.Newer}).Draw(t, "replayed direction")
+		page, _, err := r.Messages(from, ctx, c.Ref, scoped.MessagePosition{}, dir, 1)
+		if err != nil {
+			t.Fatalf("Messages: %v", err)
+		}
+		if page.More {
+			p := page.Next
+			order := func(m scoped.DumpMessage) int {
+				o := cmp.Or(cmp.Compare(m.TS, p.TS), cmp.Compare(m.Seq, p.Seq))
+				if dir == scoped.Older {
+					return -o
+				}
+				return o
+			}
+			of := slices.DeleteFunc(slices.Clone(messages), func(m scoped.DumpMessage) bool { return m.Chat != c.JID || order(m) <= 0 })
+			slices.SortFunc(of, func(x, y scoped.DumpMessage) int { return cmp.Or(cmp.Compare(x.TS, y.TS), cmp.Compare(x.Seq, y.Seq)) })
+			if dir == scoped.Older {
+				slices.Reverse(of)
+			}
+			for _, e := range to {
+				var want []int64
+				for _, m := range of {
+					if e.set.has(m.Chat) {
+						want = append(want, m.Seq)
+					}
+				}
+				check("Messages", e, replay(t, p, func(p scoped.MessagePosition) ([]int64, scoped.MessagePosition, bool, error) {
+					page, found, err := r.Messages(e.g, ctx, c.Ref, p, dir, limit)
+					if found != e.set.has(c.JID) {
+						t.Fatalf("Messages of %s replayed under another grant found %v", c.JID, found)
+					}
+					var rows []int64
+					for _, m := range page.Messages {
+						rows = append(rows, m.Position.Seq)
+					}
+					return rows, page.Next, page.More, err
+				}), want)
+			}
+		}
+	}
+
+	changePage, _, err := r.Changes(from, ctx, "", scoped.ChangePosition{}, 1)
+	if err != nil {
+		t.Fatalf("Changes: %v", err)
+	}
+	if changePage.More {
+		p := changePage.Next
+		of := slices.DeleteFunc(slices.Clone(messages), func(m scoped.DumpMessage) bool { return m.ChangeSeq <= p.ChangeSeq })
+		slices.SortFunc(of, func(x, y scoped.DumpMessage) int { return cmp.Compare(x.ChangeSeq, y.ChangeSeq) })
+		for _, e := range to {
+			var want []int64
+			for _, m := range of {
+				if e.set.has(m.Chat) {
+					want = append(want, m.Seq)
+				}
+			}
+			check("Changes", e, replay(t, p, func(p scoped.ChangePosition) ([]int64, scoped.ChangePosition, bool, error) {
+				page, _, err := r.Changes(e.g, ctx, "", p, limit)
+				var rows []int64
+				for _, m := range page.Messages {
+					rows = append(rows, m.Position.Seq)
+				}
+				return rows, page.Next, page.More, err
+			}), want)
+		}
+	}
+
+	q, err := scoped.ParseQuery("end")
+	if err != nil {
+		t.Fatalf("ParseQuery: %v", err)
+	}
+	searchPage, _, err := r.Search(from, ctx, q, "", scoped.SearchPosition{}, 1)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if searchPage.More {
+		p := searchPage.Next
+		for _, e := range to {
+			var want []int64
+			for _, m := range messages {
+				if e.set.has(m.Chat) && !m.Revoked && strings.Contains(m.Text, "end") && m.Seq < p.Upper {
+					want = append(want, m.Seq)
+				}
+			}
+			slices.SortFunc(want, func(x, y int64) int { return cmp.Compare(y, x) })
+			check("Search", e, replay(t, p, func(p scoped.SearchPosition) ([]int64, scoped.SearchPosition, bool, error) {
+				page, _, err := r.Search(e.g, ctx, q, "", p, limit)
+				var rows []int64
+				for _, m := range page.Messages {
+					rows = append(rows, m.Position.Seq)
+				}
+				return rows, page.Next, page.More, err
+			}), want)
+		}
+	}
 }
 
 func checkChats(t *rapid.T, a *archive, g policy.ReadGrant, set scopeSet, chats []scoped.DumpChat, limit int) {
