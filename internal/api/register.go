@@ -68,7 +68,7 @@ func decided[G any](decide func(*http.Request) (G, bool), h func(context.Context
 	return func(w http.ResponseWriter, r *http.Request) {
 		g, ok := decide(r)
 		if !ok {
-			writeError(w, http.StatusNotFound, codeNotFound)
+			refuse(w, r, http.StatusNotFound, codeNotFound)
 			return
 		}
 		resp, err := h(r.Context(), g, &Request{w: w, req: r})
@@ -99,16 +99,17 @@ func (rt *router) register(rte route, h http.HandlerFunc) {
 }
 
 func (rt *router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	f := &fallbackWriter{w: w, header: make(http.Header)}
+	f := &fallbackWriter{w: w, r: r, header: make(http.Header)}
 	rt.mux.ServeHTTP(f, r)
 	if !f.routed && !f.written {
-		writeError(w, http.StatusNotFound, codeNotFound)
+		refuse(w, r, http.StatusNotFound, codeNotFound)
 	}
 }
 
 // Only registered routes write directly; any response ServeMux makes itself becomes the uniform 404 or 405.
 type fallbackWriter struct {
 	w       http.ResponseWriter
+	r       *http.Request
 	header  http.Header
 	routed  bool
 	written bool
@@ -128,8 +129,8 @@ func (f *fallbackWriter) WriteHeader(status int) {
 	f.written = true
 	if status == http.StatusMethodNotAllowed {
 		f.w.Header().Set("Allow", f.header.Get("Allow"))
-		writeError(f.w, http.StatusMethodNotAllowed, codeMethodNotAllowed)
+		refuse(f.w, f.r, http.StatusMethodNotAllowed, codeMethodNotAllowed)
 		return
 	}
-	writeError(f.w, http.StatusNotFound, codeNotFound)
+	refuse(f.w, f.r, http.StatusNotFound, codeNotFound)
 }

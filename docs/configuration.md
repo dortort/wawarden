@@ -1344,9 +1344,10 @@ Requests to the client and admin listeners pass these checks in order:
    (`not_found`) and a known path with another method is `405`
    (`method_not_allowed`) with an `Allow` header.
 
-No request body is read before authentication succeeds. When a refused request
-announces a body, the response carries `Connection: close` and the connection is
-closed instead of being read.
+No request body is read before authentication succeeds. When a request
+announces a body the service does not read, as with every refusal, every `404`
+and `405`, and every read route, the response carries `Connection: close` and
+the connection is closed instead of being read.
 
 The credential is taken from exactly one `Authorization` header of the form
 `Bearer <token>`: the scheme in any letter case, one space, and a token without

@@ -382,6 +382,30 @@ func TestInvalidCursorsAreRefusedAfterTheScopeCheck(t *testing.T) {
 	}
 }
 
+func TestEveryNotFoundWithABodyIsByteIdentical(t *testing.T) {
+	f := newReadFixture(t)
+	f.clients[keyRevoked] = &policy.Client{ID: "client-revoked", ReadAll: true, Revoked: true, ExpiresAt: testNow.Add(24 * time.Hour)}
+	withBody := func(key, target string) *httptest.ResponseRecorder {
+		r := newRequest(t, http.MethodGet, target, bearer(key))
+		r.ContentLength = int64(len("x=1"))
+		return serve(f.handler, r)
+	}
+	reference := withBody(keyGroup, "/v1/no-such-route")
+	requireError(t, reference, http.StatusNotFound, codeNotFound)
+	if got := reference.Header().Get("Connection"); got != "close" {
+		t.Fatalf("an unknown route with a body: Connection = %q, want close", got)
+	}
+	for _, target := range []string{"/v1/chats/" + aliceRef, "/v1/chats/" + noRef, "/v1/chats/" + aliceRef + "/messages", "/v1/messages/garbage", "/v1/chats/" + groupRef + "/messages/extra"} {
+		requireSameResponse(t, withBody(keyGroup, target), reference)
+	}
+	requireSameResponse(t, withBody(keyRevoked, "/v1/chats"), reference)
+	wrongMethod := newRequest(t, http.MethodPost, "/v1/chats", bearer(keyGroup))
+	wrongMethod.ContentLength = int64(len("x=1"))
+	if rec := serve(f.handler, wrongMethod); rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Connection") != "close" {
+		t.Fatalf("a wrong method with a body = %d, Connection %q, want 405 and close", rec.Code, rec.Header().Get("Connection"))
+	}
+}
+
 func TestReplaysUnderAChangedGrantNeverWidenScope(t *testing.T) {
 	f := newReadFixture(t)
 	page := decodeBody[pageView](t, f.get(t, keyGroup, "/v1/chats/"+groupRef+"/messages?limit=2"))
