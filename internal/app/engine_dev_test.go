@@ -23,7 +23,7 @@ func TestTheFakeEngineOpensNoSessionAndWaitsForPairing(t *testing.T) {
 	cfg.OwnerPhone, cfg.HistoryMaxBytes = "+15550100009", config.DefaultHistoryMaxBytes
 	cfg.Dev.FakeEngine = true
 	logs := &syncBuffer{}
-	a, err := New(t.Context(), cfg, logx.NewWriter(logs))
+	a, err := New(t.Context(), cfg, logx.NewWriter(logs), testMaster(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestTheFakeEngineSaysItTakesNoBackup(t *testing.T) {
 	cfg.OwnerPhone, cfg.HistoryMaxBytes, cfg.BackupRecipient = "+15550100009", config.DefaultHistoryMaxBytes, id.Recipient().String()
 	cfg.Dev.FakeEngine, cfg.LogLevel = true, slog.LevelError
 	logs := &syncBuffer{}
-	a, err := New(t.Context(), cfg, logx.NewWriter(logs))
+	a, err := New(t.Context(), cfg, logx.NewWriter(logs), testMaster(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestTheFakeEngineWarnsAtEveryLogLevel(t *testing.T) {
 			cfg.OwnerPhone, cfg.HistoryMaxBytes = "+15550100009", config.DefaultHistoryMaxBytes
 			cfg.Dev.FakeEngine, cfg.LogLevel = true, level
 			logs := &syncBuffer{}
-			a, err := New(t.Context(), cfg, logx.NewWriter(logs))
+			a, err := New(t.Context(), cfg, logx.NewWriter(logs), testMaster(t))
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
@@ -101,7 +101,7 @@ func TestARefusedFakeEngineClosesTheArchive(t *testing.T) {
 	cfg := testConfig(t, "")
 	cfg.OwnerPhone, cfg.HistoryMaxBytes = "+15550100021", config.DefaultHistoryMaxBytes
 	cfg.Dev.FakeEngine = true
-	if _, err := New(t.Context(), cfg, logx.NewWriter(io.Discard)); err == nil {
+	if _, err := New(t.Context(), cfg, logx.NewWriter(io.Discard), testMaster(t)); err == nil {
 		t.Fatal("New accepted an owner number that the fake engine uses for a synthetic contact")
 	}
 	requireReleased(t, cfg.DataDir)

@@ -80,7 +80,7 @@ func TestNewRefusesAnArchiveItCannotTrust(t *testing.T) {
 	if err := os.Chmod(path, 0o644); err != nil { //nolint:gosec // G302: the refusal under test needs a world-readable archive
 		t.Fatalf("Chmod: %v", err)
 	}
-	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), noClients{}, idle())
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), nil, noClients{}, idle())
 	if err == nil {
 		t.Cleanup(func() { _ = run(t, a)() })
 	}
@@ -99,7 +99,7 @@ func TestNewWaitsForTheArchiveAndStopsWhenCancelled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
 	began := time.Now()
-	a, err := newAppWith(ctx, cfg, logx.NewWriter(io.Discard), noClients{}, idle())
+	a, err := newAppWith(ctx, cfg, logx.NewWriter(io.Discard), nil, noClients{}, idle())
 	if err == nil {
 		t.Cleanup(func() { _ = run(t, a)() })
 	}
@@ -115,7 +115,7 @@ func TestAFailedStartClosesTheArchive(t *testing.T) {
 	a, _, stop := start(t, testConfig(t, ""), noClients{})
 	cfg := testConfig(t, "")
 	cfg.HealthListen = addr(t, a, "health")
-	if _, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), noClients{}, idle()); err == nil {
+	if _, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), nil, noClients{}, idle()); err == nil {
 		t.Fatal("newAppWith bound an address already in use")
 	}
 	requireReleased(t, cfg.DataDir)

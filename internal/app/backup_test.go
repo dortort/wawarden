@@ -259,7 +259,7 @@ func pairedApp(t *testing.T, client *stubClient, recipient string) (*App, *syncB
 		t.Fatalf("session.Open: %v", err)
 	}
 	logs := &syncBuffer{}
-	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), noClients{},
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), nil, noClients{},
 		fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}, session: sess}))
 	if err != nil {
 		_ = sess.Close()

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -71,7 +72,7 @@ func TestAdminRoutesDriveTheEngine(t *testing.T) {
 	client := newStubClient()
 	client.unpaired, client.pairCode = true, canary
 	logs := &syncBuffer{}
-	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), noClients{}, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), nil, noClients{}, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
 	if err != nil {
 		t.Fatalf("newAppWith: %v", err)
 	}
@@ -90,7 +91,8 @@ func TestAdminRoutesDriveTheEngine(t *testing.T) {
 
 	r := mustDo(t, http.MethodGet, admin, "/admin/v1/status", bearer(adminToken))
 	want := `{"state":"unpaired","reason":"","paired":false,"counts":{"chats":1,"messages":1,"history_blobs_pending":0,` +
-		`"history_blobs_quarantined":0,"inbox_backlog":0,"inbox_quarantined":0},"last_ingest_at":"2026-10-05T08:00:00Z","version":"` + buildinfo.Read().Version + `"}`
+		`"history_blobs_quarantined":0,"inbox_backlog":0,"inbox_quarantined":0},"clients":{"active":0,"expired":0,"revoked":0,"all_chats_active":0},` +
+		`"warnings":[],"last_ingest_at":"2026-10-05T08:00:00Z","version":"` + buildinfo.Read().Version + `"}`
 	if r.status != http.StatusOK || r.body != want {
 		t.Fatalf("status = %d %s, want %s", r.status, r.body, want)
 	}
@@ -132,6 +134,105 @@ func TestAdminRoutesDriveTheEngine(t *testing.T) {
 	}
 }
 
+func TestClientsAreCreatedAuthenticatedAuditedAndRevoked(t *testing.T) {
+	adminToken := token.NewAdmin()
+	cfg := testConfig(t, adminToken)
+	logs := &syncBuffer{}
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), testMaster(t), nil, idle())
+	if err != nil {
+		t.Fatalf("newAppWith: %v", err)
+	}
+	group, _ := policy.Normalize("120363000000000001@g.us")
+	sender, _ := policy.Normalize("15550100002@s.whatsapp.net")
+	if err := a.archive.Write(t.Context(), "test.fill", func(tx *ingest.Tx) error {
+		if err := tx.SetChatName(group, "Synthetic Group", ingest.NameGroupSubject, ingest.OriginLive); err != nil {
+			return err
+		}
+		_, _, err := tx.InsertMessage(ingest.Message{Chat: group, ID: "M1", Sender: sender, Origin: ingest.OriginLive,
+			Timestamp: time.Now().Add(-time.Minute), Kind: ingest.KindText, Text: "synthetic", Ingested: time.Now()})
+		return err
+	}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	stop := run(t, a)
+	logs.waitFor(t, "ready")
+	admin, client := addr(t, a, "admin"), addr(t, a, "client")
+
+	if r := mustDo(t, http.MethodGet, admin, "/admin/v1/chats?match=synthetic", bearer(adminToken)); r.status != http.StatusOK ||
+		!strings.Contains(r.body, `"id":"120363000000000001@g.us","kind":"group"`) || !strings.Contains(r.body, `"name":"Synthetic Group"`) {
+		t.Fatalf("chats = %d %s", r.status, r.body)
+	}
+	created := post(t, admin, "/admin/v1/clients", bearer(adminToken), `{"name":"agent","read_chats":["120363000000000001@g.us"],"write_chats":["120363000000000001@g.us"]}`)
+	var body struct {
+		Client struct {
+			ID    string `json:"id"`
+			State string `json:"state"`
+		} `json:"client"`
+		Credential string `json:"credential"`
+	}
+	if created.status != http.StatusOK || json.Unmarshal([]byte(created.body), &body) != nil || body.Client.State != "active" {
+		t.Fatalf("create = %d %s", created.status, created.body)
+	}
+	if id, ok := token.ParseClient(body.Credential); !ok || id != body.Client.ID {
+		t.Fatalf("the credential %q is not a client token for %q", body.Credential, body.Client.ID)
+	}
+	if r := post(t, admin, "/admin/v1/clients", bearer(adminToken), `{"name":"AGENT","all_chats":true}`); r.status != http.StatusConflict || r.body != `{"error":"name_taken"}` {
+		t.Fatalf("a second client with the name = %d %s", r.status, r.body)
+	}
+	if r := mustDo(t, http.MethodGet, client, "/v1/anything", bearer(body.Credential)); r.status != http.StatusNotFound {
+		t.Fatalf("an authenticated client request to an unknown path = %d %s, want the uniform 404", r.status, r.body)
+	}
+	_, other := token.NewClient()
+	if r := mustDo(t, http.MethodGet, client, "/v1/anything", bearer(other)); r.status != http.StatusUnauthorized {
+		t.Fatalf("an unknown client token = %d, want 401", r.status)
+	}
+	if r := mustDo(t, http.MethodGet, admin, "/admin/v1/status", bearer(adminToken)); !strings.Contains(r.body, `"clients":{"active":1,"expired":0,"revoked":0,"all_chats_active":0}`) {
+		t.Fatalf("status = %s", r.body)
+	}
+	if r := post(t, admin, "/admin/v1/clients/"+body.Client.ID+"/revoke", bearer(adminToken), "{}"); r.status != http.StatusOK || !strings.Contains(r.body, `"state":"revoked"`) {
+		t.Fatalf("revoke = %d %s", r.status, r.body)
+	}
+	if r := mustDo(t, http.MethodGet, client, "/v1/anything", bearer(body.Credential)); r.status != http.StatusUnauthorized {
+		t.Fatalf("a revoked client's request = %d, want 401 on the next request", r.status)
+	}
+	if r := mustDo(t, http.MethodGet, admin, "/admin/v1/clients/zzzzzzzz", bearer(adminToken)); r.status != http.StatusNotFound || r.body != `{"error":"not_found"}` {
+		t.Fatalf("an unknown client = %d %s", r.status, r.body)
+	}
+	if err := stop(); err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+
+	var mutations []string
+	for _, rec := range logs.find("admin_mutation") {
+		mutations = append(mutations, rec["action"].(string)+":"+rec["outcome"].(string))
+	}
+	if got := strings.Join(mutations, " "); got != "client_create:ok client_create:name_taken client_revoke:ok" {
+		t.Fatalf("admin_mutation events %q", got)
+	}
+	var audit []string
+	for _, rec := range logs.events() {
+		if head, ok := rec["chain_head"].(string); ok && len(head) == 32 && rec["client"] == body.Client.ID {
+			audit = append(audit, rec["action"].(string))
+		}
+	}
+	if got := strings.Join(audit, " "); got != "client_create client_revoke" {
+		t.Fatalf("audit lines %q, want the create and the revoke on standard output", got)
+	}
+	out := logs.buf.String()
+	if strings.Contains(out, body.Credential) || strings.Contains(out, body.Credential[12:55]) || strings.Contains(out, "120363000000000001@g.us") {
+		t.Fatalf("standard output carries the credential or a chat identifier:\n%s", out)
+	}
+	if n := strings.Count(created.body, body.Credential); n != 1 {
+		t.Fatalf("the create response holds the credential %d times", n)
+	}
+}
+
+func TestNewRefusesToStartWithoutTheMasterKey(t *testing.T) {
+	if _, err := New(t.Context(), testConfig(t, ""), logx.NewWriter(io.Discard), nil); !errors.Is(err, errNoMasterKey) {
+		t.Fatalf("New without a master key = %v", err)
+	}
+}
+
 func TestTheWebhookIsWiredFromTheConfiguration(t *testing.T) {
 	cfg := testConfig(t, "")
 	cfg.OwnerPhone, cfg.HistoryMaxBytes = "+15550100009", config.DefaultHistoryMaxBytes
@@ -139,7 +240,7 @@ func TestTheWebhookIsWiredFromTheConfiguration(t *testing.T) {
 	client := newStubClient()
 	client.unpaired = true
 	logs := &syncBuffer{}
-	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), noClients{}, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), nil, noClients{}, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
 	if err != nil {
 		t.Fatalf("newAppWith: %v", err)
 	}
@@ -188,7 +289,7 @@ func TestAWebhookCutShortByTheGracePeriodFailsTheRun(t *testing.T) {
 	client := newStubClient()
 	client.unpaired = true
 	logs := &syncBuffer{}
-	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), noClients{}, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), nil, noClients{}, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
 	if err != nil {
 		t.Fatalf("newAppWith: %v", err)
 	}
@@ -246,7 +347,7 @@ func TestEMFLinesGoThroughTheScrubbingWriter(t *testing.T) {
 	cfg.OwnerPhone, cfg.HistoryMaxBytes, cfg.MetricsEMF = "+15550100009", config.DefaultHistoryMaxBytes, true
 	client := newStubClient()
 	logs := &syncBuffer{}
-	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), noClients{}, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), nil, noClients{}, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
 	if err != nil {
 		t.Fatalf("newAppWith: %v", err)
 	}

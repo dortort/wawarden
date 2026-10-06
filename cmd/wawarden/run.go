@@ -78,7 +78,7 @@ func serve(ctx context.Context, args, environ []string, stdout, stderr io.Writer
 	out.SetKey(master.LogRedactKey())
 	logger := logx.New(out, cfg.LogLevel)
 	logger.Info("keys loaded", slog.String("event", "keys_loaded"), slog.String("key_id", master.ID()))
-	a, err := app.New(ctx, cfg, out)
+	a, err := app.New(ctx, cfg, out, master)
 	if r, ok := errors.AsType[*app.Refusal](err); ok {
 		return refused(out, r.Reason, r)
 	}

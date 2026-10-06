@@ -137,7 +137,7 @@ func TestEngineRunsWhenAClientIsSupplied(t *testing.T) {
 	cfg.OwnerPhone, cfg.HistoryMaxBytes = "+15550100009", config.DefaultHistoryMaxBytes
 	client := newStubClient()
 	logs := &syncBuffer{}
-	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), noClients{}, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), nil, noClients{}, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
 	if err != nil {
 		t.Fatalf("newAppWith: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestTheRestartBudgetReachesTheEngine(t *testing.T) {
 		}
 		client := newStubClient()
 		logs := &syncBuffer{}
-		a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), noClients{}, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
+		a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), nil, noClients{}, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
 		if err != nil {
 			t.Fatalf("newAppWith: %v", err)
 		}
@@ -241,7 +241,7 @@ func TestTheRestartBudgetReachesTheEngine(t *testing.T) {
 func TestIncompleteEnginePartsAreRefused(t *testing.T) {
 	cfg := testConfig(t, "")
 	cfg.HistoryMaxBytes = config.DefaultHistoryMaxBytes
-	if _, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), noClients{}, fixed(engineParts{client: newStubClient()})); err == nil {
+	if _, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), nil, noClients{}, fixed(engineParts{client: newStubClient()})); err == nil {
 		t.Fatal("an engine without a version source or a decoder was accepted")
 	}
 	requireReleased(t, cfg.DataDir)
@@ -272,7 +272,7 @@ func TestAnUnpairedEngineStaysIdleAndSaysSoOnce(t *testing.T) {
 	client.unpaired = true
 	var fetches atomic.Int32
 	logs := &syncBuffer{}
-	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), noClients{}, fixed(engineParts{client: client, versions: stubVersions{calls: &fetches}, decoder: stubDecoder{}}))
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), nil, noClients{}, fixed(engineParts{client: client, versions: stubVersions{calls: &fetches}, decoder: stubDecoder{}}))
 	if err != nil {
 		t.Fatalf("newAppWith: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestTheDeviceStoreIsPartOfHealthAndClosedOnShutdown(t *testing.T) {
 	store.healthy.Store(true)
 	client := newStubClient()
 	client.unpaired = true
-	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), noClients{}, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}, session: store}))
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), nil, noClients{}, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}, session: store}))
 	if err != nil {
 		t.Fatalf("newAppWith: %v", err)
 	}
@@ -329,12 +329,12 @@ func TestAFailingEngineSourceClosesTheArchive(t *testing.T) {
 	failing := func(context.Context, config.Config, *logx.Writer, *slog.Logger, *slog.Logger) (engineParts, error) {
 		return engineParts{}, failure
 	}
-	if _, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), noClients{}, failing); !errors.Is(err, failure) {
+	if _, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), nil, noClients{}, failing); !errors.Is(err, failure) {
 		t.Fatalf("newAppWith = %v, want the source's failure", err)
 	}
 	requireReleased(t, cfg.DataDir)
 	store := &stubSession{}
-	if _, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), noClients{}, fixed(engineParts{client: newStubClient(), session: store})); err == nil {
+	if _, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), nil, noClients{}, fixed(engineParts{client: newStubClient(), session: store})); err == nil {
 		t.Fatal("an engine without a version source or a decoder was accepted")
 	}
 	if store.closed.Load() != 1 {
@@ -347,7 +347,7 @@ func TestReleaseBuildsOpenTheSessionAndWaitForPairing(t *testing.T) {
 	cfg := testConfig(t, "")
 	cfg.OwnerPhone, cfg.HistoryMaxBytes = "+15550100009", config.DefaultHistoryMaxBytes
 	logs := &syncBuffer{}
-	a, err := New(t.Context(), cfg, logx.NewWriter(logs))
+	a, err := New(t.Context(), cfg, logx.NewWriter(logs), testMaster(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -396,7 +396,7 @@ func TestReleaseBuildsRefuseASessionTheyCannotTrust(t *testing.T) {
 	if err := os.Chmod(path, 0o640); err != nil { //nolint:gosec // G302: the refusal under test needs a group-readable session.db
 		t.Fatalf("Chmod: %v", err)
 	}
-	_, err := New(t.Context(), cfg, logx.NewWriter(io.Discard))
+	_, err := New(t.Context(), cfg, logx.NewWriter(io.Discard), testMaster(t))
 	if r, ok := errors.AsType[*Refusal](err); !ok || r.Reason != "session_db_permissions" {
 		t.Fatalf("New = %v, want the refusal session_db_permissions", err)
 	}

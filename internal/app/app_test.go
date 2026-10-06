@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/dortort/wawarden/internal/api"
 	"github.com/dortort/wawarden/internal/buildinfo"
 	"github.com/dortort/wawarden/internal/config"
+	"github.com/dortort/wawarden/internal/keys"
 	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/policy"
@@ -136,10 +138,31 @@ func testConfig(t *testing.T, adminToken string) config.Config {
 	return cfg
 }
 
+func testMaster(t *testing.T) *keys.Master {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "master")
+	secret := make([]byte, 32)
+	for i := range secret {
+		secret[i] = byte(200 - i)
+	}
+	if err := os.WriteFile(path, secret, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	m, r := keys.LoadFile(path)
+	if r != nil {
+		t.Fatalf("LoadFile: %v", r)
+	}
+	return m
+}
+
+type noClients struct{}
+
+func (noClients) Authenticate(context.Context, string) (*policy.Client, bool) { return nil, false }
+
 func open(t *testing.T, cfg config.Config, auth api.Authenticator) (*App, *syncBuffer) {
 	t.Helper()
 	logs := &syncBuffer{}
-	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), auth, idle())
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), nil, auth, idle())
 	if err != nil {
 		t.Fatalf("newAppWith: %v", err)
 	}

@@ -16,11 +16,11 @@ import (
 	"github.com/dortort/wawarden/internal/buildinfo"
 	"github.com/dortort/wawarden/internal/config"
 	"github.com/dortort/wawarden/internal/engine"
+	"github.com/dortort/wawarden/internal/keys"
 	"github.com/dortort/wawarden/internal/listeners"
 	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/notify"
-	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/safego"
 	"github.com/dortort/wawarden/internal/store/ingest"
 )
@@ -37,6 +37,7 @@ const (
 var (
 	errHealthNotLoopback = errors.New("app: the unauthenticated health listener must be bound to a loopback address")
 	errBackupNotStopped  = errors.New("app: the backup did not stop in time")
+	errNoMasterKey       = errors.New("app: the service needs the master key")
 )
 
 type Refusal = ingest.Refusal
@@ -83,11 +84,14 @@ type engineParts struct {
 
 type engineSource func(ctx context.Context, cfg config.Config, out *logx.Writer, logger, alerts *slog.Logger) (engineParts, error)
 
-func New(ctx context.Context, cfg config.Config, out *logx.Writer) (*App, error) {
-	return newAppWith(ctx, cfg, out, noClients{}, engineFor(cfg))
+func New(ctx context.Context, cfg config.Config, out *logx.Writer, master *keys.Master) (*App, error) {
+	if master == nil {
+		return nil, errNoMasterKey
+	}
+	return newAppWith(ctx, cfg, out, master, nil, engineFor(cfg))
 }
 
-func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth api.Authenticator, source engineSource) (*App, error) {
+func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master *keys.Master, auth api.Authenticator, source engineSource) (*App, error) {
 	if !cfg.HealthListen.Addr().IsLoopback() {
 		return nil, errHealthNotLoopback
 	}
@@ -113,9 +117,14 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth a
 		Profile:      ingest.Profile(cfg.StorageProfile),
 		MinFreeBytes: cfg.MinFreeBytes,
 		Logger:       logger,
+		Master:       master,
+		AuditOut:     out,
 	})
 	if err != nil {
 		return nil, err
+	}
+	if auth == nil {
+		auth = archive.Clients()
 	}
 	starts, err := archive.RecordStart(ctx, time.Now())
 	if err != nil {
@@ -310,7 +319,3 @@ func (a *App) emit() {
 		a.logger.Warn("writing the embedded-metric-format lines failed", slog.String("event", "emf_failed"), slog.String("error_type", fmt.Sprintf("%T", err)))
 	}
 }
-
-type noClients struct{}
-
-func (noClients) Authenticate(context.Context, string) (*policy.Client, bool) { return nil, false }

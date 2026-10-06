@@ -51,7 +51,7 @@ func TestHealthListenerIsRefusedBeyondLoopback(t *testing.T) {
 		t.Run(health, func(t *testing.T) {
 			cfg := testConfig(t, "")
 			cfg.HealthListen = netip.MustParseAddrPort(health)
-			a, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), noClients{}, idle())
+			a, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), nil, noClients{}, idle())
 			if err == nil {
 				t.Cleanup(func() { _ = run(t, a)() })
 			}
@@ -67,7 +67,7 @@ func TestFailedStartLeavesNoListener(t *testing.T) {
 	a, _, stop := start(t, testConfig(t, token.NewAdmin()), noClients{})
 	cfg := testConfig(t, token.NewAdmin())
 	cfg.HealthListen = addr(t, a, "health")
-	if _, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), noClients{}, idle()); err == nil {
+	if _, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), nil, noClients{}, idle()); err == nil {
 		t.Fatal("newAppWith bound an address already in use")
 	}
 	listenertest.Require(t, inventoryAddrs(a)...)
