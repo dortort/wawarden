@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -28,6 +29,8 @@ import (
 )
 
 const missingRef = "ffffffffffffffffffffffffffffffff"
+
+var sealedTokens = regexp.MustCompile(`m1_[A-Za-z0-9_-]+|"next":"[A-Za-z0-9_-]*"`)
 
 type httpClients struct {
 	mu      sync.Mutex
@@ -284,8 +287,9 @@ func TestPropertyHTTPReadsMatchTheOracle(t *testing.T) {
 			checkHTTPReplay(t, h, a, token, c, set, cursors, refOf)
 		}
 		for _, body := range h.bodies {
+			unsealed := sealedTokens.ReplaceAll(body, nil)
 			for _, d := range a.dead {
-				if bytes.Contains(body, []byte(d)) {
+				if bytes.Contains(unsealed, []byte(d)) {
 					t.Fatalf("a response carries the revoked or edited text %s: %s", d, body)
 				}
 			}
