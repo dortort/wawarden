@@ -46,9 +46,10 @@ release before reporting, if you can.
 
 From milestone M1 on, every binary and image links third-party Go modules, among
 them the WhatsApp protocol library, the Signal protocol library, the SQLite
-driver and the age encryption library ([`RELEASING.md`](RELEASING.md#licences)
-lists them with their licences). They are compiled into the binary, so a fix to
-one of them reaches a deployment only through a new WaWarden release. The
+driver and the age encryption library ([`README.md`](README.md#licence) lists
+them with their licences; [`RELEASING.md`](RELEASING.md#licences) describes how
+releases ship them). They are compiled into the binary, so a fix to one of
+them reaches a deployment only through a new WaWarden release. The
 GPL-3.0-or-later licence also lets you rebuild a release from its corresponding
 source with a fixed module, but the result no longer matches the release's
 checksums, signature and attestations.
