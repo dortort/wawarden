@@ -547,12 +547,18 @@ merges, tags or releases. It runs two jobs:
    `contents: write` and `pull-requests: write`. It runs no Go code. It commits
    the artifact's `go.mod` and `go.sum` onto the commit the run started from,
    pushes the commit to the branch `bump/whatsmeow`, and opens the pull request
-   from that branch, or updates the title and description of the open one. The
-   branch belongs to the workflow: a run replaces it, refuses to when it holds a
-   commit that the workflow did not make, and leaves it alone when it already
-   pins the same version, so that an approved CI run stays valid. A closed pull
-   request is not remembered: the next run opens a new one for the newest
-   commit, even one that was declined.
+   from that branch, or updates the title and description of the open one from
+   that branch of this repository; a pull request from a fork's branch of the
+   same name is never touched. The branch belongs to the workflow: a run
+   replaces it, refuses to when it holds a commit that the workflow did not
+   make, and leaves it alone when it already pins the same version, so that an
+   approved CI run stays valid. A closed pull request is not remembered: the
+   next run opens a new one for the newest commit, even one that was declined.
+   An architecture test (`internal/archtest/workflows_test.go`) holds the
+   workflow to this split: main only, no workflow-wide permission, no Go and no
+   `hack/` script in the job that can write, credentials never persisted by a
+   checkout, the Go version check after setup-go, and the lookup that skips
+   pull requests from forks.
 
 The description carries the old and new pseudo-versions, the upstream compare
 link, whether the new commit descends from the pinned one (and if not, the
