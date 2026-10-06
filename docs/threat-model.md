@@ -202,11 +202,13 @@ These are stated so that nobody relies on WaWarden for them:
 5. **Service to clients (M2).** Message text, contact names and group subjects are
    written by third parties. Every message object carries `untrusted: true` and its
    `origin`, and a `text_display` field with control, bidirectional-override,
-   zero-width and tag characters removed. The function that removes them is on
-   `main` (M1, on `main`): it keeps newline and tab, also removes every other
-   format character, and replaces invalid UTF-8. The field arrives with the archive
-   (M1). MCP tool names, descriptions and schemas are compile-time constants, so no
-   chat-controlled string reaches a tool definition.
+   zero-width and tag characters removed. The function that removes them is in
+   place (M1, on `main`): it keeps newline and tab, also removes every other
+   format character, and replaces invalid UTF-8. The archive stores the field
+   beside a message's text when it writes the message and when it applies an
+   edit (M1, on `main`); no route returns either before M2. MCP tool names,
+   descriptions and schemas are compile-time constants, so no chat-controlled
+   string reaches a tool definition.
 6. **Service to logs, metrics and notifications.** Chat identities leave the
    process only as keyed HMACs, and message text, query text, tokens and protocol
    messages never leave it. As of M0: no request is logged; failed authentications
