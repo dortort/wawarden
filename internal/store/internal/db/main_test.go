@@ -168,7 +168,20 @@ func count(t *testing.T, d *DB, query string) int {
 	return n
 }
 
-const slowQuery = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 2000000000) SELECT count(*) FROM c"
+const (
+	slowQuery      = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < " + slowRows + ") SELECT count(*) FROM c"
+	interruptBound = 3 * time.Second
+)
+
+func interrupted(t *testing.T, call func() error) error {
+	t.Helper()
+	start := time.Now()
+	err := call()
+	if elapsed := time.Since(start); elapsed > interruptBound {
+		t.Fatalf("the slow call returned after %v: its interrupt was lost, as when the deadline fires between the driver arming the interrupt and the statement's first step, which clears it", elapsed)
+	}
+	return err
+}
 
 func shortTimeouts(o *Options) {
 	o.busyTimeout = 100 * time.Millisecond

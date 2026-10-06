@@ -505,7 +505,8 @@ names and source positions only), and is interrupted: SQLite stops its statement
 between two steps, and the call fails. A call that waits on the filesystem, such
 as a read that hangs on a network filesystem, or that is committing, is not
 interrupted and runs until that wait or the commit ends; a write whose commit
-ends succeeds.
+ends succeeds. A deadline that passes just as a statement starts can be lost in
+the database driver: that statement then runs to its end before the call fails.
 
 Revoked, edited and expired message text is removed from the database file,
 its journal and the full-text index, as described in the
@@ -1334,7 +1335,7 @@ notices of a [debug window](#protocol-library-logs). Lines in
 | `stopped` | `INFO`, or `ERROR` with `error` | | Shutdown ended. |
 | `panic` | `ERROR` | `name`, `panic_type`, `stack` | A panic was recovered in a handler or a goroutine; `name` is as in `wawarden_panics_total`. |
 | `http_server_error` | `WARN` | `listener` | Go's HTTP server reported an error of its own, such as a failed accept; `msg` holds the server's text. |
-| `db_deadline` | `ERROR` | `database`, `operation`, `timeout_ms`, `goroutines` | A read of the archive ran beyond 2 seconds, a write beyond 10 or a rewrite of its full-text index beyond 5 minutes. It is written when the deadline passes, while the call still runs, and the call is interrupted and fails, unless it is waiting on the filesystem or committing; see [Message archive](#message-archive). `operation` names the call in the code, and `goroutines` holds the goroutine profile of the process (function names and source positions, cut at 32 KiB). |
+| `db_deadline` | `ERROR` | `database`, `operation`, `timeout_ms`, `goroutines` | A read of the archive ran beyond 2 seconds, a write beyond 10 or a rewrite of its full-text index beyond 5 minutes. It is written when the deadline passes, while the call still runs, and the call is interrupted and fails, unless it is waiting on the filesystem or committing, or the deadline passed just as a statement started; see [Message archive](#message-archive). `operation` names the call in the code, and `goroutines` holds the goroutine profile of the process (function names and source positions, cut at 32 KiB). |
 | `db_lost` | `ERROR` | `database` | The connection that held the lock of the archive or the device store is gone, and the service refuses to open another; `/healthz` answers `503` from then on. |
 | `log_dropped` | `WARN` | `reason`: `xml` or `too_long` | Replaces a line that carried XML (`xml`) or was longer than 65,536 bytes (`too_long`); see [Pseudonyms and dropped lines](#pseudonyms-and-dropped-lines). It is written in place of a line that passed the log level, whatever that line's level was. |
 | `unpaired` | `WARN`, at every log level | | A [notification event](#notifications). |
