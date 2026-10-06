@@ -110,7 +110,7 @@ func TestRekeyingMovesClientScopes(t *testing.T) {
 func TestRekeyingThatWouldWidenOrDropAScopeIsRefused(t *testing.T) {
 	type world struct {
 		phoneChat, phoneMessages, lidChat, lidMessages bool
-		read                                           []string
+		read, write                                    []string
 		readAll, revoked                               bool
 	}
 	for _, tt := range []struct {
@@ -125,7 +125,12 @@ func TestRekeyingThatWouldWidenOrDropAScopeIsRefused(t *testing.T) {
 		{"a grant on an empty phone chat merged away into an empty LID chat", world{phoneChat: true, lidChat: true, read: []string{alice}}, ConflictScopedChat},
 		{"a grant on an empty LID chat merged away", world{phoneChat: true, phoneMessages: true, lidChat: true, read: []string{aliceLID}}, ConflictScopedChat},
 		{"a grant on both chats when the empty LID chat is merged away", world{phoneChat: true, phoneMessages: true, lidChat: true, read: []string{alice, aliceLID}}, ConflictScopedChat},
+		{"a write grant on an empty phone chat merged away", world{phoneChat: true, lidChat: true, write: []string{alice}}, ConflictScopedChat},
+		{"a write grant on an empty LID chat merged away", world{phoneChat: true, phoneMessages: true, lidChat: true, read: []string{alice}, write: []string{aliceLID}}, ConflictScopedChat},
 		{"a revoked client", world{phoneChat: true, phoneMessages: true, read: []string{aliceLID}, revoked: true}, ""},
+		{"a revoked client on the number while the LID chat has messages", world{lidChat: true, lidMessages: true, read: []string{alice}, write: []string{alice}, revoked: true}, ""},
+		{"a revoked client on an empty phone chat merged away", world{phoneChat: true, lidChat: true, read: []string{alice}, write: []string{alice}, revoked: true}, ""},
+		{"a revoked client on an empty LID chat merged away", world{phoneChat: true, phoneMessages: true, lidChat: true, read: []string{alice, aliceLID}, write: []string{alice, aliceLID}, revoked: true}, ""},
 		{"a client that reads every chat", world{phoneChat: true, phoneMessages: true, lidChat: true, readAll: true}, ""},
 		{"a grant on the phone chat that is re-keyed", world{phoneChat: true, phoneMessages: true, read: []string{alice}}, ""},
 		{"a grant on both identities of a renamed chat", world{phoneChat: true, phoneMessages: true, read: []string{alice, aliceLID}}, ""},
@@ -145,7 +150,7 @@ func TestRekeyingThatWouldWidenOrDropAScopeIsRefused(t *testing.T) {
 					write(t, s, func(tx *Tx) error { return tx.SetChatName(chat(t, c.jid), "Alice", NamePushName, OriginLive) })
 				}
 			}
-			addClient(t, s, "client01", tt.w.readAll, tt.w.revoked, tt.w.read, nil)
+			addClient(t, s, "client01", tt.w.readAll, tt.w.revoked, tt.w.read, tt.w.write)
 			before := snapshot(t, s)
 			res := learn(t, s, aliceLID, alice, MappingSenderAlt)
 			if tt.want == "" {
