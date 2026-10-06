@@ -2,12 +2,13 @@
 
 WaWarden is a self-hosted WhatsApp gateway. It links to one personal WhatsApp
 account as a companion device and keeps that account's messages in a local
-archive. When complete, it will expose that account to your own AI agents and
-applications, over REST and MCP, with access scoped per client and per chat:
-each client will get a token that may read, or read and write, only the chats
-on its allowlist. The link and the archive (milestone M1) are on `main` and not
-released yet; the REST and MCP interfaces are planned for M2 and M3; the latest
-release, `v0.1.0`, is the M0 scaffold (see [Status](#status)).
+archive. It exposes that archive to your own AI agents and applications, over
+REST and MCP, with access scoped per client and per chat: each client gets a
+token that may read only the chats on its allowlist, and, once sending is
+built, write only to the chats allowed for it. The link and the archive
+(milestone M1) are released as `v0.2.0`; the read API over REST and MCP
+(M2) is on `main` and not released yet; sending is planned for M3 (see
+[Status](#status)).
 
 It is not:
 
@@ -77,19 +78,20 @@ It is not:
 
 The latest release, `v0.2.0`, is milestone **M1**: WaWarden links to the
 owner's WhatsApp account and archives its messages, but serves no client API.
-`main` holds most of milestone **M2**: clients with per-chat read scopes and
-expiring tokens, which the admin creates and revokes; the REST read API (chats,
-messages, search and a change feed) with sealed cursors and per-client read and
-search budgets; the same reads as five MCP tools at `POST /mcp`; the names the
-owner saved for contacts, shown only to a client that may read the contact's
-direct chat and not yet verified against a live account; and the audit chain
-of client changes and of every client request.
+`main` holds milestone **M2**, which is not released yet: clients with
+per-chat read scopes and expiring tokens, which the admin creates and revokes;
+the REST read API (chats, messages, search and a change feed) with sealed
+cursors and per-client read and search budgets; the same reads as five MCP
+tools at `POST /mcp`; the names the owner saved for contacts, shown only to a
+client that may read the contact's direct chat and not yet verified against a
+live account; and the audit chain of client changes and of every client
+request.
 
 | Milestone | State | Scope |
 |---|---|---|
 | M0 | Released as `v0.1.0` | Configuration checks and startup refusals; the client, admin and health listeners; the admin token; Prometheus metrics; `healthcheck` and `version`; the policy core; the container image and verifiable releases. |
 | M1 | Released as `v0.2.0` | The WhatsApp engine: pairing guarded by an account check, history sync, the session and the message archive in SQLite; `admin status`, `pair` and `reconnect`; notification events and a signed webhook; metrics on standard output; one encrypted backup per paired device. |
-| M2 | In progress on `main`: clients, their tokens, the REST read API, the MCP read tools, owner-saved contact names and the audit chain | Clients with per-chat read scopes and expiring tokens; the read API over REST (chats, messages, search, change feed) and MCP; owner-saved contact names; the audit trail. |
+| M2 | Implemented on `main`, not released | Clients with per-chat read scopes and expiring tokens; the read API over REST (chats, messages, search, change feed) and MCP; owner-saved contact names; the audit chain and `audit verify`; the [guide for agents](docs/agents.md). |
 | M3 | Planned | Sending over REST and MCP, with idempotency, pacing, per-client budgets and a first-contact rule; nightly encrypted backups with retention; the v1.0 documentation. |
 
 What `main` does:
@@ -131,8 +133,9 @@ What `main` does:
   change, and each client request, is appended to a hash-chained audit table
   and written on standard output with its chain head, and `wawarden audit
   verify` checks a copy of the archive against the master key and those heads. See
-  [admin clients](docs/configuration.md#admin-clients-and-admin-chats) and
-  [the audit chain](docs/configuration.md#audit-chain).
+  [admin clients](docs/configuration.md#admin-clients-and-admin-chats),
+  [the audit chain](docs/configuration.md#audit-chain) and
+  [the guide for agents](docs/agents.md).
 - **Events and metrics.** Operational events such as `unpaired`,
   `disconnected`, `quarantine`, `backup_done` and `admin_mutation` are written
   as JSON lines on standard output and, with `WAWARDEN_NOTIFY_URL`, posted with
@@ -167,9 +170,9 @@ What `main` does:
   sanitisers for display text and terminal output; a strict JSON decoder for
   request bodies; and the architecture tests and lint rules that enforce them.
 
-Not in this build: the client listener has no routes and no client tokens and
-refuses every request, with `401` for anything that reaches authentication;
-no client can read the archive (M2) or send a message (M3).
+Not in this build: no client can send a message, and no route or tool
+writes to WhatsApp (M3); backups have no schedule or retention (M3) and no
+restore tool.
 
 ## Quick start
 
@@ -377,9 +380,10 @@ holds the fake's code (see [the fake engine](docs/configuration.md#fake-engine))
 Images are published to `ghcr.io/dortort/wawarden` by the release workflow only.
 Take the image index digest from a release's notes, and verify the image as
 [`RELEASING.md`](RELEASING.md#verifying-a-release) describes. The latest
-release, `v0.1.0`, is M0: its image has no WhatsApp engine and no
-`admin status`, `pair` or `reconnect`, so until M1 is released, use the steps
-from source to run `main`. The example below works with either.
+release, `v0.2.0`, is M1: its image links the account and archives it, but has
+no clients, read API, MCP endpoint or audit chain, so until M2 is released,
+use the steps from source to read through a client. The example below works
+with either.
 
 ```sh
 image=ghcr.io/dortort/wawarden@sha256:<digest>
@@ -547,6 +551,10 @@ history blobs pending: 0
 history blobs quarantined: 0
 inbox backlog: 0
 inbox quarantined: 0
+clients active: 0
+clients expired: 0
+clients revoked: 0
+all-chats clients active: 0
 last ingest: 2026-10-05T08:00:00Z
 version: <version>
 ```
@@ -619,11 +627,71 @@ arrives. After a restart, the engine starts `unpaired`.
 To pair again, run `admin pair` as in step 3, for the same account. The new
 device gets its own history sync and, once that has settled, its own backup.
 
+### 9. The first client
+
+List the chats the agent may read, then create a client for them. `--read`
+takes a chat's `id`, a `+E.164` number or the `ref` that `admin chats list`
+prints, and can be repeated; the client expires after 90 days unless
+`--expires-days` says otherwise, 365 at most:
+
+```sh
+./wawarden admin chats list --match <part of a name> --token-file admin.token
+./wawarden admin clients create --token-file admin.token \
+  --name claude-code --read <id, +E.164 number or ref> --expires-days 90
+```
+
+It prints the client's lines, then `token: ww_...`, once. Keep the token in a
+secret manager or in the agent host's environment as `WAWARDEN_TOKEN`, never
+in a repository. `admin status` now counts the client under `clients active`,
+and each request it makes is written on standard output with its chain head
+(see [the audit chain](docs/configuration.md#audit-chain)).
+
+On the agent's host, register the endpoint in Claude Code at the HTTPS address
+of the proxy in front of the client listener:
+
+```sh
+claude mcp add --transport http whatsapp https://<your-host>/mcp --header "Authorization: Bearer $WAWARDEN_TOKEN"
+```
+
+`claude mcp get whatsapp` shows it as connected, and `/mcp` in a Claude Code
+session lists five tools, `get_changes`, `get_chat`, `get_messages`,
+`list_chats` and `search_messages`, and no `send_message`. This form stores
+the token itself in `~/.claude.json`;
+[Registering with Claude Code](docs/configuration.md#registering-with-claude-code)
+says what each `--scope` writes and how to keep the token out of files with
+`.mcp.json` or a `headersHelper`. Before the agent reads anything, read
+[the guide for agents](docs/agents.md): every name and text it returns is
+third-party text.
+
+### 10. Rotating the token and retiring other devices
+
+Before the token expires, create a client with the same chats under a new
+name (a name stays taken after its client is revoked), switch the agent to
+the new token, then revoke the old client:
+
+```sh
+./wawarden admin clients create --token-file admin.token \
+  --name claude-code-2 --read <id, +E.164 number or ref>
+claude mcp remove whatsapp
+claude mcp add --transport http whatsapp https://<your-host>/mcp --header "Authorization: Bearer $WAWARDEN_TOKEN"
+./wawarden admin clients revoke --id <old id> --token-file admin.token
+```
+
+`admin clients list` shows each client's `id` and `expires`. A revocation
+takes effect on the client's next request.
+
+If the agent read WhatsApp through another device linked to the same account
+before, log that device out on the owner's phone (Linked devices, select the
+device, Log out) once the agent works through WaWarden: a linked device has
+the account's full access, outside every scope, budget and audit row of
+WaWarden (see [trust roots](docs/threat-model.md#trust-roots)).
+
 ## Documentation
 
 | Document | Content |
 |---|---|
-| [`docs/configuration.md`](docs/configuration.md) | Every environment variable, flag, subcommand, exit code, startup refusal, listener, log event and metric of the current build, and the container contract. |
+| [`docs/configuration.md`](docs/configuration.md) | Every environment variable, flag, subcommand, exit code, startup refusal, listener, route, MCP tool, log event and metric of the current build, the audit chain, and the container contract. |
+| [`docs/agents.md`](docs/agents.md) | How an agent should treat what it reads, page, retry and stop, and how to scope and rotate its token. |
 | [`docs/threat-model.md`](docs/threat-model.md) | Assets, actors, trust boundaries, invariants, the mechanisms that enforce them with their milestones, and residual risks. |
 | [`SECURITY.md`](SECURITY.md) | How to report a vulnerability, supported versions and scope. |
 | [`RELEASING.md`](RELEASING.md) | How releases are built, what they contain, and how to verify and reproduce one. |
