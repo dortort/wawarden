@@ -479,8 +479,14 @@ Right after the master key, `serve`:
    open-file-description locks, and a kernel or filesystem that refuses them
    is refused in turn (59) instead of falling back to classic locks;
 5. brings the schema up to date (an archive written by a newer release is
-   refused, 60), completes a rewrite of the full-text index that a stop or a
-   failed rewrite left due (see below) and logs `archive_opened`.
+   refused, 60): each schema version is applied in one transaction that has no
+   deadline, because it runs only here, under the lock, and can take seconds on
+   a large archive (about 8 seconds for 500,000 messages on a laptop). Moving
+   to version 3 then numbers the changes of the messages already stored, in
+   transactions of 10,000 messages that each run under the 5-minute rewrite
+   deadline, and a stop in between leaves the rest to the next start. Then
+   `serve` completes a rewrite of the full-text index that a stop or a failed
+   rewrite left due (see below) and logs `archive_opened`.
 
 The connection that holds the lock is the only one the service ever opens to
 the archive. It survives a call that runs out of time, and should it ever be
@@ -498,7 +504,8 @@ Temporary data stays in memory, so the service writes no other file next to the
 archive.
 
 Every read of the archive must finish within 2 seconds, every write within
-10 seconds and every rewrite of its full-text index within 5 minutes. A call
+10 seconds and every rewrite of its full-text index within 5 minutes; a schema
+migration has no deadline (step 5 above). A call
 that runs out of time is logged as `db_deadline` when its deadline passes, while
 it still runs, with the profile of every goroutine of the process (function
 names and source positions only), and is interrupted: SQLite stops its statement
@@ -507,6 +514,31 @@ as a read that hangs on a network filesystem, or that is committing, is not
 interrupted and runs until that wait or the commit ends; a write whose commit
 ends succeeds. A deadline that passes just as a statement starts can be lost in
 the database driver: that statement then runs to its end before the call fails.
+
+The schema is at version 3. Besides chats, messages and their full-text index,
+identity mappings, push names, group members, the inbox and the history-sync
+queue, it holds:
+
+- a change number per message, which a trigger sets to one more than the
+  largest stored when a message is stored, edited or revoked, or loses its text
+  at expiry; a duplicate of a stored message and a re-key change none;
+- a reference per chat, 32 random lower-case hexadecimal digits that a trigger
+  assigns when the chat is first stored. A re-key from a phone number to a LID
+  keeps it. A re-key that merges a chat without messages into the other chat
+  of the same person removes the merged chat and its reference with it;
+- names that the owner saved for a contact, keyed by the contact's identifier;
+- read clients and the chats each one may read and write. A client row has
+  room for a 32-byte digest of its token, not for the token; its expiry must be
+  at most 366 days after its creation, and a trigger refuses a write chat for a
+  client that reads every chat. A client's chats are canonical identifiers, not references to stored
+  chats, so they may name a chat the archive has not seen yet, and a re-key
+  moves them from the phone number to the LID (see [Ingest](#ingest));
+- the audit table, whose rows triggers refuse to update or delete.
+
+No part of the service writes clients, saved names or audit rows yet. The
+service never runs `ANALYZE` or `PRAGMA optimize` on the archive: planner
+statistics could make SQLite read a whole table where its read queries now
+search an index.
 
 Revoked, edited and expired message text is removed from the database file,
 its journal and the full-text index, as described in the
@@ -906,9 +938,13 @@ Further, the worker:
   [Message archive](#message-archive);
 - learns which LID belongs to which phone number only from the alternate
   identifiers WhatsApp's servers attach to live messages and from history sync,
-  and re-keys a direct chat from the number to the LID. A mapping that
-  contradicts one already learned, or that would merge two chats that both hold
-  messages, is refused and counted in `wawarden_rekey_conflicts_total` every
+  and re-keys a direct chat from the number to the LID, moving every client's
+  read and write chats from the number to the LID in the same transaction. A
+  mapping that contradicts one already learned, that would merge two chats
+  that both hold messages, or that would widen what a client reads (a client
+  that names only one of the two identities while the other holds messages, or
+  a merge that would remove a chat a client names; revoked clients do not
+  count), is refused and counted in `wawarden_rekey_conflicts_total` every
   time, and reported as the [notification event](#notifications)
   `rekey_conflict` the first time the engine refuses it since the service
   started; the engine remembers up to 1,024 refused mappings, and forgets them
@@ -1544,7 +1580,7 @@ the [webhook](#webhook).
 | `pair_rejected` | `WARN` | `stage`: `before_save`, `after_pairing` | Pairing linked or tried to link an account other than the owner's; see [Pairing](#pairing). |
 | `logout_failed` | `WARN` | `attempt`, `error_type` | Logging out a rejected device failed; the engine tries again. `error_type` is the Go type of the error. |
 | `quarantine` | `WARN` | `queue`: `inbox`, `history`; `attempts` | An inbox row or a history blob was set aside after three failed attempts. |
-| `rekey_conflict` | `WARN` | `conflict`: `mapping_contradicts`, `both_chats_have_messages`, `message_collision` | A LID mapping was refused; the event that carried it is still applied. Reported once per refused mapping, as described under [Ingest](#ingest). |
+| `rekey_conflict` | `WARN` | `conflict`: `mapping_contradicts`, `both_chats_have_messages`, `message_collision`, `scoped_chat` | A LID mapping was refused; the event that carried it is still applied. Reported once per refused mapping, as described under [Ingest](#ingest). |
 | `ingest_paused` | `WARN` | `free_bytes`, `floor_bytes` | The data directory fell below its [free-space floor](#free-space). |
 | `admin_mutation` | `INFO` | `action`: `pair`, `reconnect`; `outcome` | A `POST` [admin route](#admin-routes) was called with the admin token; `outcome` is `ok` or the error code it answered, such as `already_paired` or `invalid_body`. |
 | `backup_done` | `INFO` | `bytes`, `archive_bytes`, `session_bytes`, `duration_ms` | A [backup](#backups) was written: `bytes` is the size of the encrypted file, the others the sizes of the two database copies and the time it took. |
