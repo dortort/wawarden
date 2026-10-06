@@ -386,6 +386,178 @@ The container contract, in full in
   WaWarden, the Go standard library and every linked module are under
   `/licenses` in the image (see [Licence](#licence)).
 
+## First run with a WhatsApp account
+
+Read the [residual risks](docs/threat-model.md#residual-risks) before linking an
+account: WhatsApp can restrict, log out or ban an account that links an
+unofficial client. These steps link the owner's account to a build of `main`,
+made [from source](#from-source). In a container, pass the same variables with
+`-e`, and run the admin commands inside it with the token on standard input:
+`docker exec -i wawarden /wawarden admin status --token-stdin < admin.token`.
+
+### 1. Prepare the secrets
+
+In a directory that only you can read, generate the admin token and keep it and
+its hash in separate files. The service is given the hash only; keep a copy of
+the token in a secret manager, from which `--token-command` can also read it:
+
+```sh
+umask 077
+./wawarden admin init > admin.txt
+sed -n 's/^sha256: //p' admin.txt > admin.sha256
+sed -n 's/^token: //p' admin.txt > admin.token
+rm admin.txt
+```
+
+On another machine, create the key pair that backups are encrypted to with the
+[age](https://age-encryption.org) tools, and keep `backup-identity.txt` there.
+The service needs only the public key, `age1...`, that `age-keygen` prints:
+
+```sh
+age-keygen -o backup-identity.txt
+```
+
+For a webhook, also create its signing secret, readable only by the service's
+user: `openssl rand -hex 32 > notify.secret`.
+
+### 2. Configure and start
+
+Set the owner's number in E.164 form, the hash file, the backup recipient and a
+data directory whose parent exists, then start the service under a user other
+than root:
+
+```sh
+export WAWARDEN_DATA_DIR="$HOME/wawarden-data"
+export WAWARDEN_OWNER_PHONE=+15550100001
+export WAWARDEN_ADMIN_TOKEN_SHA256_FILE="$PWD/admin.sha256"
+export WAWARDEN_BACKUP_AGE_RECIPIENT='age1...'
+./wawarden serve
+```
+
+Add `WAWARDEN_NOTIFY_URL` and `WAWARDEN_NOTIFY_SECRET_FILE` for the webhook, and
+`WAWARDEN_METRICS_EMF=1` for metrics on standard output; the
+[configuration reference](docs/configuration.md#environment-variables) lists
+every variable, and any other `WAWARDEN_` variable stops the start. Run the
+service under a supervisor that keeps its standard output, where every event
+is written, and gives it more than 10 seconds to stop.
+
+The start writes JSON lines such as `keys_loaded`, `archive_opened`,
+`session_opened` with `"paired":false`, one `listening` per listener and
+`ready`. With no device stored, the engine reports `unpaired` and makes no
+connection to WhatsApp. Without a backup recipient, every start warns
+`backup_disabled`.
+
+### 3. Pair
+
+```sh
+./wawarden admin pair --token-file admin.token
+```
+
+It prints `pairing code: <code>`, and on standard error where to enter it. On
+the owner's phone, in WhatsApp, open Linked devices, choose Link a device, then
+Link with phone number instead, and enter the code. WaWarden links as a
+`Chrome (Linux)` device. The code goes to you only; it is never logged or kept.
+
+| Refusal | Exit code | What to do |
+|---|---|---|
+| `owner_phone_missing` | `5` | Set `WAWARDEN_OWNER_PHONE` and restart. |
+| `already_paired` | `5` | A device is stored already; see `admin status`. |
+| `rate_limited` | `5` | Three attempts were made in the last hour; wait. |
+| `pair_failed` | `1` | The connection failed or no code came within 25 seconds; check outbound access to `web.whatsapp.com` and try again. |
+
+Only the account whose number is `WAWARDEN_OWNER_PHONE` can be linked. A code
+entered on another account's phone is refused before anything is stored, or,
+should that pairing complete, the new device is logged out again; either way
+the service reports `pair_rejected`.
+
+### 4. Watch the status
+
+```sh
+./wawarden admin status --token-file admin.token
+```
+
+```text
+state: connected
+reason: none
+paired: true
+chats: 12
+messages: 3456
+history blobs pending: 0
+history blobs quarantined: 0
+inbox backlog: 0
+inbox quarantined: 0
+last ingest: 2026-10-05T08:00:00Z
+version: <version>
+```
+
+`state` is `unpaired`, `connecting`, `connected` or `disconnected`, the last with
+a `reason`. Right after pairing, WhatsApp asks the new device to log in again,
+which the engine handles as a dropped connection: expect a short `connecting`
+before `connected`. Each change is logged as `engine_state`, the gauges
+`wawarden_paired` and `wawarden_connected` follow it, and every stop that waits
+for you is reported as a `disconnected` event, on standard output and to the
+webhook.
+
+### 5. The first history sync
+
+Once paired, the owner's phone sends the chat history in blobs.
+`history blobs pending` rises as they are announced and returns to `0` as each
+is downloaded into `history/`, applied to the archive and deleted; `chats`,
+`messages` and `last ingest` grow with it, and so does
+`wawarden_messages_ingested_total`. Blobs are downloaded only while connected,
+and a restart takes up those still waiting. A blob larger than
+`WAWARDEN_HISTORY_MAX_BYTES` (32 MiB by default), or one that fails three
+times, is quarantined: the `quarantine` event reports it with `queue`
+`history`, and `history blobs quarantined` counts it. See
+[history sync](docs/configuration.md#history-sync).
+
+### 6. The first backup
+
+With a backup recipient, the service takes one backup once no history blob is
+waiting and 10 minutes have passed since the later of the pairing and the
+latest blob's arrival. It writes `backups/<UTC time>.age`, such as
+`backups/20261005T120000Z.age`, and reports `backup_done` with `bytes`,
+`archive_bytes`, `session_bytes` and `duration_ms`, or `backup_failed` with a
+reason, which is tried again only at the next start. It is the only backup for
+this pairing: there is no schedule or retention yet (M3). Copy it off the host
+and check that it decrypts with the identity file, as
+[backups](docs/configuration.md#backups) describes.
+
+### 7. When the engine disconnects
+
+A disconnection never stops the process, and `/healthz` still answers `200`.
+The engine retries an ordinary drop by itself, waiting up to 5 minutes between
+attempts. It stays `disconnected` for these reasons until you act:
+
+| `reason` | What happened | What to do |
+|---|---|---|
+| `outdated` | No protocol version could be fetched from `web.whatsapp.com` at the start, or WhatsApp reported the client as outdated and no newer version could be fetched. | Check outbound access, then `admin reconnect`, which fetches again, or restart. After WhatsApp reported the client as outdated, only a strictly newer version helps: try again later, or upgrade WaWarden. |
+| `replaced` | Another client took over the session, such as a second service started from a copy of `session.db`. | Stop the other one, then `admin reconnect`. |
+| `logged_out` | The device was logged out, from the phone or by WhatsApp; it is gone and `paired` is `false`. | Pair again, as in step 3. |
+| `temporary_ban` | WhatsApp banned the account temporarily. | Wait for the ban to end, then `admin reconnect`. |
+| `cat_refresh` | A connection token could not be refreshed. | `admin reconnect`. |
+| `connect_failure` | WhatsApp refused the connection. | `admin reconnect`. |
+| `restart_budget` | The service started more than 5 times in 10 minutes, so the engine did not connect. | Find out from the logs why it restarts, then `admin reconnect`, or `admin pair` when no device is stored; or restart once the 10 minutes have passed. |
+| `owner_mismatch` | The stored device's number is not `WAWARDEN_OWNER_PHONE`. | Correct `WAWARDEN_OWNER_PHONE` and restart. When the device belongs to another account, as after a failed logout, stop the service, delete `session.db` and `session.db-journal` from the data directory, remove the device from that account's Linked devices, then start and pair again. |
+| `shutdown` | The service is stopping. | Nothing. |
+
+`admin reconnect` answers `already_connected` while the engine is connected and
+`not_paired` when no device is stored (exit code `5`); see
+[engine states](docs/configuration.md#engine-states).
+
+### 8. Unpairing and pairing again
+
+There is no admin command that unpairs. To unlink WaWarden, log the device out
+on the owner's phone: Linked devices, select the device, Log out. WhatsApp logs
+it out at once while it is connected, or at its next connection: the engine
+reports `disconnected` with reason `logged_out`, then `unpaired`; `admin status`
+shows `paired: false`, and both gauges fall to `0`. The device is deleted from
+`session.db`, the archive keeps everything stored so far, and nothing more
+arrives. After a restart, the engine starts `unpaired`.
+
+To pair again, run `admin pair` as in step 3, for the same account. The new
+device gets its own history sync and, once that has settled, its own backup.
+
 ## Documentation
 
 | Document | Content |
