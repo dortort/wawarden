@@ -202,6 +202,63 @@ func TestRefRoundTripsUnderItsClientOnly(t *testing.T) {
 	}
 }
 
+func TestARefIsStablePerClientAndMessage(t *testing.T) {
+	s := sealer(t, key, keyID)
+	first := mustSealRef(t, s, binding.Client, ref)
+	if again := mustSealRef(t, s, binding.Client, ref); again != first {
+		t.Fatalf("the same message under the same client sealed to %q and %q, want one stable reference", first, again)
+	}
+	if again := mustSealRef(t, sealer(t, key, keyID), binding.Client, ref); again != first {
+		t.Fatalf("a second sealer with the same key sealed the message to %q, want %q", again, first)
+	}
+	seen := map[string]string{first: "the message"}
+	nonces := map[string]string{nonceOf(t, first): "the message"}
+	for _, tt := range []struct {
+		name   string
+		s      *cursor.Sealer
+		client string
+		r      cursor.Ref
+	}{
+		{name: "another client", s: s, client: "abcdefgi", r: ref},
+		{name: "a client that extends the id", s: s, client: binding.Client + "x", r: ref},
+		{name: "another chat", s: s, client: binding.Client, r: cursor.Ref{Chat: "15550100002@s.whatsapp.net", ID: ref.ID, Sender: ref.Sender}},
+		{name: "another message", s: s, client: binding.Client, r: cursor.Ref{Chat: ref.Chat, ID: "3EB0SYNTHETIC0002", Sender: ref.Sender}},
+		{name: "another sender", s: s, client: binding.Client, r: cursor.Ref{Chat: ref.Chat, ID: ref.ID, Sender: "15550100002@s.whatsapp.net"}},
+		{name: "another key", s: sealer(t, otherKey, keyID), client: binding.Client, r: ref},
+	} {
+		text := mustSealRef(t, tt.s, tt.client, tt.r)
+		if other, dup := seen[text]; dup {
+			t.Errorf("%s sealed to the same reference as %s", tt.name, other)
+		}
+		seen[text] = tt.name
+		if tt.s != s {
+			continue
+		}
+		if other, dup := nonces[nonceOf(t, text)]; dup {
+			t.Errorf("%s drew the same nonce as %s", tt.name, other)
+		}
+		nonces[nonceOf(t, text)] = tt.name
+	}
+}
+
+func mustSealRef(t *testing.T, s *cursor.Sealer, client string, r cursor.Ref) string {
+	t.Helper()
+	text, err := s.SealRef(client, r)
+	if err != nil {
+		t.Fatalf("SealRef: %v", err)
+	}
+	return text
+}
+
+func nonceOf(t *testing.T, text string) string {
+	t.Helper()
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(text, cursor.RefPrefix))
+	if err != nil || len(raw) < 5+12 {
+		t.Fatalf("reference %q does not decode to a header and a nonce: %v", text, err)
+	}
+	return string(raw[5 : 5+12])
+}
+
 func TestRefFieldsCannotShift(t *testing.T) {
 	s := sealer(t, key, keyID)
 	shifted := cursor.Ref{Chat: ref.Chat + ref.ID, ID: "", Sender: ref.Sender}

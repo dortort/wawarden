@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
@@ -23,6 +24,7 @@ const (
 	headerSize   = 1 + idSize
 	keySize      = 32
 	positionSize = 3 * 8
+	nonceSize    = 12
 	refFields    = 3
 	cursorLabel  = "cursor"
 	refLabel     = "mref"
@@ -37,8 +39,10 @@ var (
 var encoding = base64.RawURLEncoding.Strict()
 
 type Sealer struct {
-	aead cipher.AEAD
-	id   [idSize]byte
+	aead  cipher.AEAD
+	fixed cipher.AEAD
+	key   []byte
+	id    [idSize]byte
 }
 
 type Binding struct {
@@ -69,7 +73,11 @@ func New(key []byte, keyID string) (*Sealer, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Sealer{aead: aead}
+	fixed, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	s := &Sealer{aead: aead, fixed: fixed, key: bytes.Clone(key)}
 	copy(s.id[:], id)
 	return s, nil
 }
@@ -95,15 +103,20 @@ func (s *Sealer) OpenCursor(b Binding, text string) (Position, error) {
 }
 
 func (s *Sealer) SealRef(client string, r Ref) (string, error) {
+	if s == nil {
+		return "", ErrInvalid
+	}
 	var pt []byte
 	for _, f := range [refFields]string{r.Chat, r.ID, r.Sender} {
 		pt = binary.AppendUvarint(pt, uint64(len(f)))
 		pt = append(pt, f...)
 	}
-	text, err := s.seal(pt, []string{client, refLabel})
-	if err != nil {
-		return "", err
-	}
+	mac := hmac.New(sha256.New, s.key)
+	mac.Write(additional(nil, []string{client}))
+	mac.Write(pt)
+	nonce := mac.Sum(nil)[:nonceSize]
+	header := s.header()
+	text := encoding.EncodeToString(s.fixed.Seal(append(header, nonce...), nonce, pt, additional(header, []string{client, refLabel})))
 	if len(RefPrefix)+len(text) > MaxRef {
 		return "", errRefSize
 	}
@@ -149,10 +162,12 @@ func (s *Sealer) seal(pt []byte, fields []string) (string, error) {
 	if s == nil {
 		return "", ErrInvalid
 	}
-	header := []byte{version, s.id[0], s.id[1], s.id[2], s.id[3]}
+	header := s.header()
 	ad := additional(header, fields)
 	return encoding.EncodeToString(s.aead.Seal(header, nil, pt, ad)), nil //nolint:gosec // G407: NewGCMWithRandomNonce draws a fresh random nonce and requires a nil one
 }
+
+func (s *Sealer) header() []byte { return []byte{version, s.id[0], s.id[1], s.id[2], s.id[3]} }
 
 func (s *Sealer) open(text string, limit int, fields []string) ([]byte, error) {
 	if s == nil || len(text) > limit {

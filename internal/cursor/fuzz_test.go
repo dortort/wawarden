@@ -55,12 +55,8 @@ func FuzzOpenRef(f *testing.F) {
 		}
 		_, err = s.OpenRef("zzzzzzzz", text)
 		requireInvalid(t, err)
-		again, err := s.SealRef(binding.Client, r)
-		if err != nil || len(again) != len(text) {
-			t.Fatalf("an accepted reference re-sealed to %q, %v", again, err)
-		}
-		if back, err := s.OpenRef(binding.Client, again); err != nil || back != r {
-			t.Fatalf("the re-sealed reference opened to %+v, %v, want %+v", back, err, r)
+		if again, err := s.SealRef(binding.Client, r); err != nil || again != text {
+			t.Fatalf("an accepted reference re-sealed to %q, %v, want the same text", again, err)
 		}
 	})
 }
