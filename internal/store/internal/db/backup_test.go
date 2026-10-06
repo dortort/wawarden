@@ -183,7 +183,6 @@ func (f finishRecorder) Finish() error {
 
 func TestABackupIsFinishedOnceItsConnectionIsFree(t *testing.T) {
 	opts, logs := testOptions(t)
-	opts.WriteTimeout = 200 * time.Millisecond
 	d := mustOpen(t, opts)
 	d.backupPages = 4
 	seed(t, d, 40)
@@ -200,6 +199,7 @@ func TestABackupIsFinishedOnceItsConnectionIsFree(t *testing.T) {
 	var release func()
 	d.stepped = func() {
 		if release == nil {
+			d.writeTimeout = 200 * time.Millisecond
 			release, _ = holdConnection(t, d)
 			cancel()
 			time.AfterFunc(time.Second, release)
