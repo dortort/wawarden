@@ -1054,8 +1054,9 @@ Further, the worker:
   canonical identifier, and nowhere else: a saved name names no chat and
   replaces no push name. The latest change replaces the stored name, and a
   change that carries no name clears it. The protocol library passes on only
-  contacts added or renamed after the device's first sync of the contact list,
-  not the list as it stood at pairing, and no deletion, so a contact deleted on
+  the changes it fetches one by one, such as a contact added or renamed after
+  the device has synced the contact list, never a list it fetches whole, as it
+  does the first time after pairing, and no deletion, so a contact deleted on
   the phone keeps its last saved name. This is tested only with synthetic
   events: whether the phone sends these changes to a linked device, and under
   which identifier, has not been verified against a live account yet;
