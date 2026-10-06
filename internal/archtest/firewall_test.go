@@ -3,8 +3,10 @@ package archtest
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/token"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -64,6 +66,104 @@ func receiverPrefix(d *ast.FuncDecl) string {
 		return id.Name + "."
 	}
 	return ""
+}
+
+var routerMembers = set(muxField, "routes", "now", "credential", "read", "write", "admin", muxRegister, "ServeHTTP")
+
+func anchorProblems(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	api := declarations(t, root, apiDir)
+	members := map[string]bool{}
+	for name := range api {
+		if member, ok := strings.CutPrefix(name, "router."); ok {
+			members[member] = true
+		}
+	}
+	if !maps.Equal(members, routerMembers) {
+		out = append(out, fmt.Sprintf("package api's router declares %q, but the mux-ownership rule was written for %q: review the new members and update the rule and this list together",
+			slices.Sorted(maps.Keys(members)), slices.Sorted(maps.Keys(routerMembers))))
+	}
+	if !api[muxDecide] {
+		out = append(out, fmt.Sprintf("package api no longer declares %s, so the mux-ownership rule guards nothing by that name: update it", muxDecide))
+	}
+	handlers := map[string]bool{}
+	for name := range declarations(t, root, listenersDir) {
+		if typ, ok := strings.CutSuffix(name, ".Handler"); ok && ast.IsExported(typ) {
+			handlers[typ] = true
+		}
+	}
+	if !maps.Equal(handlers, set(listenerSpec)) {
+		out = append(out, fmt.Sprintf("package listeners declares the exported types %q with a Handler field, but the handler-ownership rule guards only %s: update it",
+			slices.Sorted(maps.Keys(handlers)), listenerSpec))
+	}
+	if handles := rawHandles(t, root); !maps.Equal(handles, set("DB."+rawHandleMethod)) {
+		out = append(out, fmt.Sprintf("package db hands out a *sql.DB through %q, but the raw-database-handle rule guards only DB.%s: update it",
+			slices.Sorted(maps.Keys(handles)), rawHandleMethod))
+	}
+	return out
+}
+
+func rawHandles(t *testing.T, root string) map[string]bool {
+	t.Helper()
+	files, err := moduleFiles(os.DirFS(filepath.Join(root, dbDir)))
+	if err != nil {
+		t.Fatalf("walk %s: %v", dbDir, err)
+	}
+	handles := map[string]bool{}
+	for _, f := range files {
+		if f.test || f.dir != "." {
+			continue
+		}
+		for _, decl := range f.file.Decls {
+			d, ok := decl.(*ast.FuncDecl)
+			if !ok || !d.Name.IsExported() || d.Type.Results == nil {
+				continue
+			}
+			for _, r := range d.Type.Results.List {
+				if star, ok := r.Type.(*ast.StarExpr); ok && f.isType(star.X, "database/sql", "DB") {
+					handles[receiverPrefix(d)+d.Name.Name] = true
+				}
+			}
+		}
+	}
+	return handles
+}
+
+func TestRuleAnchors(t *testing.T) {
+	if problems := anchorProblems(t, moduleRoot(t)); len(problems) > 0 {
+		t.Fatal(strings.Join(problems, "\n"))
+	}
+	for _, tt := range []struct {
+		name string
+		api  string
+		lis  string
+		db   string
+		want int
+	}{
+		{name: "the names the rules guard", api: "func (rt *router) register() {}\nfunc decided() {}\n", lis: "type Spec struct{ Handler http.Handler }\n", db: "func (d *DB) RawHandle() *sql.DB { return nil }\n"},
+		{name: "renamed", api: "func (rt *router) add() {}\nfunc guard() {}\n", lis: "type Endpoint struct{ Handler http.Handler }\n", db: "func (d *DB) SQLHandle() *sql.DB { return nil }\n", want: 4},
+		{name: "added beside them", api: "func (rt *router) register() {}\nfunc (rt *router) open() {}\nfunc decided() {}\n", lis: "type Spec struct{ Handler http.Handler }\ntype Wrapped struct{ Handler http.Handler }\n", db: "func (d *DB) RawHandle() *sql.DB { return nil }\nfunc (d *DB) Conn() *sql.DB { return nil }\n", want: 3},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			for dir, src := range map[string]string{
+				apiDir:       "package api\n\ntype router struct{ mux, routes, now, credential int }\n\nfunc (rt *router) read()      {}\nfunc (rt *router) write()     {}\nfunc (rt *router) admin()     {}\nfunc (rt *router) ServeHTTP() {}\n" + tt.api,
+				listenersDir: "package listeners\n\nimport \"net/http\"\n\n" + tt.lis,
+				dbDir:        "package db\n\nimport \"database/sql\"\n\ntype DB struct{}\n\n" + tt.db,
+			} {
+				if err := os.MkdirAll(filepath.Join(root, dir), 0o700); err != nil {
+					t.Fatalf("mkdir: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(root, dir, "x.go"), []byte(src), 0o600); err != nil {
+					t.Fatalf("write: %v", err)
+				}
+			}
+			if got := anchorProblems(t, root); len(got) != tt.want {
+				t.Fatalf("%d problems, want %d: %q", len(got), tt.want, got)
+			}
+		})
+	}
 }
 
 func TestCompileTimeFirewalls(t *testing.T) {

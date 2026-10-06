@@ -74,7 +74,10 @@ var sqlCalls = map[string]int{
 	"ExecContext": 1, "QueryContext": 1, "QueryRowContext": 1, "PrepareContext": 1,
 }
 
-const migrateCall = "Migrate"
+const (
+	migrateCall     = "Migrate"
+	rawHandleMethod = "RawHandle"
+)
 
 func sqlArguments(file *ast.File, visit func(sel *ast.SelectorExpr, texts []ast.Expr)) {
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -534,7 +537,7 @@ func checkRawHandle(f *sourceFile) []string {
 	}
 	var out []string
 	ast.Inspect(f.file, func(n ast.Node) bool {
-		if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "RawHandle" {
+		if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == rawHandleMethod {
 			out = append(out, f.at(sel, "RawHandle hands out the database handle without deadlines; only %s gives it to the protocol library's device store", sessionDir))
 		}
 		return true

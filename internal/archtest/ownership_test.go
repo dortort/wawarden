@@ -10,6 +10,10 @@ const (
 	safegoDir    = "internal/safego"
 	listenersDir = "internal/listeners"
 	muxFile      = "internal/api/register.go"
+	muxField     = "mux"
+	muxRegister  = "register"
+	muxDecide    = "decided"
+	listenerSpec = "Spec"
 )
 
 var goroutineRule = rule{
@@ -637,14 +641,14 @@ func checkMux(f *sourceFile) []string {
 		out = append(out, f.at(id, "%s outside %s reaches the mux without the grant-minting read, write or admin helpers", id.Name, muxFile))
 	}
 	ast.Inspect(f.file, func(n ast.Node) bool {
-		if id, ok := n.(*ast.Ident); ok && f.dir == apiDir && id.Name == "decided" {
+		if id, ok := n.(*ast.Ident); ok && f.dir == apiDir && id.Name == muxDecide {
 			internal(id)
 		}
 		sel, ok := n.(*ast.SelectorExpr)
 		if !ok {
 			return true
 		}
-		if f.dir == apiDir && (sel.Sel.Name == "register" || sel.Sel.Name == "mux") {
+		if f.dir == apiDir && (sel.Sel.Name == muxRegister || sel.Sel.Name == muxField) {
 			internal(sel.Sel)
 		}
 		if s, p := f.ref(sel); s != nil {

@@ -206,7 +206,7 @@ func checkHandlers(f *sourceFile) []string {
 				out = append(out, f.at(n, "the address of a Handler field taken outside %s, through which it could be changed after its literal", apiDir))
 			}
 		case *ast.CallExpr:
-			if f.isType(n.Fun, module+"/"+listenersDir, "Spec") && !within(f.dir, listenersDir) {
+			if f.isType(n.Fun, module+"/"+listenersDir, listenerSpec) && !within(f.dir, listenersDir) {
 				out = append(out, f.at(n, "conversion to listeners.Spec: build it with a literal whose Handler is the direct result of an %s constructor", apiDir))
 			}
 		}
@@ -215,7 +215,7 @@ func checkHandlers(f *sourceFile) []string {
 	f.compositeLits(func(lit *ast.CompositeLit, typ ast.Expr) {
 		handler := keyedValue(lit, "Handler")
 		switch {
-		case f.isType(typ, module+"/"+listenersDir, "Spec") && !within(f.dir, listenersDir) && !f.apiCall(handler):
+		case f.isType(typ, module+"/"+listenersDir, listenerSpec) && !within(f.dir, listenersDir) && !f.apiCall(handler):
 			out = append(out, f.at(lit, "a listeners.Spec must set Handler by name to the direct result of an %s constructor, so no listener serves a wrapped or foreign handler", apiDir))
 		case f.dir == listenersDir && f.isType(typ, "net/http", "Server") && !specHandler(handler):
 			out = append(out, f.at(lit, "an http.Server in %s must serve its spec's Handler unchanged", listenersDir))
