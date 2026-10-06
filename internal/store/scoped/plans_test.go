@@ -83,23 +83,49 @@ func TestEveryQueryOfThePackageIsPlanned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var declared []string
+	fset := token.NewFileSet()
+	var parsed []*ast.File
+	constants := map[string]bool{}
 	for _, file := range files {
 		if strings.HasSuffix(file, "_test.go") {
 			continue
 		}
-		f, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
+		f, err := parser.ParseFile(fset, file, nil, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		ast.Inspect(f, func(n ast.Node) bool {
-			spec, ok := n.(*ast.ValueSpec)
-			if !ok {
-				return true
+		parsed = append(parsed, f)
+		for _, decl := range f.Decls {
+			if d, ok := decl.(*ast.GenDecl); ok && d.Tok == token.CONST {
+				for _, spec := range d.Specs {
+					for _, id := range spec.(*ast.ValueSpec).Names {
+						constants[id.Name] = true
+					}
+				}
 			}
-			for i, id := range spec.Names {
-				if i < len(spec.Values) && selects(spec.Values[i]) {
+		}
+	}
+	var declared []string
+	for _, f := range parsed {
+		forwards := fset.File(f.Pos()).Name() == "inbuilder.go"
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.ValueSpec:
+				for i, id := range x.Names {
+					if i < len(x.Values) && selects(x.Values[i]) {
+						declared = append(declared, id.Name)
+					}
+				}
+			case *ast.CallExpr:
+				sel, ok := x.Fun.(*ast.SelectorExpr)
+				if !ok || !sqlCalls[sel.Sel.Name] || len(x.Args) < 2 {
+					return true
+				}
+				switch id, ok := ast.Unparen(x.Args[1]).(*ast.Ident); {
+				case ok && constants[id.Name]:
 					declared = append(declared, id.Name)
+				case !ok || !forwards:
+					t.Errorf("%s: the SQL text of %s is not a constant of the package, so it has no golden plan and no checked scope marker", fset.Position(x.Args[1].Pos()), sel.Sel.Name)
 				}
 			}
 			return true
@@ -110,6 +136,7 @@ func TestEveryQueryOfThePackageIsPlanned(t *testing.T) {
 		planned = append(planned, name)
 	}
 	slices.Sort(declared)
+	declared = slices.Compact(declared)
 	slices.Sort(planned)
 	if !slices.Equal(declared, planned) {
 		t.Fatalf("queries declared %q, planned %q: add every query to the golden plans", declared, planned)
@@ -137,6 +164,8 @@ var unscopedScalars = map[string]string{
 	"selectTopChange": "the highest change number, no message content",
 	"selectTopSeq":    "the highest message sequence number, no message content",
 }
+
+var sqlCalls = map[string]bool{"QueryContext": true, "QueryRowContext": true, "scalar": true}
 
 var selectKeyword = regexp.MustCompile(`(?i)\bSELECT\b`)
 
