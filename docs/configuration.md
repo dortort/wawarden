@@ -1087,7 +1087,8 @@ Further, the worker:
   that both hold messages, or that would widen what a client reads (a client
   that names only one of the two identities while the other holds messages, or
   a merge that would remove a chat a client names; revoked clients do not
-  count), is refused and counted in `wawarden_rekey_conflicts_total` every
+  count, but an expired client counts until it is revoked, so revoke an
+  expired client whose chats hold a mapping back), is refused and counted in `wawarden_rekey_conflicts_total` every
   time, and reported as the [notification event](#notifications)
   `rekey_conflict` the first time the engine refuses it since the service
   started; the engine remembers up to 1,024 refused mappings, and forgets them
