@@ -53,7 +53,7 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	version, err := d.Migrate(ctx, migrations)
+	version, err := migrate(ctx, d)
 	if err != nil {
 		return nil, errors.Join(err, d.Close())
 	}

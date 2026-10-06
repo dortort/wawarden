@@ -15,8 +15,8 @@ import (
 func TestOpenCreatesTheSchemaOnce(t *testing.T) {
 	opts := testOptions(t)
 	s := openWith(t, opts)
-	if s.SchemaVersion() != len(migrations) || len(migrations) != 2 {
-		t.Fatalf("schema version %d, want %d", s.SchemaVersion(), len(migrations))
+	if s.SchemaVersion() != 2 {
+		t.Fatalf("schema version %d, want 2", s.SchemaVersion())
 	}
 	for _, table := range []string{"chats", "chat_aliases", "lid_map", "contacts", "group_participants", "messages", "messages_fts", "history_blobs", "inbox", "sync_state"} {
 		if n := scalar[int](t, s, "SELECT count(*) FROM sqlite_schema WHERE name = ?", table); n != 1 {

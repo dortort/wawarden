@@ -1,11 +1,13 @@
 package ingest
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/dortort/wawarden/internal/policy"
+	"github.com/dortort/wawarden/internal/store/internal/db"
 )
 
 func learn(t *testing.T, s *Store, lid, pn string, source MappingSource) LIDResult {
@@ -460,29 +462,33 @@ func TestRekeyingPrefersLiveFacts(t *testing.T) {
 
 func TestMigratingKeepsEarlierFactsLive(t *testing.T) {
 	opts := testOptions(t)
-	all := migrations
-	t.Cleanup(func() { migrations = all })
-	migrations = all[:1]
-	s := openWith(t, opts)
-	migrations = all
-	write(t, s, func(tx *Tx) error {
-		for _, q := range []string{
+	d, err := db.Open(t.Context(), db.Archive, db.Options{DataDir: opts.DataDir, UID: opts.UID, Profile: opts.Profile, Logger: opts.Logger, ReadTimeout: opts.ReadTimeout, WriteTimeout: opts.WriteTimeout, RewriteTimeout: opts.RewriteTimeout})
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if _, err := d.Migrate(t.Context(), []string{schemaV1}); err != nil {
+		t.Fatalf("Migrate to the first schema: %v", err)
+	}
+	if err := d.Write(t.Context(), "test.seed", func(ctx context.Context, q db.Querier) error {
+		for _, stmt := range []string{
 			"INSERT INTO chats (jid, kind, name, name_source) VALUES ('" + groupJID + "', 3, 'Subject', 'group_subject')",
 			"INSERT INTO group_participants (group_jid, user_jid, is_admin) VALUES ('" + groupJID + "', '" + alice + "', 0)",
 			"INSERT INTO contacts (jid, push_name, name_source, updated_ts) VALUES ('" + alice + "', 'Alice', 'push_name', 0)",
 		} {
-			if _, err := tx.q.ExecContext(tx.ctx, q); err != nil {
+			if _, err := q.ExecContext(ctx, stmt); err != nil {
 				return err
 			}
 		}
 		return nil
-	})
-	if err := s.Close(); err != nil {
+	}); err != nil {
+		t.Fatalf("seed the first schema: %v", err)
+	}
+	if err := d.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	s = openWith(t, opts)
-	if s.SchemaVersion() != len(all) {
-		t.Fatalf("schema version %d after migrating, want %d", s.SchemaVersion(), len(all))
+	s := openWith(t, opts)
+	if s.SchemaVersion() != 2 {
+		t.Fatalf("schema version %d after migrating, want 2", s.SchemaVersion())
 	}
 	write(t, s, func(tx *Tx) error {
 		if err := tx.ReplaceParticipants(chat(t, groupJID), []Participant{{User: chat(t, alice), Admin: true}}, OriginHistory); err != nil {

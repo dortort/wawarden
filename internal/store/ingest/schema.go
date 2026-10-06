@@ -1,6 +1,14 @@
 package ingest
 
-var migrations = []string{schemaV1, schemaV2}
+import (
+	"context"
+
+	"github.com/dortort/wawarden/internal/store/internal/db"
+)
+
+func migrate(ctx context.Context, d *db.DB) (int, error) {
+	return d.Migrate(ctx, []string{schemaV1, schemaV2})
+}
 
 const schemaV1 = `
 CREATE TABLE chats (
