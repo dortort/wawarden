@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"io"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -559,6 +561,57 @@ func TestMCPVerifierTakesThePipelinesClient(t *testing.T) {
 	info, err := pipelineClient(withClient(t.Context(), c), "ignored", nil)
 	if err != nil || info.UserID != c.ID || !info.Expiration.Equal(c.ExpiresAt) || len(info.Scopes) != 0 {
 		t.Fatalf("client = %+v, %v", info, err)
+	}
+}
+
+func TestMCPLibraryWritesNoLogLines(t *testing.T) {
+	logs := &syncBuffer{}
+	defaultLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(defaultLogger)
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+	stderr := make(chan []byte, 1)
+	go func() {
+		b, _ := io.ReadAll(r)
+		stderr <- b
+	}()
+	defaultStderr := os.Stderr
+	os.Stderr = w
+	defer func() {
+		os.Stderr = defaultStderr
+		_ = w.Close()
+	}()
+
+	f := newMCPFixture(t)
+	meta := `"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"x","version":"1"},"io.modelcontextprotocol/clientCapabilities":{}}`
+	current := http.Header{"Mcp-Protocol-Version": {"2026-07-28"}, "Mcp-Method": {"initialize"}}
+	for _, c := range []struct {
+		body   string
+		header http.Header
+	}{
+		{legacyCall("initialize", `{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"x","version":"1"},`+meta+`}`), current},
+		{legacyCall("tools/call", `{"name":5}`), legacyHeader},
+		{legacyCall("tools/call", `{"name":"get_chat","arguments":{"chat":5}}`), legacyHeader},
+		{legacyCall("no/such/method", "{}"), legacyHeader},
+		{legacyCall("resources/list", "{}"), legacyHeader},
+		{`{"jsonrpc":"2.0","method":"notifications/initialized"}`, legacyHeader},
+	} {
+		rawMCP(t, f.handler, keyGroup, c.body, c.header)
+	}
+	for _, p := range protocols {
+		call(t, connect(t, f.handler, keyGroup, p), toolListChats, nil)
+	}
+
+	os.Stderr = defaultStderr
+	if err := w.Close(); err != nil {
+		t.Fatalf("close the pipe: %v", err)
+	}
+	if written := <-stderr; len(written) > 0 || logs.String() != "" {
+		t.Fatalf("the library logged %q to the default logger and %q to standard error", logs.String(), written)
 	}
 }
 
