@@ -46,14 +46,22 @@ func (l *lines) records(t *testing.T) []map[string]any {
 }
 
 type clock struct {
-	mu sync.Mutex
-	t  time.Time
+	mu    sync.Mutex
+	t     time.Time
+	reads int
 }
 
 func (c *clock) now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.reads++
 	return c.t
+}
+
+func (c *clock) readCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.reads
 }
 
 func (c *clock) advance(d time.Duration) {
@@ -221,14 +229,21 @@ func TestHeldBackAuthFailuresAreReportedByTheTicker(t *testing.T) {
 	n.AdminAuthFailure()
 	n.AdminAuthFailure()
 	n.AdminAuthFailure()
+	ticked := c.readCount() + 2
 	n.Start(t.Context())
 	t.Cleanup(func() { _ = n.Stop(context.Background()) })
-	time.Sleep(50 * time.Millisecond)
+	deadline := time.Now().Add(5 * time.Second)
+	for c.readCount() < ticked {
+		if time.Now().After(deadline) {
+			t.Fatal("the ticker did not check the held-back failures twice")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if got := authFailures(t, out); !slices.Equal(got, []float64{1}) {
 		t.Fatalf("admin_auth_failure counts %v within the minute, want [1]", got)
 	}
 	c.advance(authFailureWindow)
-	deadline := time.Now().Add(5 * time.Second)
+	deadline = time.Now().Add(5 * time.Second)
 	for !slices.Equal(authFailures(t, out), []float64{1, 2}) {
 		if time.Now().After(deadline) {
 			t.Fatalf("admin_auth_failure counts %v, want the two held back reported by the ticker without Stop", authFailures(t, out))
