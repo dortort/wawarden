@@ -298,6 +298,10 @@ func TestRevocationAndReKeysReachTheNextAuthentication(t *testing.T) {
 	if _, has := got.Read[chat(t, phoneA)]; !has {
 		t.Fatalf("the client reads %v, want %s", got.Read, phoneA)
 	}
+	later, laterToken := f.create(t, policy.ClientSpec{Name: "later", Read: []string{phoneB}})
+	if got, ok := f.clients.Authenticate(t.Context(), laterToken); !ok || got.ID != later.ID {
+		t.Fatalf("a client created after the cache loaded = %+v, %v: the create did not invalidate the cache", got, ok)
+	}
 	err := f.store.Write(t.Context(), "test.rekey", func(tx *ingest.Tx) error {
 		res, err := tx.LearnLID(chat(t, lidA), chat(t, phoneA), ingest.MappingSenderAlt, start)
 		if err == nil && !res.Rescoped {
@@ -325,8 +329,8 @@ func TestRevocationAndReKeysReachTheNextAuthentication(t *testing.T) {
 	if err != nil || again.State != admin.StateRevoked || !again.RevokedAt.Equal(start) {
 		t.Fatalf("a second revoke = %+v, %v, want the same revoked view", again, err)
 	}
-	if lines := f.auditLines(t); len(lines) != 2 || lines[1]["action"] != "client_revoke" {
-		t.Fatalf("audit lines %v, want one create and one revoke: a repeated revoke changes nothing", lines)
+	if lines := f.auditLines(t); len(lines) != 3 || lines[2]["action"] != "client_revoke" {
+		t.Fatalf("audit lines %v, want two creates and one revoke: a repeated revoke changes nothing", lines)
 	}
 }
 
@@ -416,6 +420,26 @@ func TestAnUnkeyedAuditRefusesEveryChange(t *testing.T) {
 	}
 	if err := f.store.Audit().Record(t.Context(), admin.Event{At: start, Client: "aaaaaaaa", Action: "messages.read", OK: true, Reason: "ok"}); err == nil {
 		t.Fatal("Record without an audit key succeeded")
+	}
+
+	dir := t.TempDir()
+	keyed := openWith(t, dir, syntheticMaster(t, 100))
+	c, full := keyed.create(t, policy.ClientSpec{Name: "agent", Read: []string{phoneA}})
+	if err := keyed.store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	unkeyed := openWith(t, dir, nil)
+	if _, err := unkeyed.clients.Revoke(t.Context(), c.ID); err == nil {
+		t.Fatal("Revoke without an audit key succeeded")
+	}
+	if got, err := unkeyed.clients.Get(t.Context(), c.ID); err != nil || got.State != admin.StateActive || !got.RevokedAt.IsZero() {
+		t.Fatalf("Get = %+v, %v: the refused revoke committed without its audit row", got, err)
+	}
+	if text := unkeyed.audit.String(); text != "" {
+		t.Fatalf("the refused revoke wrote the audit line %q", text)
+	}
+	if _, ok := unkeyed.clients.Authenticate(t.Context(), full); !ok {
+		t.Fatal("the client no longer authenticates after a refused revoke")
 	}
 }
 
