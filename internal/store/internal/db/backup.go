@@ -61,12 +61,17 @@ func (d *DB) copyTo(ctx context.Context, dst string) error {
 		if b == nil {
 			return nil
 		}
-		return d.step(context.WithoutCancel(ctx), func(kc *keptConn) error {
-			if kc != source {
-				return errBackupConnChanged
+		for {
+			err := d.step(context.WithoutCancel(ctx), func(kc *keptConn) error {
+				if kc != source {
+					return errBackupConnChanged
+				}
+				return safely(b.Finish)
+			})
+			if !errors.Is(err, context.DeadlineExceeded) {
+				return err
 			}
-			return safely(b.Finish)
-		})
+		}
 	}
 	for more := true; more; {
 		if err := ctx.Err(); err != nil {

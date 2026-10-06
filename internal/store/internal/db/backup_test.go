@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func seed(t *testing.T, d *DB, rows int) {
@@ -166,6 +168,51 @@ func TestBackupStopsWhenCancelled(t *testing.T) {
 	}
 	if !d.Healthy() || count(t, d, "SELECT count(*) FROM t") != 40 {
 		t.Fatal("a cancelled backup disturbed the database")
+	}
+}
+
+type finishRecorder struct {
+	stepper
+	finished *atomic.Bool
+}
+
+func (f finishRecorder) Finish() error {
+	f.finished.Store(true)
+	return f.stepper.Finish()
+}
+
+func TestABackupIsFinishedOnceItsConnectionIsFree(t *testing.T) {
+	opts, logs := testOptions(t)
+	opts.WriteTimeout = 200 * time.Millisecond
+	d := mustOpen(t, opts)
+	d.backupPages = 4
+	seed(t, d, 40)
+	var finished atomic.Bool
+	d.newBackup = func(kc *keptConn, dst string) (stepper, error) {
+		b, err := startBackup(kc, dst)
+		if err != nil {
+			return nil, err
+		}
+		return finishRecorder{stepper: b, finished: &finished}, nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var release func()
+	d.stepped = func() {
+		if release == nil {
+			release, _ = holdConnection(t, d)
+			cancel()
+			time.AfterFunc(time.Second, release)
+		}
+	}
+	if err := d.Backup(ctx, filepath.Join(t.TempDir(), "staging"), into(io.Discard)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Backup = %v, want the cancellation", err)
+	}
+	if len(logs.events("db_deadline")) == 0 {
+		t.Fatal("finishing the backup never waited past the write deadline, so this test proves nothing")
+	}
+	if !finished.Load() {
+		t.Fatal("the backup was left unfinished on the connection that holds the lock")
 	}
 }
 
