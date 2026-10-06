@@ -155,7 +155,9 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth a
 	switch {
 	case cfg.BackupRecipient == "":
 		alerts.Warn("no backup recipient is configured: no backup is ever taken", slog.String("event", "backup_disabled"))
-	case a.engine != nil && a.session != nil:
+	case a.engine != nil && a.session == nil:
+		alerts.Warn("the engine opens no device store: no backup is ever taken", slog.String("event", "backup_disabled"))
+	case a.engine != nil:
 		taker, err := backup.New(backup.Options{
 			DataDir: cfg.DataDir, UID: cfg.UID, Recipient: cfg.BackupRecipient, Version: info.Version,
 			Archive: archive, Session: a.session, Notify: notifier,

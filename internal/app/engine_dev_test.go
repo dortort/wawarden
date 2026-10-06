@@ -6,9 +6,12 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"filippo.io/age"
 
 	"github.com/dortort/wawarden/internal/config"
 	"github.com/dortort/wawarden/internal/engine"
@@ -44,6 +47,33 @@ func TestTheFakeEngineOpensNoSessionAndWaitsForPairing(t *testing.T) {
 		t.Fatalf("session.db with the fake engine: %v", err)
 	}
 	requireReleased(t, cfg.DataDir)
+}
+
+func TestTheFakeEngineSaysItTakesNoBackup(t *testing.T) {
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatalf("GenerateX25519Identity: %v", err)
+	}
+	cfg := testConfig(t, "")
+	cfg.OwnerPhone, cfg.HistoryMaxBytes, cfg.BackupRecipient = "+15550100009", config.DefaultHistoryMaxBytes, id.Recipient().String()
+	cfg.Dev.FakeEngine, cfg.LogLevel = true, slog.LevelError
+	logs := &syncBuffer{}
+	a, err := New(t.Context(), cfg, logx.NewWriter(logs))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if a.backup != nil {
+		t.Fatal("the fake engine, which opens no device store, has a backup trigger")
+	}
+	if err := run(t, a)(); err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	if d := logs.find("backup_disabled"); len(d) != 1 || d[0]["level"] != "WARN" {
+		t.Fatalf("backup_disabled events %v with the fake engine and a recipient, want one warning", d)
+	}
+	if _, err := os.Lstat(filepath.Join(cfg.DataDir, "backups")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("backups/ with the fake engine: %v", err)
+	}
 }
 
 func TestTheFakeEngineWarnsAtEveryLogLevel(t *testing.T) {

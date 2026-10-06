@@ -596,7 +596,9 @@ the [archive](#message-archive) and the [device store](#device-store) to
 `backups/` in the data directory. It holds only the
 [age](https://age-encryption.org) recipient, a public key: it encrypts to it and
 can never read a backup back. Without the variable no backup is ever taken, and
-every start logs the warning `backup_disabled`.
+every start logs the warning `backup_disabled`. The [fake engine](#fake-engine)
+of a development build opens no device store, so it takes no backup either and
+logs the same warning even with the variable set.
 
 **When.** This release takes exactly one backup automatically for each paired
 device, once its initial [history sync](#history-sync) has settled, and nothing
@@ -1051,10 +1053,12 @@ adapter with a scripted fake when `WAWARDEN_DEV_FAKE_ENGINE` is `1` or
 metrics without a WhatsApp account. Everything around the fake is the real
 engine: the same [states](#engine-states), pairing guards,
 [ingest rules](#ingest), inbox, [history worker](#history-sync) and caps. The
-fake opens no network connection and no [device store](#device-store), starts
-its goroutines through the same panic-recovering helper as the rest of the
-service, and makes `serve` log the warning `fake_engine`, at every log level,
-with `wrong_account` set to whether it pairs the wrong account.
+fake opens no network connection and no [device store](#device-store), so it
+takes no [backup](#backups) and logs `backup_disabled` even when
+`WAWARDEN_BACKUP_AGE_RECIPIENT` is set. It starts its goroutines through the
+same panic-recovering helper as the rest of the service, and makes `serve` log
+the warning `fake_engine`, at every log level, with `wrong_account` set to
+whether it pairs the wrong account.
 
 - **Pairing.** The fake keeps its pairing in memory only, so every start begins
   `unpaired`, and pairing needs `WAWARDEN_OWNER_PHONE` as it does with WhatsApp.
@@ -1381,7 +1385,7 @@ notices of a [debug window](#protocol-library-logs). Lines in
 | `notify_failed` | `WARN`, at every log level | `attempts`, `reason`, `status` | The [webhook](#webhook) did not take an event, which is dropped. |
 | `notify_dropped` | `WARN`, at every log level | `count` | At shutdown, the [webhook](#webhook) dropped `count` events it had not delivered, and `serve` exits `1`. |
 | `emf_failed` | `WARN` | `error_type` | Writing the [embedded-metric-format](#embedded-metric-format) lines failed. |
-| `backup_disabled` | `WARN`, at every log level | | `WAWARDEN_BACKUP_AGE_RECIPIENT` is not set, so no [backup](#backups) is ever taken. Logged once per start. |
+| `backup_disabled` | `WARN`, at every log level | | `WAWARDEN_BACKUP_AGE_RECIPIENT` is not set, or the [fake engine](#fake-engine) runs and opens no device store, so no [backup](#backups) is ever taken. Logged once per start. |
 | `backup_check_failed` | `WARN` | `error_type` | Reading or recording whether the [backup](#backups) is due failed; the check runs again 30 seconds later. |
 
 What is never logged: requests (there is no access log), request bodies, header
