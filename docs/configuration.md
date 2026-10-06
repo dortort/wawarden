@@ -1684,9 +1684,11 @@ Panic names: `api.client`, `api.admin` and `api.health` for the handlers;
 `listeners.client`, `listeners.admin`, `listeners.health`, `listeners.shutdown`
 and `signals` for goroutines. The engine adds `engine.supervisor`,
 `engine.ingest` and `engine.logout`; the first two also count a panic of one
-version fetch or connection attempt (`engine.supervisor`) or of one inbox row's
-or history blob's attempt (`engine.ingest`), which the engine treats as a failed
-attempt. Its adapter adds `wa.connect`, which ends a connection attempt whose
+version fetch, connection attempt, or pairing's dial or code request
+(`engine.supervisor`) or of one inbox row's or history blob's attempt
+(`engine.ingest`), which the engine treats as a failed attempt. A panic while a
+reconnect closes the connection being dialled also counts as
+`engine.supervisor`, and the reconnect goes ahead. Its adapter adds `wa.connect`, which ends a connection attempt whose
 caller gave up, `wa.keepalive`, which closes a connection whose keepalives
 failed or that WhatsApp asked to log in again, and `wa.event` for a panic while
 it translates one of the protocol library's events or the engine handles it,

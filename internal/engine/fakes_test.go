@@ -171,24 +171,26 @@ func (c *gatedClock) waiting() int {
 }
 
 type fakeClient struct {
-	mu          sync.Mutex
-	paired      bool
-	account     string
-	connected   bool
-	version     Version
-	connectErrs []error
-	logoutErrs  []error
-	oneSocket   bool
-	pairErr     error
-	calls       []string
-	handler     func(Event) bool
-	blobs       map[string][]byte
-	downloadErr error
-	onAck       func(HistoryRef)
-	onWrite     func()
-	onConnect   func()
-	acks        []string
-	called      chan string
+	mu           sync.Mutex
+	paired       bool
+	account      string
+	connected    bool
+	version      Version
+	connectErrs  []error
+	logoutErrs   []error
+	oneSocket    bool
+	pairErr      error
+	calls        []string
+	handler      func(Event) bool
+	blobs        map[string][]byte
+	downloadErr  error
+	onAck        func(HistoryRef)
+	onWrite      func()
+	onConnect    func()
+	onPair       func()
+	onDisconnect func()
+	acks         []string
+	called       chan string
 }
 
 func newClient(paired bool) *fakeClient {
@@ -234,9 +236,13 @@ func (f *fakeClient) isConnected() bool {
 
 func (f *fakeClient) Disconnect() {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.record("disconnect")
 	f.connected = false
+	hook := f.onDisconnect
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 }
 
 func (f *fakeClient) Paired() bool {
@@ -274,10 +280,14 @@ func (f *fakeClient) pairAs(jid string) {
 
 func (f *fakeClient) PairPhone(_ context.Context, digits string) (string, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.record("pair:" + digits)
-	if f.pairErr != nil {
-		return "", f.pairErr
+	hook, err := f.onPair, f.pairErr
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	if err != nil {
+		return "", err
 	}
 	return "SYNT-HETC", nil
 }

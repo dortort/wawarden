@@ -658,6 +658,61 @@ func TestPanicsInTheClientAreFailedAttempts(t *testing.T) {
 	}
 }
 
+func recovered(fn func()) {
+	defer func() { _ = recover() }()
+	fn()
+}
+
+func TestPanicsInTheClientWhilePairingAreFailedAttempts(t *testing.T) {
+	h := newSupRig(t)
+	h.reportPanics()
+	h.client.setPaired(false)
+	var connectOnce, pairOnce sync.Once
+	h.client.onConnect = func() { connectOnce.Do(func() { panic("synthetic canary pairing connect panic") }) }
+	h.client.onPair = func() { pairOnce.Do(func() { panic("synthetic canary pairing code panic") }) }
+	for _, call := range []string{"Connect", "PairPhone"} {
+		var err error
+		recovered(func() { _, err = h.s.pair(t.Context()) })
+		if !errors.Is(err, ErrPairFailed) {
+			t.Fatalf("Pair with a panicking %s = %v, want ErrPairFailed", call, err)
+		}
+	}
+	h.want(StateConnecting, "")
+	if code, err := h.s.pair(t.Context()); err != nil || code == "" {
+		t.Fatalf("Pair after the panics = %q, %v", code, err)
+	}
+	if h.client.count("connect") != 2 || h.client.count("pair:15550100009") != 2 {
+		t.Fatalf("calls %v, want a second dial after the panicking one and a code from the open connection", h.client.history())
+	}
+	if len(h.logs.events("pair_failed")) != 2 || h.counter("wawarden_panics_total", "name", "engine.supervisor") != 2 || strings.Contains(h.logs.String(), "canary") {
+		t.Fatalf("panics counted %v; log %s", h.counter("wawarden_panics_total", "name", "engine.supervisor"), h.logs)
+	}
+}
+
+func TestAPanicInTheClientWhileReconnectingStillRedials(t *testing.T) {
+	h := newSupRig(t)
+	h.reportPanics()
+	h.versions(versionResult{v: current})
+	h.s.begin(t.Context(), 1)
+	h.steps()
+	h.want(StateConnecting, "")
+	var once sync.Once
+	h.client.onDisconnect = func() { once.Do(func() { panic("synthetic canary disconnect panic") }) }
+	err := errors.New("synthetic: reconnect did not return")
+	recovered(func() { err = h.s.reconnect() })
+	if err != nil {
+		t.Fatalf("Reconnect with a panicking Disconnect = %v", err)
+	}
+	if h.steps() == 0 || h.client.count("connect") != 2 {
+		t.Fatalf("calls %v, want a new dial after the panicking disconnect", h.client.history())
+	}
+	h.deliver(Connected{})
+	h.want(StateConnected, "")
+	if h.counter("wawarden_panics_total", "name", "engine.supervisor") != 1 {
+		t.Fatalf("panics counted %v", h.counter("wawarden_panics_total", "name", "engine.supervisor"))
+	}
+}
+
 func TestRestartBudgetStartsDisconnected(t *testing.T) {
 	h := newSupRig(t)
 	v := h.versions(versionResult{v: newer})

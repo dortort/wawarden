@@ -597,7 +597,7 @@ func (s *supervisor) pair(ctx context.Context) (string, error) {
 	s.mu.Unlock()
 	s.logger.Info("pairing started", slog.String("event", "pairing_started"))
 	if dial {
-		if err := s.client.Connect(ctx); err != nil {
+		if err := guarded("engine.supervisor", func() error { return s.client.Connect(ctx) }); err != nil {
 			s.mu.Lock()
 			if s.gen == gen {
 				s.setLocked(StateUnpaired, "")
@@ -612,7 +612,12 @@ func (s *supervisor) pair(ctx context.Context) (string, error) {
 		}
 		s.mu.Unlock()
 	}
-	code, err := s.client.PairPhone(ctx, s.owner)
+	var code string
+	err := guarded("engine.supervisor", func() error {
+		var err error
+		code, err = s.client.PairPhone(ctx, s.owner)
+		return err
+	})
 	if err != nil {
 		s.logger.Warn("pairing failed", slog.String("event", "pair_failed"), slog.String("error_type", fmt.Sprintf("%T", err)))
 		return "", ErrPairFailed
@@ -629,7 +634,7 @@ func (s *supervisor) reconnect() error {
 	if !redial {
 		return err
 	}
-	s.client.Disconnect()
+	_ = guarded("engine.supervisor", func() error { s.client.Disconnect(); return nil })
 	s.mu.Lock()
 	if s.gen == gen {
 		s.next, s.attempt = connect, 0
