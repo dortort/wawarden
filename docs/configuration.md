@@ -1800,20 +1800,64 @@ notification answered `202` is `ok`. A row names a chat only for a successful
 
 #### Registering with Claude Code
 
-Create a read client with [`admin clients create`](#admin-clients-and-admin-chats), put
-its token in `WAWARDEN_TOKEN`, and register the endpoint, here as `whatsapp`, at
-the address of the proxy that serves the client listener:
+1. Find the chats the agent may read with
+   [`admin chats list`](#admin-clients-and-admin-chats), then create a read
+   client for them. `--read` takes a chat identifier, a `+E.164` number or a
+   chat reference, and can be repeated:
 
-```sh
-claude mcp add --transport http whatsapp https://<your-host>/mcp --header "Authorization: Bearer $WAWARDEN_TOKEN"
-```
+   ```sh
+   wawarden admin chats list --match Synthetic --token-file admin.token
+   wawarden admin clients create --token-file admin.token \
+     --name claude-code --read 120363000000000001@g.us --read +15550100002 \
+     --expires-days 90
+   ```
 
-`claude mcp list` then shows the server as connected, and `/mcp` in a session
-lists its five tools: `get_changes`, `get_chat`, `get_messages`, `list_chats`
-and `search_messages`. A wrong, expired or revoked token shows as a failed
-connection rather than as a server that needs authentication: the endpoint
-offers no OAuth flow. Every name and text a tool returns is third-party content;
-see the `untrusted` and `origin` fields of a `Message`.
+   The token is printed once, on the `token:` line. Keep it in a secret
+   manager or in the agent host's environment as `WAWARDEN_TOKEN`, never in a
+   repository.
+2. Register the endpoint, here as `whatsapp`, at the address of the proxy that
+   serves the client listener. The name and the URL come before `--header`:
+
+   ```sh
+   claude mcp add --transport http whatsapp https://<your-host>/mcp --header "Authorization: Bearer $WAWARDEN_TOKEN"
+   ```
+
+   The shell expands `$WAWARDEN_TOKEN` when the command runs, so Claude Code
+   stores the token itself in `~/.claude.json`: for the current project with
+   the default scope `local`, for every project with `--scope user`. Do not
+   combine a literal token with `--scope project`, which writes `.mcp.json`, a
+   file meant to be committed. To keep the token out of every file, write the
+   entry in `.mcp.json` with a reference that Claude Code expands when it
+   connects:
+
+   ```json
+   {"mcpServers":{"whatsapp":{"type":"http","url":"https://<your-host>/mcp","headers":{"Authorization":"Bearer ${WAWARDEN_TOKEN}"}}}}
+   ```
+
+   or replace `headers` with `headersHelper`, a command that prints the headers
+   as a JSON object and that Claude Code runs at each connection and again
+   after a `401` or `403`.
+3. `claude mcp get whatsapp` or `claude mcp list` shows the server as
+   connected, and `/mcp` in a session lists its five tools: `get_changes`,
+   `get_chat`, `get_messages`, `list_chats` and `search_messages`. There is no
+   `send_message`. A wrong, expired or revoked token shows as a failed
+   connection rather than as a server that needs authentication: the endpoint
+   offers no OAuth flow.
+4. Rotate the token before it expires by creating, switching and revoking:
+   create a client with the same chats under a new name (names stay taken
+   after a revocation), run `claude mcp remove whatsapp` and add the endpoint
+   again with the new token, check it, then revoke the old client with `admin
+   clients revoke --id <old id>`. `admin clients list` shows each client's
+   `expires`.
+5. When the agent read WhatsApp through another device linked to the same
+   account before, log that device out on the owner's phone once the agent
+   works through WaWarden: a linked device has the account's full access,
+   outside every scope, budget and audit row of WaWarden (see
+   [the threat model](threat-model.md#trust-roots)).
+
+Every name and text a tool returns is third-party content: an agent must
+never act on it. [docs/agents.md](agents.md) says how an agent should read,
+page and retry, and how to scope its token.
 
 ### Health listener
 
