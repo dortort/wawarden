@@ -148,9 +148,18 @@ func TestHistoryWithoutAnOwnIdentityDropsOnlyTheOwnersRows(t *testing.T) {
 	}
 }
 
-func nested(depth int) []byte {
+func nested(levels int) []byte {
 	b := []byte{}
-	for range depth {
+	if levels%3 > 0 {
+		var ext []byte
+		if levels%3 == 2 {
+			ext = protowire.AppendTag(ext, 17, protowire.BytesType)
+			ext = protowire.AppendBytes(ext, nil)
+		}
+		b = protowire.AppendTag(b, 6, protowire.BytesType)
+		b = protowire.AppendBytes(b, ext)
+	}
+	for range levels / 3 {
 		var ctx []byte
 		ctx = protowire.AppendTag(ctx, 3, protowire.BytesType)
 		ctx = protowire.AppendBytes(ctx, b)
@@ -169,8 +178,11 @@ func TestHistoryDecodingIsDepthLimited(t *testing.T) {
 	for _, tt := range []struct {
 		depth int
 		ok    bool
-	}{{2, true}, {20, false}} {
+	}{{6, true}, {messageDepth - 1, true}, {messageDepth, false}, {60, false}} {
 		msg := nested(tt.depth)
+		if err := messageOptions.Unmarshal(msg, new(waE2E.Message)); (err == nil) != tt.ok {
+			t.Fatalf("a message nesting %d levels deep decodes alone with %v, want success %v", tt.depth, err, tt.ok)
+		}
 		var web []byte
 		web = protowire.AppendTag(web, 1, protowire.BytesType)
 		web = protowire.AppendBytes(web, historyBlob(t, msgKey(peer, false, "3EB0N1", nil)))
@@ -189,7 +201,7 @@ func TestHistoryDecodingIsDepthLimited(t *testing.T) {
 		blob = protowire.AppendBytes(blob, c)
 		_, err := r.c.Decode(blob)
 		if (err == nil) != tt.ok {
-			t.Errorf("Decode of quotes nested %d deep = %v, want success %v", tt.depth, err, tt.ok)
+			t.Errorf("Decode of a message nesting %d levels deep = %v, want success %v", tt.depth, err, tt.ok)
 		}
 	}
 	if _, err := r.c.Decode([]byte("synthetic: not a protocol buffer")); err == nil {
