@@ -1355,12 +1355,18 @@ the presented token hashed once and compared once, in constant time, with the
 stored digest, or with a random digest drawn at start when the token is
 malformed or its id unknown; only then are revocation and expiry checked. A
 malformed, unknown, wrong, revoked or expired token is one failure, answered as
-below. The in-memory copy is reloaded on the first request after a client is
-created or revoked, or after a re-key moved a client's chat, so a revocation
-takes effect on the next request; a request that was already authenticated
-finishes with the grant it holds, within the 2-second read deadline. An
-authenticated request goes on to the [read API](#read-api); every other request
-that passes checks 1 and 2 is answered `401` (or `429`):
+below. The copy is loaded when the archive opens, and authentication never
+reads the archive. Creating or revoking a client, and a re-key that moves a
+client's chat, rebuild the copy inside their own write and publish it once that
+write commits and before the change returns, so a revocation takes effect on
+the next request; a request that was already authenticated finishes with the
+grant it holds, within the 2-second read deadline. A request that arrives while
+a change is being published, or after a change that did not commit and before
+the copy has been reloaded in the background, waits for the new copy for up to
+2 seconds and is then answered `503` (`busy`) with `Retry-After: 1`, whatever
+token it presents; that answer is not a failure and spends no failure budget.
+An authenticated request goes on to the [read API](#read-api); every other
+request that passes checks 1 and 2 is answered `401` (or `429`):
 
 ```text
 HTTP/1.1 401 Unauthorized
@@ -1498,7 +1504,8 @@ instead of `401`.
 
 The budget changes only the answer to a failure. Authentication still runs for
 every request, and a valid credential is accepted whether or not the budget is
-empty, so legitimate callers cannot be locked out. For the same reason the budget
+empty, so legitimate callers cannot be locked out; a client list that is being
+republished answers `503` without spending the budget. For the same reason the budget
 does not slow down guessing: what protects the admin and client tokens against
 guessing are their 256 random bits. Anyone who can reach a listener can keep its budget empty, after
 which a caller presenting a wrong token sees `429` rather than `401`.

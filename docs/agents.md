@@ -72,7 +72,7 @@ for. Keep the two apart:
 | `401` `unauthorized` | The token is wrong, expired or revoked. In Claude Code, the server shows as failed to connect. | Stop and tell the operator. Retrying spends a failure budget that every caller shares, after which every wrong token gets `429` `too_many_requests`. |
 | `429` `rate_limited` | The client's read budget, or for a search its search budget, is spent. | Wait the whole seconds that `Retry-After` gives, then go on. The tool code `rate_limited` comes without `Retry-After`: at the default rate a search is admitted again within a second. |
 | `429` `too_many_requests` | The failure budget of the listener is spent. | Stop, as for `401`. |
-| `503` `busy` | The archive is busy with ingest, or the call passed its deadline. `Retry-After` is `1`. | Wait a second and retry, a few times at most. |
+| `503` `busy` | The archive is busy with ingest, the call passed its deadline, or the service is publishing a change to its clients. `Retry-After` is `1`. | Wait a second and retry, a few times at most. |
 | `400` `invalid_query`, `invalid_cursor`; the tool codes `invalid_arguments`, `invalid_query`, `invalid_cursor` | The request does not fit the rules. | Fix the request. For a cursor, start again without one. |
 | `403` `forbidden` | The request carried an `Origin` or `Sec-Fetch-Site` header, as a browser sends. | Call from a program, not from a web page. |
 | `500` `internal_error` | Something failed inside the service. | Stop and tell the operator. |
