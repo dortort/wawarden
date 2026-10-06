@@ -294,7 +294,7 @@ func TestPropertyHTTPReadsMatchTheOracle(t *testing.T) {
 			if c.revoked {
 				denied, sql := h.get(t, token, "/v1/chats")
 				unknown, _ := h.get(t, token, "/v1/no-such-route")
-				if denied.Code != http.StatusNotFound || !bytes.Equal(denied.Body.Bytes(), unknown.Body.Bytes()) || len(sql) != 0 {
+				if denied.Code != http.StatusNotFound || !bytes.Equal(denied.Body.Bytes(), unknown.Body.Bytes()) || !maps.EqualFunc(denied.Header(), unknown.Header(), slices.Equal) || len(sql) != 0 {
 					t.Fatalf("a revoked client's listing = %d %s after %q", denied.Code, denied.Body.String(), sql)
 				}
 				continue
