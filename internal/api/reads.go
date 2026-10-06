@@ -144,53 +144,14 @@ func (s *reads) chats(ctx context.Context, g policy.ReadGrant, r *Request) (dto.
 	if err != nil {
 		return nil, policy.CanonicalChat{}, err
 	}
-	binding := cursor.Binding{Client: g.Client(), Endpoint: endpointChats, Filter: allChats}
-	var pos scoped.ChatPosition
-	if text, ok := q["cursor"]; ok {
-		p, err := s.cursors.OpenCursor(binding, text)
-		if err != nil || p[1] < 1 || p[2] < 0 || p[2] > 1 {
-			return nil, policy.CanonicalChat{}, errBadCursor
-		}
-		pos = scoped.ChatPosition{LastTS: p[0], Row: p[1], Undated: p[2] == 1}
-	}
-	page, err := s.archive.Chats(g, ctx, pos, limit)
-	if err != nil {
-		return nil, policy.CanonicalChat{}, err
-	}
-	items := make([]dto.Chat, 0, len(page.Chats))
-	for _, c := range page.Chats {
-		items = append(items, chatItem(c))
-	}
-	kept, cut, err := fit(items)
-	if err != nil {
-		return nil, policy.CanonicalChat{}, err
-	}
-	out := dto.ChatPage{Chats: kept, Truncated: cut, Session: s.state()}
-	if cut || page.More {
-		next := page.Next
-		if cut {
-			next = page.Chats[len(kept)-1].Position
-		}
-		undated := int64(0)
-		if next.Undated {
-			undated = 1
-		}
-		if out.Next, err = s.seal(binding, cursor.Position{next.LastTS, next.Row, undated}); err != nil {
-			return nil, policy.CanonicalChat{}, err
-		}
-	}
-	return out, policy.CanonicalChat{}, nil
+	return response(s.chatPage(ctx, g, q["cursor"], limit))
 }
 
 func (s *reads) chat(ctx context.Context, g policy.ReadGrant, r *Request) (dto.Response, policy.CanonicalChat, error) {
 	if _, err := params(r); err != nil {
 		return nil, policy.CanonicalChat{}, err
 	}
-	c, found, err := s.archive.Chat(g, ctx, r.req.PathValue("ref"))
-	if err := missing(found, err); err != nil {
-		return nil, policy.CanonicalChat{}, err
-	}
-	return chatItem(c), c.Chat, nil
+	return response(s.oneChat(ctx, g, r.req.PathValue("ref")))
 }
 
 func (s *reads) messages(ctx context.Context, g policy.ReadGrant, r *Request) (dto.Response, policy.CanonicalChat, error) {
@@ -202,40 +163,12 @@ func (s *reads) messages(ctx context.Context, g policy.ReadGrant, r *Request) (d
 	if err != nil {
 		return nil, policy.CanonicalChat{}, err
 	}
-	ref := r.req.PathValue("ref")
-	binding := cursor.Binding{Client: g.Client(), Endpoint: endpointMessages, Filter: ref}
-	var pos scoped.MessagePosition
-	if text, ok := q["cursor"]; ok {
-		p, err := s.cursors.OpenCursor(binding, text)
-		if err != nil || p[1] < 1 || p[2] != int64(scoped.Older) {
-			return nil, policy.CanonicalChat{}, s.cursorRefused(ctx, g, ref)
-		}
-		pos = scoped.MessagePosition{TS: p[0], Seq: p[1]}
-	}
-	page, found, err := s.archive.Messages(g, ctx, ref, pos, scoped.Older, limit)
-	if err := missing(found, err); err != nil {
-		return nil, policy.CanonicalChat{}, err
-	}
-	kept, cut, err := s.messageItems(g.Client(), page.Messages)
-	if err != nil {
-		return nil, policy.CanonicalChat{}, err
-	}
-	out := dto.MessagePage{Messages: kept, Truncated: cut, Session: s.state()}
-	if cut || page.More {
-		next := page.Next
-		if cut {
-			next = page.Messages[len(kept)-1].Position
-		}
-		if out.Next, err = s.seal(binding, cursor.Position{next.TS, next.Seq, int64(scoped.Older)}); err != nil {
-			return nil, policy.CanonicalChat{}, err
-		}
-	}
-	return out, page.Chat.Chat, nil
+	return response(s.messagePage(ctx, g, r.req.PathValue("ref"), q["cursor"], limit))
 }
 
 func (s *reads) search(ctx context.Context, g policy.ReadGrant, r *Request) (dto.Response, policy.CanonicalChat, error) {
-	if wait, ok := s.searches.Allow(g.Client()); !ok {
-		return nil, policy.CanonicalChat{}, &codedError{status: http.StatusTooManyRequests, code: codeRateLimited, retryAfter: wait}
+	if err := s.chargeSearch(g); err != nil {
+		return nil, policy.CanonicalChat{}, err
 	}
 	q, err := params(r, "q", "chat", "cursor", "limit")
 	if err != nil {
@@ -249,39 +182,7 @@ func (s *reads) search(ctx context.Context, g policy.ReadGrant, r *Request) (dto
 	if !ok {
 		return nil, policy.CanonicalChat{}, errBadQuery
 	}
-	query, err := scoped.ParseQuery(text)
-	if err != nil {
-		return nil, policy.CanonicalChat{}, errBadQuery
-	}
-	ref := q["chat"]
-	binding := cursor.Binding{Client: g.Client(), Endpoint: endpointSearch, Filter: cmp.Or(ref, allChats), Query: query.Expression()}
-	var pos scoped.SearchPosition
-	if text, ok := q["cursor"]; ok {
-		p, err := s.cursors.OpenCursor(binding, text)
-		if err != nil || p[0] < 1 || p[1] != 0 || p[2] != 0 {
-			return nil, policy.CanonicalChat{}, s.cursorRefused(ctx, g, ref)
-		}
-		pos = scoped.SearchPosition{Upper: p[0]}
-	}
-	page, found, err := s.archive.Search(g, ctx, query, ref, pos, limit)
-	if err := missing(found, err); err != nil {
-		return nil, policy.CanonicalChat{}, err
-	}
-	kept, cut, err := s.messageItems(g.Client(), page.Messages)
-	if err != nil {
-		return nil, policy.CanonicalChat{}, err
-	}
-	out := dto.SearchPage{Messages: kept, More: cut || page.More, Truncated: cut, Session: s.state()}
-	if out.More {
-		next := page.Next
-		if cut {
-			next = scoped.SearchPosition{Upper: page.Messages[len(kept)-1].Position.Seq}
-		}
-		if out.Next, err = s.seal(binding, cursor.Position{next.Upper}); err != nil {
-			return nil, policy.CanonicalChat{}, err
-		}
-	}
-	return out, policy.CanonicalChat{}, nil
+	return response(s.searchPage(ctx, g, text, q["chat"], q["cursor"], limit))
 }
 
 func (s *reads) changes(ctx context.Context, g policy.ReadGrant, r *Request) (dto.Response, policy.CanonicalChat, error) {
@@ -293,21 +194,152 @@ func (s *reads) changes(ctx context.Context, g policy.ReadGrant, r *Request) (dt
 	if err != nil {
 		return nil, policy.CanonicalChat{}, err
 	}
-	ref := q["chat"]
+	return response(s.changePage(ctx, g, q["since"], q["chat"], limit))
+}
+
+func response[T dto.Response](resp T, chat policy.CanonicalChat, err error) (dto.Response, policy.CanonicalChat, error) {
+	if err != nil {
+		return nil, policy.CanonicalChat{}, err
+	}
+	return resp, chat, nil
+}
+
+func (s *reads) chargeSearch(g policy.ReadGrant) error {
+	if wait, ok := s.searches.Allow(g.Client()); !ok {
+		return &codedError{status: http.StatusTooManyRequests, code: codeRateLimited, retryAfter: wait}
+	}
+	return nil
+}
+
+func (s *reads) chatPage(ctx context.Context, g policy.ReadGrant, text string, limit int) (dto.ChatPage, policy.CanonicalChat, error) {
+	binding := cursor.Binding{Client: g.Client(), Endpoint: endpointChats, Filter: allChats}
+	var pos scoped.ChatPosition
+	if text != "" {
+		p, err := s.cursors.OpenCursor(binding, text)
+		if err != nil || p[1] < 1 || p[2] < 0 || p[2] > 1 {
+			return dto.ChatPage{}, policy.CanonicalChat{}, errBadCursor
+		}
+		pos = scoped.ChatPosition{LastTS: p[0], Row: p[1], Undated: p[2] == 1}
+	}
+	page, err := s.archive.Chats(g, ctx, pos, limit)
+	if err != nil {
+		return dto.ChatPage{}, policy.CanonicalChat{}, err
+	}
+	items := make([]dto.Chat, 0, len(page.Chats))
+	for _, c := range page.Chats {
+		items = append(items, chatItem(c))
+	}
+	kept, cut, err := fit(items)
+	if err != nil {
+		return dto.ChatPage{}, policy.CanonicalChat{}, err
+	}
+	out := dto.ChatPage{Chats: kept, Truncated: cut, Session: s.state()}
+	if cut || page.More {
+		next := page.Next
+		if cut {
+			next = page.Chats[len(kept)-1].Position
+		}
+		undated := int64(0)
+		if next.Undated {
+			undated = 1
+		}
+		if out.Next, err = s.seal(binding, cursor.Position{next.LastTS, next.Row, undated}); err != nil {
+			return dto.ChatPage{}, policy.CanonicalChat{}, err
+		}
+	}
+	return out, policy.CanonicalChat{}, nil
+}
+
+func (s *reads) oneChat(ctx context.Context, g policy.ReadGrant, ref string) (dto.Chat, policy.CanonicalChat, error) {
+	c, found, err := s.archive.Chat(g, ctx, ref)
+	if err := missing(found, err); err != nil {
+		return dto.Chat{}, policy.CanonicalChat{}, err
+	}
+	return chatItem(c), c.Chat, nil
+}
+
+func (s *reads) messagePage(ctx context.Context, g policy.ReadGrant, ref, text string, limit int) (dto.MessagePage, policy.CanonicalChat, error) {
+	binding := cursor.Binding{Client: g.Client(), Endpoint: endpointMessages, Filter: ref}
+	var pos scoped.MessagePosition
+	if text != "" {
+		p, err := s.cursors.OpenCursor(binding, text)
+		if err != nil || p[1] < 1 || p[2] != int64(scoped.Older) {
+			return dto.MessagePage{}, policy.CanonicalChat{}, s.cursorRefused(ctx, g, ref)
+		}
+		pos = scoped.MessagePosition{TS: p[0], Seq: p[1]}
+	}
+	page, found, err := s.archive.Messages(g, ctx, ref, pos, scoped.Older, limit)
+	if err := missing(found, err); err != nil {
+		return dto.MessagePage{}, policy.CanonicalChat{}, err
+	}
+	kept, cut, err := s.messageItems(g.Client(), page.Messages)
+	if err != nil {
+		return dto.MessagePage{}, policy.CanonicalChat{}, err
+	}
+	out := dto.MessagePage{Messages: kept, Truncated: cut, Session: s.state()}
+	if cut || page.More {
+		next := page.Next
+		if cut {
+			next = page.Messages[len(kept)-1].Position
+		}
+		if out.Next, err = s.seal(binding, cursor.Position{next.TS, next.Seq, int64(scoped.Older)}); err != nil {
+			return dto.MessagePage{}, policy.CanonicalChat{}, err
+		}
+	}
+	return out, page.Chat.Chat, nil
+}
+
+func (s *reads) searchPage(ctx context.Context, g policy.ReadGrant, text, ref, cur string, limit int) (dto.SearchPage, policy.CanonicalChat, error) {
+	query, err := scoped.ParseQuery(text)
+	if err != nil {
+		return dto.SearchPage{}, policy.CanonicalChat{}, errBadQuery
+	}
+	binding := cursor.Binding{Client: g.Client(), Endpoint: endpointSearch, Filter: cmp.Or(ref, allChats), Query: query.Expression()}
+	var pos scoped.SearchPosition
+	if cur != "" {
+		p, err := s.cursors.OpenCursor(binding, cur)
+		if err != nil || p[0] < 1 || p[1] != 0 || p[2] != 0 {
+			return dto.SearchPage{}, policy.CanonicalChat{}, s.cursorRefused(ctx, g, ref)
+		}
+		pos = scoped.SearchPosition{Upper: p[0]}
+	}
+	page, found, err := s.archive.Search(g, ctx, query, ref, pos, limit)
+	if err := missing(found, err); err != nil {
+		return dto.SearchPage{}, policy.CanonicalChat{}, err
+	}
+	kept, cut, err := s.messageItems(g.Client(), page.Messages)
+	if err != nil {
+		return dto.SearchPage{}, policy.CanonicalChat{}, err
+	}
+	out := dto.SearchPage{Messages: kept, More: cut || page.More, Truncated: cut, Session: s.state()}
+	if out.More {
+		next := page.Next
+		if cut {
+			next = scoped.SearchPosition{Upper: page.Messages[len(kept)-1].Position.Seq}
+		}
+		if out.Next, err = s.seal(binding, cursor.Position{next.Upper}); err != nil {
+			return dto.SearchPage{}, policy.CanonicalChat{}, err
+		}
+	}
+	return out, policy.CanonicalChat{}, nil
+}
+
+func (s *reads) changePage(ctx context.Context, g policy.ReadGrant, since, ref string, limit int) (dto.ChangePage, policy.CanonicalChat, error) {
 	binding := cursor.Binding{Client: g.Client(), Endpoint: endpointChanges, Filter: cmp.Or(ref, allChats)}
 	var pos scoped.ChangePosition
-	if since, ok := q["since"]; ok {
+	if since != "" {
+		var ok bool
 		if pos, ok = s.changePosition(binding, since); !ok {
-			return nil, policy.CanonicalChat{}, s.cursorRefused(ctx, g, ref)
+			return dto.ChangePage{}, policy.CanonicalChat{}, s.cursorRefused(ctx, g, ref)
 		}
 	}
 	page, found, err := s.archive.Changes(g, ctx, ref, pos, limit)
 	if err := missing(found, err); err != nil {
-		return nil, policy.CanonicalChat{}, err
+		return dto.ChangePage{}, policy.CanonicalChat{}, err
 	}
 	kept, cut, err := s.messageItems(g.Client(), page.Messages)
 	if err != nil {
-		return nil, policy.CanonicalChat{}, err
+		return dto.ChangePage{}, policy.CanonicalChat{}, err
 	}
 	next := page.Next
 	if cut {
@@ -315,7 +347,7 @@ func (s *reads) changes(ctx context.Context, g policy.ReadGrant, r *Request) (dt
 	}
 	out := dto.ChangePage{Messages: kept, More: cut || page.More, Truncated: cut, Session: s.state()}
 	if out.Next, err = s.seal(binding, cursor.Position{next.ChangeSeq, next.Since}); err != nil {
-		return nil, policy.CanonicalChat{}, err
+		return dto.ChangePage{}, policy.CanonicalChat{}, err
 	}
 	return out, policy.CanonicalChat{}, nil
 }
