@@ -333,6 +333,38 @@ func TestSearchFindsTextInScopeNewestFirstAcrossWindows(t *testing.T) {
 	}
 }
 
+func TestARevokedRowShowsNoTextWhileItsTextAndIndexEntryRemain(t *testing.T) {
+	s := openStore(t)
+	insert(t, s, message(t, alice, "R1", alice, "a revoked needle", epoch))
+	exec(t, s, "UPDATE messages SET revoked = 1 WHERE id = 'R1'")
+	if texts, err := s.Scoped().Column(t.Context(), "SELECT text FROM messages_fts WHERE messages_fts MATCH 'needle'"); err != nil || len(texts) != 1 {
+		t.Fatalf("the revoked row's text and index entry = %q, %v, want both still present", texts, err)
+	}
+	ref := refOf(t, s, alice)
+	for _, in := range []string{"", ref} {
+		if got := searchAll(t, s.Scoped(), grantAll(t), "needle", in, 5); len(got) != 0 {
+			t.Fatalf("search in %q found the revoked row: %q", in, got)
+		}
+	}
+	page, _, err := s.Scoped().Messages(grantAll(t), t.Context(), ref, scoped.MessagePosition{}, scoped.Older, 5)
+	if err != nil || len(page.Messages) != 1 {
+		t.Fatalf("Messages = %+v, %v", page, err)
+	}
+	changes, _, err := s.Scoped().Changes(grantAll(t), t.Context(), "", scoped.ChangePosition{}, 5)
+	if err != nil || len(changes.Messages) != 1 {
+		t.Fatalf("Changes = %+v, %v", changes, err)
+	}
+	one, found, err := s.Scoped().Message(grantAll(t), t.Context(), chat(t, alice), "R1", chat(t, alice))
+	if err != nil || !found {
+		t.Fatalf("Message = %v, %v", found, err)
+	}
+	for name, m := range map[string]scoped.Message{"Messages": page.Messages[0], "Changes": changes.Messages[0], "Message": one} {
+		if m.ID != "R1" || !m.Revoked || m.Text != "" || m.TextDisplay != "" {
+			t.Errorf("%s = %+v, want the revoked row without its text", name, m)
+		}
+	}
+}
+
 func TestSearchFindsComposedTextFromADecomposedQuery(t *testing.T) {
 	s := openStore(t)
 	insert(t, s, message(t, alice, "A1", alice, "un caf\u00e9 noir", epoch), message(t, alice, "A2", alice, "un cafe noir", epoch))
