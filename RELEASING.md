@@ -546,27 +546,31 @@ merges, tags or releases. It runs two jobs:
    the target's pseudo-version, and ends without a change when `go.mod` already
    pins it. Otherwise it runs `go get`, `go mod tidy` and `go mod verify`, stops
    unless exactly `go.mod` and `go.sum` changed, writes the pull request's
-   description, uploads it with `go.mod`, `go.sum` and the watched-path diff as
-   the artifact `whatsmeow-bump`, builds the release and `dev` tag sets, and
-   runs `hack/offline-test.sh`. A target that resolves to a tagged version or to
+   description, which states no result of the build or the tests, uploads it
+   with `go.mod`, `go.sum` and the watched-path diff as the artifact
+   `whatsmeow-bump`, builds the release and `dev` tag sets, and runs
+   `hack/offline-test.sh`. A target that resolves to a tagged version or to
    another commit, or that needs a newer Go than the `toolchain` line of
    `go.mod` names (`GOTOOLCHAIN` is `local`), stops it.
 2. The second job runs only when the first one passed, and alone holds
-   `contents: write` and `pull-requests: write`. It runs no Go code. It commits
-   the artifact's `go.mod` and `go.sum` onto the commit the run started from,
-   pushes the commit to the branch `bump/whatsmeow`, and opens the pull request
-   from that branch, or updates the title and description of the open one from
-   that branch of this repository; a pull request from a fork's branch of the
-   same name is never touched. The branch belongs to the workflow: a run
-   replaces it, refuses to when it holds a commit that the workflow did not
-   make, and leaves it alone when it already pins the same version, so that an
-   approved CI run stays valid. A closed pull request is not remembered: the
-   next run opens a new one for the newest commit, even one that was declined.
-   An architecture test (`internal/archtest/workflows_test.go`) holds the
-   workflow to this split: main only, no workflow-wide permission, no Go and no
-   `hack/` script in the job that can write, credentials never persisted by a
-   checkout, the Go version check right after setup-go and before any Go command,
-   and the lookup that skips pull requests from forks.
+   `contents: write` and `pull-requests: write`. It runs no Go code. It puts a
+   line in front of the artifact's description saying that the first job passed
+   its checks, builds and tests, commits the artifact's `go.mod` and `go.sum`
+   onto the commit the run started from, pushes the commit to the branch
+   `bump/whatsmeow`, and opens the pull request from that branch, or updates the
+   title and description of the open one from that branch of this repository; a
+   pull request from a fork's branch of the same name is never touched. The
+   branch belongs to the workflow: a run replaces it, refuses to when it holds a
+   commit that the workflow did not make, and leaves it alone when it already
+   pins the same version, so that an approved CI run stays valid. A closed pull
+   request is not remembered: the next run opens a new one for the newest
+   commit, even one that was declined. An architecture test
+   (`internal/archtest/workflows_test.go`) holds the workflow to this split:
+   main only, no workflow-wide permission, no Go and no `hack/` script in the
+   job that can write, credentials never persisted by a checkout, the Go version
+   check right after setup-go and before any Go command, no step that says
+   checks passed before the tests run, and the lookup that skips pull requests
+   from forks.
 
 The description carries the old and new pseudo-versions, the upstream compare
 link, whether the new commit descends from the pinned one (and if not, the
@@ -580,9 +584,10 @@ the diff is cut at a line with a note, and the complete diff is
 `watched-paths.diff` in the run's `whatsmeow-bump` artifact.
 
 When the first job fails, nothing is pushed. If it failed at the build or the
-tests, its `whatsmeow-bump` artifact still holds the description and the diff. A bump that
-needs a change of this repository, such as a new module for the architecture
-tests' reviewed lists, is made by hand on a branch with the same commands.
+tests, its `whatsmeow-bump` artifact still holds the description, which claims
+no result, and the diff. A bump that needs a change of this repository, such
+as a new module for the architecture tests' reviewed lists, is made by hand on a
+branch with the same commands.
 
 Opening the pull request needs the repository setting **Allow GitHub Actions to
 create and approve pull requests** (Settings, Actions, General, Workflow

@@ -172,7 +172,7 @@ jobs:
           {
             printf "Pins \`%s\` to \`%s\`; \`main\` pins \`%s\`.\n\n" "$module" "$NEW" "$OLD"
             printf -- '- Upstream: %s/compare/%s...%s. The new commit %s.\n' "$upstream" "$old_commit" "$new_commit" "$lineage"
-            printf -- "- Opened by the \`bump-whatsmeow\` workflow (%s, [run %s](%s)), which never merges. That run passed \`go mod tidy\`, \`go mod verify\`, \`go build\` for the release and \`dev\` tag sets, and \`hack/offline-test.sh\`, which runs the whole suite, release and dev builds, in a container without a network, before it opened or updated this pull request.\n" "$GITHUB_EVENT_NAME" "$GITHUB_RUN_ID" "$run_url"
+            printf -- "- Opened by the \`bump-whatsmeow\` workflow (%s, [run %s](%s)), which never merges.\n" "$GITHUB_EVENT_NAME" "$GITHUB_RUN_ID" "$run_url"
             printf -- '- CI does not start on its own for a pull request that the workflow token opened or updated: a maintainer starts it with **Approve workflows to run** in the merge box. RELEASING.md, under The whatsmeow bump workflow, gives the review.\n\n'
             printf '### Upstream commits\n\n'
             if [ -s "$work/log.full" ]; then
@@ -271,9 +271,17 @@ jobs:
           branch=bump/whatsmeow
           bot_email='41898282+github-actions[bot]@users.noreply.github.com'
           pseudo='^v[0-9]+\.[0-9]+\.[0-9]+-([0-9A-Za-z.-]*\.)?[0-9]{14}-[0-9a-f]{12}$'
-          body=$RUNNER_TEMP/bump/body.md
+          body=$RUNNER_TEMP/description.md
           if [[ ! "$OLD" =~ $pseudo || ! "$NEW" =~ $pseudo ]]; then
             echo "::error::the prepare job handed over versions that are not pseudo-versions"
+            exit 1
+          fi
+          {
+            printf 'The workflow run that opened or updated this pull request, [run %s](%s/%s/actions/runs/%s), did so only after its first job had passed the module checks, the release and `dev` builds and the tests without a network that RELEASING.md lists under The whatsmeow bump workflow.\n\n' "$GITHUB_RUN_ID" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            cat "$RUNNER_TEMP/bump/body.md"
+          } > "$body"
+          if [ "$(($(wc -c < "$body")))" -gt 65536 ]; then
+            echo "::error::the pull request description exceeds GitHub's limit of 65536 characters"
             exit 1
           fi
           cp "$RUNNER_TEMP/bump/go.mod" "$RUNNER_TEMP/bump/go.sum" .

@@ -213,6 +213,8 @@ const openPullRequestLookup = `number=$(gh pr list --head "$branch" --base main 
 var (
 	goCommand = regexp.MustCompile(`(?m)\bgo(?:\s|$)`)
 	ghPR      = regexp.MustCompile(`\bgh pr (\S+)(?: (\S+))?`)
+	outcome   = regexp.MustCompile(`\bpassed\b`)
+	runsTests = regexp.MustCompile(`(?m)^\s*hack/offline-test\.sh(?:\s|$)`)
 )
 
 func bumpWorkflowProblems(config string) []string {
@@ -240,6 +242,10 @@ func bumpWorkflowProblems(config string) []string {
 		}
 		writes := strings.Contains(inline, "write") || slices.ContainsFunc(granted, func(p string) bool { return strings.Contains(p, "write") })
 		setup, firstGo := -1, -1
+		tested := slices.IndexFunc(job.steps, func(step string) bool {
+			script, _ := stepScript(step)
+			return runsTests.MatchString(script)
+		})
 		for i, step := range job.steps {
 			uses, _ := yamlValue(step, "uses")
 			script, _ := stepScript(step)
@@ -248,6 +254,9 @@ func bumpWorkflowProblems(config string) []string {
 			}
 			if strings.HasPrefix(uses, "actions/setup-go@") {
 				setup = i
+			}
+			if i < tested && outcome.MatchString(script) {
+				out = append(out, fmt.Sprintf("jobs.%s step %d says that checks passed before step %d runs the tests", job.name, i+1, tested+1))
 			}
 			if strings.HasPrefix(uses, "actions/checkout@") {
 				if got, _ := yamlValue(step, "with", "persist-credentials"); got != "false" {
@@ -341,6 +350,7 @@ jobs:
       - uses: actions/download-artifact@0000000000000000000000000000000000000000 # v0
       - name: Propose
         run: |
+          printf 'Its first job passed the tests.\n' > description.md
           git push origin HEAD:refs/heads/bump/whatsmeow
           ` + openPullRequestLookup + `
           if [ -n "$number" ]; then
@@ -373,6 +383,7 @@ jobs:
 		{name: "Go used before the version check", old: setupGo + check, new: setupGo + "      - run: go version\n" + check, want: 1},
 		{name: "Go without setup-go", old: setupGo + check, want: 1},
 		{name: "Go before setup-go", old: setupGo, new: "      - run: go mod download\n" + setupGo, want: 1},
+		{name: "checks said to pass before the tests", old: "      - name: Build\n", new: "      - run: echo 'The checks passed.' > body.md\n      - name: Build\n", want: 1},
 		{name: "fork pull requests", old: "--json number,isCrossRepository --jq 'map(select(.isCrossRepository | not)) | .[0].number // empty'", new: "--json number --jq '.[0].number // empty'", want: 1},
 		{name: "no lookup", old: "          " + openPullRequestLookup + "\n", want: 1},
 		{name: "edit by branch", old: `gh pr edit "$number"`, new: `gh pr edit "$branch"`, want: 1},
