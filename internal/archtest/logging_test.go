@@ -3,6 +3,7 @@ package archtest
 import (
 	"go/ast"
 	"path"
+	"regexp"
 )
 
 const logxDir = "internal/logx"
@@ -74,15 +75,17 @@ var processOutput = map[string]map[string]bool{
 	"log": set("Default", "SetOutput", "Writer", "Output", "Print", "Printf", "Println", "Fatal", "Fatalf", "Fatalln",
 		"Panic", "Panicf", "Panicln"),
 	"fmt":     set("Print", "Printf", "Println"),
-	"os":      set("Stdout", "Stderr"),
-	"syscall": set("Stdout", "Stderr"),
+	"os":      set("Stdout", "Stderr", "NewFile"),
+	"syscall": set("Stdout", "Stderr", "Write"),
 }
+
+var streamPath = regexp.MustCompile(`/dev/(?:stdout|stderr|fd/)|/proc/[^/\s]+/fd/`)
 
 var logOutputRule = rule{
 	name:  "log-output",
 	check: checkLogOutput,
 	cases: []snippet{
-		{name: "the default loggers and the standard streams", rel: "internal/app/x.go", want: 22, src: `package app
+		{name: "the default loggers and the standard streams", rel: "internal/app/x.go", want: 27, src: `package app
 
 import (
 	"context"
@@ -113,6 +116,10 @@ func f(ctx context.Context) {
 	_, _ = os.Stdout.WriteString("x")
 	_, _ = fmt.Fprintln(os.Stderr, "x")
 	_, _ = syscall.Write(syscall.Stderr, nil)
+	_ = os.NewFile(2, "")
+	_, _ = os.OpenFile("/dev/stdout", os.O_WRONLY, 0)
+	_, _ = os.OpenFile("/dev/fd/"+"2", os.O_WRONLY, 0)
+	_, _ = os.OpenFile("/proc/self/fd/1", os.O_WRONLY, 0)
 	println("x")
 	print("x")
 	p := fmt.Println
@@ -126,11 +133,15 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"os"
 
 	other "example.com/log"
 )
 
 func f(w io.Writer, logger *slog.Logger, l *log.Logger) string {
+	_, _ = os.ReadDir("/proc/self/fd")
+	_, _ = os.ReadDir("/dev/fd")
+	_, _ = os.Open("/dev/null")
 	logger.Info("x")
 	logger.Error("x", slog.String("event", "x"))
 	l.Println("x")
@@ -213,6 +224,11 @@ func checkLogOutput(f *sourceFile) []string {
 			}
 		}
 		return true
+	})
+	literalRuns(f.file, func(at ast.Node, s string) {
+		if m := streamPath.FindString(s); m != "" {
+			out = append(out, f.at(at, "%q names a descriptor of the process, which reaches its output past the scrubbing writer", m))
+		}
 	})
 	return out
 }
