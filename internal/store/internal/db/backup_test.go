@@ -169,7 +169,7 @@ func TestBackupStopsWhenCancelled(t *testing.T) {
 	}
 }
 
-type panickingBackup struct{ inStep, inFinish bool }
+type panickingBackup struct{ inStart, inStep, inFinish bool }
 
 func (b panickingBackup) Step(int32) (bool, error) {
 	if b.inStep {
@@ -192,12 +192,18 @@ func TestBackupRecoversAPanic(t *testing.T) {
 	}{
 		{"in a step", panickingBackup{inStep: true}},
 		{"in finish", panickingBackup{inFinish: true}},
+		{"in start", panickingBackup{inStart: true}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			opts, _ := testOptions(t)
 			d := mustOpen(t, opts)
 			seed(t, d, 10)
-			d.newBackup = func(*keptConn, string) (stepper, error) { return tt.b, nil }
+			d.newBackup = func(*keptConn, string) (stepper, error) {
+				if tt.b.inStart {
+					panic("synthetic start panic")
+				}
+				return tt.b, nil
+			}
 			staging := filepath.Join(t.TempDir(), "staging")
 			var out bytes.Buffer
 			if err := d.Backup(t.Context(), staging, into(&out)); !errors.Is(err, errBackupPanicked) {

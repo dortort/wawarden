@@ -74,8 +74,11 @@ func (d *DB) copyTo(ctx context.Context, dst string) error {
 		}
 		err := d.step(ctx, func(kc *keptConn) error {
 			if b == nil {
-				nb, err := d.newBackup(kc, dst)
-				if err != nil {
+				var nb stepper
+				if err := safely(func() (err error) {
+					nb, err = d.newBackup(kc, dst)
+					return err
+				}); err != nil {
 					return err
 				}
 				source, b = kc, nb
