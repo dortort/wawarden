@@ -72,16 +72,23 @@ func tokenFile(t *testing.T, content string) string {
 }
 
 const statusBody = `{"state":"connected","reason":"","paired":true,"counts":{"chats":3,"messages":120,"history_blobs_pending":1,` +
-	`"history_blobs_quarantined":0,"inbox_backlog":2,"inbox_quarantined":0},"last_ingest_at":"2026-10-05T08:00:00Z","version":"v0.2.0"}`
+	`"history_blobs_quarantined":0,"inbox_backlog":2,"inbox_quarantined":0},"clients":{"active":2,"expired":1,"revoked":0,"all_chats_active":0},` +
+	`"warnings":[],"last_ingest_at":"2026-10-05T08:00:00Z","version":"v0.2.0"}`
 
 func TestAdminStatusPrintsTheAnswer(t *testing.T) {
 	secret := token.NewAdmin()
 	f, addr := newFakeListener(t, http.StatusOK, statusBody)
 	code, stdout, stderr := invokeWith(t, []string{"admin", "status", "--addr", addr, "--token-file", tokenFile(t, secret+"\n")}, nil, nil)
 	want := "state: connected\nreason: none\npaired: true\nchats: 3\nmessages: 120\nhistory blobs pending: 1\nhistory blobs quarantined: 0\n" +
-		"inbox backlog: 2\ninbox quarantined: 0\nlast ingest: 2026-10-05T08:00:00Z\nversion: v0.2.0\n"
+		"inbox backlog: 2\ninbox quarantined: 0\nclients active: 2\nclients expired: 1\nclients revoked: 0\nall-chats clients active: 0\n" +
+		"last ingest: 2026-10-05T08:00:00Z\nversion: v0.2.0\n"
 	if code != 0 || stdout != want || stderr != "" {
 		t.Fatalf("admin status = %d %q %q, want 0 %q", code, stdout, stderr, want)
+	}
+	_, warned := newFakeListener(t, http.StatusOK, strings.Replace(strings.Replace(statusBody, `"all_chats_active":0`, `"all_chats_active":1`, 1), `"warnings":[]`, `"warnings":["all_chats_client"]`, 1))
+	code, stdout, stderr = invokeWith(t, []string{"admin", "status", "--addr", warned, "--token-file", tokenFile(t, secret)}, nil, nil)
+	if code != 0 || !strings.Contains(stdout, "all-chats clients active: 1\n") || stderr != "admin status: warning: all_chats_client\n" {
+		t.Fatalf("admin status with an all-chats client = %d %q %q", code, stdout, stderr)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

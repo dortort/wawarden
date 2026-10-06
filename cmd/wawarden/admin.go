@@ -45,43 +45,89 @@ const (
 
 var errAnswerTooLarge = errors.New("the answer is larger than 65536 bytes")
 
-func adminCall(ctx context.Context, command string, args, environ []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	flags := flag.NewFlagSet("admin "+command, flag.ContinueOnError)
+type adminSource struct {
+	addr      *string
+	file      *string
+	fromStdin *bool
+	command   *string
+}
+
+type adminRequest struct {
+	label  string
+	method string
+	path   []string
+	query  url.Values
+	body   []byte
+	print  func(answer []byte, stdout, stderr io.Writer) error
+}
+
+func adminFlags(name string) (*flag.FlagSet, adminSource) {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.Usage = func() {}
-	addr := flags.String("addr", defaultAdminAddr, "the admin listener's URL")
-	file := flags.String(flagTokenFile, "", "read the admin token from this file")
-	fromStdin := flags.Bool(flagTokenStdin, false, "read the admin token from standard input")
-	tokenCommand := flags.String(flagTokenCommand, "", "run this command, without a shell, and read the admin token from its output")
+	return flags, adminSource{
+		addr:      flags.String("addr", defaultAdminAddr, "the admin listener's URL"),
+		file:      flags.String(flagTokenFile, "", "read the admin token from this file"),
+		fromStdin: flags.Bool(flagTokenStdin, false, "read the admin token from standard input"),
+		command:   flags.String(flagTokenCommand, "", "run this command, without a shell, and read the admin token from its output"),
+	}
+}
+
+func parseAdminFlags(flags *flag.FlagSet, args []string, stderr io.Writer) bool {
 	if err := flags.Parse(args); err != nil {
 		if !errors.Is(err, flag.ErrHelp) {
 			_, _ = fmt.Fprintln(stderr, "admin:", flagProblem(flags, err))
 		}
-		return usageError(stderr)
+		return false
 	}
 	if flags.NArg() > 0 {
 		_, _ = fmt.Fprintln(stderr, "admin: the command takes no arguments besides its flags")
+		return false
+	}
+	return true
+}
+
+func adminCall(ctx context.Context, command string, args, environ []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	flags, src := adminFlags("admin " + command)
+	if !parseAdminFlags(flags, args, stderr) {
 		return usageError(stderr)
 	}
+	req := adminRequest{label: command, method: http.MethodPost, path: []string{command}, body: []byte("{}"),
+		print: func(answer []byte, stdout, stderr io.Writer) error {
+			return printAnswer(command, answer, stdout, stderr)
+		}}
+	if command == commandStatus {
+		req.method, req.body = http.MethodGet, nil
+	}
+	return adminSend(ctx, flags, src, environ, stdin, stdout, stderr, req)
+}
+
+type adminSession struct {
+	client *http.Client
+	base   *url.URL
+	secret string
+}
+
+func adminConnect(ctx context.Context, flags *flag.FlagSet, src adminSource, environ []string, stdin io.Reader, stderr io.Writer) (*adminSession, int) {
 	var sources []string
 	flags.Visit(func(f *flag.Flag) {
-		if f.Name == flagTokenFile || f.Name == flagTokenCommand || f.Name == flagTokenStdin && *fromStdin {
+		if f.Name == flagTokenFile || f.Name == flagTokenCommand || f.Name == flagTokenStdin && *src.fromStdin {
 			sources = append(sources, f.Name)
 		}
 	})
 	if len(sources) != 1 {
 		_, _ = fmt.Fprintln(stderr, "admin: give exactly one of --token-file, --token-stdin and --token-command")
-		return usageError(stderr)
+		return nil, usageError(stderr)
 	}
 	source := sources[0]
-	if source == flagTokenFile && *file == "" || source == flagTokenCommand && *tokenCommand == "" {
+	if source == flagTokenFile && *src.file == "" || source == flagTokenCommand && *src.command == "" {
 		_, _ = fmt.Fprintf(stderr, "admin: --%s needs a value\n", source)
-		return usageError(stderr)
+		return nil, usageError(stderr)
 	}
-	base, plain, err := adminURL(*addr)
+	base, plain, err := adminURL(*src.addr)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "admin:", err)
-		return usageError(stderr)
+		return nil, usageError(stderr)
 	}
 	if plain {
 		_, _ = fmt.Fprintln(stderr, "admin: warning: --addr sends the admin token over plain HTTP to a host that is not loopback")
@@ -92,28 +138,47 @@ func adminCall(ctx context.Context, command string, args, environ []string, stdi
 	case flagTokenStdin:
 		secret, err = tokenFromStdin(stdin)
 	case flagTokenCommand:
-		secret, err = tokenFromCommand(ctx, *tokenCommand, environ)
+		secret, err = tokenFromCommand(ctx, *src.command, environ)
 	case flagTokenFile:
-		secret, err = tokenFromFile(*file)
+		secret, err = tokenFromFile(*src.file)
 	}
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "admin:", err)
-		return exitToken
+		return nil, exitToken
 	}
+	return &adminSession{client: newAdminClient(), base: base, secret: secret}, 0
+}
 
-	status, answer, err := callAdmin(ctx, newAdminClient(), base, command, secret)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "admin %s: the request failed: %s\n", command, failure(err))
-		return exitFailed
+func adminSend(ctx context.Context, flags *flag.FlagSet, src adminSource, environ []string, stdin io.Reader, stdout, stderr io.Writer, req adminRequest) int {
+	session, code := adminConnect(ctx, flags, src, environ, stdin, stderr)
+	if session == nil {
+		return code
 	}
-	if status != http.StatusOK {
-		return adminRefusal(command, status, answer, stderr)
+	return session.send(ctx, stdout, stderr, req)
+}
+
+func (s *adminSession) send(ctx context.Context, stdout, stderr io.Writer, req adminRequest) int {
+	answer, code := s.exchange(ctx, stderr, req)
+	if code != 0 {
+		return code
 	}
-	if err := printAnswer(command, answer, stdout, stderr); err != nil {
-		_, _ = fmt.Fprintf(stderr, "admin %s: %v\n", command, err)
+	if err := req.print(answer, stdout, stderr); err != nil {
+		_, _ = fmt.Fprintf(stderr, "admin %s: %v\n", req.label, err)
 		return exitFailed
 	}
 	return 0
+}
+
+func (s *adminSession) exchange(ctx context.Context, stderr io.Writer, req adminRequest) ([]byte, int) {
+	status, answer, err := callAdmin(ctx, s.client, s.base, req, s.secret)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "admin %s: the request failed: %s\n", req.label, failure(err))
+		return nil, exitFailed
+	}
+	if status != http.StatusOK {
+		return nil, adminRefusal(req.label, status, answer, stderr)
+	}
+	return answer, 0
 }
 
 func flagProblem(flags *flag.FlagSet, err error) string {
@@ -158,12 +223,14 @@ func newAdminClient() *http.Client {
 	}
 }
 
-func callAdmin(ctx context.Context, client *http.Client, base *url.URL, command, secret string) (int, []byte, error) {
-	method, body := http.MethodPost, io.Reader(strings.NewReader("{}"))
-	if command == commandStatus {
-		method, body = http.MethodGet, nil
+func callAdmin(ctx context.Context, client *http.Client, base *url.URL, call adminRequest, secret string) (int, []byte, error) {
+	target := base.JoinPath(append([]string{"admin", "v1"}, call.path...)...)
+	target.RawQuery = call.query.Encode()
+	var body io.Reader
+	if call.body != nil {
+		body = bytes.NewReader(call.body)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, base.JoinPath("admin", "v1", command).String(), body) //nolint:gosec // G704: the operator chooses the admin listener's URL
+	req, err := http.NewRequestWithContext(ctx, call.method, target.String(), body) //nolint:gosec // G704: the operator chooses the admin listener's URL
 	if err != nil {
 		return 0, nil, err
 	}
@@ -214,7 +281,7 @@ func adminRefusal(command string, status int, answer []byte, stderr io.Writer) i
 	switch {
 	case status == http.StatusUnauthorized, status == http.StatusTooManyRequests && refusal.Error == "too_many_requests":
 		return exitDenied
-	case status == http.StatusConflict, status == http.StatusTooManyRequests:
+	case status == http.StatusConflict, status == http.StatusTooManyRequests, status == http.StatusNotFound, status == http.StatusUnprocessableEntity:
 		return exitRefused
 	}
 	return exitFailed
@@ -232,8 +299,15 @@ type statusAnswer struct {
 		InboxBacklog     int64 `json:"inbox_backlog"`
 		InboxQuarantined int64 `json:"inbox_quarantined"`
 	} `json:"counts"`
-	LastIngestAt *string `json:"last_ingest_at"`
-	Version      *string `json:"version"`
+	Clients *struct {
+		Active         int64 `json:"active"`
+		Expired        int64 `json:"expired"`
+		Revoked        int64 `json:"revoked"`
+		AllChatsActive int64 `json:"all_chats_active"`
+	} `json:"clients"`
+	Warnings     *[]string `json:"warnings"`
+	LastIngestAt *string   `json:"last_ingest_at"`
+	Version      *string   `json:"version"`
 }
 
 var errBadAnswer = errors.New("the answer is not what the admin listener sends")
@@ -243,7 +317,7 @@ func printAnswer(command string, answer []byte, stdout, stderr io.Writer) error 
 	switch command {
 	case commandStatus:
 		var s statusAnswer
-		if json.Unmarshal(answer, &s) != nil || s.State == nil || s.Reason == nil || s.Paired == nil || s.Counts == nil || s.Version == nil {
+		if json.Unmarshal(answer, &s) != nil || s.State == nil || s.Reason == nil || s.Paired == nil || s.Counts == nil || s.Clients == nil || s.Warnings == nil || s.Version == nil {
 			return errBadAnswer
 		}
 		last := "never"
@@ -260,10 +334,17 @@ func printAnswer(command string, answer []byte, stdout, stderr io.Writer) error 
 			{"history blobs quarantined", strconv.FormatInt(s.Counts.BlobsQuarantined, 10)},
 			{"inbox backlog", strconv.FormatInt(s.Counts.InboxBacklog, 10)},
 			{"inbox quarantined", strconv.FormatInt(s.Counts.InboxQuarantined, 10)},
+			{"clients active", strconv.FormatInt(s.Clients.Active, 10)},
+			{"clients expired", strconv.FormatInt(s.Clients.Expired, 10)},
+			{"clients revoked", strconv.FormatInt(s.Clients.Revoked, 10)},
+			{"all-chats clients active", strconv.FormatInt(s.Clients.AllChatsActive, 10)},
 			{"last ingest", last},
 			{"version", *s.Version},
 		} {
 			fmt.Fprintf(&out, "%s: %s\n", line[0], sanitize.Terminal(line[1]))
+		}
+		for _, w := range *s.Warnings {
+			_, _ = fmt.Fprintf(stderr, "admin status: warning: %s\n", sanitize.Terminal(w))
 		}
 	case commandPair:
 		var p struct {

@@ -24,8 +24,15 @@ const usage = `usage:
   wawarden healthcheck             exit 0 only when the local /healthz answers 200
   wawarden version                 print the version and build flavour
   wawarden admin init              generate an admin token and its SHA-256
-  wawarden admin status|pair|reconnect [--addr URL] --token-file PATH | --token-stdin | --token-command COMMAND
-                                   call the admin listener (default --addr http://127.0.0.1:8082)
+  wawarden admin status|pair|reconnect ADMIN
+  wawarden admin clients create --name NAME (--read CHAT... | --all-chats) [--write CHAT...]
+                                [--allow-first-contact] [--expires-days DAYS] ADMIN
+  wawarden admin clients list ADMIN
+  wawarden admin clients show|revoke --id ID ADMIN
+  wawarden admin chats list [--match TEXT] ADMIN
+                                   call the admin listener; ADMIN is [--addr URL] and one of
+                                   --token-file PATH, --token-stdin or --token-command COMMAND
+                                   (default --addr http://127.0.0.1:8082)
 `
 
 const healthcheckTimeout = 2 * time.Second
@@ -162,6 +169,10 @@ func admin(ctx context.Context, args, environ []string, stdin io.Reader, stdout,
 		return adminInit(stdout, stderr)
 	case commandStatus, commandPair, commandReconnect:
 		return adminCall(ctx, args[0], args[1:], environ, stdin, stdout, stderr)
+	case "clients":
+		return adminClients(ctx, args[1:], environ, stdin, stdout, stderr)
+	case "chats":
+		return adminChats(ctx, args[1:], environ, stdin, stdout, stderr)
 	}
 	return usageError(stderr)
 }
