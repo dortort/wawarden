@@ -26,25 +26,36 @@ var (
 func (r *Request) DecodeJSON(dst any) error { return r.decodeJSON(dst, maxBodyBytes) }
 
 func (r *Request) decodeJSON(dst any, limit int64) error {
-	if r == nil || r.w == nil || r.req == nil || r.req.Body == nil {
+	if r == nil || r.w == nil || r.req == nil {
 		return errBadBody
 	}
-	if !jsonMediaType(r.req.Header) {
-		ignoreBody(r.w, r.req)
-		return errMediaType
-	}
-	if r.req.ContentLength > limit {
-		ignoreBody(r.w, r.req)
-		return errTooLarge
-	}
-	body, err := io.ReadAll(http.MaxBytesReader(r.w, r.req.Body, limit))
-	if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
-		return errTooLarge
-	}
+	body, err := readJSON(r.w, r.req, limit)
 	if err != nil {
-		return errBadBody
+		return err
 	}
 	return decodeStrict(body, dst)
+}
+
+func readJSON(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, error) {
+	if r.Body == nil {
+		return nil, errBadBody
+	}
+	if !jsonMediaType(r.Header) {
+		ignoreBody(w, r)
+		return nil, errMediaType
+	}
+	if r.ContentLength > limit {
+		ignoreBody(w, r)
+		return nil, errTooLarge
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+	if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
+		return nil, errTooLarge
+	}
+	if err != nil {
+		return nil, errBadBody
+	}
+	return body, nil
 }
 
 func jsonMediaType(h http.Header) bool {
@@ -65,7 +76,7 @@ func jsonMediaType(h http.Header) bool {
 }
 
 func decodeStrict(body []byte, dst any) error {
-	if !utf8.Valid(body) || bytes.HasPrefix(body, []byte(byteOrderMark)) || !wellFormed(body) {
+	if !strictJSON(body, maxJSONDepth, snakeCase) {
 		return errBadBody
 	}
 	dec := json.NewDecoder(bytes.NewReader(body))
@@ -85,7 +96,11 @@ type jsonFrame struct {
 	keys    map[string]struct{}
 }
 
-func wellFormed(body []byte) bool {
+func strictJSON(body []byte, depth int, validKey func(string) bool) bool {
+	return utf8.Valid(body) && !bytes.HasPrefix(body, []byte(byteOrderMark)) && jsonShape(body, depth, validKey)
+}
+
+func jsonShape(body []byte, depth int, validKey func(string) bool) bool {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.UseNumber()
 	var stack []*jsonFrame
@@ -112,7 +127,7 @@ func wellFormed(body []byte) bool {
 				continue
 			}
 			key, ok := tok.(string)
-			if _, seen := top.keys[key]; !ok || seen || !snakeCase(key) {
+			if _, seen := top.keys[key]; !ok || seen || !validKey(key) {
 				return false
 			}
 			top.keys[key] = struct{}{}
@@ -121,7 +136,7 @@ func wellFormed(body []byte) bool {
 		}
 		switch tok {
 		case json.Delim('{'), json.Delim('['):
-			if len(stack) == maxJSONDepth {
+			if len(stack) == depth {
 				return false
 			}
 			stack = append(stack, &jsonFrame{object: tok == json.Delim('{'), wantKey: true, keys: map[string]struct{}{}})
