@@ -32,7 +32,7 @@ func TestTheFakeEngineOpensNoSessionAndWaitsForPairing(t *testing.T) {
 	if f := logs.find("fake_engine"); len(f) != 1 || f[0]["level"] != "WARN" || f[0]["wrong_account"] != false {
 		t.Fatalf("fake_engine events %v", f)
 	}
-	for _, event := range []string{"session_opened", "engine_absent", "engine_state"} {
+	for _, event := range []string{"session_opened", "engine_state"} {
 		if found := logs.find(event); len(found) != 0 {
 			t.Fatalf("%s events %v with the fake engine", event, found)
 		}

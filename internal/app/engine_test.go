@@ -41,6 +41,12 @@ func fixed(p engineParts) engineSource {
 	}
 }
 
+func idle() engineSource {
+	client := newStubClient()
+	client.unpaired = true
+	return fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}})
+}
+
 func (c *stubClient) record(call string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -125,22 +131,6 @@ func waitUntil(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-func TestStartsWithoutAnEngineAndSaysSo(t *testing.T) {
-	adminToken := token.NewAdmin()
-	a, logs, stop := start(t, testConfig(t, adminToken), noClients{})
-	absent := logs.find("engine_absent")
-	if len(absent) != 1 || absent[0]["level"] != "WARN" {
-		t.Fatalf("engine_absent events %v", absent)
-	}
-	r := mustDo(t, http.MethodGet, addr(t, a, "admin"), "/metrics", bearer(adminToken))
-	if r.status != http.StatusOK || strings.Contains(r.body, "wawarden_connected") || strings.Contains(r.body, "wawarden_paired") {
-		t.Fatalf("/metrics without an engine = %d %q", r.status, r.body)
-	}
-	if err := stop(); err != nil {
-		t.Fatalf("Run = %v", err)
-	}
-}
-
 func TestEngineRunsWhenAClientIsSupplied(t *testing.T) {
 	adminToken := token.NewAdmin()
 	cfg := testConfig(t, adminToken)
@@ -150,9 +140,6 @@ func TestEngineRunsWhenAClientIsSupplied(t *testing.T) {
 	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), noClients{}, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
 	if err != nil {
 		t.Fatalf("newAppWith: %v", err)
-	}
-	if len(logs.find("engine_absent")) != 0 {
-		t.Fatal("engine_absent was logged although a client was supplied")
 	}
 	stop := run(t, a)
 	<-client.connected
@@ -372,7 +359,7 @@ func TestReleaseBuildsOpenTheSessionAndWaitForPairing(t *testing.T) {
 	if u := logs.find("unpaired"); len(u) != 1 {
 		t.Fatalf("unpaired events %v", u)
 	}
-	for _, event := range []string{"engine_absent", "engine_state", "version_refresh_failed", "version_updated", "connect_failed"} {
+	for _, event := range []string{"engine_state", "version_refresh_failed", "version_updated", "connect_failed"} {
 		if found := logs.find(event); len(found) != 0 {
 			t.Fatalf("%s events %v: an unpaired release build must make no connection", event, found)
 		}

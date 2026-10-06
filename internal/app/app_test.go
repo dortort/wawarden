@@ -125,7 +125,7 @@ func (h heldClient) Authenticate(context.Context, string) (*policy.Client, bool)
 func testConfig(t *testing.T, adminToken string) config.Config {
 	t.Helper()
 	loopback := netip.MustParseAddrPort("127.0.0.1:0")
-	cfg := config.Config{DataDir: t.TempDir(), UID: os.Geteuid(), Listen: loopback, AdminListen: loopback, HealthListen: loopback, StorageProfile: config.StorageLocal, MinFreeBytes: 1}
+	cfg := config.Config{DataDir: t.TempDir(), UID: os.Geteuid(), Listen: loopback, AdminListen: loopback, HealthListen: loopback, StorageProfile: config.StorageLocal, MinFreeBytes: 1, HistoryMaxBytes: config.DefaultHistoryMaxBytes}
 	if adminToken != "" {
 		cred, err := policy.ParseAdminCredential(token.Hash(adminToken))
 		if err != nil {
@@ -139,9 +139,9 @@ func testConfig(t *testing.T, adminToken string) config.Config {
 func open(t *testing.T, cfg config.Config, auth api.Authenticator) (*App, *syncBuffer) {
 	t.Helper()
 	logs := &syncBuffer{}
-	a, err := newApp(t.Context(), cfg, logx.NewWriter(logs), auth)
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), auth, idle())
 	if err != nil {
-		t.Fatalf("newApp: %v", err)
+		t.Fatalf("newAppWith: %v", err)
 	}
 	return a, logs
 }
@@ -283,9 +283,9 @@ func TestHealthTurnsUnavailableWhenShutdownBegins(t *testing.T) {
 	if _, err := do(t, http.MethodGet, health, "/healthz", nil); err == nil {
 		t.Fatal("the health listener still answers after Run returned")
 	}
-	want := []string{"archive_opened", "engine_absent", "backup_disabled", "starting", "listening", "listening", "ready", "shutdown_started", "stopped"}
+	want := []string{"archive_opened", "backup_disabled", "starting", "listening", "listening", "unpaired", "ready", "shutdown_started", "engine_state", "stopped"}
 	if buildinfo.Dev {
-		want = slices.Insert(want, 4, "dev_build")
+		want = slices.Insert(want, 3, "dev_build")
 	}
 	var got []string
 	for _, rec := range logs.events() {

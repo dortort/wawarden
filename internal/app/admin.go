@@ -16,9 +16,6 @@ type adminService struct {
 }
 
 func (s adminService) Status(ctx context.Context) (api.AdminStatus, error) {
-	if s.engine == nil {
-		return api.AdminStatus{}, api.ErrEngineUnavailable
-	}
 	st := s.engine.Status()
 	c, err := s.archive.Admin().Counters(ctx)
 	if err != nil {
@@ -40,9 +37,6 @@ func (s adminService) Status(ctx context.Context) (api.AdminStatus, error) {
 }
 
 func (s adminService) Pair(ctx context.Context) (string, error) {
-	if s.engine == nil {
-		return "", api.ErrEngineUnavailable
-	}
 	code, err := s.engine.Pair(ctx)
 	if err != nil {
 		return "", adminError(err)
@@ -51,9 +45,6 @@ func (s adminService) Pair(ctx context.Context) (string, error) {
 }
 
 func (s adminService) Reconnect(context.Context) error {
-	if s.engine == nil {
-		return api.ErrEngineUnavailable
-	}
 	return adminError(s.engine.Reconnect())
 }
 

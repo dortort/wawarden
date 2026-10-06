@@ -132,31 +132,6 @@ func TestAdminRoutesDriveTheEngine(t *testing.T) {
 	}
 }
 
-func TestAdminRoutesWithoutAnEngine(t *testing.T) {
-	adminToken := token.NewAdmin()
-	a, logs, stop := start(t, testConfig(t, adminToken), noClients{})
-	logs.waitFor(t, "ready")
-	admin := addr(t, a, "admin")
-	if r := mustDo(t, http.MethodGet, admin, "/admin/v1/status", bearer(adminToken)); r.status != http.StatusServiceUnavailable || r.body != `{"error":"engine_unavailable"}` {
-		t.Fatalf("status without an engine = %d %s", r.status, r.body)
-	}
-	for _, path := range []string{"/admin/v1/pair", "/admin/v1/reconnect"} {
-		if r := post(t, admin, path, bearer(adminToken), "{}"); r.status != http.StatusServiceUnavailable || r.body != `{"error":"engine_unavailable"}` {
-			t.Fatalf("%s without an engine = %d %s", path, r.status, r.body)
-		}
-	}
-	if err := stop(); err != nil {
-		t.Fatalf("Run = %v", err)
-	}
-	var outcomes []string
-	for _, rec := range logs.find("admin_mutation") {
-		outcomes = append(outcomes, rec["outcome"].(string))
-	}
-	if strings.Join(outcomes, " ") != "engine_unavailable engine_unavailable" {
-		t.Fatalf("admin_mutation outcomes %v", outcomes)
-	}
-}
-
 func TestTheWebhookIsWiredFromTheConfiguration(t *testing.T) {
 	cfg := testConfig(t, "")
 	cfg.OwnerPhone, cfg.HistoryMaxBytes = "+15550100009", config.DefaultHistoryMaxBytes

@@ -87,10 +87,6 @@ func New(ctx context.Context, cfg config.Config, out *logx.Writer) (*App, error)
 	return newAppWith(ctx, cfg, out, noClients{}, engineFor(cfg))
 }
 
-func newApp(ctx context.Context, cfg config.Config, out *logx.Writer, auth api.Authenticator) (*App, error) {
-	return newAppWith(ctx, cfg, out, auth, nil)
-}
-
 func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth api.Authenticator, source engineSource) (*App, error) {
 	if !cfg.HealthListen.Addr().IsLoopback() {
 		return nil, errHealthNotLoopback
@@ -137,27 +133,23 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, auth a
 		a.emf = metrics.NewEMF(reg, out, time.Now)
 	}
 	unpairs := &unpairCounter{Notifier: notifier}
-	if source == nil {
-		alerts.Warn("this build has no WhatsApp engine: nothing pairs, connects or ingests", slog.String("event", "engine_absent"))
-	} else {
-		parts, err := source(ctx, cfg, out, logger, alerts)
-		if err != nil {
-			return nil, errors.Join(err, archive.Close())
-		}
-		a.session = parts.session
-		if a.engine, err = engine.New(engine.Options{
-			Client: parts.client, Versions: parts.versions, Decoder: parts.decoder, Archive: archive, DataDir: cfg.DataDir,
-			OwnerPhone: cfg.OwnerPhone, HistoryMaxBytes: cfg.HistoryMaxBytes, Logger: logger, Notify: unpairs, Metrics: reg,
-		}); err != nil {
-			return nil, errors.Join(err, a.closeStores())
-		}
+	parts, err := source(ctx, cfg, out, logger, alerts)
+	if err != nil {
+		return nil, errors.Join(err, archive.Close())
+	}
+	a.session = parts.session
+	if a.engine, err = engine.New(engine.Options{
+		Client: parts.client, Versions: parts.versions, Decoder: parts.decoder, Archive: archive, DataDir: cfg.DataDir,
+		OwnerPhone: cfg.OwnerPhone, HistoryMaxBytes: cfg.HistoryMaxBytes, Logger: logger, Notify: unpairs, Metrics: reg,
+	}); err != nil {
+		return nil, errors.Join(err, a.closeStores())
 	}
 	switch {
 	case cfg.BackupRecipient == "":
 		alerts.Warn("no backup recipient is configured: no backup is ever taken", slog.String("event", "backup_disabled"))
-	case a.engine != nil && a.session == nil:
+	case a.session == nil:
 		alerts.Warn("the engine opens no device store: no backup is ever taken", slog.String("event", "backup_disabled"))
-	case a.engine != nil:
+	default:
 		taker, err := backup.New(backup.Options{
 			DataDir: cfg.DataDir, UID: cfg.UID, Recipient: cfg.BackupRecipient, Version: info.Version,
 			Archive: archive, Session: a.session, Notify: notifier,
@@ -232,9 +224,7 @@ func (a *App) Inventory() []listeners.Bound {
 
 func (a *App) Run(ctx context.Context) error {
 	a.notify.Start(context.WithoutCancel(ctx))
-	if a.engine != nil {
-		a.engine.Start(context.WithoutCancel(ctx), a.starts)
-	}
+	a.engine.Start(context.WithoutCancel(ctx), a.starts)
 	emitting, stopEmitting := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopEmitting()
 	emitted := make(chan struct{})
@@ -280,10 +270,7 @@ func (a *App) Run(ctx context.Context) error {
 	if a.afterDrain != nil {
 		a.afterDrain()
 	}
-	var stopped error
-	if a.engine != nil {
-		stopped = a.engine.Stop(grace)
-	}
+	stopped := a.engine.Stop(grace)
 	stopBackingUp()
 	var backupStopped error
 	select {

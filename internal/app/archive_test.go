@@ -80,12 +80,12 @@ func TestNewRefusesAnArchiveItCannotTrust(t *testing.T) {
 	if err := os.Chmod(path, 0o644); err != nil { //nolint:gosec // G302: the refusal under test needs a world-readable archive
 		t.Fatalf("Chmod: %v", err)
 	}
-	a, err := newApp(t.Context(), cfg, logx.NewWriter(io.Discard), noClients{})
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), noClients{}, idle())
 	if err == nil {
 		t.Cleanup(func() { _ = run(t, a)() })
 	}
 	if r, ok := errors.AsType[*Refusal](err); !ok || r.Reason != "archive_db_permissions" {
-		t.Fatalf("newApp = %v, want an archive_db_permissions refusal", err)
+		t.Fatalf("newAppWith = %v, want an archive_db_permissions refusal", err)
 	}
 }
 
@@ -99,15 +99,15 @@ func TestNewWaitsForTheArchiveAndStopsWhenCancelled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
 	began := time.Now()
-	a, err := newApp(ctx, cfg, logx.NewWriter(io.Discard), noClients{})
+	a, err := newAppWith(ctx, cfg, logx.NewWriter(io.Discard), noClients{}, idle())
 	if err == nil {
 		t.Cleanup(func() { _ = run(t, a)() })
 	}
 	if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, new(*Refusal)) {
-		t.Fatalf("newApp while another process holds the archive = %v, want the cancellation", err)
+		t.Fatalf("newAppWith while another process holds the archive = %v, want the cancellation", err)
 	}
 	if elapsed := time.Since(began); elapsed > 15*time.Second {
-		t.Fatalf("newApp returned %v after its context ended", elapsed)
+		t.Fatalf("newAppWith returned %v after its context ended", elapsed)
 	}
 }
 
@@ -115,8 +115,8 @@ func TestAFailedStartClosesTheArchive(t *testing.T) {
 	a, _, stop := start(t, testConfig(t, ""), noClients{})
 	cfg := testConfig(t, "")
 	cfg.HealthListen = addr(t, a, "health")
-	if _, err := newApp(t.Context(), cfg, logx.NewWriter(io.Discard), noClients{}); err == nil {
-		t.Fatal("newApp bound an address already in use")
+	if _, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), noClients{}, idle()); err == nil {
+		t.Fatal("newAppWith bound an address already in use")
 	}
 	requireReleased(t, cfg.DataDir)
 	if err := stop(); err != nil {
