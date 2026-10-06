@@ -173,17 +173,23 @@ func deadInToolReply(body []byte, dead []string) (string, error) {
 	if err := json.Unmarshal(reply["result"], &result); err != nil {
 		return "", err
 	}
-	var content []struct {
-		Text string `json:"text"`
-	}
+	var content []map[string]json.RawMessage
 	if err := json.Unmarshal(result["content"], &content); err != nil {
 		return "", err
 	}
 	delete(reply, "result")
 	delete(result, "content")
 	parts := slices.Concat(slices.Collect(maps.Values(reply)), slices.Collect(maps.Values(result)))
-	for _, c := range content {
-		parts = append(parts, json.RawMessage(c.Text))
+	for _, item := range content {
+		if raw, ok := item["text"]; ok {
+			var text string
+			if err := json.Unmarshal(raw, &text); err != nil {
+				return "", err
+			}
+			parts = append(parts, json.RawMessage(text))
+			delete(item, "text")
+		}
+		parts = append(parts, slices.Collect(maps.Values(item))...)
 	}
 	for _, part := range parts {
 		unsealed := sealedTokens.ReplaceAll(part, nil)
@@ -216,6 +222,7 @@ func TestDeadInToolReplyLooksPastSealedValuesInBothCopies(t *testing.T) {
 		"the text copy":                  {body: reply(sealed, leaked), want: dead},
 		"the envelope beside the result": {body: []byte(`{"jsonrpc":"2.0","id":"` + dead + `","result":{"content":[]}}`), want: dead},
 		"a member of the result":         {body: []byte(`{"jsonrpc":"2.0","id":1,"result":{"content":[],"_meta":{"x":"` + dead + `"}}}`), want: dead},
+		"a member of a content item":     {body: []byte(`{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"ok","_meta":{"x":"` + dead + `"}}]}}`), want: dead},
 	} {
 		if got, err := deadInToolReply(c.body, []string{dead}); err != nil || got != c.want {
 			t.Errorf("%s: deadInToolReply = %q, %v, want %q", name, got, err, c.want)
