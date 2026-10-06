@@ -77,15 +77,17 @@ It is not:
 
 The latest release, `v0.2.0`, is milestone **M1**: WaWarden links to the
 owner's WhatsApp account and archives its messages, but serves no client API.
-`main` holds the first part of milestone **M2**: clients with per-chat read
-scopes and expiring tokens, which the admin creates and revokes, and the audit
-chain of those changes. The read API is not served yet.
+`main` holds most of milestone **M2**: clients with per-chat read scopes and
+expiring tokens, which the admin creates and revokes; the REST read API (chats,
+messages, search and a change feed) with sealed cursors and per-client read and
+search budgets; and the audit chain of client changes and of every client
+request. MCP is not served yet.
 
 | Milestone | State | Scope |
 |---|---|---|
 | M0 | Released as `v0.1.0` | Configuration checks and startup refusals; the client, admin and health listeners; the admin token; Prometheus metrics; `healthcheck` and `version`; the policy core; the container image and verifiable releases. |
 | M1 | Released as `v0.2.0` | The WhatsApp engine: pairing guarded by an account check, history sync, the session and the message archive in SQLite; `admin status`, `pair` and `reconnect`; notification events and a signed webhook; metrics on standard output; one encrypted backup per paired device. |
-| M2 | In progress on `main`: clients, their tokens and the audit chain | Clients with per-chat read scopes and expiring tokens; the read API over REST (chats, messages, search, change feed) and MCP; the audit trail. |
+| M2 | In progress on `main`: clients, their tokens, the REST read API and the audit chain | Clients with per-chat read scopes and expiring tokens; the read API over REST (chats, messages, search, change feed) and MCP; the audit trail. |
 | M3 | Planned | Sending over REST and MCP, with idempotency, pacing, per-client budgets and a first-contact rule; nightly encrypted backups with retention; the v1.0 documentation. |
 
 What `main` does:
@@ -118,11 +120,13 @@ What `main` does:
 - **Clients.** `wawarden admin clients create` makes a client that may read
   chosen chats, or every chat, for 90 days by default and 365 at most, and
   prints its token once; `list`, `show` and `revoke` manage it, and `admin
-  chats list` finds the chats to name. The client listener accepts the token,
-  but serves no route yet. Each client change is appended to a hash-chained
-  audit table and written on standard output with its chain head, and
-  `wawarden audit verify` checks a copy of the archive against the master key
-  and those heads. See
+  chats list` finds the chats to name. With the token, the client reads its
+  chats through the [read API](docs/configuration.md#read-api): `/v1/me`,
+  `/v1/chats`, a chat's messages, search and a change feed, in pages with
+  sealed cursors, within per-client read and search budgets. Each client
+  change, and each client request, is appended to a hash-chained audit table
+  and written on standard output with its chain head, and `wawarden audit
+  verify` checks a copy of the archive against the master key and those heads. See
   [admin clients](docs/configuration.md#admin-clients-and-admin-chats) and
   [the audit chain](docs/configuration.md#audit-chain).
 - **Events and metrics.** Operational events such as `unpaired`,
@@ -220,8 +224,7 @@ curl -i http://127.0.0.1:8080/v1/me
 curl -H @"$demo/admin.header" http://127.0.0.1:8082/metrics
 ```
 
-This build has no client routes and no client tokens yet (they come with M2), so
-every client request is refused:
+Without a client token, every client request is refused:
 
 ```text
 HTTP/1.1 401 Unauthorized
@@ -273,6 +276,26 @@ state is `unpaired` and the service makes no connection to WhatsApp:
 sed -n 's/^token: //p' "$demo/admin.txt" > "$demo/admin.token"
 ./wawarden admin status --token-file "$demo/admin.token"
 ```
+
+To read through the client API, create a client; the command prints its token
+once, which you keep as a header file:
+
+```sh
+./wawarden admin clients create --token-file "$demo/admin.token" \
+  --name agent --read 120363000000000001@g.us > "$demo/client.txt"
+sed -n 's/^token: /Authorization: Bearer /p' "$demo/client.txt" > "$demo/client.header"
+curl -H @"$demo/client.header" http://127.0.0.1:8080/v1/me
+curl -H @"$demo/client.header" 'http://127.0.0.1:8080/v1/chats?limit=20'
+curl -H @"$demo/client.header" 'http://127.0.0.1:8080/v1/chats/<id>/messages?limit=50'
+curl -H @"$demo/client.header" -G --data-urlencode 'q=synthetic words' http://127.0.0.1:8080/v1/search
+curl -H @"$demo/client.header" -G --data-urlencode 'since=2026-10-01T00:00:00Z' http://127.0.0.1:8080/v1/changes
+```
+
+`<id>` is a chat's `id` from `/v1/chats`. A page with more items carries a `next`
+cursor to pass back as `cursor` (or, for `/v1/changes`, as `since`). With no
+device paired the archive is empty, and the lists are too. The routes, limits
+and codes are in
+[docs/configuration.md](docs/configuration.md#read-api).
 
 Stop the service; it shuts down gracefully and exits `0`. Then delete the
 temporary directory, which holds the admin token and the data directory:

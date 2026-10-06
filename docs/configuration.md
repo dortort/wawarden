@@ -14,8 +14,8 @@ library, the [admin routes](#admin-routes) with the
 [notifications](#notifications),
 [metrics in embedded metric format](#embedded-metric-format),
 [backups](#backups) and, in development builds only, the
-[fake engine](#fake-engine). The client API, client tokens and sending come
-with M2 and M3. A service without a paired device makes no connection to
+[fake engine](#fake-engine). Of M2, it holds the client listener's
+[read API](#read-api); sending comes with M3. A service without a paired device makes no connection to
 WhatsApp until `wawarden admin pair` requests pairing. Everything listed here
 is implemented, and nothing else is. Settings planned for later milestones are
 listed under [Reserved names](#reserved-names) and are refused by this build.
@@ -534,8 +534,8 @@ only the derived keys:
 | `key-id` | 4 bytes | The key id: logged as 8 hexadecimal digits in the `keys_loaded` event, so that log lines can be grouped by the key their pseudonyms were made with. |
 | `log-redact` | 32 bytes | The key of the [log pseudonyms](#pseudonyms-and-dropped-lines). |
 | `chat-hmac` | 32 bytes | The `chat_hmac` of [audit lines](#audit-chain): the first 16 bytes of HMAC-SHA256 under this key over the chat's canonical identifier. No [notification event](#notifications) names a chat. |
-| `cursor-seal` | 32 bytes | Derived but not used in this build. Reserved for sealing the cursors of client reads. |
-| `mref` | 32 bytes | Derived but not used in this build. Reserved for sealing message references. |
+| `cursor-seal` | 32 bytes | Seals the `next` cursors of the [read API](#cursors-and-message-references). |
+| `mref` | 32 bytes | Seals the [message references](#cursors-and-message-references) of the read API. |
 | `audit-chain` | 32 bytes | The key of the [audit chain](#audit-chain)'s row HMACs. |
 
 Apart from the log pseudonyms, the chat HMACs and the chain heads of audit
@@ -1251,7 +1251,7 @@ public internet.
 
 | Listener | Address | Opened | Serves |
 |---|---|---|---|
-| `client` | `WAWARDEN_LISTEN`, default `127.0.0.1:8080` | Always | The client API. This build has no client routes and no client tokens, which come with M2: every request is refused. |
+| `client` | `WAWARDEN_LISTEN`, default `127.0.0.1:8080` | Always | The [read API](#read-api), with a client token. |
 | `admin` | `WAWARDEN_ADMIN_LISTEN`, default `127.0.0.1:8082` | Only when an admin token hash is configured | `GET /metrics` and the [admin routes](#admin-routes) `GET /admin/v1/status`, `POST /admin/v1/pair` and `POST /admin/v1/reconnect`, all with the admin token. |
 | `health` | `WAWARDEN_HEALTH_LISTEN`, default `127.0.0.1:8081`, loopback only | Always | `GET /healthz`, without authentication. |
 
@@ -1290,7 +1290,10 @@ Requests to the client and admin listeners pass these checks in order:
    with `WWW-Authenticate: Bearer`, or `429` (`too_many_requests`, without that
    header) when the failure budget is spent; see
    [Failed authentication](#failed-authentication).
-4. Only an authenticated request reaches routing: an unknown path is `404`
+4. On the client listener, the request then costs one from the client's
+   [read budget](#read-rate-limits); when the budget is spent, it is answered
+   `429` (`rate_limited`) with `Retry-After`, before routing.
+5. Only an authenticated request reaches routing: an unknown path is `404`
    (`not_found`) and a known path with another method is `405`
    (`method_not_allowed`) with an `Allow` header.
 
@@ -1316,10 +1319,9 @@ malformed, unknown, wrong, revoked or expired token is one failure, answered as
 below. The in-memory copy is reloaded on the first request after a client is
 created or revoked, or after a re-key moved a client's chat, so a revocation
 takes effect on the next request; a request that was already authenticated
-finishes with the grant it holds, within the 2-second read deadline. This
-build serves no client route yet: an authenticated request is answered `404`
-(`not_found`), and every other request that passes checks 1 and 2 `401` (or
-`429`):
+finishes with the grant it holds, within the 2-second read deadline. An
+authenticated request goes on to the [read API](#read-api); every other request
+that passes checks 1 and 2 is answered `401` (or `429`):
 
 ```text
 HTTP/1.1 401 Unauthorized
@@ -1483,6 +1485,146 @@ route's grant was decided. It answers with a fixed error and reads no further wh
 | `413` `{"error":"body_too_large"}` | The body is longer than 16384 bytes, or 65536 bytes for the client create route so that two sets of 256 chats fit, as announced by `Content-Length` (the body is not read) or found while reading; the connection is closed. |
 | `400` `{"error":"invalid_body"}` | The body is not valid UTF-8, starts with a byte-order mark, or is not exactly one JSON object with nothing but white space after it; it nests objects and arrays more than 8 levels deep, counting the outer object; an object holds a key that is not lower-case `snake_case` (a letter `a` to `z`, then letters, digits and `_`), or holds the same key twice once escapes are decoded (`"te\u0078t"` is `"text"`); a key is not a field of the route's request; or a value does not fit its field. |
 
+### Read API
+
+The client listener serves these routes, all read-only, with a client token. A
+client reads only the chats its read scope names (or every chat, for an
+all-chats client); nothing in this build sends a message.
+
+| Route | Query | Answer |
+|---|---|---|
+| `GET /v1/me` | none | `{client:{id, name, expires_at, read:{all, chats:[{id, kind}]}, write:{chats:[{id, kind}]}}, session}`: the client's own scope, chats by canonical identifier, sorted |
+| `GET /v1/chats` | `cursor`, `limit` | `{chats:[Chat], next, truncated, session}`, the chats in scope by their last message, newest first, then the chats without a message |
+| `GET /v1/chats/{ref}` | none | one `Chat` |
+| `GET /v1/chats/{ref}/messages` | `cursor`, `limit` | `{messages:[Message], next, truncated, session}`, newest first by time, then by arrival |
+| `GET /v1/search` | `q`, `chat`, `cursor`, `limit` | `{messages:[Message], next, more, truncated, session}`, newest first by arrival, without rank or count |
+| `GET /v1/changes` | `since`, `chat`, `limit` | `{messages:[Message], next, more, truncated, session}`, every message in scope that was added, edited, revoked or expired, in the order of its latest change, oldest first |
+| `GET /v1/messages/{mref}` | none | one `Message` |
+
+A `Chat` is `{id, kind, name, name_source, last_message_at}`: `id` is the chat's
+reference, 32 hexadecimal digits that stay the same when WhatsApp re-keys the chat
+and never reveal a phone number, and `{ref}` and `chat=` take it exactly as
+`/v1/chats` lists it; `kind` is `phone`, `lid` or `group`. A `Message` is
+`{mref, chat, sender:{id, name}, from_me, ts, kind, text, text_display,
+text_truncated, media_type, reply_to, quote_verified, edited_at, revoked, origin,
+untrusted}`:
+
+- `chat` is the chat's reference; `sender.id` is the sender's canonical user
+  identifier (`<digits>@s.whatsapp.net` or `<digits>@lid`).
+- `sender.name` is the name the owner saved for that contact when the contact's
+  direct chat is also in the client's scope, otherwise the sender's own WhatsApp
+  name, or `null`.
+- `ts` and `edited_at` are RFC 3339 times in UTC with milliseconds.
+- `kind` is `text`, `media`, `reaction`, `poll_update` or `other`.
+- `text` and `text_display` are `null` for a revoked message, which is answered
+  with `revoked: true`, and when the message has no text. Each is cut on a
+  character boundary so that it encodes to at most 32 KiB, and `text_truncated`
+  says whether either was cut.
+- `reply_to` is the message reference of the quoted message when it is in the
+  archive, or `null`; `quote_verified` passes on whether the quote matched it.
+- `origin` is `owner` for a message the owner's account sent and `peer` for any
+  other. `untrusted` is always `true`: every string in a message, and every chat
+  and sender name, is third-party text.
+
+No answer carries a database sequence number, an alternate sender identifier,
+raw protocol data or media metadata. `session` is `{state}` alone, one of
+`unpaired`, `connecting`, `connected` and `disconnected`.
+
+#### Query parameters and pages
+
+Query parsing is strict: a parameter the route does not take, a parameter given
+twice, an empty value or a malformed query string is `400` (`invalid_query`).
+`limit` is a whole number from 1 to 200 in decimal digits, without a sign or a
+leading zero; it defaults to 50. A page holds at most `limit` items and is cut
+earlier, with `truncated: true` and a `next` cursor that resumes at the first
+item left out, when its body would pass 256 KiB; it always holds at least one
+item.
+
+`q` is 3 to 128 bytes of UTF-8 without control characters, normalised to NFC,
+of 1 to 8 terms separated by white space, each of at least 3 characters (code
+points); a term matches anywhere inside the text, case folded the way the
+full-text index folds it, and every term must match. Anything else is `400`
+(`invalid_query`). Search walks the archive in windows of about 20,000 messages,
+newest first, so a page can hold fewer than `limit` messages, or none, with
+`more: true`: follow `next` until `more` is `false`. The query string,
+including `q`, appears in the logs of any reverse proxy in front of the
+service; keeping those logs is the deployer's concern.
+
+`/v1/changes` takes `since`, either a `next` cursor of an earlier call or, on
+the first call, an RFC 3339 time: the feed then starts at the first change of a
+message dated at or after it. Without `since`, it starts at the beginning. Its
+`next` is always set, so a client can poll with it; `more: true` means more
+changes are waiting now.
+
+#### Cursors and message references
+
+`next` is an opaque cursor, at most 256 characters, or `null` at the end. It
+holds only a position (a time and an arrival number, and for the change feed a
+change number), sealed with AES-256-GCM under the `cursor-seal` key derived
+from the [master key](#master-key), and is bound to the client, the route, the
+chat (or all chats) and, for search, the query: a cursor that was altered,
+truncated, issued to another client or for another route, chat or query, or
+sealed under a previous master key, is `400` (`invalid_cursor`). The scope is
+taken from the client's grant at every request, never from the cursor, so a
+cursor replayed after the client's scope narrowed returns nothing outside the
+new scope.
+
+A message reference (`mref`, `reply_to`) is `m1_` followed by the sealed chat,
+message id and sender under the `mref` key, bound to the client, at most 640
+characters. A reference changes from one answer to the next, and every one
+issued to the client opens for it while the master key stays the same. It is opened, its chat mapped to the chat's
+current identifier, and the client's scope checked before the message is looked
+up.
+
+**Not found.** An unknown, out-of-scope or malformed chat reference in the
+path or in `chat=`, and an unknown, out-of-scope, foreign or malformed message
+reference, are all answered with the same `404` (`not_found`) as an unknown
+route, byte for byte. A request that names a chat checks the chat before its
+cursor: an invalid cursor with a chat outside the scope is `404`, not `400`.
+`404` means "not found or not yours".
+
+#### Read rate limits
+
+Each client has a read budget and a search budget, kept in memory and never
+queued:
+
+| Budget | Default | Refill | Burst |
+|---|---|---|---|
+| Reads | `WAWARDEN_READ_PER_CLIENT_PER_MINUTE`, 600 a minute | evenly, one every 100 ms at the default | 60, or the rate when it is lower |
+| Searches | `WAWARDEN_SEARCH_PER_CLIENT_PER_MINUTE`, 60 a minute | evenly, one a second at the default | 6, or the rate when it is lower |
+
+Every authenticated request on the client listener costs one read, whatever its
+route or its answer, unknown routes and `404`s included, so probing spends the
+budget; a search costs one read and one search. A spent budget is answered `429`
+(`rate_limited`) with `Retry-After`, the whole seconds until the next request is
+admitted. Failed authentications cost nothing here; they have their own
+[budget](#failed-authentication). Each value is capped at its default unless
+`WAWARDEN_UNSAFE_RATE_CAPS=1`, which lifts the caps to 1,000,000 a minute and
+logs `unsafe_rate_caps` at every start. The budgets start full at every start of
+the service.
+
+#### Busy reads
+
+Reads share the archive's single database connection with ingest. At most 8
+reads run at once: a read that finds them all taken, or that passes its
+2-second read deadline, is answered `503` (`busy`) with `Retry-After: 1` at once
+instead of waiting.
+
+#### Read audit
+
+Every request the read budget admits writes one [audit](#audit-chain) row and
+one standard-output line before it is answered, allowed or not. The action is
+`rest.me`, `rest.chats`, `rest.chat`, `rest.messages`, `rest.search`,
+`rest.changes` or `rest.message` for the routes above, in that order, and
+`rest.unrouted` for an unknown path or method; the reason is `ok` or the error
+code of the answer (`not_found`, `invalid_query`, `invalid_cursor`,
+`rate_limited`, `busy`, `method_not_allowed` or `internal_error`). The row names
+a chat only when the answer is about one chat (`rest.chat`, `rest.messages` and
+`rest.message` that succeed); a `404` names none. A request whose row cannot be
+written is answered `500` (`internal_error`) and nothing of the read leaves the
+service. A request refused by the read budget, and a failed authentication,
+write no row.
+
 ### Health listener
 
 | Request | Answer |
@@ -1514,7 +1656,10 @@ an `Access-Control-*` header. Their error bodies are fixed JSON objects with
 | `{"error":"too_many_requests"}` | `429` |
 | `{"error":"not_found"}` | `404` |
 | `{"error":"method_not_allowed"}` | `405` |
-| `{"error":"internal_error"}` | `500`, when a handler fails or panics |
+| `{"error":"internal_error"}` | `500`, when a handler fails or panics, or a client request's [audit row](#read-audit) cannot be written |
+| `{"error":"invalid_query"}`, `{"error":"invalid_cursor"}` | `400`, from the [read API](#read-api) and, for `invalid_query`, `GET /admin/v1/chats` |
+| `{"error":"rate_limited"}` | `429` with `Retry-After`, from the client listener's [read and search budgets](#read-rate-limits) |
+| `{"error":"busy"}` | `503` with `Retry-After: 1`, from the [read API](#busy-reads) |
 | `{"error":"unsupported_media_type"}`, `{"error":"body_too_large"}`, `{"error":"invalid_body"}` | `415`, `413`, `400`, from a route that reads a body (`pair` and `reconnect`); see [Request bodies](#request-bodies) |
 | `{"error":"already_paired"}`, `{"error":"already_connected"}`, `{"error":"not_paired"}`, `{"error":"owner_phone_missing"}`, `{"error":"owner_mismatch"}`, `{"error":"rate_limited"}`, `{"error":"pair_failed"}`, `{"error":"engine_unavailable"}` | `409`, `429`, `502` or `503`, from the [admin routes](#admin-routes) |
 
@@ -1754,19 +1899,21 @@ never as its content.
 
 The archive's `audit` table records every change of a client: creating one
 (`client_create`) and revoking one (`client_revoke`, once; repeating it records
-nothing). Later releases record each client read in it too. Failed
-authentications are not recorded. A row holds an id one more than the
+nothing), and every request a client makes to the [read API](#read-audit) that
+its read budget admits. Failed authentications are not recorded. A row holds an id one more than the
 previous row's, the time in milliseconds, the client id, the action, the chat
 (none for these two actions), its `chat-hmac` value, whether the action was
-allowed, a reason code (`ok` here), the peer address when one is known, the
+allowed, a reason code (`ok` for these two actions), the peer address when one is known, the
 key id, and the row's HMAC: HMAC-SHA256 under the `audit-chain` key derived
 from the [master key](#master-key), over the domain string
 `wawarden/audit-row/v1`, a zero byte, the id and the time as 8-byte big-endian
 integers, each other field with a presence byte and its length, and the
 previous row's HMAC (32 zero bytes before the first row). The row is appended
 inside the same write transaction as the change it records, so a change whose
-row cannot be written does not happen. Triggers refuse to update or delete a
-row.
+row cannot be written does not happen; a client request's row is appended in a
+write transaction of its own before the answer is sent, and a request whose row
+cannot be written is answered `500` (`internal_error`) instead. Triggers refuse
+to update or delete a row.
 
 After the transaction commits, the service writes one line on standard output,
 through the same scrubbing writer as every log line:
@@ -1794,8 +1941,9 @@ end of the chain are detectable only this way. The master key is not part of a
 [backup](#backups): keep a copy of it apart from the backups to verify them.
 
 **Growth.** A row takes about 200 bytes. Client changes add a handful of rows;
-once client reads are recorded, a client that reads continuously at the
-highest rate the service allows could add up to about 170 MB a day. Nothing
+a client that reads continuously at the default read budget of 600 requests a
+minute adds about 170 MB a day, and each further client as much again. A
+request refused by the read budget adds no row. Nothing
 removes audit rows yet: retention and checkpoints are decided in a later
 release, and until then the table grows with the archive and its backups.
 
@@ -1930,7 +2078,7 @@ in [embedded metric format](#embedded-metric-format), which needs no token.
 |---|---|---|---|
 | `wawarden_auth_failures_total` | counter | | Failed authentications on the client listener, including those answered `429`. |
 | `wawarden_admin_auth_failures_total` | counter | | Failed authentications on the admin listener, including those answered `429`. |
-| `wawarden_policy_denials_total` | counter | | Client requests that the client's grant did not allow. Always `0` in this build, which has no client tokens. |
+| `wawarden_policy_denials_total` | counter | | Client requests that the client's grant did not allow. Always `0` in this build: the read API resolves a chat outside the scope and a missing chat by the same query, so it cannot count one apart from the other, and nothing sends yet. |
 | `wawarden_sends_rejected_total` | counter | | Sends refused by a scope, a budget or a rate limit. Always `0` in this build, which does not send. |
 | `wawarden_panics_total` | counter | `name` | Panics recovered, by handler or goroutine name. Absent until the first panic. |
 | `wawarden_notify_dropped_total` | counter | `reason` | Notification events the [webhook](#webhook) did not deliver: `queue_full`, `failed`, `shutdown`. |
