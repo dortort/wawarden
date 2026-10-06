@@ -239,10 +239,12 @@ The binaries link the Go standard library, under Go's BSD-style licence and
 patent grant, and from M1 on third-party Go modules, each under its own
 licence: the WhatsApp protocol library `go.mau.fi/whatsmeow` and its
 `go.mau.fi/util` under MPL-2.0, the Signal protocol implementation
-`go.mau.fi/libsignal` under GPL-3.0, `github.com/petermattis/goid` under
-Apache-2.0, `github.com/coder/websocket` under ISC, seven modules under MIT, and
-the rest, the SQLite driver and its C library translation included, under
-BSD-3-Clause; [`README.md`](README.md#licence) lists them all. GPL-3.0 is why
+`go.mau.fi/libsignal` under GPL-3.0, `github.com/petermattis/goid` and the MCP
+library `github.com/modelcontextprotocol/go-sdk` under Apache-2.0, the MCP
+library's code contributed before its move to Apache-2.0 under MIT unless its
+authors relicensed it (its licence file carries both texts),
+`github.com/coder/websocket` under ISC, ten modules under MIT, and the rest, the
+SQLite driver and its C library translation included, under BSD-3-Clause; [`README.md`](README.md#licence) lists them all. GPL-3.0 is why
 WaWarden itself is GPL-3.0-or-later from M1 on. Every release ships their
 licence texts, the GPL-3.0 and MPL-2.0 texts included, and WaWarden's own:
 
