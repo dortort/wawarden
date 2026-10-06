@@ -4,8 +4,45 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/dortort/wawarden/internal/cursor"
 	"github.com/dortort/wawarden/internal/token"
 )
+
+func TestSealersUseTheCursorAndMessageReferenceKeys(t *testing.T) {
+	master := testMaster(t)
+	cursors, refs, err := sealers(master)
+	if err != nil {
+		t.Fatalf("sealers: %v", err)
+	}
+	binding := cursor.Binding{Client: "aaaaaaaa", Endpoint: "chats"}
+	sealedCursor, err := cursors.Cursor(binding, cursor.Position{1, 2, 3})
+	if err != nil {
+		t.Fatalf("Cursor: %v", err)
+	}
+	sealedRef, err := refs.SealRef("aaaaaaaa", cursor.Ref{Chat: "120363000000000001@g.us", ID: "SYNTHETIC", Sender: "15550100001@s.whatsapp.net"})
+	if err != nil {
+		t.Fatalf("SealRef: %v", err)
+	}
+	purposes := map[string][]byte{
+		"log redact":  master.LogRedactKey(),
+		"chat hmac":   master.ChatHMACKey(),
+		"cursor seal": master.CursorSealKey(),
+		"message ref": master.MessageRefKey(),
+		"audit chain": master.AuditChainKey(),
+	}
+	for name, key := range purposes {
+		s, err := cursor.New(key, master.ID())
+		if err != nil {
+			t.Fatalf("cursor.New(%s): %v", name, err)
+		}
+		if _, err := s.OpenCursor(binding, sealedCursor); (err == nil) != (name == "cursor seal") {
+			t.Errorf("the %s key opens the cursor: %v", name, err == nil)
+		}
+		if _, err := s.OpenRef("aaaaaaaa", sealedRef); (err == nil) != (name == "message ref") {
+			t.Errorf("the %s key opens the message reference: %v", name, err == nil)
+		}
+	}
+}
 
 func TestLiftedRateCapsAreAnnounced(t *testing.T) {
 	cfg := testConfig(t, token.NewAdmin())
