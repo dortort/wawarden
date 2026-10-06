@@ -89,6 +89,13 @@ func historyRef(id string, n *waE2E.HistorySyncNotification) engine.HistoryRef {
 	}
 }
 
+func pushName(name string) string {
+	if name == "-" {
+		return ""
+	}
+	return name
+}
+
 func content(info types.MessageInfo, m *waE2E.Message) (engine.Message, bool) {
 	out := engine.Message{
 		Chat:       info.Chat.String(),
@@ -96,7 +103,7 @@ func content(info types.MessageInfo, m *waE2E.Message) (engine.Message, bool) {
 		Sender:     info.Sender.String(),
 		FromMe:     info.IsFromMe,
 		Timestamp:  info.Timestamp,
-		PushName:   info.PushName,
+		PushName:   pushName(info.PushName),
 		Addressing: string(info.AddressingMode),
 	}
 	if !info.SenderAlt.IsEmpty() {

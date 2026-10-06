@@ -39,8 +39,8 @@ func decodeHistory(cli *whatsmeow.Client, blob []byte) (engine.History, error) {
 		out.LIDMappings = append(out.LIDMappings, engine.LIDMapping{PN: m.GetPnJID(), LID: m.GetLidJID()})
 	}
 	for _, p := range h.GetPushnames() {
-		if p.GetID() != "" && p.GetPushname() != "" {
-			out.Contacts = append(out.Contacts, engine.Contact{User: p.GetID(), PushName: p.GetPushname()})
+		if name := pushName(p.GetPushname()); p.GetID() != "" && name != "" {
+			out.Contacts = append(out.Contacts, engine.Contact{User: p.GetID(), PushName: name})
 		}
 	}
 	for _, c := range h.GetConversations() {

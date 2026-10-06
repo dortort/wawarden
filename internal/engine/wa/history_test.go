@@ -53,7 +53,7 @@ func TestFixtureHistoryBlobWithALIDMapping(t *testing.T) {
 			{ID: proto.String(admin.String()), LidJID: proto.String("100000000000002@lid")},
 		},
 		PhoneNumberToLidMappings: []*waHistorySync.PhoneNumberToLIDMapping{{PnJID: proto.String(peer.String()), LidJID: proto.String(peerLID.String())}},
-		Pushnames:                []*waHistorySync.Pushname{{ID: proto.String(peer.String()), Pushname: proto.String("Synthetic Peer")}, {ID: proto.String(other.String())}},
+		Pushnames:                []*waHistorySync.Pushname{{ID: proto.String(peer.String()), Pushname: proto.String("Synthetic Peer")}, {ID: proto.String(other.String())}, {ID: proto.String(victim.String()), Pushname: proto.String("-")}},
 		ChunkOrder:               proto.Uint32(1),
 	})
 	if !reflect.DeepEqual(got.LIDMappings, []engine.LIDMapping{{PN: peer.String(), LID: peerLID.String()}, {PN: victim.String(), LID: victimLID.String()}}) {

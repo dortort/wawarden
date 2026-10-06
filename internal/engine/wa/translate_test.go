@@ -37,6 +37,11 @@ func TestFixtureText(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("text = %+v, want %+v", got, want)
 	}
+	evt := textMessage(t, peer, peer, "3EB0A2", "synthetic hello")
+	evt.Info.PushName = "-"
+	if got := asMessage(t, evt); got.PushName != "" {
+		t.Fatalf("push name %q, want WhatsApp's placeholder for no name dropped", got.PushName)
+	}
 }
 
 func TestFixtureEdit(t *testing.T) {
