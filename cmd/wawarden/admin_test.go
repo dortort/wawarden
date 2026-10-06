@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -344,15 +347,27 @@ func TestTokenCommandIsBounded(t *testing.T) {
 		t.Fatalf("a command that does not finish = %v after %v, want a timeout", err, time.Since(start))
 	}
 	tokenCommandTimeout = 10 * time.Second
-	marker := filepath.Join(t.TempDir(), "survived")
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
 	start = time.Now()
-	_, err := tokenFromCommand(t.Context(), `sh -c '(sleep 3; touch `+marker+`) & printf %s `+secret+`'`, environ)
+	_, err := tokenFromCommand(t.Context(), `sh -c 'sleep 60 & echo $! > `+pidFile+`; printf %s `+secret+`'`, environ)
 	if err != errCommandLingered || time.Since(start) > tokenCommandWaitDelay+2*time.Second {
 		t.Fatalf("a command whose child keeps its output open = %v after %v, want refused after the wait delay", err, time.Since(start))
 	}
-	time.Sleep(3*time.Second + 500*time.Millisecond - time.Since(start))
-	if _, err := os.Stat(marker); err == nil {
-		t.Fatal("the token command's background child survived: its process group was not killed")
+	data, err := os.ReadFile(filepath.Clean(pidFile))
+	if err != nil {
+		t.Fatalf("read the background child's PID: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		t.Fatalf("background child PID %q: %v", data, err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for !errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatal("the token command's background child survived: its process group was not killed")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
