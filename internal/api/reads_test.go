@@ -364,6 +364,22 @@ func TestInvalidCursorsAreRefusedAfterTheScopeCheck(t *testing.T) {
 	if more := decodeBody[pageView](t, f.get(t, keyGroup, "/v1/search?q=synthetic&limit=1&cursor="+*search.Next)); len(more.Messages) != 1 || *more.Messages[0].Text != "synthetic text 9" {
 		t.Fatalf("second search page = %+v", more)
 	}
+	messages := decodeBody[pageView](t, f.get(t, keyAll, "/v1/chats/"+groupRef+"/messages?limit=1"))
+	changes := decodeBody[pageView](t, f.get(t, keyAll, "/v1/changes?chat="+groupRef+"&since=2030-01-01T00:00:00Z"))
+	if messages.Next == nil || changes.Next == nil {
+		t.Fatalf("messages page = %+v, changes page = %+v", messages, changes)
+	}
+	for name, target := range map[string]string{
+		"a messages cursor on another chat":    "/v1/chats/" + aliceRef + "/messages?cursor=" + *messages.Next,
+		"a changes cursor on another chat":     "/v1/changes?chat=" + aliceRef + "&since=" + *changes.Next,
+		"a changes cursor without its chat":    "/v1/changes?since=" + *changes.Next,
+		"a changes cursor on its chat's pages": "/v1/chats/" + groupRef + "/messages?cursor=" + *changes.Next,
+		"a messages cursor on its chat's feed": "/v1/changes?chat=" + groupRef + "&since=" + *messages.Next,
+	} {
+		t.Run(name, func(t *testing.T) {
+			requireError(t, f.get(t, keyAll, target), http.StatusBadRequest, codeInvalidCursor)
+		})
+	}
 }
 
 func TestReplaysUnderAChangedGrantNeverWidenScope(t *testing.T) {
