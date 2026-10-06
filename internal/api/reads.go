@@ -167,7 +167,7 @@ func (s *reads) messages(ctx context.Context, g policy.ReadGrant, r *Request) (d
 }
 
 func (s *reads) search(ctx context.Context, g policy.ReadGrant, r *Request) (dto.Response, policy.CanonicalChat, error) {
-	if err := s.chargeSearch(g); err != nil {
+	if err := s.chargeSearch(g.Client()); err != nil {
 		return nil, policy.CanonicalChat{}, err
 	}
 	q, err := params(r, "q", "chat", "cursor", "limit")
@@ -204,8 +204,8 @@ func response[T dto.Response](resp T, chat policy.CanonicalChat, err error) (dto
 	return resp, chat, nil
 }
 
-func (s *reads) chargeSearch(g policy.ReadGrant) error {
-	if wait, ok := s.searches.Allow(g.Client()); !ok {
+func (s *reads) chargeSearch(client string) error {
+	if wait, ok := s.searches.Allow(client); !ok {
 		return &codedError{status: http.StatusTooManyRequests, code: codeRateLimited, retryAfter: wait}
 	}
 	return nil

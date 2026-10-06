@@ -531,6 +531,11 @@ func TestMCPSharesTheReadAndSearchBudgetsWithREST(t *testing.T) {
 			t.Fatal("a refused read carries no Retry-After")
 		}
 	}
+	probe := rawMCP(t, h, keyAlice, legacyCall("tools/call", `{"name":"search_messages","arguments":{"query":"ab"}}`), legacyHeader)
+	if !strings.Contains(probe.Body.String(), `"text":"invalid_arguments"`) {
+		t.Fatalf("a search with invalid arguments = %s, want invalid_arguments", probe.Body.String())
+	}
+	requireError(t, serve(h, newRequest(t, http.MethodGet, "/v1/search?q=synthetic", bearer(keyAlice))), http.StatusTooManyRequests, codeRateLimited)
 }
 
 func TestMCPAnswersBehindALoopbackProxyWithAnyHost(t *testing.T) {

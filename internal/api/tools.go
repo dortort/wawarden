@@ -71,14 +71,14 @@ func registerTools(server *mcp.Server, k *toolkit) []string {
 	readTool(server, k, &mcp.Tool{
 		Name:        toolListChats,
 		Description: "Lists the chats this client may read: the most recent last message first, then the chats without one. Pass next as cursor for the following page." + untrustedTexts,
-	}, func(d dto.Session) dto.ChatPage { return dto.ChatPage{Session: d} },
+	}, func(d dto.Session) dto.ChatPage { return dto.ChatPage{Session: d} }, nil,
 		func(ctx context.Context, g policy.ReadGrant, in listChatsArgs) (dto.ChatPage, policy.CanonicalChat, error) {
 			return s.chatPage(ctx, g, in.Cursor, pageSize(in.Limit))
 		})
 	readTool(server, k, &mcp.Tool{
 		Name:        toolGetChat,
 		Description: "Returns one chat by the id list_chats gave it." + untrustedTexts,
-	}, func(d dto.Session) dto.ChatResult { return dto.ChatResult{Session: d} },
+	}, func(d dto.Session) dto.ChatResult { return dto.ChatResult{Session: d} }, nil,
 		func(ctx context.Context, g policy.ReadGrant, in getChatArgs) (dto.ChatResult, policy.CanonicalChat, error) {
 			c, chat, err := s.oneChat(ctx, g, in.Chat)
 			return dto.ChatResult{Chat: &c, Session: s.state()}, chat, err
@@ -86,31 +86,28 @@ func registerTools(server *mcp.Server, k *toolkit) []string {
 	readTool(server, k, &mcp.Tool{
 		Name:        toolGetMessages,
 		Description: "Returns the messages of one chat, newest first. Pass next as cursor for older messages." + untrustedTexts,
-	}, func(d dto.Session) dto.MessagePage { return dto.MessagePage{Session: d} },
+	}, func(d dto.Session) dto.MessagePage { return dto.MessagePage{Session: d} }, nil,
 		func(ctx context.Context, g policy.ReadGrant, in getMessagesArgs) (dto.MessagePage, policy.CanonicalChat, error) {
 			return s.messagePage(ctx, g, in.Chat, in.Cursor, pageSize(in.Limit))
 		})
 	readTool(server, k, &mcp.Tool{
 		Name:        toolSearchMessages,
 		Description: "Finds the messages that contain every word of the query, in all readable chats or in one, newest first, without rank or count. Pass next as cursor while more is true." + untrustedTexts,
-	}, func(d dto.Session) dto.SearchPage { return dto.SearchPage{Session: d} },
+	}, func(d dto.Session) dto.SearchPage { return dto.SearchPage{Session: d} }, s.chargeSearch,
 		func(ctx context.Context, g policy.ReadGrant, in searchMessagesArgs) (dto.SearchPage, policy.CanonicalChat, error) {
-			if err := s.chargeSearch(g); err != nil {
-				return dto.SearchPage{}, policy.CanonicalChat{}, err
-			}
 			return s.searchPage(ctx, g, in.Query, in.Chat, in.Cursor, pageSize(in.Limit))
 		})
 	readTool(server, k, &mcp.Tool{
 		Name:        toolGetChanges,
 		Description: "Returns every readable message added, edited, revoked or expired since a point, in the order of its latest change, oldest first. Pass next as since while more is true, and keep the last next for the following call." + untrustedTexts,
-	}, func(d dto.Session) dto.ChangePage { return dto.ChangePage{Session: d} },
+	}, func(d dto.Session) dto.ChangePage { return dto.ChangePage{Session: d} }, nil,
 		func(ctx context.Context, g policy.ReadGrant, in getChangesArgs) (dto.ChangePage, policy.CanonicalChat, error) {
 			return s.changePage(ctx, g, in.Since, in.Chat, pageSize(in.Limit))
 		})
 	return []string{toolListChats, toolGetChat, toolGetMessages, toolSearchMessages, toolGetChanges}
 }
 
-func readTool[In, Out any](server *mcp.Server, k *toolkit, tool *mcp.Tool, failed func(dto.Session) Out, h toolHandler[In, Out]) {
+func readTool[In, Out any](server *mcp.Server, k *toolkit, tool *mcp.Tool, failed func(dto.Session) Out, charge func(client string) error, h toolHandler[In, Out]) {
 	input := inputSchema[In]()
 	resolved, err := input.Resolve(nil)
 	if err != nil {
@@ -124,7 +121,7 @@ func readTool[In, Out any](server *mcp.Server, k *toolkit, tool *mcp.Tool, faile
 	tool.Annotations = &mcp.ToolAnnotations{ReadOnlyHint: true}
 	action := "mcp." + tool.Name
 	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		out, chat, code := runTool(ctx, k, resolved, req, h)
+		out, chat, code := runTool(ctx, k, resolved, req, charge, h)
 		if code != "" {
 			exchangeFrom(ctx).settle(action, policy.CanonicalChat{}, code)
 			return toolResult(failed(k.reads.state()), code), nil
@@ -134,9 +131,14 @@ func readTool[In, Out any](server *mcp.Server, k *toolkit, tool *mcp.Tool, faile
 	})
 }
 
-func runTool[In, Out any](ctx context.Context, k *toolkit, resolved *jsonschema.Resolved, req *mcp.CallToolRequest, h toolHandler[In, Out]) (out Out, chat policy.CanonicalChat, code string) {
+func runTool[In, Out any](ctx context.Context, k *toolkit, resolved *jsonschema.Resolved, req *mcp.CallToolRequest, charge func(string) error, h toolHandler[In, Out]) (out Out, chat policy.CanonicalChat, code string) {
 	code = codeInternal
 	defer safego.Recover(mcpPanicName)
+	if c := clientFrom(ctx); charge != nil && c != nil {
+		if err := charge(c.ID); err != nil {
+			return out, chat, toolCode(err)
+		}
+	}
 	var in In
 	if !arguments(resolved, req.Params.Arguments, &in) {
 		return out, chat, codeInvalidArguments
