@@ -159,6 +159,37 @@ func TestFixtureOwnRevoke(t *testing.T) {
 	}
 }
 
+func TestFixtureAnOwnChangeNamingTheSelfChatIsForeign(t *testing.T) {
+	r := newPipeRig(t)
+	r.ingest(fromOwner(alice, "M1", "mine"))
+	for i, kind := range []Kind{KindRevoke, KindEdit, KindReaction} {
+		own := change(kind, alice, "X"+strconv.Itoa(i), "15550100009:3@s.whatsapp.net", Key{RemoteJID: owner, FromMe: true, ID: "M1"})
+		own.FromMe, own.Text = true, "rewritten"
+		r.ingest(own)
+	}
+	if f := r.must(alice, "M1", owner); f.Revoked || f.Text != "mine" || r.dropped(dropForeign) != 3 {
+		t.Fatalf("M1 revoked %v with text %q, foreign drops %v: the owner's change naming the self-chat was applied in this chat", f.Revoked, f.Text, r.dropped(dropForeign))
+	}
+}
+
+func TestFixtureAlternatesOfOneKindTeachNoMapping(t *testing.T) {
+	r := newPipeRig(t)
+	lids := dm("M1", aliceLID, "two LIDs")
+	lids.SenderAlt = bobLID
+	phones := dm("M2", alice, "two numbers")
+	phones.SenderAlt = bob
+	r.ingest(lids, phones)
+	r.must(aliceLID, "M1", aliceLID)
+	r.must(alice, "M2", alice)
+	if r.dropped(dropInvalid) != 0 {
+		t.Fatal("a message whose sender and alternate are of one kind was dropped")
+	}
+	db := r.inspect()
+	if n := query[int](t, db, "SELECT count(*) FROM lid_map"); n != 0 {
+		t.Fatalf("%d mappings learned from alternates of one kind", n)
+	}
+}
+
 func TestFixtureDirectChatChangesNeedTheOriginalSender(t *testing.T) {
 	r := newPipeRig(t)
 	r.ingest(fromOwner(alice, "M1", "the owner's words"), dm("M2", alice, "alice's words"))
