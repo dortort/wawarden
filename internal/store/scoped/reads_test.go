@@ -233,18 +233,39 @@ func TestOneMessageResolvesThroughTheLIDMapAndTheGrant(t *testing.T) {
 func TestSavedNamesShowOnlyForAChatInScope(t *testing.T) {
 	s := openStore(t)
 	insert(t, s, message(t, groupJID, "G", bob, "in the group", epoch))
-	write(t, s, func(tx *ingest.Tx) error { return tx.SetPushName(chat(t, bob), "Bob says", epoch, ingest.OriginLive) })
-	exec(t, s, "INSERT INTO contact_names (jid, full_name, first_name, updated_ts) VALUES ('"+bob+"', 'Bob Saved', 'Bob', 1)")
+	write(t, s, func(tx *ingest.Tx) error {
+		if err := tx.SetPushName(chat(t, bob), "Bob says", epoch, ingest.OriginLive); err != nil {
+			return err
+		}
+		return tx.SetContactName(chat(t, bob), "Bob Saved", "Bob", epoch)
+	})
 	ref := refOf(t, s, groupJID)
-	for _, tt := range []struct {
+	type want struct {
 		g    policy.ReadGrant
-		want string
-	}{{grant(t, groupJID), ""}, {grant(t, groupJID, alice), ""}, {grant(t, groupJID, bob), "Bob Saved"}, {grantAll(t), "Bob Saved"}} {
-		page, _, err := s.Scoped().Messages(tt.g, t.Context(), ref, scoped.MessagePosition{}, scoped.Older, 5)
-		if err != nil || len(page.Messages) != 1 || page.Messages[0].PushName != "Bob says" || page.Messages[0].SavedName != tt.want {
-			t.Fatalf("Messages = %+v, %v, want the saved name %q", page, err, tt.want)
+		name string
+	}
+	check := func(stage string, cases []want) {
+		t.Helper()
+		for _, tt := range cases {
+			page, _, err := s.Scoped().Messages(tt.g, t.Context(), ref, scoped.MessagePosition{}, scoped.Older, 5)
+			if err != nil || len(page.Messages) != 1 || page.Messages[0].PushName != "Bob says" || page.Messages[0].SavedName != tt.name {
+				t.Fatalf("%s: Messages = %+v, %v, want the saved name %q", stage, page, err, tt.name)
+			}
 		}
 	}
+	check("saved by phone number", []want{{grant(t, groupJID), ""}, {grant(t, groupJID, alice), ""}, {grant(t, groupJID, bob), "Bob Saved"}, {grantAll(t), "Bob Saved"}})
+	write(t, s, func(tx *ingest.Tx) error {
+		res, err := tx.LearnLID(chat(t, bobLID), chat(t, bob), ingest.MappingSenderAlt, epoch)
+		if err != nil || res.Outcome != ingest.LIDLearned {
+			t.Fatalf("LearnLID = %+v, %v", res, err)
+		}
+		return nil
+	})
+	check("re-keyed to the LID", []want{{grant(t, groupJID), ""}, {grant(t, groupJID, alice), ""}, {grant(t, groupJID, bobLID), "Bob Saved"}, {grantAll(t), "Bob Saved"}})
+	write(t, s, func(tx *ingest.Tx) error { return tx.SetContactName(chat(t, bob), "", "Bob", epoch.Add(time.Minute)) })
+	check("renamed to a first name only", []want{{grant(t, groupJID), ""}, {grant(t, groupJID, bobLID), "Bob"}, {grantAll(t), "Bob"}})
+	write(t, s, func(tx *ingest.Tx) error { return tx.SetContactName(chat(t, bobLID), "", "", epoch.Add(2*time.Minute)) })
+	check("cleared", []want{{grant(t, groupJID, bobLID), ""}, {grantAll(t), ""}})
 }
 
 func searchAll(t *testing.T, r *scoped.Reader, g policy.ReadGrant, text, ref string, limit int) []string {
