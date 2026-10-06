@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -281,15 +282,23 @@ func TestTheServiceTakesOneEncryptedBackupOnceTheSyncSettles(t *testing.T) {
 	if a.backup == nil || len(logs.find("backup_disabled")) != 0 {
 		t.Fatal("a configured recipient did not enable the backup")
 	}
+	var checks atomic.Int64
+	unpairs := a.backup.unpairs
+	a.backup.unpairs = func() uint64 {
+		checks.Add(1)
+		return unpairs()
+	}
 	stop := run(t, a)
 	waitUntil(t, "the pairing is recorded", func() bool { return syncValue(t, a.archive, pairedAtKey) != "" })
-	time.Sleep(20 * time.Millisecond)
+	checked := checks.Load() + 2
+	waitUntil(t, "a whole check after the pairing", func() bool { return checks.Load() >= checked })
 	if len(logs.find("backup_done")) != 0 {
 		t.Fatal("a backup was taken before the sync settled")
 	}
 	clock.set(clock.Now().Add(settleAfter))
 	waitUntil(t, "the backup is done", func() bool { return len(logs.find("backup_done")) == 1 })
-	time.Sleep(20 * time.Millisecond)
+	checked = checks.Load() + 2
+	waitUntil(t, "a whole check after the backup", func() bool { return checks.Load() >= checked })
 	if err := stop(); err != nil {
 		t.Fatalf("Run = %v", err)
 	}
