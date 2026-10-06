@@ -194,7 +194,8 @@ func TestRegistrationRecordsEveryRouteWithItsClass(t *testing.T) {
 	rt.read("GET /r", func(context.Context, policy.ReadGrant, *Request) (dto.Response, error) { return ok, nil })
 	rt.write("POST /w", func(context.Context, policy.WriteGrant, *Request) (dto.Response, error) { return ok, nil })
 	rt.admin("GET /a", func(context.Context, policy.AdminGrant, *Request) (dto.Response, error) { return ok, nil })
-	want := []route{{pattern: "GET /r", class: classRead}, {pattern: "POST /w", class: classWrite}, {pattern: "GET /a", class: classAdmin}}
+	rt.mcp("POST /m", http.NotFoundHandler())
+	want := []route{{pattern: "GET /r", class: classRead}, {pattern: "POST /w", class: classWrite}, {pattern: "GET /a", class: classAdmin}, {pattern: "POST /m", class: classMCP}}
 	if !slices.Equal(rt.routes, want) {
 		t.Fatalf("routes = %+v, want %+v", rt.routes, want)
 	}

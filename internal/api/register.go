@@ -17,6 +17,7 @@ const (
 	classRead  class = "read"
 	classWrite class = "write"
 	classAdmin class = "admin"
+	classMCP   class = "mcp"
 )
 
 type route struct {
@@ -57,6 +58,10 @@ func (rt *router) admin(pattern string, h func(context.Context, policy.AdminGran
 		presented, _ := bearerToken(r.Header)
 		return policy.DecideAdmin(rt.credential, presented)
 	}, h))
+}
+
+func (rt *router) mcp(pattern string, h http.Handler) {
+	rt.register(route{pattern: pattern, class: classMCP}, h.ServeHTTP)
 }
 
 func decided[G any](decide func(*http.Request) (G, bool), h func(context.Context, G, *Request) (dto.Response, error)) http.HandlerFunc {

@@ -35,6 +35,7 @@ func samples() []dto.Response {
 			Read:  dto.ReadScope{Chats: []dto.ScopeChat{{ID: "120363000000000001@g.us", Kind: "group"}}},
 			Write: dto.WriteScope{Chats: []dto.ScopeChat{{ID: "120363000000000001@g.us", Kind: "group"}}}}, Session: dto.Session{State: "connected"}},
 		sampleChat(),
+		dto.ChatResult{Chat: new(sampleChat()), Session: dto.Session{State: "connected"}},
 		dto.ChatPage{Chats: []dto.Chat{sampleChat()}, Next: &next, Truncated: true, Session: dto.Session{State: "connected"}},
 		sampleMessage(),
 		dto.MessagePage{Messages: []dto.Message{sampleMessage()}, Next: &next, Truncated: true, Session: dto.Session{State: "connected"}},

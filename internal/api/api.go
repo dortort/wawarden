@@ -53,7 +53,9 @@ func NewClientHandler(d ClientDeps) http.Handler {
 			return r.WithContext(withClient(r.Context(), c)), true
 		},
 	}
-	registerReads(p.router, &reads{archive: d.Archive, cursors: d.Cursors, refs: d.Refs, searches: searches, session: d.Session})
+	s := &reads{archive: d.Archive, cursors: d.Cursors, refs: d.Refs, searches: searches, session: d.Session}
+	registerReads(p.router, s)
+	p.router.mcp(mcpPattern, newMCPEndpoint(s, now, mcpCallDeadline))
 	return p
 }
 

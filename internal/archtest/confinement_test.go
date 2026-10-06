@@ -21,6 +21,7 @@ const (
 	rapidModule     = "pgregory.net/rapid"
 	textModule      = "golang.org/x/text"
 	mcpModule       = "github.com/modelcontextprotocol/go-sdk"
+	schemaModule    = "github.com/google/jsonschema-go"
 	scopedDir       = storeDir + "/scoped"
 )
 
@@ -38,6 +39,7 @@ var confinements = []confinement{
 	{pkg: ageModule, dirs: []string{backupDir}},
 	{pkg: textModule, dirs: []string{scopedDir}},
 	{pkg: mcpModule, dirs: []string{apiDir}},
+	{pkg: schemaModule, dirs: []string{apiDir}},
 	{pkg: rapidModule},
 }
 
@@ -186,18 +188,21 @@ import (
 
 import "golang.org/x/text/unicode/norm"
 `},
-		{name: "the MCP library outside the api", rel: "internal/app/x.go", want: 3, src: `package app
+		{name: "the MCP and schema libraries outside the api", rel: "internal/app/x.go", want: 4, src: `package app
 
 import (
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	_ "github.com/google/jsonschema-gox"
 	_ "github.com/modelcontextprotocol/go-sdkx"
 )
 `},
-		{name: "the MCP library in the api", rel: "internal/api/x.go", src: `package api
+		{name: "the MCP and schema libraries in the api", rel: "internal/api/x.go", src: `package api
 
 import (
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"

@@ -68,7 +68,7 @@ func receiverPrefix(d *ast.FuncDecl) string {
 	return ""
 }
 
-var routerMembers = set(muxField, "routes", "now", "credential", "read", "write", "admin", muxRegister, "ServeHTTP")
+var routerMembers = set(muxField, "routes", "now", "credential", "read", "write", "admin", "mcp", muxRegister, "ServeHTTP")
 
 func anchorProblems(t *testing.T, root string) []string {
 	t.Helper()
@@ -148,7 +148,7 @@ func TestRuleAnchors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			root := t.TempDir()
 			for dir, src := range map[string]string{
-				apiDir:       "package api\n\ntype router struct{ mux, routes, now, credential int }\n\nfunc (rt *router) read()      {}\nfunc (rt *router) write()     {}\nfunc (rt *router) admin()     {}\nfunc (rt *router) ServeHTTP() {}\n" + tt.api,
+				apiDir:       "package api\n\ntype router struct{ mux, routes, now, credential int }\n\nfunc (rt *router) read()      {}\nfunc (rt *router) write()     {}\nfunc (rt *router) admin()     {}\nfunc (rt *router) mcp()       {}\nfunc (rt *router) ServeHTTP() {}\n" + tt.api,
 				listenersDir: "package listeners\n\nimport \"net/http\"\n\n" + tt.lis,
 				dbDir:        "package db\n\nimport \"database/sql\"\n\ntype DB struct{}\n\n" + tt.db,
 			} {

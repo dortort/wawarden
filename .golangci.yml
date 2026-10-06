@@ -83,6 +83,8 @@ linters:
           deny:
             - pkg: github.com/modelcontextprotocol/go-sdk
               desc: the MCP library is confined to internal/api, which serves its tools behind the client pipeline
+            - pkg: github.com/google/jsonschema-go
+              desc: the JSON Schema library is confined to internal/api, which builds and checks the MCP tool schemas
         test-only-modules:
           files:
             - $all

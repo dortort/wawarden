@@ -70,7 +70,7 @@ func audited(w http.ResponseWriter, r *http.Request, audit Auditor, now func() t
 		ctx, cancel := context.WithTimeout(r.Context(), auditWait)
 		defer cancel()
 		err := audit.Record(ctx, ReadEvent{
-			At: now(), Client: client.ID, Action: note.action, Chat: note.chat, OK: status == http.StatusOK, Reason: reason, Peer: peer(r.RemoteAddr),
+			At: now(), Client: client.ID, Action: note.action, Chat: note.chat, OK: reason == outcomeOK, Reason: reason, Peer: peer(r.RemoteAddr),
 		})
 		if err != nil && r.Context().Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return errBusy
@@ -119,7 +119,7 @@ func (a *auditWriter) Unwrap() http.ResponseWriter { return a.ResponseWriter }
 
 func statusReason(status int) string {
 	switch status {
-	case http.StatusOK:
+	case http.StatusOK, http.StatusAccepted:
 		return outcomeOK
 	case http.StatusNotFound:
 		return codeNotFound

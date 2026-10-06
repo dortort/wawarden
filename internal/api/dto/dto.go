@@ -196,6 +196,13 @@ type Chat struct {
 
 func (c Chat) encode() (string, []byte, error) { return encodeJSON(c) }
 
+type ChatResult struct {
+	Chat    *Chat   `json:"chat"`
+	Session Session `json:"session"`
+}
+
+func (c ChatResult) encode() (string, []byte, error) { return encodeJSON(c) }
+
 type ChatPage struct {
 	Chats     []Chat  `json:"chats"`
 	Next      *string `json:"next"`

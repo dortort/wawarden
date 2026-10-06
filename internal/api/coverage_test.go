@@ -29,6 +29,7 @@ func TestRoutesMatchTheGoldenList(t *testing.T) {
 			{pattern: "GET /v1/search", class: classRead},
 			{pattern: "GET /v1/changes", class: classRead},
 			{pattern: "GET /v1/messages/{mref}", class: classRead},
+			{pattern: "POST /mcp", class: classMCP},
 		},
 		"admin": {
 			{pattern: "GET /metrics", class: classAdmin},
@@ -56,7 +57,7 @@ func TestRoutesMatchTheGoldenList(t *testing.T) {
 				t.Fatalf("the %s handler is a %T, not the pipeline whose routes are recorded", name, h)
 			}
 			for _, r := range p.router.routes {
-				if !slices.Contains([]class{classRead, classWrite, classAdmin}, r.class) {
+				if !slices.Contains([]class{classRead, classWrite, classAdmin, classMCP}, r.class) {
 					t.Errorf("route %q has no policy class (%q)", r.pattern, r.class)
 				}
 			}
