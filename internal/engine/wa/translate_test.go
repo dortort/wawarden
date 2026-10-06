@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waSyncAction"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
@@ -337,5 +338,33 @@ func TestGroupEventsTranslate(t *testing.T) {
 	}}).(engine.Group)
 	if !ok || joined.Subject != "Synthetic group" || !reflect.DeepEqual(joined.Members, []engine.Participant{{User: admin.String(), Admin: true}, {User: peerLID.String(), Admin: true}, {User: victim.String()}}) {
 		t.Fatalf("joined group = %+v", joined)
+	}
+}
+
+func TestContactEventsTranslate(t *testing.T) {
+	full := &waSyncAction.ContactAction{FullName: proto.String("Synthetic Saved Peer"), FirstName: proto.String("Synthetic"), LidJID: proto.String(peerLID.String()), SaveOnPrimaryAddressbook: proto.Bool(true)}
+	fromFullSync := contactEvent(t, peerLID, &waSyncAction.ContactAction{FullName: proto.String("Synthetic Saved Peer")})
+	fromFullSync.FromFullSync = true
+	for _, tt := range []struct {
+		in   *events.Contact
+		want engine.ContactName
+	}{
+		{contactEvent(t, peer, full), engine.ContactName{User: peer.String(), FullName: "Synthetic Saved Peer", FirstName: "Synthetic"}},
+		{contactEvent(t, peer, &waSyncAction.ContactAction{FirstName: proto.String("Synthetic")}), engine.ContactName{User: peer.String(), FirstName: "Synthetic"}},
+		{fromFullSync, engine.ContactName{User: peerLID.String(), FullName: "Synthetic Saved Peer"}},
+		{contactEvent(t, peer, &waSyncAction.ContactAction{PnJID: proto.String(peer.String())}), engine.ContactName{User: peer.String()}},
+		{contactEvent(t, group, full), engine.ContactName{User: group.String(), FullName: "Synthetic Saved Peer", FirstName: "Synthetic"}},
+	} {
+		if got := translated(t, tt.in); got != tt.want {
+			t.Errorf("contact %v = %+v, want %+v", tt.in.JID, got, tt.want)
+		}
+	}
+	for name, ignored := range map[string]*events.Contact{
+		"no action":     {JID: peer, Timestamp: epoch},
+		"no identifier": contactEvent(t, types.EmptyJID, full),
+	} {
+		if ev, ok := translate(ignored); ok {
+			t.Errorf("a contact event with %s became %+v", name, ev)
+		}
 	}
 }

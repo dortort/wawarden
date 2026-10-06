@@ -8,6 +8,7 @@ import (
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waSyncAction"
 	"go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -64,6 +65,11 @@ func live(t testing.TB, chat, sender types.JID, id string, raw *waE2E.Message) *
 
 func textMessage(t testing.TB, chat, sender types.JID, id, body string) *events.Message {
 	return live(t, chat, sender, id, &waE2E.Message{Conversation: proto.String(body)})
+}
+
+func contactEvent(t testing.TB, jid types.JID, action *waSyncAction.ContactAction) *events.Contact {
+	t.Helper()
+	return &events.Contact{JID: jid, Timestamp: epoch, Action: wire(t, action)}
 }
 
 func editMessage(t testing.TB, chat, sender types.JID, id string, key *waCommon.MessageKey, body string) *events.Message {

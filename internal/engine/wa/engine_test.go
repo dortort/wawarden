@@ -10,6 +10,7 @@ import (
 
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/proto/waHistorySync"
+	"go.mau.fi/whatsmeow/proto/waSyncAction"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
@@ -20,6 +21,7 @@ import (
 	"github.com/dortort/wawarden/internal/notify"
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/store/ingest"
+	"github.com/dortort/wawarden/internal/store/scoped"
 )
 
 type noVersions struct{ t *testing.T }
@@ -173,6 +175,48 @@ func TestFixturesTakeEffectThroughTheEngine(t *testing.T) {
 		}
 	}
 	for _, leak := range []string{"synthetic", "15550100001", "120363000000000001"} {
+		if strings.Contains(w.logs.String(), leak) {
+			t.Fatalf("%q reached the logs:\n%s", leak, w.logs.String())
+		}
+	}
+}
+
+func TestASavedContactNameTakesEffectThroughTheEngine(t *testing.T) {
+	w := wireEngine(t)
+	w.send(t, textMessage(t, group, peer, "3EB0G1", "synthetic group text"))
+	w.send(t, contactEvent(t, peer, &waSyncAction.ContactAction{FullName: proto.String("Synthetic Saved Peer"), FirstName: proto.String("Synthetic")}))
+	w.send(t, contactEvent(t, group, &waSyncAction.ContactAction{FullName: proto.String("Synthetic Saved Group")}))
+	w.send(t, textMessage(t, other, other, "3EB0LAST", "synthetic marker"))
+	eventually(t, "the last message is stored", func() bool { _, ok := w.find(t, other, "3EB0LAST", other); return ok })
+	if !w.metric(t, `wawarden_ingest_dropped_total{reason="chat_rejected"} 1`) {
+		t.Error("the saved name of a group was not dropped")
+	}
+	now := time.Now()
+	grant := func(jids ...types.JID) policy.ReadGrant {
+		read := map[policy.CanonicalChat]struct{}{}
+		for _, jid := range jids {
+			read[canonical(t, jid)] = struct{}{}
+		}
+		g, ok := policy.DecideRead(&policy.Client{ID: "client01", Read: read, ExpiresAt: now.Add(time.Hour)}, now)
+		if !ok {
+			t.Fatal("DecideRead refused a live client")
+		}
+		return g
+	}
+	chats, err := w.archive.Scoped().Chats(grant(group), t.Context(), scoped.ChatPosition{}, 5)
+	if err != nil || len(chats.Chats) != 1 {
+		t.Fatalf("Chats = %+v, %v", chats, err)
+	}
+	for _, tt := range []struct {
+		g    policy.ReadGrant
+		want string
+	}{{grant(group), ""}, {grant(group, other), ""}, {grant(group, peer), "Synthetic Saved Peer"}} {
+		page, _, err := w.archive.Scoped().Messages(tt.g, t.Context(), chats.Chats[0].Ref, scoped.MessagePosition{}, scoped.Older, 5)
+		if err != nil || len(page.Messages) != 1 || page.Messages[0].PushName != "Synthetic Peer" || page.Messages[0].SavedName != tt.want {
+			t.Fatalf("Messages = %+v, %v, want the saved name %q", page, err, tt.want)
+		}
+	}
+	for _, leak := range []string{"Saved", "15550100001", "120363000000000001"} {
 		if strings.Contains(w.logs.String(), leak) {
 			t.Fatalf("%q reached the logs:\n%s", leak, w.logs.String())
 		}

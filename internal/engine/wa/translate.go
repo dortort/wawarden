@@ -31,6 +31,8 @@ func translate(evt any) (engine.Event, bool) {
 		return groupChange(e)
 	case *events.JoinedGroup:
 		return joinedGroup(e)
+	case *events.Contact:
+		return contactName(e)
 	case *events.Connected:
 		return engine.Connected{}, true
 	case *events.Disconnected:
@@ -274,4 +276,11 @@ func joinedGroup(e *events.JoinedGroup) (engine.Event, bool) {
 		return nil, false
 	}
 	return g, true
+}
+
+func contactName(e *events.Contact) (engine.Event, bool) {
+	if e.Action == nil || e.JID.IsEmpty() {
+		return nil, false
+	}
+	return engine.ContactName{User: e.JID.String(), FullName: e.Action.GetFullName(), FirstName: e.Action.GetFirstName()}, true
 }
