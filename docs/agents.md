@@ -101,8 +101,9 @@ search as well.
 - **Poll the change feed with its cursor.** `get_changes` and `/v1/changes`
   return every message in scope that was added, edited, revoked or expired,
   oldest change first. Start with an RFC 3339 time as `since`, then keep the
-  `next` it returns, which is always set. `more: true` means more changes are
-  waiting now; otherwise, wait before the next poll. A revoked message comes
+  `next` it returns, which is always set. `more: true` means the feed has not
+  yet walked every change, so call again at once, even after an empty page;
+  otherwise, wait before the next poll. A revoked message comes
   back with `revoked: true` and no text: drop what you kept of it.
 - **Watch `session.state`.** Every list, search and change page, `/v1/me`
   and every MCP tool result (errors included) carries it; a single chat, a

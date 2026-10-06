@@ -1604,8 +1604,10 @@ service; keeping those logs is the deployer's concern.
 `/v1/changes` takes `since`, either a `next` cursor of an earlier call or, on
 the first call, an RFC 3339 time: the feed then starts at the first change of a
 message dated at or after it. Without `since`, it starts at the beginning. Its
-`next` is always set, so a client can poll with it; `more: true` means more
-changes are waiting now.
+`next` is always set, so a client can poll with it; `more: true` means the
+feed has not yet walked every change in the archive, so call again at once,
+even when the page is empty: the walk covers every chat, and a client that
+reads few chats can get several empty pages before it is up to date.
 
 #### Cursors and message references
 
