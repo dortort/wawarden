@@ -99,6 +99,8 @@ func (p *pipeline) accept(ev Event) bool {
 		chat = e.Chat
 	case Group:
 		chat = e.Chat
+	case ContactName:
+		chat = e.User
 	}
 	if _, ok := policy.Normalize(chat); !ok {
 		p.counts.dropped.With(dropChat).Inc()
@@ -242,6 +244,8 @@ func (p *pipeline) apply(ctx context.Context, item ingest.InboxItem) (outcome, e
 			err = a.message(e, ingest.OriginLive)
 		case Group:
 			err = a.group(e, ingest.OriginLive)
+		case ContactName:
+			err = a.contactName(e)
 		}
 		if err != nil {
 			return err

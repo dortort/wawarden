@@ -12,9 +12,10 @@ const payloadVersion = 1
 var errPayload = errors.New("engine: the inbox payload is not one event of a known version")
 
 type envelope struct {
-	V       int      `json:"v"`
-	Message *Message `json:"message,omitempty"`
-	Group   *Group   `json:"group,omitempty"`
+	V       int          `json:"v"`
+	Message *Message     `json:"message,omitempty"`
+	Group   *Group       `json:"group,omitempty"`
+	Contact *ContactName `json:"contact,omitempty"`
 }
 
 func encodePayload(ev Event) ([]byte, error) {
@@ -24,6 +25,8 @@ func encodePayload(ev Event) ([]byte, error) {
 		env.Message = &e
 	case Group:
 		env.Group = &e
+	case ContactName:
+		env.Contact = &e
 	default:
 		return nil, errPayload
 	}
@@ -59,10 +62,12 @@ func decodePayload(b []byte) (Event, error) {
 		return nil, errPayload
 	}
 	switch {
-	case env.Message != nil && env.Group == nil:
+	case env.Message != nil && env.Group == nil && env.Contact == nil:
 		return *env.Message, nil
-	case env.Group != nil && env.Message == nil:
+	case env.Group != nil && env.Message == nil && env.Contact == nil:
 		return *env.Group, nil
+	case env.Contact != nil && env.Message == nil && env.Group == nil:
+		return *env.Contact, nil
 	}
 	return nil, errPayload
 }

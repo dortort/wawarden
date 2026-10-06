@@ -383,3 +383,12 @@ func (a *applier) participants(in []Participant) ([]ingest.Participant, error) {
 	}
 	return out, nil
 }
+
+func (a *applier) contactName(c ContactName) error {
+	u, ok := normalizeUser(c.User)
+	if !ok {
+		a.drop(dropChat)
+		return nil
+	}
+	return a.tx.SetContactName(u, c.FullName, c.FirstName, a.now)
+}

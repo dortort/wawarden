@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"math/rand/v2"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -555,6 +556,38 @@ func TestFixtureGroupMembership(t *testing.T) {
 	}
 	if r.dropped(dropChat) != 1 {
 		t.Fatal("a group event for a direct chat was not dropped")
+	}
+}
+
+func TestFixtureContactName(t *testing.T) {
+	r := newPipeRig(t)
+	mapped := dm("M1", aliceLID, "teaches the mapping")
+	mapped.SenderAlt = alice
+	r.ingest(mapped)
+	r.ingest(
+		ContactName{User: alice, FullName: "Alice Saved", FirstName: "Alice"},
+		ContactName{User: "15550100002:3@s.whatsapp.net", FullName: "Bob Saved"},
+		ContactName{User: carol, FirstName: "Carol"},
+		ContactName{User: carol},
+		ContactName{User: group, FullName: "Group Saved"},
+		ContactName{User: "not a user", FullName: "Nobody Saved"},
+	)
+	if r.dropped(dropChat) != 2 {
+		t.Fatalf("chat_rejected drops %v, want the group's and the invalid identifier's", r.dropped(dropChat))
+	}
+	if len(r.logs.events("ingest_failed")) != 0 || len(r.alerts("quarantine")) != 0 || strings.Contains(r.logs.String(), "Saved") {
+		t.Fatalf("contact names failed, were quarantined or reached the logs:\n%s", r.logs.String())
+	}
+	db := r.inspect()
+	if got, want := query[string](t, db, "SELECT group_concat(jid || '=' || coalesce(full_name, '-') || '/' || coalesce(first_name, '-'), ' ') FROM (SELECT * FROM contact_names ORDER BY jid)"),
+		aliceLID+"=Alice Saved/Alice "+bob+"=Bob Saved/- "+carol+"=-/-"; got != want {
+		t.Fatalf("saved names = %q, want %q", got, want)
+	}
+	if got := query[string](t, db, "SELECT group_concat(DISTINCT updated_ts) FROM contact_names"); got != strconv.FormatInt(epoch.UnixMilli(), 10) {
+		t.Fatalf("updated_ts = %q, want the time the engine applied them", got)
+	}
+	if got := query[string](t, db, "SELECT (SELECT group_concat(jid) FROM chats) || ' ' || (SELECT group_concat(jid) FROM contacts) || ' ' || (SELECT count(*) FROM inbox)"); got != aliceLID+" "+aliceLID+" 0" {
+		t.Fatalf("chats, contacts and inbox rows = %q, want saved names to add no chat and no push name", got)
 	}
 }
 

@@ -26,6 +26,8 @@ func TestPayloadRoundTrip(t *testing.T) {
 			Kind: KindEdit, Text: "body", MediaType: "image/jpeg", Target: &Key{RemoteJID: group, FromMe: true, ID: "M0", Participant: bob},
 			Reply: &Reply{ID: "M0", Participant: bob, RemoteJID: group, Text: "quoted"}, Expiration: time.Hour},
 		Group{Chat: group, Subject: "Synthetic Group", Members: []Participant{{User: alice, Admin: true}}, Joined: []Participant{{User: bob}}, Left: []string{carol}, Timestamp: epoch},
+		ContactName{User: alice, FullName: "Alice Saved", FirstName: "Alice"},
+		ContactName{User: bob},
 	} {
 		b, err := encodePayload(ev)
 		if err != nil {
@@ -128,6 +130,8 @@ func TestPayloadDecodingIsStrict(t *testing.T) {
 	for _, in := range []string{
 		``, `{}`, `{"v":1}`, `{"v":2,"message":{"chat":"x"}}`, `{"v":1,"message":{},"group":{}}`,
 		`{"v":1,"message":{"chat":"x"}} {}`, `{"v":1,"message":{"chat":"x","unknown":1}}`, `{"v":1,"other":{}}`, `[1]`, "\xff",
+		`{"v":1,"contact":{"user":"x"},"message":{"chat":"x"}}`, `{"v":1,"contact":{"user":"x"},"group":{"chat":"x"}}`,
+		`{"v":1,"contact":{"user":"x","nickname":"y"}}`, `{"v":2,"contact":{"user":"x"}}`,
 	} {
 		if _, err := decodePayload([]byte(in)); err == nil {
 			t.Errorf("decodePayload(%q) accepted", in)
@@ -136,7 +140,7 @@ func TestPayloadDecodingIsStrict(t *testing.T) {
 }
 
 func FuzzDecodePayload(f *testing.F) {
-	for _, ev := range []Event{text(alice, "M1", alice, "body"), Group{Chat: group, Timestamp: epoch}} {
+	for _, ev := range []Event{text(alice, "M1", alice, "body"), Group{Chat: group, Timestamp: epoch}, ContactName{User: alice, FullName: "Alice Saved"}} {
 		b, err := encodePayload(ev)
 		if err != nil {
 			f.Fatal(err)

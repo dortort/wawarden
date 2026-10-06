@@ -169,6 +169,12 @@ type Group struct {
 	Timestamp time.Time     `json:"ts"`
 }
 
+type ContactName struct {
+	User      string `json:"user"`
+	FullName  string `json:"full_name,omitempty"`
+	FirstName string `json:"first_name,omitempty"`
+}
+
 type HistoryNotification struct {
 	Sender string
 	FromMe bool
@@ -190,6 +196,7 @@ type (
 
 func (Message) engineEvent()             {}
 func (Group) engineEvent()               {}
+func (ContactName) engineEvent()         {}
 func (HistoryNotification) engineEvent() {}
 func (Connected) engineEvent()           {}
 func (Disconnected) engineEvent()        {}

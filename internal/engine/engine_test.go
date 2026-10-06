@@ -225,14 +225,15 @@ func TestContentIsDroppedWhileNoDeviceIsPaired(t *testing.T) {
 	for _, ev := range []Event{
 		dm("M1", bob, "from the rejected account"),
 		Group{Chat: group, Subject: "Rejected Account Group", Timestamp: epoch},
+		ContactName{User: carol, FullName: "Rejected Account Contact"},
 		HistoryNotification{Sender: bob, FromMe: true, Ref: HistoryRef{ID: "HS1", Inline: []byte("synthetic")}},
 	} {
 		if !r.client.emit(ev) {
 			t.Fatalf("%T from the rejected account was refused instead of dropped", ev)
 		}
 	}
-	if got := r.counter("wawarden_ingest_dropped_total", "reason", "not_paired"); got != 3 {
-		t.Fatalf("not_paired drops %v, want 3", got)
+	if got := r.counter("wawarden_ingest_dropped_total", "reason", "not_paired"); got != 4 {
+		t.Fatalf("not_paired drops %v, want 4", got)
 	}
 	r.client.waitFor(t, "logout")
 	eventually(t, "the rejected device is logged out", func() bool {
@@ -247,8 +248,8 @@ func TestContentIsDroppedWhileNoDeviceIsPaired(t *testing.T) {
 	if st := e.Status(); st != (Status{State: StateDisconnected, Reason: ReasonLoggedOut}) {
 		t.Fatalf("status %+v", st)
 	}
-	if got := r.counter("wawarden_ingest_dropped_total", "reason", "not_paired"); got != 4 {
-		t.Fatalf("not_paired drops after the LoggedOut %v, want 4", got)
+	if got := r.counter("wawarden_ingest_dropped_total", "reason", "not_paired"); got != 5 {
+		t.Fatalf("not_paired drops after the LoggedOut %v, want 5", got)
 	}
 	if _, err := e.Pair(t.Context()); err != nil {
 		t.Fatalf("Pair: %v", err)
@@ -266,8 +267,8 @@ func TestContentIsDroppedWhileNoDeviceIsPaired(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 	db := r.inspect()
-	if got := query[string](t, db, "SELECT (SELECT count(*) FROM inbox) || ' ' || (SELECT count(*) FROM history_blobs) || ' ' || (SELECT group_concat(id) FROM messages) || ' ' || (SELECT count(*) FROM chats WHERE jid != ?)", alice); got != "0 0 M2 0" {
-		t.Fatalf("inbox rows, blobs, messages and other chats = %q, want only the owner's message", got)
+	if got := query[string](t, db, "SELECT (SELECT count(*) FROM inbox) || ' ' || (SELECT count(*) FROM history_blobs) || ' ' || (SELECT group_concat(id) FROM messages) || ' ' || (SELECT count(*) FROM chats WHERE jid != ?) || ' ' || (SELECT count(*) FROM contact_names)", alice); got != "0 0 M2 0 0" {
+		t.Fatalf("inbox rows, blobs, messages, other chats and saved names = %q, want only the owner's message", got)
 	}
 }
 
@@ -292,6 +293,7 @@ func TestARejectedAccountIsNeitherConnectedNorStoredWhenItsLogoutFails(t *testin
 	content := []Event{
 		dm("W1", bob, "from the rejected account"),
 		Group{Chat: group, Subject: "Rejected Account Group", Timestamp: epoch},
+		ContactName{User: carol, FullName: "Rejected Account Contact"},
 		HistoryNotification{Sender: bob, FromMe: true, Ref: HistoryRef{ID: "HS1", Inline: []byte("synthetic")}},
 	}
 	rejectedEverywhere := func(e *Engine, logouts int) {
@@ -364,8 +366,8 @@ func TestARejectedAccountIsNeitherConnectedNorStoredWhenItsLogoutFails(t *testin
 		t.Fatalf("Stop: %v", err)
 	}
 	db := r.inspect()
-	if got := query[string](t, db, "SELECT (SELECT count(*) FROM inbox) || ' ' || (SELECT count(*) FROM messages) || ' ' || (SELECT count(*) FROM history_blobs) || ' ' || (SELECT count(*) FROM chats)"); got != "0 0 0 0" {
-		t.Fatalf("inbox rows, messages, blobs and chats = %q, want none", got)
+	if got := query[string](t, db, "SELECT (SELECT count(*) FROM inbox) || ' ' || (SELECT count(*) FROM messages) || ' ' || (SELECT count(*) FROM history_blobs) || ' ' || (SELECT count(*) FROM chats) || ' ' || (SELECT count(*) FROM contact_names)"); got != "0 0 0 0 0" {
+		t.Fatalf("inbox rows, messages, blobs, chats and saved names = %q, want none", got)
 	}
 }
 
