@@ -621,6 +621,45 @@ func TestNoDeadlineEventWhenTheCallerGivesUp(t *testing.T) {
 	}
 }
 
+func TestTheDeadlineEventComesWhileTheCallStillRuns(t *testing.T) {
+	opts, logs := testOptions(t)
+	d := mustOpen(t, opts)
+	release := make(chan struct{})
+	returned := make(chan error, 1)
+	go func() {
+		returned <- d.within(t.Context(), "test.stuck", 100*time.Millisecond, func(context.Context) error {
+			<-release
+			return nil
+		})
+	}()
+	for start := time.Now(); len(logs.events("db_deadline")) == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Since(start) > 30*time.Second {
+			close(release)
+			t.Fatal("no db_deadline event while a call ran past its deadline")
+		}
+	}
+	select {
+	case err := <-returned:
+		t.Fatalf("the call returned (%v) before it was released, so this test proves nothing", err)
+	default:
+	}
+	e := logs.events("db_deadline")[0]
+	dump, _ := e["goroutines"].(string)
+	if e["operation"] != "test.stuck" || e["timeout_ms"] != float64(100) || !strings.Contains(dump, t.Name()) {
+		t.Fatalf("db_deadline event = %v, want test.stuck with a dump that shows the stuck call", e)
+	}
+	close(release)
+	if err := <-returned; err != nil {
+		t.Fatalf("the released call = %v, want its own result", err)
+	}
+	if err := d.within(t.Context(), "test.quick", time.Minute, func(context.Context) error { return nil }); err != nil {
+		t.Fatalf("a quick call = %v", err)
+	}
+	if events := logs.events("db_deadline"); len(events) != 1 {
+		t.Fatalf("db_deadline events = %d, want one for the stuck call and none for the quick one", len(events))
+	}
+}
+
 func TestRewriteRunsUnderItsOwnDeadline(t *testing.T) {
 	opts, logs := testOptions(t)
 	d := mustOpen(t, opts)
