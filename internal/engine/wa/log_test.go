@@ -100,6 +100,9 @@ func TestMaskNumbers(t *testing.T) {
 	for in, want := range map[string]string{
 		"no numbers here":                   "no numbers here",
 		"short 12345 run":                   "short 12345 run",
+		"six 123456 run":                    "six " + maskedNumber + " run",
+		"split 12.34:56 run":                "split " + maskedNumber + " run",
+		"national 5550100001 run":           "national " + maskedNumber + " run",
 		"phone 15550100001 alone":           "phone " + maskedNumber + " alone",
 		"address 15550100001.0:4 alone":     "address " + maskedNumber + " alone",
 		"jid 15550100001:4@s.whatsapp.net":  "jid 15550100001:4@s.whatsapp.net",
