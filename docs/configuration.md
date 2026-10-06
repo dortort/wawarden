@@ -336,11 +336,13 @@ Rules that apply to all of them:
 - `WAWARDEN_ADMIN_TOKEN` is never accepted, with any value: the service takes the
   admin credential only as a hash (`plaintext_admin_token`).
 
-`serve` also checks one variable outside the `WAWARDEN_` namespace:
+`serve` also checks three variables outside the `WAWARDEN_` namespace:
 
 | Variable | Accepted values | Reason code |
 |---|---|---|
 | `GOTRACEBACK` | unset, empty, `none` or `single` | `traceback_level_unsafe` |
+| `MCPGODEBUG` | unset | `library_debug_set` |
+| `JSONSCHEMAGODEBUG` | unset | `library_debug_set` |
 
 Every other value is refused, numeric levels included, `0` and `1` as well. The
 named levels `all`, `system`, `crash` and `wer` make a crash print the stack of
@@ -348,6 +350,14 @@ every goroutine. `serve` sets the level to `single` itself before doing anything
 else, but the Go runtime does not let a program lower the level that this
 variable sets, and combined with `single`, every other refused value (`0`, any
 other number, or a name the runtime does not know) prints every goroutine too.
+
+`MCPGODEBUG` and `JSONSCHEMAGODEBUG` switch compatibility behaviour of the MCP
+library and of its JSON Schema library, such as how tool schemas and results are
+encoded, so a set value, even an empty one, is refused. The MCP library reads
+`MCPGODEBUG` when the program starts, before `serve` checks anything: a value
+that is not a comma-separated list of `key=value` pairs makes the binary panic
+with exit status 2 and a message that repeats the malformed part, so leave the
+variable unset.
 
 ### Listen addresses
 
@@ -392,73 +402,74 @@ The checks run in this order:
 | 2 | `dev_variable_in_release` | the first such name, in sorted order | A release build sees any `WAWARDEN_DEV_*` variable. |
 | 3 | `unknown_variable` | the first such name, in sorted order | Any other `WAWARDEN_` name is not one of the [environment variables](#environment-variables). |
 | 4 | `traceback_level_unsafe` | `GOTRACEBACK` | `GOTRACEBACK` is set to anything other than empty, `none` or `single`, a numeric level included. |
-| 5 | `listen_address_invalid` | the listen variable | `WAWARDEN_LISTEN`, `WAWARDEN_ADMIN_LISTEN` or `WAWARDEN_HEALTH_LISTEN` (checked in that order) is not a valid [listen address](#listen-addresses). |
-| 6 | `health_address_not_loopback` | `WAWARDEN_HEALTH_LISTEN` | The health address is not a loopback address. |
-| 7 | `admin_hash_sources_conflict` | `WAWARDEN_ADMIN_TOKEN_SHA256_FILE` | Both admin hash variables are set. |
-| 8 | `admin_hash_file_unreadable` | `WAWARDEN_ADMIN_TOKEN_SHA256_FILE` | The file cannot be opened or read, or is not a regular file (a directory, a device or a named pipe, for example). |
-| 9 | `admin_hash_invalid` | the hash variable | The hash is not exactly 64 hexadecimal characters, or the file holds more than 4096 bytes. |
-| 10 | `listen_address_shared` | the later listener | Two enabled listeners overlap. |
-| 11 | `log_level_invalid` | `WAWARDEN_LOG_LEVEL` | The level is not `debug`, `info`, `warn` or `error`. |
-| 12 | `storage_profile_invalid` | `WAWARDEN_STORAGE_PROFILE` | The profile is not `local` or `nfs`. |
-| 13 | `min_free_bytes_invalid` | `WAWARDEN_MIN_FREE_BYTES` | The value is not a number of bytes in decimal digits that fits in 64 bits. |
-| 14 | `owner_phone_invalid` | `WAWARDEN_OWNER_PHONE` | The value is set but is not an E.164 number: `+` and 7 to 15 digits, the first not `0`. |
-| 15 | `history_max_bytes_invalid` | `WAWARDEN_HISTORY_MAX_BYTES` | The value is not a number of bytes in decimal digits from 1 to 268435456. |
-| 16 | `unsafe_debug_invalid` | `WAWARDEN_UNSAFE_DEBUG` | The value is not a number of minutes in decimal digits from 1 to 60. |
-| 17 | `metrics_emf_invalid` | `WAWARDEN_METRICS_EMF` | The value is not `0` or `1`. |
-| 18 | `notify_url_invalid` | `WAWARDEN_NOTIFY_URL` | The value is not an `https` URL with a host, or it holds credentials, a fragment or an IPv6 zone. |
-| 19 | `notify_allow_private_invalid` | `WAWARDEN_NOTIFY_ALLOW_PRIVATE` | The value is not `0` or `1`. |
-| 20 | `notify_url_missing` | `WAWARDEN_NOTIFY_SECRET_FILE`, else `WAWARDEN_NOTIFY_ALLOW_PRIVATE` | That variable is set without `WAWARDEN_NOTIFY_URL`. |
-| 21 | `notify_secret_missing` | `WAWARDEN_NOTIFY_SECRET_FILE` | `WAWARDEN_NOTIFY_URL` is set without a secret file. |
-| 22 | `notify_secret_unreadable` | `WAWARDEN_NOTIFY_SECRET_FILE` | The file cannot be opened or read, or is not a regular file. |
-| 23 | `notify_secret_permissions` | `WAWARDEN_NOTIFY_SECRET_FILE` | The file grants write permission to its group or any permission to others. |
-| 24 | `notify_secret_invalid` | `WAWARDEN_NOTIFY_SECRET_FILE` | The file holds more than 4096 bytes, or less than 32 bytes apart from surrounding white space. |
-| 25 | `backup_recipient_invalid` | `WAWARDEN_BACKUP_AGE_RECIPIENT` | The value is not exactly one age X25519 or hybrid recipient: it is empty, holds white space, a comment, a second recipient or an age secret key, or fails age's parser. The value is never repeated. |
-| 26 | `unsafe_rate_caps_invalid` | `WAWARDEN_UNSAFE_RATE_CAPS` | The value is not `0` or `1`. |
-| 27 | `read_per_minute_invalid` | `WAWARDEN_READ_PER_CLIENT_PER_MINUTE` | The value is not a whole number written in decimal digits, without a sign or leading zero, from 1 to 600, or to 1000000 with `WAWARDEN_UNSAFE_RATE_CAPS=1`. Zero, a negative number and an empty value are always refused. |
-| 28 | `search_per_minute_invalid` | `WAWARDEN_SEARCH_PER_CLIENT_PER_MINUTE` | The value is not a whole number written in decimal digits, without a sign or leading zero, from 1 to 60, or to 1000000 with `WAWARDEN_UNSAFE_RATE_CAPS=1`. Zero, a negative number and an empty value are always refused. |
-| 29 | `dev_fake_engine_invalid` | `WAWARDEN_DEV_FAKE_ENGINE` | A development build sees a value other than `0`, `1` or `wrong_account`. A release build refuses the name itself at check 2. |
-| 30 | `running_as_root` | none | The real or the effective user ID is 0 and `--allow-root` was not given. |
-| 31 | `data_dir_unusable` | `WAWARDEN_DATA_DIR` | The directory does not exist and cannot be created, or cannot be inspected; the path is empty. |
-| 32 | `data_dir_not_directory` | `WAWARDEN_DATA_DIR` | The path is not a directory, or its last component is a symbolic link. |
-| 33 | `data_dir_foreign_owner` | `WAWARDEN_DATA_DIR` | The directory is not owned by the process's effective user ID. |
-| 34 | `data_dir_permissions` | `WAWARDEN_DATA_DIR` | The directory's mode is not exactly `0700`. |
-| 35 | `history_dir_unusable` | none; the error names `history/` | `history` exists in the data directory but cannot be inspected. |
-| 36 | `history_dir_not_directory` | none; the error names `history/` | `history` exists but is not a directory, or is a symbolic link. |
-| 37 | `history_dir_foreign_owner` | none; the error names `history/` | `history` is not owned by the process's effective user ID. |
-| 38 | `history_dir_permissions` | none; the error names `history/` | The mode of `history` is not exactly `0700`. |
-| 39 | `backups_dir_unusable` | none; the error names `backups/` | `backups` exists in the data directory but cannot be inspected. |
-| 40 | `backups_dir_not_directory` | none; the error names `backups/` | `backups` exists but is not a directory, or is a symbolic link. |
-| 41 | `backups_dir_foreign_owner` | none; the error names `backups/` | `backups` is not owned by the process's effective user ID. |
-| 42 | `backups_dir_permissions` | none; the error names `backups/` | The mode of `backups` is not exactly `0700`. |
-| 43 | `keys_dir_unusable` | none; the error names `keys/` | `keys` in the data directory does not exist and cannot be created, or cannot be inspected. |
-| 44 | `keys_dir_not_directory` | none; the error names `keys/` | `keys` is not a directory, or is a symbolic link. |
-| 45 | `keys_dir_foreign_owner` | none; the error names `keys/` | `keys` is not owned by the process's effective user ID. |
-| 46 | `keys_dir_permissions` | none; the error names `keys/` | The mode of `keys` is not exactly `0700`. |
-| 47 | `master_key_unusable` | none; the error names `keys/master` | `keys/master` does not exist and cannot be created, or cannot be inspected, opened or read. |
-| 48 | `master_key_not_regular` | none; the error names `keys/master` | `keys/master` is not a regular file: a symbolic link (even to a valid key), a directory or a named pipe, for example. |
-| 49 | `master_key_foreign_owner` | none; the error names `keys/master` | `keys/master` is not owned by the process's effective user ID. |
-| 50 | `master_key_permissions` | none; the error names `keys/master` | `keys/master` grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 51 | `master_key_size` | none; the error names `keys/master` | `keys/master` does not hold exactly 32 bytes. |
-| 52 | `storage_filesystem_unknown` | none | The filesystem of the data directory cannot be inspected (`statfs`). |
-| 53 | `storage_network_filesystem` | none | The storage profile is `local` and the data directory is on a network filesystem; see [Storage profiles](#storage-profiles). |
-| 54 | `archive_db_unusable` | none; the error names `archive.db` | `archive.db` does not exist and cannot be created, or cannot be inspected. |
-| 55 | `archive_db_not_regular` | none; the error names `archive.db` | `archive.db` is not a regular file: a symbolic link or a directory, for example. |
-| 56 | `archive_db_foreign_owner` | none; the error names `archive.db` | `archive.db` is not owned by the process's effective user ID. |
-| 57 | `archive_db_permissions` | none; the error names `archive.db` | `archive.db` grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 58 | `archive_journal_unusable` | none; the error names `archive.db-journal` | `archive.db-journal` exists but cannot be inspected. |
-| 59 | `archive_journal_not_regular` | none; the error names `archive.db-journal` | `archive.db-journal` exists but is not a regular file. |
-| 60 | `archive_journal_foreign_owner` | none; the error names `archive.db-journal` | `archive.db-journal` is not owned by the process's effective user ID. |
-| 61 | `archive_journal_permissions` | none; the error names `archive.db-journal` | `archive.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 62 | `storage_ofd_unavailable` | none | On Linux, the storage profile is `local` and the kernel or the data directory's filesystem refused open-file-description locks; see [Storage profiles](#storage-profiles). |
-| 63 | `archive_schema_newer` | none; the error names `archive.db` | The archive's schema version is newer than this build knows: a newer release wrote it. |
-| 64 | `session_db_unusable` | none; the error names `session.db` | `session.db` does not exist and cannot be created, or cannot be inspected. |
-| 65 | `session_db_not_regular` | none; the error names `session.db` | `session.db` is not a regular file: a symbolic link or a directory, for example. |
-| 66 | `session_db_foreign_owner` | none; the error names `session.db` | `session.db` is not owned by the process's effective user ID. |
-| 67 | `session_db_permissions` | none; the error names `session.db` | `session.db` grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 68 | `session_journal_unusable` | none; the error names `session.db-journal` | `session.db-journal` exists but cannot be inspected. |
-| 69 | `session_journal_not_regular` | none; the error names `session.db-journal` | `session.db-journal` exists but is not a regular file. |
-| 70 | `session_journal_foreign_owner` | none; the error names `session.db-journal` | `session.db-journal` is not owned by the process's effective user ID. |
-| 71 | `session_journal_permissions` | none; the error names `session.db-journal` | `session.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 5 | `library_debug_set` | the variable | `MCPGODEBUG` or `JSONSCHEMAGODEBUG` is set, to any value, an empty one included. |
+| 6 | `listen_address_invalid` | the listen variable | `WAWARDEN_LISTEN`, `WAWARDEN_ADMIN_LISTEN` or `WAWARDEN_HEALTH_LISTEN` (checked in that order) is not a valid [listen address](#listen-addresses). |
+| 7 | `health_address_not_loopback` | `WAWARDEN_HEALTH_LISTEN` | The health address is not a loopback address. |
+| 8 | `admin_hash_sources_conflict` | `WAWARDEN_ADMIN_TOKEN_SHA256_FILE` | Both admin hash variables are set. |
+| 9 | `admin_hash_file_unreadable` | `WAWARDEN_ADMIN_TOKEN_SHA256_FILE` | The file cannot be opened or read, or is not a regular file (a directory, a device or a named pipe, for example). |
+| 10 | `admin_hash_invalid` | the hash variable | The hash is not exactly 64 hexadecimal characters, or the file holds more than 4096 bytes. |
+| 11 | `listen_address_shared` | the later listener | Two enabled listeners overlap. |
+| 12 | `log_level_invalid` | `WAWARDEN_LOG_LEVEL` | The level is not `debug`, `info`, `warn` or `error`. |
+| 13 | `storage_profile_invalid` | `WAWARDEN_STORAGE_PROFILE` | The profile is not `local` or `nfs`. |
+| 14 | `min_free_bytes_invalid` | `WAWARDEN_MIN_FREE_BYTES` | The value is not a number of bytes in decimal digits that fits in 64 bits. |
+| 15 | `owner_phone_invalid` | `WAWARDEN_OWNER_PHONE` | The value is set but is not an E.164 number: `+` and 7 to 15 digits, the first not `0`. |
+| 16 | `history_max_bytes_invalid` | `WAWARDEN_HISTORY_MAX_BYTES` | The value is not a number of bytes in decimal digits from 1 to 268435456. |
+| 17 | `unsafe_debug_invalid` | `WAWARDEN_UNSAFE_DEBUG` | The value is not a number of minutes in decimal digits from 1 to 60. |
+| 18 | `metrics_emf_invalid` | `WAWARDEN_METRICS_EMF` | The value is not `0` or `1`. |
+| 19 | `notify_url_invalid` | `WAWARDEN_NOTIFY_URL` | The value is not an `https` URL with a host, or it holds credentials, a fragment or an IPv6 zone. |
+| 20 | `notify_allow_private_invalid` | `WAWARDEN_NOTIFY_ALLOW_PRIVATE` | The value is not `0` or `1`. |
+| 21 | `notify_url_missing` | `WAWARDEN_NOTIFY_SECRET_FILE`, else `WAWARDEN_NOTIFY_ALLOW_PRIVATE` | That variable is set without `WAWARDEN_NOTIFY_URL`. |
+| 22 | `notify_secret_missing` | `WAWARDEN_NOTIFY_SECRET_FILE` | `WAWARDEN_NOTIFY_URL` is set without a secret file. |
+| 23 | `notify_secret_unreadable` | `WAWARDEN_NOTIFY_SECRET_FILE` | The file cannot be opened or read, or is not a regular file. |
+| 24 | `notify_secret_permissions` | `WAWARDEN_NOTIFY_SECRET_FILE` | The file grants write permission to its group or any permission to others. |
+| 25 | `notify_secret_invalid` | `WAWARDEN_NOTIFY_SECRET_FILE` | The file holds more than 4096 bytes, or less than 32 bytes apart from surrounding white space. |
+| 26 | `backup_recipient_invalid` | `WAWARDEN_BACKUP_AGE_RECIPIENT` | The value is not exactly one age X25519 or hybrid recipient: it is empty, holds white space, a comment, a second recipient or an age secret key, or fails age's parser. The value is never repeated. |
+| 27 | `unsafe_rate_caps_invalid` | `WAWARDEN_UNSAFE_RATE_CAPS` | The value is not `0` or `1`. |
+| 28 | `read_per_minute_invalid` | `WAWARDEN_READ_PER_CLIENT_PER_MINUTE` | The value is not a whole number written in decimal digits, without a sign or leading zero, from 1 to 600, or to 1000000 with `WAWARDEN_UNSAFE_RATE_CAPS=1`. Zero, a negative number and an empty value are always refused. |
+| 29 | `search_per_minute_invalid` | `WAWARDEN_SEARCH_PER_CLIENT_PER_MINUTE` | The value is not a whole number written in decimal digits, without a sign or leading zero, from 1 to 60, or to 1000000 with `WAWARDEN_UNSAFE_RATE_CAPS=1`. Zero, a negative number and an empty value are always refused. |
+| 30 | `dev_fake_engine_invalid` | `WAWARDEN_DEV_FAKE_ENGINE` | A development build sees a value other than `0`, `1` or `wrong_account`. A release build refuses the name itself at check 2. |
+| 31 | `running_as_root` | none | The real or the effective user ID is 0 and `--allow-root` was not given. |
+| 32 | `data_dir_unusable` | `WAWARDEN_DATA_DIR` | The directory does not exist and cannot be created, or cannot be inspected; the path is empty. |
+| 33 | `data_dir_not_directory` | `WAWARDEN_DATA_DIR` | The path is not a directory, or its last component is a symbolic link. |
+| 34 | `data_dir_foreign_owner` | `WAWARDEN_DATA_DIR` | The directory is not owned by the process's effective user ID. |
+| 35 | `data_dir_permissions` | `WAWARDEN_DATA_DIR` | The directory's mode is not exactly `0700`. |
+| 36 | `history_dir_unusable` | none; the error names `history/` | `history` exists in the data directory but cannot be inspected. |
+| 37 | `history_dir_not_directory` | none; the error names `history/` | `history` exists but is not a directory, or is a symbolic link. |
+| 38 | `history_dir_foreign_owner` | none; the error names `history/` | `history` is not owned by the process's effective user ID. |
+| 39 | `history_dir_permissions` | none; the error names `history/` | The mode of `history` is not exactly `0700`. |
+| 40 | `backups_dir_unusable` | none; the error names `backups/` | `backups` exists in the data directory but cannot be inspected. |
+| 41 | `backups_dir_not_directory` | none; the error names `backups/` | `backups` exists but is not a directory, or is a symbolic link. |
+| 42 | `backups_dir_foreign_owner` | none; the error names `backups/` | `backups` is not owned by the process's effective user ID. |
+| 43 | `backups_dir_permissions` | none; the error names `backups/` | The mode of `backups` is not exactly `0700`. |
+| 44 | `keys_dir_unusable` | none; the error names `keys/` | `keys` in the data directory does not exist and cannot be created, or cannot be inspected. |
+| 45 | `keys_dir_not_directory` | none; the error names `keys/` | `keys` is not a directory, or is a symbolic link. |
+| 46 | `keys_dir_foreign_owner` | none; the error names `keys/` | `keys` is not owned by the process's effective user ID. |
+| 47 | `keys_dir_permissions` | none; the error names `keys/` | The mode of `keys` is not exactly `0700`. |
+| 48 | `master_key_unusable` | none; the error names `keys/master` | `keys/master` does not exist and cannot be created, or cannot be inspected, opened or read. |
+| 49 | `master_key_not_regular` | none; the error names `keys/master` | `keys/master` is not a regular file: a symbolic link (even to a valid key), a directory or a named pipe, for example. |
+| 50 | `master_key_foreign_owner` | none; the error names `keys/master` | `keys/master` is not owned by the process's effective user ID. |
+| 51 | `master_key_permissions` | none; the error names `keys/master` | `keys/master` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 52 | `master_key_size` | none; the error names `keys/master` | `keys/master` does not hold exactly 32 bytes. |
+| 53 | `storage_filesystem_unknown` | none | The filesystem of the data directory cannot be inspected (`statfs`). |
+| 54 | `storage_network_filesystem` | none | The storage profile is `local` and the data directory is on a network filesystem; see [Storage profiles](#storage-profiles). |
+| 55 | `archive_db_unusable` | none; the error names `archive.db` | `archive.db` does not exist and cannot be created, or cannot be inspected. |
+| 56 | `archive_db_not_regular` | none; the error names `archive.db` | `archive.db` is not a regular file: a symbolic link or a directory, for example. |
+| 57 | `archive_db_foreign_owner` | none; the error names `archive.db` | `archive.db` is not owned by the process's effective user ID. |
+| 58 | `archive_db_permissions` | none; the error names `archive.db` | `archive.db` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 59 | `archive_journal_unusable` | none; the error names `archive.db-journal` | `archive.db-journal` exists but cannot be inspected. |
+| 60 | `archive_journal_not_regular` | none; the error names `archive.db-journal` | `archive.db-journal` exists but is not a regular file. |
+| 61 | `archive_journal_foreign_owner` | none; the error names `archive.db-journal` | `archive.db-journal` is not owned by the process's effective user ID. |
+| 62 | `archive_journal_permissions` | none; the error names `archive.db-journal` | `archive.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 63 | `storage_ofd_unavailable` | none | On Linux, the storage profile is `local` and the kernel or the data directory's filesystem refused open-file-description locks; see [Storage profiles](#storage-profiles). |
+| 64 | `archive_schema_newer` | none; the error names `archive.db` | The archive's schema version is newer than this build knows: a newer release wrote it. |
+| 65 | `session_db_unusable` | none; the error names `session.db` | `session.db` does not exist and cannot be created, or cannot be inspected. |
+| 66 | `session_db_not_regular` | none; the error names `session.db` | `session.db` is not a regular file: a symbolic link or a directory, for example. |
+| 67 | `session_db_foreign_owner` | none; the error names `session.db` | `session.db` is not owned by the process's effective user ID. |
+| 68 | `session_db_permissions` | none; the error names `session.db` | `session.db` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 69 | `session_journal_unusable` | none; the error names `session.db-journal` | `session.db-journal` exists but cannot be inspected. |
+| 70 | `session_journal_not_regular` | none; the error names `session.db-journal` | `session.db-journal` exists but is not a regular file. |
+| 71 | `session_journal_foreign_owner` | none; the error names `session.db-journal` | `session.db-journal` is not owned by the process's effective user ID. |
+| 72 | `session_journal_permissions` | none; the error names `session.db-journal` | `session.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
 
 When the data directory is missing, it is created only after checks 1 to 30 pass,
 so a start refused by checks 1 to 30 leaves nothing behind. `history/` and

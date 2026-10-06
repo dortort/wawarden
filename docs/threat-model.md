@@ -542,6 +542,7 @@ reason codes of the checks in the current build.
 | A release build sees a `WAWARDEN_DEV_*` variable, such as `WAWARDEN_DEV_FAKE_ENGINE`, which selects the fake engine that only builds with the `dev` tag contain (row 21). | M0 |
 | A development build sees a `WAWARDEN_DEV_FAKE_ENGINE` value other than `0`, `1` or `wrong_account`. | M1 |
 | `GOTRACEBACK` is set to anything other than unset, empty, `none` or `single`; numeric levels are refused too, `0` included. The named levels `all`, `system`, `crash` and `wer` print every goroutine's stack in crash output, and so does every other refused value once the service sets the `single` level itself. | M0 |
+| `MCPGODEBUG` or `JSONSCHEMAGODEBUG` is set, even to an empty value: both switch compatibility behaviour of the MCP and JSON Schema libraries, such as how tool schemas are inferred and encoded. A malformed `MCPGODEBUG` makes the MCP library panic when the program starts, before this check. | M2 |
 | A listen address is not an IP literal with a port from 1 to 65535, the health address is not loopback, or two enabled listeners share an address. | M0 |
 | The process runs with a real or effective user ID of 0 without `--allow-root`. | M0 |
 | The data directory cannot be created, is not a directory, is a symbolic link, is not owned by the process's effective user, or does not have mode `0700` exactly. | M0 |

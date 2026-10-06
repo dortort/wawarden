@@ -33,6 +33,8 @@ const (
 	envLogLevel        = "WAWARDEN_LOG_LEVEL"
 	envPlaintextAdmin  = "WAWARDEN_ADMIN_TOKEN"
 	envTraceback       = "GOTRACEBACK"
+	envMCPDebug        = "MCPGODEBUG"
+	envSchemaDebug     = "JSONSCHEMAGODEBUG"
 	envStorageProfile  = "WAWARDEN_STORAGE_PROFILE"
 	envMinFreeBytes    = "WAWARDEN_MIN_FREE_BYTES"
 	envOwnerPhone      = "WAWARDEN_OWNER_PHONE"
@@ -88,6 +90,7 @@ const (
 	reasonDataDirForeignOwner      = "data_dir_foreign_owner"
 	reasonDataDirPermissions       = "data_dir_permissions"
 	reasonTracebackLevelUnsafe     = "traceback_level_unsafe"
+	reasonLibraryDebugSet          = "library_debug_set"
 	reasonStorageProfileInvalid    = "storage_profile_invalid"
 	reasonMinFreeBytesInvalid      = "min_free_bytes_invalid"
 	reasonOwnerPhoneInvalid        = "owner_phone_invalid"
@@ -180,6 +183,9 @@ func Load(environ []string, opts Options) (Config, *Refusal) {
 		return Config{}, r
 	}
 	if r := checkTraceback(environ); r != nil {
+		return Config{}, r
+	}
+	if r := checkLibraryDebug(environ); r != nil {
 		return Config{}, r
 	}
 	var cfg Config
@@ -312,6 +318,15 @@ func checkTraceback(environ []string) *Refusal {
 		name, value, _ := strings.Cut(kv, "=")
 		if name == envTraceback && value != "" && value != "none" && value != "single" {
 			return &Refusal{Reason: reasonTracebackLevelUnsafe, Variable: envTraceback, detail: "must be unset, none or single: any other level makes a crash print every goroutine"}
+		}
+	}
+	return nil
+}
+
+func checkLibraryDebug(environ []string) *Refusal {
+	for _, kv := range environ {
+		if name, _, _ := strings.Cut(kv, "="); name == envMCPDebug || name == envSchemaDebug {
+			return &Refusal{Reason: reasonLibraryDebugSet, Variable: name, detail: "must be unset: it switches the MCP library's security and schema behaviour"}
 		}
 	}
 	return nil
