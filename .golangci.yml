@@ -148,8 +148,10 @@ linters:
         standard-library-only:
           list-mode: strict
           files:
+            - ${base-path}/internal/cursor/**
             - ${base-path}/internal/keys/**
             - ${base-path}/internal/logx/**
+            - ${base-path}/internal/ratelimit/**
             - ${base-path}/internal/sanitize/**
             - "!$test"
           allow:
