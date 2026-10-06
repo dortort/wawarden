@@ -85,7 +85,7 @@ cursors and per-client read and search budgets; the same reads as five MCP
 tools at `POST /mcp`; the names the owner saved for contacts, shown only to a
 client that may read the contact's direct chat and not yet verified against a
 live account; and the audit chain of client changes and of every client
-request.
+request the read budget admits.
 
 | Milestone | State | Scope |
 |---|---|---|
