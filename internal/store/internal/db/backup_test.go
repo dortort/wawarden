@@ -16,8 +16,12 @@ import (
 func seed(t *testing.T, d *DB, rows int) {
 	t.Helper()
 	exec1(t, d, "CREATE TABLE t(seq INTEGER PRIMARY KEY, body BLOB NOT NULL) STRICT")
-	exec1(t, d, "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < ?) INSERT INTO t(body) SELECT randomblob(2000) FROM c", rows)
+	for left := rows; left > 0; left -= seedBatch {
+		exec1(t, d, "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < ?) INSERT INTO t(body) SELECT randomblob(2000) FROM c", min(left, seedBatch))
+	}
 }
+
+const seedBatch = 100
 
 func into(w io.Writer) func(string, int64, io.Reader) error {
 	return func(_ string, _ int64, r io.Reader) error {
