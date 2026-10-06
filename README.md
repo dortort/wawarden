@@ -666,19 +666,24 @@ third-party text.
 ### 10. Rotating the token and retiring other devices
 
 Before the token expires, create a client with the same chats under a new
-name (a name stays taken after its client is revoked), switch the agent to
-the new token, then revoke the old client:
+name (a name stays taken after its client is revoked), set `WAWARDEN_TOKEN`
+on the agent's host to the new client's token, register the endpoint again
+with it and check the connection:
 
 ```sh
 ./wawarden admin clients create --token-file admin.token \
   --name claude-code-2 --read <id, +E.164 number or ref>
+export WAWARDEN_TOKEN=<the ww_... value of the new client's token: line>
 claude mcp remove whatsapp
 claude mcp add --transport http whatsapp https://<your-host>/mcp --header "Authorization: Bearer $WAWARDEN_TOKEN"
+claude mcp get whatsapp
 ./wawarden admin clients revoke --id <old id> --token-file admin.token
 ```
 
-`admin clients list` shows each client's `id` and `expires`. A revocation
-takes effect on the client's next request.
+Revoke the old client only once `claude mcp get whatsapp` shows the new
+registration as connected; until then the old token still works and can be
+registered again. `admin clients list` shows each client's `id` and
+`expires`. A revocation takes effect on the client's next request.
 
 If the agent read WhatsApp through another device linked to the same account
 before, log that device out on the owner's phone (Linked devices, select the
