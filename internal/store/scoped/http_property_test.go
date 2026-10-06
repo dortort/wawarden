@@ -257,6 +257,10 @@ func TestPropertyHTTPReadsMatchTheOracle(t *testing.T) {
 					requireDeniedEqualsMissing(t, h, token, "/v1/chats/"+dc.Ref, "/v1/chats/"+missingRef)
 					requireDeniedEqualsMissing(t, h, token, target, "/v1/chats/"+missingRef+"/messages")
 					requireDeniedEqualsMissing(t, h, token, "/v1/changes?chat="+dc.Ref, "/v1/changes?chat="+missingRef)
+					requireDeniedEqualsMissing(t, h, token, "/v1/changes?chat="+dc.Ref+"&since=x", "/v1/changes?chat="+missingRef+"&since=x")
+					requireDeniedEqualsMissing(t, h, token, target+"?cursor=x", "/v1/chats/"+missingRef+"/messages?cursor=x")
+					requireDeniedEqualsMissing(t, h, token, "/v1/search?q=text&chat="+dc.Ref, "/v1/search?q=text&chat="+missingRef)
+					requireDeniedEqualsMissing(t, h, token, "/v1/search?q=text&chat="+dc.Ref+"&cursor=x", "/v1/search?q=text&chat="+missingRef+"&cursor=x")
 					a.seen["http denied chat"] = true
 					continue
 				}
