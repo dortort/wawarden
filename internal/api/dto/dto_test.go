@@ -68,33 +68,15 @@ func sampleClient() dto.Client {
 }
 
 func TestOnlyTheCreateResponseCarriesACredential(t *testing.T) {
-	owners := map[string]int{}
-	visited := map[reflect.Type]bool{}
-	var walk func(reflect.Type)
-	walk = func(typ reflect.Type) {
-		if visited[typ] {
-			return
-		}
-		visited[typ] = true
-		switch typ.Kind() {
-		case reflect.Pointer, reflect.Slice, reflect.Array:
-			walk(typ.Elem())
-		case reflect.Struct:
-			for i := range typ.NumField() {
-				f := typ.Field(i)
-				name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
-				if strings.EqualFold(name, "credential") || name == "" && strings.EqualFold(f.Name, "credential") {
-					owners[typ.Name()]++
-				}
-				walk(f.Type)
-			}
-		}
-	}
 	for _, r := range samples() {
-		walk(reflect.TypeOf(r))
-	}
-	if len(owners) != 1 || owners["ClientCreated"] != 1 {
-		t.Fatalf("the key credential is declared by %v, want once by ClientCreated only", owners)
+		owners := credentialOwners(reflect.TypeOf(r), make(map[reflect.Type]bool))
+		var want []string
+		if _, created := r.(dto.ClientCreated); created {
+			want = []string{"dto.ClientCreated"}
+		}
+		if !slices.Equal(owners, want) {
+			t.Fatalf("%T reaches the key credential through %v, want %v", r, owners, want)
+		}
 	}
 	for _, r := range samples() {
 		_, body, err := dto.Encode(r)
@@ -339,6 +321,57 @@ func TestFirewallCatchesForbiddenShapes(t *testing.T) {
 				t.Fatalf("the firewall accepted %s", tt.typ)
 			}
 		})
+	}
+}
+
+func TestCredentialCheckCatchesNestedShapes(t *testing.T) {
+	tests := map[string]reflect.Type{
+		"pointer to the create answer": reflect.TypeFor[struct{ Rotated *dto.ClientCreated }](),
+		"slice of create answers":      reflect.TypeFor[struct{ Others []dto.ClientCreated }](),
+		"array of create answers":      reflect.TypeFor[struct{ Others [1]*dto.ClientCreated }](),
+		"embedded create answer":       reflect.TypeFor[struct{ dto.ClientCreated }](),
+		"embedded pointer":             reflect.TypeFor[struct{ *dto.ClientCreated }](),
+		"unnamed nested struct":        reflect.TypeFor[struct{ Inner struct{ Credential string } }](),
+		"tag in another case": reflect.TypeFor[struct {
+			Key string `json:"Credential,omitempty"`
+		}](),
+	}
+	for name, typ := range tests {
+		t.Run(name, func(t *testing.T) {
+			if owners := credentialOwners(typ, make(map[reflect.Type]bool)); len(owners) == 0 {
+				t.Fatalf("the credential check accepted %s", typ)
+			}
+		})
+	}
+}
+
+func credentialOwners(typ reflect.Type, visited map[reflect.Type]bool) []string {
+	if visited[typ] {
+		return nil
+	}
+	visited[typ] = true
+	switch typ.Kind() {
+	case reflect.Pointer, reflect.Slice, reflect.Array:
+		return credentialOwners(typ.Elem(), visited)
+	case reflect.Struct:
+		var owners []string
+		for i := range typ.NumField() {
+			f := typ.Field(i)
+			name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+			if f.Tag.Get("json") == "-" || !f.IsExported() && !f.Anonymous {
+				continue
+			}
+			if name == "" {
+				name = f.Name
+			}
+			if strings.EqualFold(name, "credential") {
+				owners = append(owners, typ.String())
+			}
+			owners = append(owners, credentialOwners(f.Type, visited)...)
+		}
+		return owners
+	default:
+		return nil
 	}
 }
 
