@@ -569,8 +569,8 @@ merges, tags or releases. It runs two jobs:
    main only, no workflow-wide permission, no Go and no `hack/` script in the
    job that can write, credentials never persisted by a checkout, the Go version
    check right after setup-go and before any Go command, no step that says
-   checks passed before the tests run, and the lookup that skips pull requests
-   from forks.
+   checks passed before the tests run, and the lookup by this repository's owner
+   and branch, which skips pull requests from forks however many there are.
 
 The description carries the old and new pseudo-versions, the upstream compare
 link, whether the new commit descends from the pinned one (and if not, the

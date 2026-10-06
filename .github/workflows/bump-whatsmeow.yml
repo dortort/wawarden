@@ -313,7 +313,7 @@ jobs:
             git push --quiet --force-with-lease="refs/heads/$branch:$remote" origin "HEAD:refs/heads/$branch"
           fi
 
-          number=$(gh pr list --head "$branch" --base main --state open --json number,isCrossRepository --jq 'map(select(.isCrossRepository | not)) | .[0].number // empty')
+          number=$(gh api "repos/$GITHUB_REPOSITORY/pulls?head=${GITHUB_REPOSITORY%%/*}:$branch&base=main&state=open" --jq '.[0].number // empty')
           if [ -n "$number" ]; then
             gh pr edit "$number" --title "$title" --body-file "$body"
           elif ! gh pr create --base main --head "$branch" --title "$title" --body-file "$body"; then

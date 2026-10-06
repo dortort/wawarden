@@ -208,13 +208,14 @@ var bumpJobs = map[string]struct {
 	"propose": {condition: "github.ref == 'refs/heads/main' && needs.prepare.outputs.new != ''", permissions: []string{"contents: write", "pull-requests: write"}},
 }
 
-const openPullRequestLookup = `number=$(gh pr list --head "$branch" --base main --state open --json number,isCrossRepository --jq 'map(select(.isCrossRepository | not)) | .[0].number // empty')`
+const openPullRequestLookup = `number=$(gh api "repos/$GITHUB_REPOSITORY/pulls?head=${GITHUB_REPOSITORY%%/*}:$branch&base=main&state=open" --jq '.[0].number // empty')`
 
 var (
-	goCommand = regexp.MustCompile(`(?m)\bgo(?:\s|$)`)
-	ghPR      = regexp.MustCompile(`\bgh pr (\S+)(?: (\S+))?`)
-	outcome   = regexp.MustCompile(`\bpassed\b`)
-	runsTests = regexp.MustCompile(`(?m)^\s*hack/offline-test\.sh(?:\s|$)`)
+	goCommand   = regexp.MustCompile(`(?m)\bgo(?:\s|$)`)
+	ghPR        = regexp.MustCompile(`\bgh pr (\S+)(?: (\S+))?`)
+	pullsLookup = regexp.MustCompile(`\bgh (?:pr list|api\b.*/pulls)\b`)
+	outcome     = regexp.MustCompile(`\bpassed\b`)
+	runsTests   = regexp.MustCompile(`(?m)^\s*hack/offline-test\.sh(?:\s|$)`)
 )
 
 func bumpWorkflowProblems(config string) []string {
@@ -270,14 +271,17 @@ func bumpWorkflowProblems(config string) []string {
 				out = append(out, fmt.Sprintf("jobs.%s step %d runs Go or a hack/ script, yet the job can write: it runs no Go and no upstream code", job.name, i+1))
 			}
 			for line := range strings.Lines(script) {
+				text := strings.TrimSpace(line)
+				if text == openPullRequestLookup {
+					lookups++
+					continue
+				}
+				if pullsLookup.MatchString(text) {
+					out = append(out, fmt.Sprintf("jobs.%s step %d looks up pull requests with %q, want %s, which matches only this repository's branch and has no page that pull requests from forks can fill", job.name, i+1, text, openPullRequestLookup))
+					continue
+				}
 				for _, m := range ghPR.FindAllStringSubmatch(line, -1) {
-					switch {
-					case m[1] == "list":
-						lookups++
-						if strings.TrimSpace(line) != openPullRequestLookup {
-							out = append(out, fmt.Sprintf("jobs.%s step %d lists pull requests with %q, want %s, which skips pull requests from forks", job.name, i+1, strings.TrimSpace(line), openPullRequestLookup))
-						}
-					case m[1] != "create" && m[2] != `"$number"`:
+					if m[1] != "create" && m[2] != `"$number"` {
 						out = append(out, fmt.Sprintf("jobs.%s step %d runs gh pr %s on %q, not on the pull request that the lookup found in this repository", job.name, i+1, m[1], m[2]))
 					}
 				}
@@ -384,7 +388,8 @@ jobs:
 		{name: "Go without setup-go", old: setupGo + check, want: 1},
 		{name: "Go before setup-go", old: setupGo, new: "      - run: go mod download\n" + setupGo, want: 1},
 		{name: "checks said to pass before the tests", old: "      - name: Build\n", new: "      - run: echo 'The checks passed.' > body.md\n      - name: Build\n", want: 1},
-		{name: "fork pull requests", old: "--json number,isCrossRepository --jq 'map(select(.isCrossRepository | not)) | .[0].number // empty'", new: "--json number --jq '.[0].number // empty'", want: 1},
+		{name: "fork pull requests", old: "head=${GITHUB_REPOSITORY%%/*}:$branch&", new: "head=$branch&", want: 2},
+		{name: "the first page of pull requests", old: openPullRequestLookup, new: `number=$(gh pr list --head "$branch" --base main --state open --json number,isCrossRepository --jq 'map(select(.isCrossRepository | not)) | .[0].number // empty')`, want: 2},
 		{name: "no lookup", old: "          " + openPullRequestLookup + "\n", want: 1},
 		{name: "edit by branch", old: `gh pr edit "$number"`, new: `gh pr edit "$branch"`, want: 1},
 	} {
