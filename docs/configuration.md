@@ -39,6 +39,11 @@ Only the names in [Environment variables](#environment-variables) are accepted.
 Names are matched exactly, so a lower-case `wawarden_listen` is not recognised as a
 WaWarden variable and has no effect.
 
+`WAWARDEN_TOKEN`, the client token that the
+[Claude Code registration](#registering-with-claude-code) reads, is read by the
+agent's host only; never put it in the service's environment, where `serve`
+refuses it as `unknown_variable`.
+
 ### Reserved names
 
 These names are reserved for later milestones. Do not set them before the
@@ -1815,7 +1820,9 @@ notification answered `202` is `ok`. A row names a chat only for a successful
 
    The token is printed once, on the `token:` line. Keep it in a secret
    manager or in the agent host's environment as `WAWARDEN_TOKEN`, never in a
-   repository.
+   repository. `WAWARDEN_TOKEN` is read by the agent's host only; never put it
+   in the service's environment, where `serve` refuses it as
+   `unknown_variable`.
 2. Register the endpoint, here as `whatsapp`, at the address of the proxy that
    serves the client listener. The name and the URL come before `--header`:
 
