@@ -2,8 +2,10 @@ package archtest
 
 import (
 	"go/ast"
+	"go/token"
 	"path"
 	"regexp"
+	"slices"
 )
 
 const logxDir = "internal/logx"
@@ -231,6 +233,122 @@ func checkLogOutput(f *sourceFile) []string {
 		}
 	})
 	return out
+}
+
+var mcpLoggerRule = rule{
+	name:  "mcp-logger",
+	check: checkMCPLogger,
+	cases: []snippet{
+		{name: "a logger given to the MCP library", rel: "internal/api/x.go", want: 8, src: `package api
+
+import (
+	"log/slog"
+
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+type options = sdk.ServerOptions
+
+type handlerOptions sdk.StreamableHTTPOptions
+
+func f(l *slog.Logger, o *sdk.StreamableHTTPOptions) []*sdk.ServerOptions {
+	_ = sdk.NewStreamableHTTPHandler(nil, &sdk.StreamableHTTPOptions{Stateless: true, Logger: l})
+	_ = (sdk.StreamableHTTPOptions{Logger: l})
+	o.Logger = l
+	p := &o.Logger
+	*p = l
+	return []*sdk.ServerOptions{{Logger: l}, {l}}
+}
+`},
+		{name: "the MCP library's options without a logger, and other loggers", rel: "internal/api/x.go", src: `package api
+
+import (
+	"log/slog"
+
+	other "example.com/mcp"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+type logged struct{ Logger *slog.Logger }
+
+func f(l *slog.Logger, o *mcp.ServerOptions) *slog.Logger {
+	_ = mcp.NewServer(&mcp.Implementation{Name: "x"}, &mcp.ServerOptions{Capabilities: &mcp.ServerCapabilities{}})
+	_ = mcp.NewStreamableHTTPHandler(nil, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
+	_ = other.ServerOptions{Logger: l}
+	_ = logged{Logger: l}
+	return o.Logger
+}
+`},
+		{name: "a logger given to the MCP library in a test", rel: "internal/api/x_test.go", src: `package api
+
+import (
+	"log/slog"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+func f(l *slog.Logger, o *mcp.StreamableHTTPOptions) *mcp.ServerOptions {
+	o.Logger = l
+	return &mcp.ServerOptions{Logger: l}
+}
+`},
+		{name: "a logger field assigned outside the api", rel: "internal/app/x.go", src: `package app
+
+import "log/slog"
+
+type logged struct{ Logger *slog.Logger }
+
+func f(o *logged, l *slog.Logger) { o.Logger = l }
+`},
+	},
+}
+
+var mcpLoggedOptions = []string{"ServerOptions", "StreamableHTTPOptions"}
+
+func checkMCPLogger(f *sourceFile) []string {
+	if f.test || !within(f.dir, apiDir) {
+		return nil
+	}
+	options := func(typ ast.Expr) bool {
+		return slices.ContainsFunc(mcpLoggedOptions, func(name string) bool { return f.isType(typ, mcpModule+"/mcp", name) })
+	}
+	const why = "the MCP library is given no logger, so none of its log lines bypasses the scrubbing writer"
+	var out []string
+	ast.Inspect(f.file, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.TypeSpec:
+			if options(x.Type) {
+				out = append(out, f.at(x, "type %s is declared from the MCP library's options, whose literals this rule then cannot see: %s", x.Name.Name, why))
+			}
+		case *ast.AssignStmt:
+			for _, lhs := range x.Lhs {
+				if sel, ok := ast.Unparen(lhs).(*ast.SelectorExpr); ok && sel.Sel.Name == "Logger" {
+					out = append(out, f.at(lhs, "a Logger field assigned in %s: %s", apiDir, why))
+				}
+			}
+		case *ast.UnaryExpr:
+			if sel, ok := ast.Unparen(x.X).(*ast.SelectorExpr); ok && x.Op == token.AND && sel.Sel.Name == "Logger" {
+				out = append(out, f.at(x, "the address of a Logger field taken in %s, through which it could be set: %s", apiDir, why))
+			}
+		}
+		return true
+	})
+	f.compositeLits(func(lit *ast.CompositeLit, typ ast.Expr) {
+		if !options(typ) {
+			return
+		}
+		if keyedValue(lit, "Logger") != nil {
+			out = append(out, f.at(lit, "a Logger in the MCP library's options: %s", why))
+		} else if len(lit.Elts) > 0 && !isKeyed(lit.Elts[0]) {
+			out = append(out, f.at(lit, "an unkeyed literal of the MCP library's options sets its Logger: %s", why))
+		}
+	})
+	return out
+}
+
+func isKeyed(e ast.Expr) bool {
+	_, ok := e.(*ast.KeyValueExpr)
+	return ok
 }
 
 func checkLogHandlers(f *sourceFile) []string {
