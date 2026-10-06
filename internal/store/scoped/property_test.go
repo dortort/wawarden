@@ -69,6 +69,23 @@ func (c *tally) require(t *testing.T, features ...string) {
 
 func canary(k int) string { return "zq" + strconv.Itoa(k) + "x" }
 
+const savedName = "Synthetic Saved"
+
+func checkSavedNames(t *rapid.T, a *archive, id string, set scopeSet, saved []string, rows []scoped.Message) {
+	for _, m := range rows {
+		sender := m.Sender.JID()
+		want := ""
+		if slices.Contains(saved, sender) && set.has(sender) {
+			want = savedName
+		}
+		if m.SavedName != want {
+			t.Fatalf("%s read the saved name %q of %s, want %q", id, m.SavedName, sender, want)
+		}
+		a.seen["saved name shown"] = a.seen["saved name shown"] || want != ""
+		a.seen["saved name hidden"] = a.seen["saved name hidden"] || want == "" && slices.Contains(saved, sender)
+	}
+}
+
 func scopeOfClient(t *rapid.T, s *ingest.Store, c propClient) scopeSet {
 	if c.revoked {
 		return scopeSet{}
@@ -188,6 +205,9 @@ func buildArchive(t *rapid.T, dir string) *archive {
 			t.Fatalf("Write: %v", err)
 		}
 	}
+	if rapid.Bool().Draw(t, "the owner saved a name for themself") {
+		batch = append(batch, func(tx *ingest.Tx) error { return tx.SetContactName(chat(t, ownerJID), savedName, "", epoch) })
+	}
 	ops := rapid.IntRange(4, 40).Draw(t, "operations")
 	for i := range ops {
 		if len(idents) == 0 {
@@ -247,6 +267,8 @@ func buildArchive(t *rapid.T, dir string) *archive {
 			source := ingest.NamePushName
 			if strings.HasSuffix(c, "@g.us") {
 				source = ingest.NameGroupSubject
+			} else if rapid.Bool().Draw(t, "saves a contact name") {
+				batch = append(batch, func(tx *ingest.Tx) error { return tx.SetContactName(chat(t, c), savedName, "", epoch) })
 			}
 			batch = append(batch, func(tx *ingest.Tx) error { return tx.SetChatName(chat(t, c), "Synthetic", source, ingest.OriginLive) })
 		}
@@ -328,6 +350,10 @@ func TestPropertyScopedReadsMatchTheOracle(t *testing.T) {
 		a := buildArchive(t, dir)
 		defer func() { _ = a.store.Close(); _ = os.RemoveAll(dir) }()
 		chats, messages := dump(t, a.store)
+		saved, err := a.store.Scoped().Column(t.Context(), "SELECT jid FROM contact_names")
+		if err != nil {
+			t.Fatalf("saved names: %v", err)
+		}
 		a.seen["dead canary"] = len(a.dead) > 0
 		for _, c := range a.clients {
 			set := scopeOfClient(t, a.store, c)
@@ -340,6 +366,7 @@ func TestPropertyScopedReadsMatchTheOracle(t *testing.T) {
 			checkChats(t, a, g, set, chats, limit)
 			rows := checkMessages(t, a, g, set, chats, messages, limit)
 			rows = append(rows, checkChanges(t, a, g, set, messages, limit)...)
+			checkSavedNames(t, a, c.id, set, saved, rows)
 			for _, m := range rows {
 				for _, d := range a.dead {
 					if strings.Contains(m.Text, d) || strings.Contains(m.TextDisplay, d) {
@@ -353,7 +380,7 @@ func TestPropertyScopedReadsMatchTheOracle(t *testing.T) {
 		cov.add(a.seen)
 	})
 	cov.require(t, "re-key moved a scope", "re-key refused for a scope", "a client sees some messages and not others", "revoke", "edit", "dead canary",
-		"changes from a time skipped a change", "changes from a time kept a later change dated before it")
+		"changes from a time skipped a change", "changes from a time kept a later change dated before it", "saved name shown", "saved name hidden")
 }
 
 func checkChats(t *rapid.T, a *archive, g policy.ReadGrant, set scopeSet, chats []scoped.DumpChat, limit int) {
