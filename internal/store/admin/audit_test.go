@@ -157,19 +157,30 @@ func TestVerifyDetectsEveryTamper(t *testing.T) {
 		t.Fatalf("the intact chain reports %+v", intact)
 	}
 	other := syntheticMaster(t, 7)
-	tests := []struct {
+	type tamperCase struct {
 		name         string
 		tamper       func(*sql.DB)
 		master       bool
 		firstBad     int64
 		problem      string
 		headsMissing int
-	}{
-		{name: "field edit", tamper: func(d *sql.DB) { exec(t, d, unlock, "UPDATE audit SET reason = 'ok' WHERE id = 2") }, firstBad: 2, problem: admin.ReasonHMACMismatch},
-		{name: "plaintext chat edit", tamper: func(d *sql.DB) {
-			exec(t, d, unlock, "UPDATE audit SET chat = '15550100003@s.whatsapp.net' WHERE id = 5")
-		}, firstBad: 5, problem: admin.ReasonHMACMismatch},
-		{name: "ok flipped", tamper: func(d *sql.DB) { exec(t, d, unlock, "UPDATE audit SET ok = 1 WHERE id = 2") }, firstBad: 2, problem: admin.ReasonHMACMismatch},
+	}
+	var tests []tamperCase
+	for _, edit := range []struct{ column, value string }{
+		{"ts", "ts + 1"},
+		{"client_id", "'aaaaaaaa'"},
+		{"action", "'messages.list'"},
+		{"chat", "'15550100003@s.whatsapp.net'"},
+		{"chat_hmac", "'00000000000000000000000000000000'"},
+		{"ok", "1 - ok"},
+		{"reason", "'ok'"},
+		{"peer", "'127.0.0.1:50001'"},
+	} {
+		tests = append(tests, tamperCase{name: "edit " + edit.column, tamper: func(d *sql.DB) {
+			exec(t, d, unlock, "UPDATE audit SET "+edit.column+" = "+edit.value+" WHERE id = 5")
+		}, firstBad: 5, problem: admin.ReasonHMACMismatch})
+	}
+	tests = append(tests, []tamperCase{
 		{name: "middle delete", tamper: func(d *sql.DB) { exec(t, d, unlock, "DELETE FROM audit WHERE id = 7") }, firstBad: 8, problem: admin.ReasonIDGap, headsMissing: 1},
 		{name: "first rows deleted", tamper: func(d *sql.DB) { exec(t, d, unlock, "DELETE FROM audit WHERE id <= 2") }, firstBad: 3, problem: admin.ReasonIDGap, headsMissing: 2},
 		{name: "forged HMAC", tamper: func(d *sql.DB) { exec(t, d, unlock, "UPDATE audit SET row_hmac = randomblob(32) WHERE id = 4") }, firstBad: 4, problem: admin.ReasonHMACMismatch, headsMissing: 1},
@@ -181,7 +192,7 @@ func TestVerifyDetectsEveryTamper(t *testing.T) {
 			exec(t, d, unlock, "UPDATE audit SET reason = 'ok', ok = 1 WHERE id = 2")
 			rechain(t, d, f.master.AuditChainKey(), 2)
 		}, headsMissing: 11},
-	}
+	}...)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := f.copyArchive(t)
