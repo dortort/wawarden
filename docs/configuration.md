@@ -976,7 +976,11 @@ the library's own receipt on arrival is switched off.
 For each blob the engine records an attempt, decompresses it, refusing more
 than `WAWARDEN_HISTORY_MAX_BYTES` of output, decodes it, and applies it with
 the rules above in transactions of 100 messages, with origin `history`; group
-subjects and members, push names and LID mappings in the blob are stored too.
+subjects and members, push names and LID mappings in the blob are stored too,
+except where a live event has already recorded a newer value: history never
+replaces a group subject, chat name or push name that a live event set, never
+changes a member that a live group change named, and leaves the member list of
+a group whose whole list arrived live as it is.
 It then marks the blob processed, which also removes its record's download
 reference and inline content, deletes its file and flushes the directory. Blobs
 not yet processed are taken up again at the next start, and each start of the

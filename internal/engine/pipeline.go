@@ -229,7 +229,7 @@ func (p *pipeline) apply(ctx context.Context, item ingest.InboxItem) (outcome, e
 		case Message:
 			err = a.message(e, ingest.OriginLive)
 		case Group:
-			err = a.group(e)
+			err = a.group(e, ingest.OriginLive)
 		}
 		if err != nil {
 			return err

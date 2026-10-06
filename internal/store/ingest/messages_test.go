@@ -15,7 +15,7 @@ import (
 func TestOpenCreatesTheSchemaOnce(t *testing.T) {
 	opts := testOptions(t)
 	s := openWith(t, opts)
-	if s.SchemaVersion() != len(migrations) || len(migrations) != 1 {
+	if s.SchemaVersion() != len(migrations) || len(migrations) != 2 {
 		t.Fatalf("schema version %d, want %d", s.SchemaVersion(), len(migrations))
 	}
 	for _, table := range []string{"chats", "chat_aliases", "lid_map", "contacts", "group_participants", "messages", "messages_fts", "history_blobs", "inbox", "sync_state"} {
@@ -34,7 +34,7 @@ func TestOpenCreatesTheSchemaOnce(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	again := openWith(t, opts)
-	if again.SchemaVersion() != 1 || scalar[int](t, again, "SELECT count(*) FROM messages") != 1 {
+	if again.SchemaVersion() != 2 || scalar[int](t, again, "SELECT count(*) FROM messages") != 1 {
 		t.Fatal("reopening changed the schema or the data")
 	}
 	if !again.Healthy() || again.Profile() != ProfileLocal {
@@ -46,7 +46,7 @@ func TestOpenRefusesANewerSchema(t *testing.T) {
 	opts := testOptions(t)
 	s := openWith(t, opts)
 	write(t, s, func(tx *Tx) error {
-		_, err := tx.q.ExecContext(tx.ctx, "PRAGMA user_version = 2")
+		_, err := tx.q.ExecContext(tx.ctx, "PRAGMA user_version = 3")
 		return err
 	})
 	if err := s.Close(); err != nil {

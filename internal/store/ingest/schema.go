@@ -1,6 +1,6 @@
 package ingest
 
-var migrations = []string{schemaV1}
+var migrations = []string{schemaV1, schemaV2}
 
 const schemaV1 = `
 CREATE TABLE chats (
@@ -92,4 +92,16 @@ CREATE TABLE sync_state (
 	key TEXT PRIMARY KEY,
 	value TEXT NOT NULL
 ) STRICT, WITHOUT ROWID;
+`
+
+const schemaV2 = `
+ALTER TABLE chats ADD COLUMN name_origin TEXT CHECK (name_origin = 'live' OR name_origin = 'history');
+
+ALTER TABLE chats ADD COLUMN members_live INTEGER NOT NULL DEFAULT 0 CHECK (members_live BETWEEN 0 AND 1);
+
+ALTER TABLE contacts ADD COLUMN origin TEXT NOT NULL DEFAULT 'live' CHECK (origin = 'live' OR origin = 'history');
+
+ALTER TABLE group_participants ADD COLUMN origin TEXT NOT NULL DEFAULT 'live' CHECK (origin = 'live' OR origin = 'history');
+
+ALTER TABLE group_participants ADD COLUMN present INTEGER NOT NULL DEFAULT 1 CHECK (present BETWEEN 0 AND 1);
 `

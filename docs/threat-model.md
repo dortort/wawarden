@@ -702,7 +702,12 @@ These remain at v1.0, after every control above is in place.
   admin of that group, and that record is only as current as the group changes
   and history WhatsApp has delivered: a demotion the engine never received
   leaves a former admin able to revoke (M1). A member the archive
-  does not record is refused.
+  does not record is refused. A member list from history sync never overrides
+  what a live group change recorded: it cannot raise, re-add or remove a member
+  that a live join, promotion, demotion or removal named, and it is ignored
+  for a group whose whole member list arrived live. It still records the
+  members no live change has named, so a group known only from history keeps
+  its admins.
 - **References from the other side of a direct chat.** The other party of a
   direct chat names it by the owner's identifier. The engine accepts the owner's
   number there, and the owner's LID only once the archive has learned which LID

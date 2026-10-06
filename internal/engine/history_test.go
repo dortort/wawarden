@@ -181,6 +181,89 @@ func TestHistoryIsPersistedAckedThenIngested(t *testing.T) {
 	}
 }
 
+func (r *histRig) applyBlob(id string, h History) {
+	r.t.Helper()
+	r.notify(HistoryRef{ID: id, Inline: r.blob("synthetic "+id, h)})
+	r.drainHistory()
+}
+
+func groupSnapshot(subject string, members ...Participant) History {
+	return History{Conversations: []Conversation{{Chat: group, Subject: subject, Members: members}}}
+}
+
+func (r *histRig) revokeM1(id, sender string) {
+	r.t.Helper()
+	r.ingest(change(KindRevoke, group, id, sender, Key{RemoteJID: group, Participant: alice, ID: "M1"}))
+}
+
+func TestAStaleHistoryBlobKeepsALiveDemotion(t *testing.T) {
+	r := newHistRig(t)
+	r.ingest(members(carol), inGroup("M1", alice, "alice secret"))
+	r.ingest(Group{Chat: group, Joined: []Participant{{User: carol}}, Timestamp: epoch})
+	r.revokeM1("M2", carol)
+	r.applyBlob("HS1", groupSnapshot("Stale Subject", Participant{User: alice}, Participant{User: bob}, Participant{User: carol, Admin: true}))
+	r.revokeM1("M3", carol)
+	if f := r.must(group, "M1", alice); f.Revoked || f.Text != "alice secret" || r.dropped(dropNotAdmin) != 2 {
+		t.Fatalf("M1 revoked %v with text %q, not-admin drops %v: a stale history blob restored a demoted admin", f.Revoked, f.Text, r.dropped(dropNotAdmin))
+	}
+	db := r.inspect()
+	if got := query[string](t, db, "SELECT name FROM chats WHERE jid = ?", group); got != "Synthetic Group" {
+		t.Fatalf("subject %q, want the live one", got)
+	}
+}
+
+func TestAStaleHistoryBlobKeepsLiveChangesToAGroupKnownFromHistory(t *testing.T) {
+	r := newHistRig(t)
+	dave := "15550100004@s.whatsapp.net"
+	snapshot := groupSnapshot("From History", Participant{User: alice, Admin: true}, Participant{User: bob}, Participant{User: carol, Admin: true}, Participant{User: dave, Admin: true})
+	r.applyBlob("HS1", snapshot)
+	r.ingest(inGroup("M1", alice, "alice secret"))
+	r.ingest(Group{Chat: group, Subject: "Live Subject", Joined: []Participant{{User: carol}, {User: bob, Admin: true}}, Left: []string{dave}, Timestamp: epoch})
+	r.applyBlob("HS2", snapshot)
+	r.revokeM1("M2", carol)
+	r.revokeM1("M3", dave)
+	if f := r.must(group, "M1", alice); f.Revoked || r.dropped(dropNotAdmin) != 1 || r.dropped(dropAdminUnknown) != 1 {
+		t.Fatalf("M1 revoked %v, drops: not admin %v, admin unknown %v: a stale history blob undid a live demotion or removal", f.Revoked, r.dropped(dropNotAdmin), r.dropped(dropAdminUnknown))
+	}
+	r.revokeM1("M4", bob)
+	if f := r.must(group, "M1", alice); !f.Revoked {
+		t.Fatal("a stale history blob undid a live promotion")
+	}
+	db := r.inspect()
+	if got := query[string](t, db, "SELECT name FROM chats WHERE jid = ?", group); got != "Live Subject" {
+		t.Fatalf("subject %q, want the live one", got)
+	}
+}
+
+func TestALiveChangeThatArrivesAfterTheNotificationOutlivesItsBlob(t *testing.T) {
+	r := newHistRig(t)
+	r.applyBlob("HS1", groupSnapshot("From History", Participant{User: alice}, Participant{User: carol, Admin: true}))
+	r.ingest(inGroup("M1", alice, "alice secret"))
+	r.notify(HistoryRef{ID: "HS2", Inline: r.blob("synthetic HS2", groupSnapshot("From History", Participant{User: alice}, Participant{User: carol, Admin: true}))})
+	r.deliver(Group{Chat: group, Joined: []Participant{{User: carol}}, Timestamp: epoch})
+	r.drain()
+	r.drainHistory()
+	r.revokeM1("M2", carol)
+	if f := r.must(group, "M1", alice); f.Revoked || r.dropped(dropNotAdmin) != 1 {
+		t.Fatal("a blob announced before a live demotion and processed after it restored the admin")
+	}
+}
+
+func TestHistoryKeepsLivePushNames(t *testing.T) {
+	r := newHistRig(t)
+	live := text(bob, "D1", bob, "hello")
+	live.PushName = "Bob Live"
+	r.ingest(live)
+	old := text(bob, "D0", bob, "older")
+	old.PushName = "Bob Old"
+	r.applyBlob("HS1", History{Conversations: []Conversation{{Chat: bob, Messages: []Message{old}}}, Contacts: []Contact{{User: bob, PushName: "Bob Example"}}})
+	r.must(bob, "D0", bob)
+	db := r.inspect()
+	if got := query[string](t, db, "SELECT k.push_name || ', ' || c.name FROM contacts k, chats c WHERE k.jid = ?1 AND c.jid = ?1", bob); got != "Bob Live, Bob Live" {
+		t.Fatalf("push name and chat name %q, want the live ones", got)
+	}
+}
+
 func (r *histRig) trace() *[]string {
 	var steps []string
 	step := func(s string) {

@@ -68,11 +68,11 @@ func (a *applier) message(m Message, origin ingest.Origin) error {
 	if err != nil || m.FromMe || m.PushName == "" {
 		return err
 	}
-	if err := a.tx.SetPushName(sender, m.PushName, m.Timestamp); err != nil {
+	if err := a.tx.SetPushName(sender, m.PushName, m.Timestamp, origin); err != nil {
 		return err
 	}
 	if userChat(chat) {
-		return a.tx.SetChatName(chat, m.PushName, ingest.NamePushName)
+		return a.tx.SetChatName(chat, m.PushName, ingest.NamePushName, origin)
 	}
 	return nil
 }
@@ -322,14 +322,14 @@ func (a *applier) revoke(m Message, chat, sender policy.CanonicalChat) error {
 	return a.tx.ApplyRevoke(found.Ref)
 }
 
-func (a *applier) group(g Group) error {
+func (a *applier) group(g Group, origin ingest.Origin) error {
 	chat, ok := policy.Normalize(g.Chat)
 	if !ok || chat.Kind() != policy.GroupChat {
 		a.drop(dropChat)
 		return nil
 	}
 	if g.Subject != "" {
-		if err := a.tx.SetChatName(chat, g.Subject, ingest.NameGroupSubject); err != nil {
+		if err := a.tx.SetChatName(chat, g.Subject, ingest.NameGroupSubject, origin); err != nil {
 			return err
 		}
 	}
@@ -338,7 +338,7 @@ func (a *applier) group(g Group) error {
 		if err != nil {
 			return err
 		}
-		if err := a.tx.ReplaceParticipants(chat, members); err != nil {
+		if err := a.tx.ReplaceParticipants(chat, members, origin); err != nil {
 			return err
 		}
 	}

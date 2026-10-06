@@ -361,7 +361,7 @@ func (h *historian) apply(ctx context.Context, hist History, received time.Time)
 	for _, conv := range hist.Conversations {
 		if c, ok := policy.Normalize(conv.Chat); ok && c.Kind() == policy.GroupChat && (conv.Subject != "" || len(conv.Members) > 0) {
 			g := Group{Chat: conv.Chat, Subject: conv.Subject, Members: conv.Members}
-			if err := h.batch(ctx, func(a *applier) error { return a.group(g) }); err != nil {
+			if err := h.batch(ctx, func(a *applier) error { return a.group(g, ingest.OriginHistory) }); err != nil {
 				return err
 			}
 		}
@@ -441,7 +441,7 @@ func (a *applier) identities(hist History, received time.Time) error {
 	}
 	for _, c := range hist.Contacts {
 		if u, ok := normalizeUser(c.User); ok && c.PushName != "" {
-			if err := a.tx.SetPushName(u, c.PushName, received); err != nil {
+			if err := a.tx.SetPushName(u, c.PushName, received, ingest.OriginHistory); err != nil {
 				return err
 			}
 		}

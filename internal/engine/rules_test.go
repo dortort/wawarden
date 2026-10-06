@@ -514,7 +514,7 @@ func TestFixtureGroupMembership(t *testing.T) {
 	r.ingest(g, Group{Chat: group, Joined: []Participant{{User: "15550100004@s.whatsapp.net"}}, Left: []string{bob, "nobody"}, Timestamp: epoch})
 	r.ingest(Group{Chat: alice, Subject: "not a group", Timestamp: epoch})
 	db := r.inspect()
-	if got := query[string](t, db, "SELECT group_concat(user_jid || ':' || is_admin, ',') FROM (SELECT * FROM group_participants ORDER BY user_jid)"); got != alice+":1,"+carol+":0,15550100004@s.whatsapp.net:0" {
+	if got := query[string](t, db, "SELECT group_concat(user_jid || ':' || is_admin, ',') FROM (SELECT * FROM group_participants WHERE present = 1 ORDER BY user_jid)"); got != alice+":1,"+carol+":0,15550100004@s.whatsapp.net:0" {
 		t.Fatalf("participants = %q", got)
 	}
 	if r.dropped(dropChat) != 1 {

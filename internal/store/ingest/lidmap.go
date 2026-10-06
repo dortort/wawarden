@@ -16,19 +16,26 @@ const (
 		WHERE a.sender_jid = ?1 AND b.sender_jid = ?2)`
 	insertMapping = "INSERT INTO lid_map (lid, pn, source, learned_ts) VALUES (?, ?, ?, ?)"
 	mergeChat     = `UPDATE chats SET
-		name = coalesce(chats.name, other.name),
-		name_source = CASE WHEN chats.name IS NULL THEN other.name_source ELSE chats.name_source END,
+		name = CASE WHEN other.outranks THEN other.name ELSE chats.name END,
+		name_source = CASE WHEN other.outranks THEN other.name_source ELSE chats.name_source END,
+		name_origin = CASE WHEN other.outranks THEN other.name_origin ELSE chats.name_origin END,
 		last_ts = CASE WHEN other.last_ts IS NULL THEN chats.last_ts WHEN chats.last_ts IS NULL THEN other.last_ts ELSE max(chats.last_ts, other.last_ts) END
-		FROM (SELECT name, name_source, last_ts FROM chats WHERE jid = ?1) AS other WHERE chats.jid = ?2`
-	repointAliases    = "UPDATE chat_aliases SET jid = ?2 WHERE jid = ?1"
-	deleteChat        = "DELETE FROM chats WHERE jid = ?"
-	rekeyChat         = "UPDATE chats SET jid = ?2, kind = 2 WHERE jid = ?1"
-	insertAlias       = "INSERT INTO chat_aliases (alias, jid) VALUES (?, ?)"
-	rekeySenders      = "UPDATE messages SET sender_jid = ?2 WHERE sender_jid = ?1"
-	dropParticipants  = "DELETE FROM group_participants AS p WHERE p.user_jid = ?1 AND EXISTS (SELECT 1 FROM group_participants o WHERE o.group_jid = p.group_jid AND o.user_jid = ?2)"
+		FROM (SELECT o.name, o.name_source, o.name_origin, o.last_ts,
+			o.name IS NOT NULL AND (t.name IS NULL OR o.name_origin = 'live' AND t.name_origin = 'history') AS outranks
+			FROM chats o, chats t WHERE o.jid = ?1 AND t.jid = ?2) AS other WHERE chats.jid = ?2`
+	repointAliases   = "UPDATE chat_aliases SET jid = ?2 WHERE jid = ?1"
+	deleteChat       = "DELETE FROM chats WHERE jid = ?"
+	rekeyChat        = "UPDATE chats SET jid = ?2, kind = 2 WHERE jid = ?1"
+	insertAlias      = "INSERT INTO chat_aliases (alias, jid) VALUES (?, ?)"
+	rekeySenders     = "UPDATE messages SET sender_jid = ?2 WHERE sender_jid = ?1"
+	dropParticipants = `DELETE FROM group_participants AS p WHERE p.user_jid = ?1 AND EXISTS (SELECT 1 FROM group_participants o
+		WHERE o.group_jid = p.group_jid AND o.user_jid = ?2 AND (o.origin = 'live' OR p.origin = 'history'))`
+	dropOutranked = `DELETE FROM group_participants AS o WHERE o.user_jid = ?2 AND EXISTS (SELECT 1 FROM group_participants p
+		WHERE p.group_jid = o.group_jid AND p.user_jid = ?1)`
 	rekeyParticipants = "UPDATE group_participants SET user_jid = ?2 WHERE user_jid = ?1"
-	takeNewerPushName = `UPDATE contacts SET push_name = other.push_name, name_source = other.name_source, updated_ts = other.updated_ts
-		FROM (SELECT push_name, name_source, updated_ts FROM contacts WHERE jid = ?1) AS other WHERE contacts.jid = ?2 AND other.updated_ts > contacts.updated_ts`
+	takeNewerPushName = `UPDATE contacts SET push_name = other.push_name, name_source = other.name_source, updated_ts = other.updated_ts, origin = other.origin
+		FROM (SELECT push_name, name_source, updated_ts, origin FROM contacts WHERE jid = ?1) AS other
+		WHERE contacts.jid = ?2 AND (other.origin = 'live' AND contacts.origin = 'history' OR other.origin = contacts.origin AND other.updated_ts > contacts.updated_ts)`
 	dropMergedContact = "DELETE FROM contacts WHERE jid = ?1 AND EXISTS (SELECT 1 FROM contacts WHERE jid = ?2)"
 	rekeyContact      = "UPDATE contacts SET jid = ?2 WHERE jid = ?1"
 )
@@ -115,6 +122,7 @@ func (tx *Tx) rekey(pn, lid string, pnChat, lidChat, pnMessages bool) error {
 	}
 	exec(q.ExecContext(ctx, rekeySenders, pn, lid))
 	exec(q.ExecContext(ctx, dropParticipants, pn, lid))
+	exec(q.ExecContext(ctx, dropOutranked, pn, lid))
 	exec(q.ExecContext(ctx, rekeyParticipants, pn, lid))
 	exec(q.ExecContext(ctx, takeNewerPushName, pn, lid))
 	exec(q.ExecContext(ctx, dropMergedContact, pn, lid))

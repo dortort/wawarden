@@ -64,7 +64,7 @@ func TestEachStartIsRecordedAndTheArchiveClosedOnShutdown(t *testing.T) {
 			t.Fatalf("archive_opened events = %v", opened)
 		}
 		e := opened[0]
-		if e["level"] != "INFO" || e["schema_version"] != float64(1) || e["profile"] != "local" || e["ofd_locking"] != (runtime.GOOS == "linux") || e["recent_starts"] != float64(want) {
+		if e["level"] != "INFO" || e["schema_version"] != float64(2) || e["profile"] != "local" || e["ofd_locking"] != (runtime.GOOS == "linux") || e["recent_starts"] != float64(want) {
 			t.Fatalf("archive_opened = %v, want start %d", e, want)
 		}
 		requireReleased(t, cfg.DataDir)
