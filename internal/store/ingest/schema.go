@@ -248,4 +248,9 @@ END;
 CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit BEGIN
 	SELECT RAISE(ABORT, 'audit rows are append-only');
 END;
+
+CREATE TRIGGER audit_no_replace BEFORE INSERT ON audit
+WHEN NEW.id IS NOT NULL AND EXISTS (SELECT 1 FROM audit WHERE id = NEW.id) BEGIN
+	SELECT RAISE(ABORT, 'audit rows are append-only');
+END;
 `

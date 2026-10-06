@@ -219,10 +219,13 @@ func TestAuditRowsAreAppendOnly(t *testing.T) {
 	if err := execAll(t, s, row, row); err != nil {
 		t.Fatalf("audit rows refused: %v", err)
 	}
+	forged := " INTO audit (id, ts, client_id, action, ok, reason, key_id, row_hmac) VALUES (1, 99, 'bbbbbbbb', 'forged', 1, 'ok', 'k1', " + hash32 + ")"
 	for name, tt := range map[string]struct{ stmt, want string }{
-		"an update":       {"UPDATE audit SET ok = 0", "audit rows are append-only"},
-		"a delete":        {"DELETE FROM audit WHERE id = 1", "audit rows are append-only"},
-		"a short row MAC": {"INSERT INTO audit (ts, client_id, action, ok, reason, key_id, row_hmac) VALUES (1, 'aaaaaaaa', 'read', 1, 'ok', 'k1', x'00')", "CHECK constraint failed"},
+		"an update":            {"UPDATE audit SET ok = 0", "audit rows are append-only"},
+		"a delete":             {"DELETE FROM audit WHERE id = 1", "audit rows are append-only"},
+		"an insert or replace": {"INSERT OR REPLACE" + forged, "audit rows are append-only"},
+		"a replace":            {"REPLACE" + forged, "audit rows are append-only"},
+		"a short row MAC":      {"INSERT INTO audit (ts, client_id, action, ok, reason, key_id, row_hmac) VALUES (1, 'aaaaaaaa', 'read', 1, 'ok', 'k1', x'00')", "CHECK constraint failed"},
 	} {
 		if err := execAll(t, s, tt.stmt); err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("%s of the audit table = %v, want %q", name, err, tt.want)
@@ -230,5 +233,8 @@ func TestAuditRowsAreAppendOnly(t *testing.T) {
 	}
 	if n := scalar[int](t, s, "SELECT count(*) FROM audit WHERE ok = 1"); n != 2 {
 		t.Fatalf("%d audit rows, want the two appended", n)
+	}
+	if got := scalar[string](t, s, "SELECT ts || client_id || action FROM audit WHERE id = 1"); got != "1aaaaaaaaread" {
+		t.Fatalf("audit row 1 = %q, want it unchanged", got)
 	}
 }
