@@ -177,6 +177,21 @@ func TestAdminExitCodes(t *testing.T) {
 	}
 }
 
+func TestExitCodesMatchTheDocumentedTable(t *testing.T) {
+	for name, code := range map[string][2]int{
+		"exitFailed":     {exitFailed, 1},
+		"exitUsage":      {exitUsage, 2},
+		"exitToken":      {exitToken, 3},
+		"exitDenied":     {exitDenied, 4},
+		"exitRefused":    {exitRefused, 5},
+		"exitUnverified": {exitUnverified, 6},
+	} {
+		if code[0] != code[1] {
+			t.Errorf("%s = %d, the exit codes table in docs/configuration.md says %d", name, code[0], code[1])
+		}
+	}
+}
+
 func answering(status int, body string) func(t *testing.T) string {
 	return func(t *testing.T) string {
 		_, addr := newFakeListener(t, status, body)
