@@ -790,8 +790,9 @@ outside the service.
 3. **Other linked devices bypass the gateway.** Any other client linked to the same
    account has unrestricted access to it, and the protocol library accepts
    history-sync and identity-mapping payloads from any of the account's own
-   devices. WaWarden accepts history only from the primary device and keeps its own
-   identity map from server-asserted fields (M1, on `main`); unlink companion devices that
+   devices. WaWarden accepts history only from the primary device and learns its
+   own identity map only from server-asserted fields and the primary device's
+   history (M1, on `main`); unlink companion devices that
    agents can reach once WaWarden replaces them.
 4. **Anyone who can read process logs must not learn chat identities or content.**
    Treat everyone with access to standard output, the log pipeline or its storage
