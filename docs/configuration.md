@@ -653,7 +653,7 @@ queue, it holds:
   client that reads every chat. A client's chats are canonical identifiers, not references to stored
   chats, so they may name a chat the archive has not seen yet, and a re-key
   moves them from the phone number to the LID (see [Ingest](#ingest));
-- the audit table, whose rows triggers refuse to update or delete.
+- the audit table, whose rows triggers refuse to update, delete or replace.
 
 The [admin routes](#admin-routes) create and revoke clients, and each change
 appends a row to the [audit chain](#audit-chain). The engine writes saved
@@ -2154,7 +2154,8 @@ write transaction of its own before the answer is sent, waiting at most 2
 seconds for the connection, and a request whose row cannot be written is
 answered `503` (`busy`) when that wait ran out and `500` (`internal_error`)
 otherwise. Triggers refuse
-to update or delete a row.
+to update or delete a row, or to insert one with the id of an existing row,
+which an `INSERT OR REPLACE` or a `REPLACE` would otherwise overwrite.
 
 After the transaction commits, the service writes one line on standard output,
 through the same scrubbing writer as every log line:
