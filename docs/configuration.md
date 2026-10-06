@@ -1,20 +1,24 @@
 # Configuration reference
 
 This is the authoritative reference for configuring and running WaWarden. It
-describes the current build on `main`: milestone **M0**, plus the parts of milestone
-**M1** merged so far, which are the [master key](#master-key), the pseudonyms and
-dropped lines in the [logs](#pseudonyms-and-dropped-lines), the
+describes the current build on `main`, which holds milestone **M1** and is not
+released yet; the latest release, `v0.1.0`, is milestone **M0**. To M0's
+configuration checks, listeners, admin token and metrics, M1 adds the
+[master key](#master-key), the pseudonyms and dropped lines in the
+[logs](#pseudonyms-and-dropped-lines), the
 [request-body decoder](#request-bodies), the
 [message archive](#message-archive), the [device store](#device-store), the
 [WhatsApp engine](#whatsapp-engine) with its adapter to the WhatsApp protocol
 library, the [admin routes](#admin-routes) with the
 [admin commands](#admin-status-admin-pair-and-admin-reconnect) that call them,
-[notifications](#notifications) and
-[metrics in embedded metric format](#embedded-metric-format). A service without
-a paired device makes no connection to WhatsApp until `wawarden admin pair`
-requests pairing. Everything listed here is implemented, and nothing else is.
-Settings planned for later milestones are listed under
-[Reserved names](#reserved-names) and are refused by this build.
+[notifications](#notifications),
+[metrics in embedded metric format](#embedded-metric-format),
+[backups](#backups) and, in development builds only, the
+[fake engine](#fake-engine). The client API, client tokens and sending come
+with M2 and M3. A service without a paired device makes no connection to
+WhatsApp until `wawarden admin pair` requests pairing. Everything listed here
+is implemented, and nothing else is. Settings planned for later milestones are
+listed under [Reserved names](#reserved-names) and are refused by this build.
 
 ## Unknown variables stop the service
 
@@ -473,9 +477,9 @@ Right after the master key, `serve`:
    then exits `1` with `startup_failed`. A stop signal ends the wait within one
    busy timeout and also exits `1`. On Linux, profile `local` takes it with
    open-file-description locks, and a kernel or filesystem that refuses them
-   is refused in turn (57) instead of falling back to classic locks;
+   is refused in turn (59) instead of falling back to classic locks;
 5. brings the schema up to date (an archive written by a newer release is
-   refused, 58), completes a rewrite of the full-text index that a stop or a
+   refused, 60), completes a rewrite of the full-text index that a stop or a
    failed rewrite left due (see below) and logs `archive_opened`.
 
 The connection that holds the lock is the only one the service ever opens to
@@ -499,7 +503,7 @@ that runs out of time is interrupted and logged as
 `db_deadline` with the profile of every goroutine of the process (function names
 and source positions only).
 
-Revoked, edited and expired message text will be removed from the database file,
+Revoked, edited and expired message text is removed from the database file,
 its journal and the full-text index, as described in the
 [threat model](threat-model.md#security-invariants) (I-8); backups are
 outside that guarantee, as are the same text, or any three-character run of it,
@@ -896,6 +900,11 @@ Further, the worker:
 
 ### Delivery
 
+**A message refused or interrupted before it is stored is lost, not
+redelivered.** Once written to the inbox, a message is applied to the archive,
+after a restart if need be, or [quarantined](#ingest) when applying it keeps
+failing; before that, WaWarden gets one chance at it.
+
 The protocol library decrypts a message, which advances and saves its session
 keys in `session.db`, and then hands it to the engine. Only once the engine has
 written the message to the inbox does the library acknowledge it to WhatsApp and
@@ -918,6 +927,20 @@ send the delivery receipt. This gives:
   confirms it, which would let a refused or interrupted message be decrypted
   again. WaWarden does not turn that on, so that `session.db` holds no message
   plaintext, and an architecture test refuses the call that would.
+
+What a loss costs, and what limits it:
+
+- Only the archive misses the message: the owner's phone and the account's
+  other linked devices receive their own copies.
+- The inbox is written before the acknowledgement, in the same file as the
+  archive, so a crash or a stop after that write does not lose the message.
+- The [free-space floor](#free-space) pauses ingest before a full disk makes
+  every write fail, and reports `ingest_paused` so that the operator can free
+  space while little is lost; ingest resumes on its own.
+- Every refusal counts in `wawarden_ingest_refused_total` by reason
+  (`backlog_full`, `paused`, `store_error`), and `admin status` shows the
+  inbox backlog that leads to `backlog_full` at 5,000 rows, so a loss can be
+  alerted on.
 
 ### History sync
 
@@ -1064,7 +1087,7 @@ public internet.
 
 | Listener | Address | Opened | Serves |
 |---|---|---|---|
-| `client` | `WAWARDEN_LISTEN`, default `127.0.0.1:8080` | Always | The client API. M0 has no client routes and no client tokens: every request is refused. |
+| `client` | `WAWARDEN_LISTEN`, default `127.0.0.1:8080` | Always | The client API. This build has no client routes and no client tokens, which come with M2: every request is refused. |
 | `admin` | `WAWARDEN_ADMIN_LISTEN`, default `127.0.0.1:8082` | Only when an admin token hash is configured | `GET /metrics` and the [admin routes](#admin-routes) `GET /admin/v1/status`, `POST /admin/v1/pair` and `POST /admin/v1/reconnect`, all with the admin token. |
 | `health` | `WAWARDEN_HEALTH_LISTEN`, default `127.0.0.1:8081`, loopback only | Always | `GET /healthz`, without authentication. |
 
@@ -1115,7 +1138,7 @@ The credential is taken from exactly one `Authorization` header of the form
 `Bearer <token>`: the scheme in any letter case, one space, and a token without
 spaces or tabs. A request with two `Authorization` headers is not authenticated.
 
-**Client listener.** M0 knows no client tokens, so every request that passes
+**Client listener.** This build knows no client tokens, so every request that passes
 checks 1 and 2 is answered `401` (or `429`):
 
 ```text
@@ -1184,7 +1207,7 @@ The routes refuse with fixed codes:
 | `409` `{"error":"already_connected"}` | reconnect | The engine is connected. |
 | `409` `{"error":"not_paired"}` | reconnect | No device is stored, or the stored device was rejected and is being logged out. |
 | `409` `{"error":"owner_mismatch"}` | reconnect | The stored device's number is not `WAWARDEN_OWNER_PHONE`; see [Pairing](#pairing). |
-| `503` `{"error":"engine_unavailable"}` | all three | The engine has stopped because the service is shutting down. |
+| `503` `{"error":"engine_unavailable"}` | pair, reconnect | The engine has stopped because the service is shutting down. |
 | `500` `{"error":"internal_error"}` | all three | Anything else, such as an archive read that failed; the cause is never sent. |
 
 #### Failed authentication
@@ -1278,10 +1301,11 @@ has these keys:
 
 `WAWARDEN_LOG_LEVEL` sets the lowest level written, with exceptions that ignore
 the setting. The `startup_refused` line is written before the configuration is
-accepted. The `dev_build`, `fake_engine` and `listener_not_loopback` warnings are
-written at every level, `error` included, because they are the only signal that
-a development binary is running, that it runs the fake engine, or that a
-listener is reachable beyond loopback.
+accepted. The `dev_build`, `fake_engine`, `listener_not_loopback` and
+`backup_disabled` warnings are written at every level, `error` included, because
+they are the only signal that a development binary is running, that it runs the
+fake engine, that a listener is reachable beyond loopback, or that no backup
+will ever be taken.
 So are the [notification events](#notifications), which an operator must see,
 the `notify_failed` and `notify_dropped` warnings, and the `unsafe_debug` and `unsafe_debug_ended`
 notices of a [debug window](#protocol-library-logs). Lines in
@@ -1339,7 +1363,7 @@ notices of a [debug window](#protocol-library-logs). Lines in
 | `notify_failed` | `WARN`, at every log level | `attempts`, `reason`, `status` | The [webhook](#webhook) did not take an event, which is dropped. |
 | `notify_dropped` | `WARN`, at every log level | `count` | At shutdown, the [webhook](#webhook) dropped `count` events it had not delivered, and `serve` exits `1`. |
 | `emf_failed` | `WARN` | `error_type` | Writing the [embedded-metric-format](#embedded-metric-format) lines failed. |
-| `backup_disabled` | `WARN` | | `WAWARDEN_BACKUP_AGE_RECIPIENT` is not set, so no [backup](#backups) is ever taken. Logged once per start. |
+| `backup_disabled` | `WARN`, at every log level | | `WAWARDEN_BACKUP_AGE_RECIPIENT` is not set, so no [backup](#backups) is ever taken. Logged once per start. |
 | `backup_check_failed` | `WARN` | `error_type` | Reading or recording whether the [backup](#backups) is due failed; the check runs again 30 seconds later. |
 
 What is never logged: requests (there is no access log), request bodies, header
@@ -1633,7 +1657,7 @@ The [WhatsApp engine](#whatsapp-engine) adds these:
 
 Labelled counters appear once they count their first event.
 
-Panic names in M0: `api.client`, `api.admin` and `api.health` for the handlers;
+Panic names: `api.client`, `api.admin` and `api.health` for the handlers;
 `listeners.client`, `listeners.admin`, `listeners.health`, `listeners.shutdown`
 and `signals` for goroutines. The engine adds `engine.supervisor`,
 `engine.ingest` and `engine.logout`; the first two also count a panic of one
@@ -1645,8 +1669,9 @@ failed or that WhatsApp asked to log in again, and `wa.event` for a panic while
 it translates one of the protocol library's events or the engine handles it,
 which refuses the event. Other code on goroutines that the protocol library
 starts itself is not covered: a panic there ends the process. The notifier adds
-`notify.flush` and `notify.webhook`, and the embedded-metric-format writer
-`metrics.emf`.
+`notify.flush` and `notify.webhook`, the embedded-metric-format writer
+`metrics.emf`, and the [backup](#backups) check `backup.initial`. In
+development builds, the [fake engine](#fake-engine) adds `fake.connection`.
 
 Anything that scrapes `/metrics` holds the full admin token, which can also
 start pairing, ask for a reconnect and read the status, and from M2 create
@@ -1729,9 +1754,11 @@ at once.
 
 Release images are published as `ghcr.io/dortort/wawarden` for `linux/amd64` and
 `linux/arm64`, by the release workflow only. Deploy them by digest;
-[`RELEASING.md`](../RELEASING.md) explains how to verify one. No image exists
-before the first release; until then, build from source. The contract below
-applies to release images:
+[`RELEASING.md`](../RELEASING.md) explains how to verify one. The latest
+release, `v0.1.0`, is milestone M0: its image has no WhatsApp engine and is
+licensed under MIT. Until M1 is released, build `main` from source to run what
+this document describes. The contract below applies to release images from M1
+on:
 
 | Item | Value |
 |---|---|
@@ -1740,11 +1767,15 @@ applies to release images:
 | Entrypoint and command | `ENTRYPOINT ["/wawarden"]`, `CMD ["serve"]`; pass another subcommand as the command, for example `admin init` |
 | User | `65532:65532` |
 | Writable path | `/data`, the only path the service writes and the only one that must be writable: an empty directory owned by `65532:65532` with mode `0700`; mount a volume there |
+| Directories and modes | In `/data` the service creates `keys/`, `history/`, `backups/` and `backups/tmp/` with mode `0700`, and every file (`keys/master`, `archive.db`, `session.db` and their journals, history blobs, backups) with mode `0600`; every directory must keep mode `0700` and the service's owner, see [Data directory](#data-directory) |
 | Root filesystem | Mount it read-only (`docker run --read-only`, or `readOnlyRootFilesystem: true` in Kubernetes) so that `/data` is also the only writable path; the service writes nothing outside the data directory |
+| Listeners | Three, plain HTTP, by default client `127.0.0.1:8080`, admin `127.0.0.1:8082` (only with an admin token hash) and health `127.0.0.1:8081` (loopback only); see [Listeners](#listeners) |
+| Network | Inbound: the three listeners only. Outbound: name resolution; WhatsApp over HTTPS and a WebSocket on port 443, only while a device is paired or pairing was requested; and the [webhook](#webhook)'s host and port when `WAWARDEN_NOTIFY_URL` is set. Nothing else, and never through a proxy |
 | Health check | `["/wawarden","healthcheck"]`, in exec form; the image declares no health check of its own |
 | Exposed ports | None declared |
-| Labels | `org.opencontainers.image.source`, `licenses`, `version`, `revision` |
-| Licences | `/licenses`: the licence files of the Go standard library (`std@<Go version>`), of WaWarden and of every other Go module linked into `/wawarden`, one directory per module and version; see [`RELEASING.md`](../RELEASING.md#licences) |
+| Labels | `org.opencontainers.image.source`, `licenses` (`GPL-3.0-or-later`), `version`, `revision` |
+| Licence | WaWarden is `GPL-3.0-or-later`; the image links modules under GPL-3.0, MPL-2.0, Apache-2.0, ISC, MIT and BSD-3-Clause, listed in the [README](../README.md#licence) |
+| Licence texts | `/licenses`: the licence files of the Go standard library (`std@<Go version>`), of WaWarden and of every other Go module linked into `/wawarden`, one directory per module and version; see [`RELEASING.md`](../RELEASING.md#licences) |
 
 Notes:
 
