@@ -1329,7 +1329,10 @@ Requests to the client and admin listeners pass these checks in order:
 3. The request is authenticated. A failure is answered `401` (`unauthorized`)
    with `WWW-Authenticate: Bearer`, or `429` (`too_many_requests`, without that
    header) when the failure budget is spent; see
-   [Failed authentication](#failed-authentication).
+   [Failed authentication](#failed-authentication). On the client listener, a
+   request that finds the copy of the clients being republished after a
+   change for more than 2 seconds, as described below, is answered `503`
+   (`busy`) with `Retry-After: 1` instead, whatever its token.
 4. On the client listener, the request then costs one from the client's
    [read budget](#read-rate-limits), every `POST /mcp` included; when the budget
    is spent, it is answered `429` (`rate_limited`) with `Retry-After`, before
