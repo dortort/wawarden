@@ -458,8 +458,9 @@ remains.
       reported identical checksums and an identical index digest.
 - [ ] Approve. Watch the publishing job through signing, attestation and release
       creation.
-- [ ] After the first release, set the `ghcr.io/dortort/wawarden` package to
-      public in the package settings, so that anyone can pull and verify it.
+- [ ] The `ghcr.io/dortort/wawarden` package is still public, so that anyone
+      can pull and verify it: pulling the new image by digest works without
+      `docker login`.
 - [ ] From a machine other than the one used for development, run every command
       under [Verifying a release](#verifying-a-release) against the new release,
       including a reproduction.
