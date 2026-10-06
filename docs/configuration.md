@@ -474,13 +474,13 @@ The checks run in this order:
 | 71 | `session_journal_foreign_owner` | none; the error names `session.db-journal` | `session.db-journal` is not owned by the process's effective user ID. |
 | 72 | `session_journal_permissions` | none; the error names `session.db-journal` | `session.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
 
-When the data directory is missing, it is created only after checks 1 to 30 pass,
-so a start refused by checks 1 to 30 leaves nothing behind. `history/` and
+When the data directory is missing, it is created only after checks 1 to 31 pass,
+so a start refused by checks 1 to 31 leaves nothing behind. `history/` and
 `backups/` are checked only when they exist; `serve` creates neither at start (see
 [Data directory](#data-directory)). `keys/` and the master key are created, when
-missing, only after checks 31 to 42 pass, an empty `archive.db` only after
-checks 31 to 53 pass, and an empty `session.db` only once the archive is open.
-Checks 64 to 71 run on `session.db` after the archive is open, and not at all
+missing, only after checks 32 to 43 pass, an empty `archive.db` only after
+checks 32 to 54 pass, and an empty `session.db` only once the archive is open.
+Checks 65 to 72 run on `session.db` after the archive is open, and not at all
 when the [fake engine](#fake-engine) runs; the
 [storage profile](#storage-profiles) is checked again for it, which passes once it
 passed for the archive. A refusal by a later check (on a filesystem that forces
@@ -505,7 +505,7 @@ The data directory is `WAWARDEN_DATA_DIR`, by default `/data`.
 
 The checks run once, at start. When they exist, `history/` and `backups/` in the
 data directory must also be directories, not symbolic links, owned by the
-effective user ID with mode exactly `0700` (refusals 35 to 42). Then `serve`
+effective user ID with mode exactly `0700` (refusals 36 to 43). Then `serve`
 creates the [master key](#master-key) when it is missing and opens the
 [message archive](#message-archive), `archive.db`, and the
 [device store](#device-store), `session.db`. The
@@ -526,7 +526,7 @@ Kubernetes `fsGroup`, make the directory fail the mode check.
 bytes. Right after the data directory checks, `serve`:
 
 1. creates `keys/` with mode `0700` when it does not exist;
-2. checks `keys/` (refusals 43 to 46): a directory, not a symbolic link, owned by
+2. checks `keys/` (refusals 44 to 47): a directory, not a symbolic link, owned by
    the effective user ID, with mode exactly `0700`;
 3. when `keys/master` does not exist, writes 32 bytes from the operating system's
    cryptographic random source to a new temporary file `keys/.master-<random>`
@@ -534,7 +534,7 @@ bytes. Right after the data directory checks, `serve`:
    the temporary name and flushes the directory. When two processes start at once,
    the second link fails, and both use the key that was linked first. An existing
    key is never replaced;
-4. checks `keys/master` (refusals 47 to 51): a regular file, not a symbolic link,
+4. checks `keys/master` (refusals 48 to 52): a regular file, not a symbolic link,
    owned by the effective user ID, without any permission for group or others and
    without the setuid, setgid or sticky bit, holding exactly 32 bytes. Mode `0600`
    and mode `0400` are both accepted.
@@ -578,10 +578,10 @@ paired.
 Right after the master key, `serve`:
 
 1. checks the data directory's filesystem against the
-   [storage profile](#storage-profiles) (refusals 52 and 53);
+   [storage profile](#storage-profiles) (refusals 53 and 54);
 2. creates `archive.db` empty with mode `0600` when it does not exist, and
-   refuses (54 to 57) one that is not a regular file, belongs to another user,
-   or grants any access to group or others; then refuses (58 to 61) an
+   refuses (55 to 58) one that is not a regular file, belongs to another user,
+   or grants any access to group or others; then refuses (59 to 62) an
    `archive.db-journal` that exists and fails the same checks;
 3. opens one connection and reads back every setting it applies, refusing the
    connection on any difference: foreign keys on, the rollback journal in
@@ -596,9 +596,9 @@ Right after the master key, `serve`:
    then exits `1` with `startup_failed`. A stop signal ends the wait within one
    busy timeout and also exits `1`. On Linux, profile `local` takes it with
    open-file-description locks, and a kernel or filesystem that refuses them
-   is refused in turn (62) instead of falling back to classic locks;
+   is refused in turn (63) instead of falling back to classic locks;
 5. brings the schema up to date (an archive written by a newer release is
-   refused, 60): each schema version is applied in one transaction that has no
+   refused, 64): each schema version is applied in one transaction that has no
    deadline, because it runs only here, under the lock, and can take seconds on
    a large archive (about 8 seconds for 500,000 messages on a laptop). Moving
    to version 3 then numbers the changes of the messages already stored, in
@@ -689,7 +689,7 @@ linked device that the WhatsApp protocol library (`go.mau.fi/whatsmeow`) keeps,
 in its own tables, through the same SQLite engine. Right after the archive,
 `serve` opens it with every step the archive gets: the storage profile is
 checked, the file is created empty with mode `0600` when it does not exist, the
-file and its journal must pass refusals 64 to 71, the connection reads back the
+file and its journal must pass refusals 65 to 72, the connection reads back the
 same fixed settings and takes the same exclusive lock, kept the same way, with
 `db_lock_wait` naming `session` and `db_lost` too. Then the protocol library
 brings its tables up to date, within one minute. A store written by a newer
