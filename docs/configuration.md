@@ -618,7 +618,11 @@ paired device.
 
 **How.** Each database is copied online, in steps of 256 pages on its own
 connection, each step bound by the 10-second write deadline, so ingest goes on
-between steps; the archive is copied first, then the device store, so the two
+between steps. A copy that stops early, for a failure or a cancellation, is
+closed on that connection as soon as the connection is free, waiting out other
+calls if it must, so that no copy stays attached to the database unless the
+database is closed first. The archive is copied first, then
+the device store, so the two
 copies are separate points in time. Each copy is staged as a plaintext file of
 mode `0600` in `backups/tmp/` (`archive.stage`, then `session.stage`, one at a
 time) and then streamed, without a second plaintext copy, through age into
