@@ -54,7 +54,9 @@ func adminCall(ctx context.Context, command string, args, environ []string, stdi
 	fromStdin := flags.Bool(flagTokenStdin, false, "read the admin token from standard input")
 	tokenCommand := flags.String(flagTokenCommand, "", "run this command, without a shell, and read the admin token from its output")
 	if err := flags.Parse(args); err != nil {
-		_, _ = fmt.Fprintln(stderr, "admin:", flagProblem(flags, err))
+		if !errors.Is(err, flag.ErrHelp) {
+			_, _ = fmt.Fprintln(stderr, "admin:", flagProblem(flags, err))
+		}
 		return usageError(stderr)
 	}
 	if flags.NArg() > 0 {

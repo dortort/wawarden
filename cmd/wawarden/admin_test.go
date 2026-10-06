@@ -221,6 +221,8 @@ func TestAdminFlagErrorsNameOnlyTheFlag(t *testing.T) {
 		{"-=" + secret, "admin: an argument is not a flag of this command\n"},
 		{"--token-file=", "admin: --token-file needs a value\n"},
 		{"--token-command=", "admin: --token-command needs a value\n"},
+		{"--help", ""},
+		{"-h", ""},
 	} {
 		code, stdout, stderr := invokeWith(t, []string{"admin", "status", tt.arg}, nil, strings.NewReader(secret))
 		if code != exitUsage || stdout != "" || !strings.HasPrefix(stderr, tt.want+"usage:") || strings.Contains(stderr, secret) {
