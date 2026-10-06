@@ -1521,7 +1521,8 @@ byte slice of any type, or a pointer to one, is written as its length
 (`[32 bytes]`), even when it has a `String` or `Error` method, as a raw JSON value
 does; an error or a value with a
 `String` method as its text, which is then pseudonymised like the rest of the
-line, and every other value as its Go type in brackets, such as `[seal.Chat]`,
+line; and a protocol message or a URL, whatever its methods, and every other
+value as its Go type in brackets, such as `[seal.Chat]` or `[*waE2E.Message]`,
 never as its content.
 
 ## Notifications

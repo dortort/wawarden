@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"reflect"
 	"regexp"
 	"strings"
@@ -219,9 +220,14 @@ func render(v any) (s string) {
 		return fmt.Sprintf("[%d bytes]", b.Len())
 	}
 	switch x := v.(type) {
+	case *url.URL:
+		return typeName(v)
 	case error:
 		return x.Error()
 	case fmt.Stringer:
+		if _, generated := reflect.TypeOf(v).MethodByName("ProtoReflect"); generated {
+			return typeName(v)
+		}
 		return x.String()
 	}
 	return typeName(v)

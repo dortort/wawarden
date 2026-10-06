@@ -11,11 +11,16 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waHistorySync"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/token"
@@ -523,6 +528,10 @@ func TestAttributesRenderFailClosed(t *testing.T) {
 		{name: "byte slice with an Error method", value: errorBytes(canary), want: "[26 bytes]"},
 		{name: "policy chat", value: chat, want: "[seal.Chat]"},
 		{name: "pointer to policy chat", value: &chat, want: "[*seal.Chat]"},
+		{name: "protocol message", value: &waE2E.Message{Conversation: proto.String(secretText)}, want: "[*waE2E.Message]"},
+		{name: "protocol message naming a chat", value: &waHistorySync.Pushname{ID: proto.String(canary), Pushname: proto.String(secretText)}, want: "[*waHistorySync.Pushname]"},
+		{name: "nil protocol message", value: (*waE2E.Message)(nil), want: "[*waE2E.Message]"},
+		{name: "URL", value: &url.URL{Scheme: "https", Host: "hooks.example", Path: "/" + secretText, RawQuery: "token=" + canaryUser}, want: "[*url.URL]"},
 		{name: "Stringer that panics", value: &panicky{}, want: "[*logx.panicky]"},
 		{name: "error that panics", value: &failure{}, want: "[*logx.failure]"},
 		{name: "nil", value: nil, want: nil},

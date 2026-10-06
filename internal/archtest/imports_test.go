@@ -108,7 +108,7 @@ func checkBannedImports(f *sourceFile) []string {
 
 var reflectAllowed = map[string]string{
 	"internal/api/dto": "compares a response's declaring package with its own",
-	"internal/logx":    "writes a log value backed by a byte slice as its length, whatever its methods",
+	"internal/logx":    "writes a log value backed by a byte slice as its length, and a protocol message as its type name, whatever their methods",
 }
 
 var unsafePointerMethods = set("NewAt", "SetPointer", "UnsafeAddr", "UnsafePointer")
