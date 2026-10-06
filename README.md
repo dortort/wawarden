@@ -80,14 +80,16 @@ owner's WhatsApp account and archives its messages, but serves no client API.
 `main` holds most of milestone **M2**: clients with per-chat read scopes and
 expiring tokens, which the admin creates and revokes; the REST read API (chats,
 messages, search and a change feed) with sealed cursors and per-client read and
-search budgets; the same reads as five MCP tools at `POST /mcp`; and the audit
-chain of client changes and of every client request.
+search budgets; the same reads as five MCP tools at `POST /mcp`; the names the
+owner saved for contacts, shown only to a client that may read the contact's
+direct chat and not yet verified against a live account; and the audit chain
+of client changes and of every client request.
 
 | Milestone | State | Scope |
 |---|---|---|
 | M0 | Released as `v0.1.0` | Configuration checks and startup refusals; the client, admin and health listeners; the admin token; Prometheus metrics; `healthcheck` and `version`; the policy core; the container image and verifiable releases. |
 | M1 | Released as `v0.2.0` | The WhatsApp engine: pairing guarded by an account check, history sync, the session and the message archive in SQLite; `admin status`, `pair` and `reconnect`; notification events and a signed webhook; metrics on standard output; one encrypted backup per paired device. |
-| M2 | In progress on `main`: clients, their tokens, the REST read API, the MCP read tools and the audit chain | Clients with per-chat read scopes and expiring tokens; the read API over REST (chats, messages, search, change feed) and MCP; the audit trail. |
+| M2 | In progress on `main`: clients, their tokens, the REST read API, the MCP read tools, owner-saved contact names and the audit chain | Clients with per-chat read scopes and expiring tokens; the read API over REST (chats, messages, search, change feed) and MCP; owner-saved contact names; the audit trail. |
 | M3 | Planned | Sending over REST and MCP, with idempotency, pacing, per-client budgets and a first-contact rule; nightly encrypted backups with retention; the v1.0 documentation. |
 
 What `main` does:

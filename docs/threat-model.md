@@ -216,7 +216,10 @@ These are stated so that nobody relies on WaWarden for them:
    message's text when it writes the message and when it applies an edit (M1);
    no route returns either before M2. MCP tool names, descriptions and schemas are
    built from constants and Go types, so no chat-controlled string reaches a tool
-   definition (M2, row 11).
+   definition (M2, row 11). The names the owner saved for contacts come from the
+   contact list the owner's phone syncs, not from the contacts themselves; a
+   read returns one only when that contact's direct chat is in the client's
+   scope, and returns it as the phone sent it (M2).
 6. **Service to logs, metrics and notifications.** Chat identities leave the
    process only as keyed HMACs, and message text, query text, tokens and protocol
    messages never leave it. As of M0: no request is logged; failed authentications
@@ -462,7 +465,7 @@ mechanisms that enforce them.
   message holds; and neither that text nor any of its trigrams is in the
   database or its journal unless the archive still holds the same text or
   trigram elsewhere: in a remaining message, in a message waiting in the inbox,
-  in a stored name (a push name, chat name or group subject), in an identifier
+  in a stored name (a push name, saved contact name, chat name or group subject), in an identifier
   or another stored value, or in the schema. Backups, a
   page key that holds less than a whole trigram, a trigram left by a stop or
   a failure between the deletion and the index rewrite it requires, and a
@@ -710,7 +713,7 @@ These remain at v1.0, after every control above is in place.
   snapshots and storage-level copies are outside the service's control. A
   trigram of the old text that a remaining message also holds stays in the
   full-text index, because that message still needs it. The deletion clears
-  only the message's own text: when a push name, a chat name or a group subject,
+  only the message's own text: when a push name, a saved contact name, a chat name or a group subject,
   a message waiting in the inbox, an identifier or another stored value, or the
   schema holds the same text or one of its trigrams, those bytes stay in the
   archive. The

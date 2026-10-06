@@ -642,7 +642,8 @@ queue, it holds:
   assigns when the chat is first stored. A re-key from a phone number to a LID
   keeps it. A re-key that merges a chat without messages into the other chat
   of the same person removes the merged chat and its reference with it;
-- names that the owner saved for a contact, keyed by the contact's identifier;
+- names that the owner saved for a contact, keyed by the contact's canonical
+  identifier (see [Ingest](#ingest));
 - read clients and the chats each one may read and write. A client row has
   room for a 32-byte digest of its token, not for the token; its expiry must be
   at most 366 days after its creation, and a trigger refuses a write chat for a
@@ -652,8 +653,10 @@ queue, it holds:
 - the audit table, whose rows triggers refuse to update or delete.
 
 The [admin routes](#admin-routes) create and revoke clients, and each change
-appends a row to the [audit chain](#audit-chain). No part of the service writes
-saved names yet. The service never runs `ANALYZE` or `PRAGMA optimize` on the archive: planner
+appends a row to the [audit chain](#audit-chain). The engine writes saved
+names from changes to the owner's contact list (see [Ingest](#ingest)), and a
+read shows one only to a client whose scope includes that contact's direct
+chat (see [Read API](#read-api)). The service never runs `ANALYZE` or `PRAGMA optimize` on the archive: planner
 statistics could make SQLite read a whole table where its read queries now
 search an index.
 
@@ -984,16 +987,17 @@ device is deleted.
 Each message that WhatsApp delivers is first written to the archive's inbox, in
 the same file as the archive, and only then acknowledged. Each group change is
 written to the inbox too, but the protocol library acknowledges it as it
-arrives, before the engine has written it (see [Delivery](#delivery)). The
-engine refuses to write a message or a group change when the inbox already
-holds 5,000 rows that wait to be applied, when ingest is
-[paused](#free-space), or when the write fails; each case counts in
-`wawarden_ingest_refused_total`, and a refused message or group change is lost
-(see [Delivery](#delivery)). Traffic of a chat that is not a phone-number
+arrives, before the engine has written it (see [Delivery](#delivery)); so is
+each change to the names the owner saved for contacts. The engine refuses to
+write a message, a group change or a saved name when the inbox already holds
+5,000 rows that wait to be applied, when ingest is [paused](#free-space), or
+when the write fails; each case counts in `wawarden_ingest_refused_total`, and
+a refused message, group change or saved name is lost (see
+[Delivery](#delivery)). Traffic of a chat that is not a phone-number
 user, a LID user or a group (status updates, broadcast lists, newsletters and
 every other kind) is acknowledged and dropped before it reaches the inbox. So
-is every message, group change and history-sync notification that arrives
-while the engine is `unpaired`, while no device is stored, such as after
+is every message, group change, saved contact name and history-sync
+notification that arrives while the engine is `unpaired`, while no device is stored, such as after
 WhatsApp logged the device out, while a device that [pairing](#pairing)
 rejected is still stored, or while the stored device is not the owner's
 (`owner_mismatch`), all counted as `not_paired`, and every message whose
@@ -1018,7 +1022,7 @@ when it drops an event:
 
 | Rule | Drop reason |
 |---|---|
-| The chat must be a phone-number user, a LID user or a group. | `chat_rejected` |
+| The chat must be a phone-number user, a LID user or a group; a saved contact name must belong to a phone-number or LID user. | `chat_rejected` |
 | The sender must be a phone-number or LID user. | `sender_rejected` |
 | An event of no known kind is dropped; in particular it never counts as a revocation. | `unknown_kind` |
 | An edit, revocation, reaction or poll vote names its target by a key. A key without a message identifier, or a group key without the target's sender, is dropped. | `no_target` |
@@ -1045,6 +1049,16 @@ Further, the worker:
 - stores the push name of a sender other than the owner for that contact, and
   as the name of a direct chat, and a group's subject as its name, each with its
   source;
+- stores the full and first name the owner saved for a contact when the owner's
+  phone syncs a change to its contact list to this device, under the contact's
+  canonical identifier, and nowhere else: a saved name names no chat and
+  replaces no push name. The latest change replaces the stored name, and a
+  change that carries no name clears it. The protocol library passes on only
+  contacts added or renamed after the device's first sync of the contact list,
+  not the list as it stood at pairing, and no deletion, so a contact deleted on
+  the phone keeps its last saved name. This is tested only with synthetic
+  events: whether the phone sends these changes to a linked device, and under
+  which identifier, has not been verified against a live account yet;
 - stores `text_display`, the text without control, bidirectional, zero-width and
   tag characters, beside the text;
 - stores whether a message came live or from history sync, and whether the
@@ -1056,7 +1070,9 @@ Further, the worker:
 - learns which LID belongs to which phone number only from the alternate
   identifiers WhatsApp's servers attach to live messages and from history sync,
   and re-keys a direct chat from the number to the LID, moving every client's
-  read and write chats from the number to the LID in the same transaction. A
+  read and write chats, and the contact's push name and saved name, from the
+  number to the LID in the same transaction; where both identities have a
+  saved name, the newer is kept. A
   mapping that contradicts one already learned, that would merge two chats
   that both hold messages, or that would widen what a client reads (a client
   that names only one of the two identities while the other holds messages, or
@@ -1091,7 +1107,9 @@ send the delivery receipt. This gives:
 - A message is lost the same way when the process stops after the library
   decrypted it and before the engine wrote it.
 - The library acknowledges a group change as it arrives, whatever the engine
-  answers, so a refused group change is lost as well.
+  answers, so a refused group change is lost as well. The library never
+  delivers a change to the owner's contact list again either, so a refused
+  saved name is lost until the owner changes that contact again.
 - The library can keep each decrypted message in `session.db` until the engine
   confirms it, which would let a refused or interrupted message be decrypted
   again. WaWarden does not turn that on, so that `session.db` holds no message
