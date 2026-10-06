@@ -166,21 +166,33 @@ func (tx *Tx) ReplaceParticipants(g policy.CanonicalChat, participants []Partici
 	if err := tx.ensureChat(g); err != nil {
 		return err
 	}
-	remove, add := deleteParticipants, insertLiveParticipant
 	if origin == OriginHistory {
-		var live bool
-		if err := tx.q.QueryRowContext(tx.ctx, selectMembersLive, g.JID()).Scan(&live); err != nil || live {
-			return err
-		}
-		remove, add = deleteHistoryMembers, insertHistoryMember
-	} else if _, err := tx.q.ExecContext(tx.ctx, markMembersLive, g.JID()); err != nil {
+		return tx.historyMembers(g, users, participants)
+	}
+	if _, err := tx.q.ExecContext(tx.ctx, markMembersLive, g.JID()); err != nil {
 		return err
 	}
-	if _, err := tx.q.ExecContext(tx.ctx, remove, g.JID()); err != nil {
+	if _, err := tx.q.ExecContext(tx.ctx, deleteParticipants, g.JID()); err != nil {
 		return err
 	}
 	for i, p := range participants {
-		if _, err := tx.q.ExecContext(tx.ctx, add, g.JID(), users[i], boolInt(p.Admin)); err != nil {
+		if _, err := tx.q.ExecContext(tx.ctx, insertLiveParticipant, g.JID(), users[i], boolInt(p.Admin)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (tx *Tx) historyMembers(g policy.CanonicalChat, users []string, participants []Participant) error {
+	var live bool
+	if err := tx.q.QueryRowContext(tx.ctx, selectMembersLive, g.JID()).Scan(&live); err != nil || live {
+		return err
+	}
+	if _, err := tx.q.ExecContext(tx.ctx, deleteHistoryMembers, g.JID()); err != nil {
+		return err
+	}
+	for i, p := range participants {
+		if _, err := tx.q.ExecContext(tx.ctx, insertHistoryMember, g.JID(), users[i], boolInt(p.Admin)); err != nil {
 			return err
 		}
 	}
