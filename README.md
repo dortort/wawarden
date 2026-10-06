@@ -673,12 +673,14 @@ third-party text.
 Before the token expires, create a client with the same chats under a new
 name (a name stays taken after its client is revoked), set `WAWARDEN_TOKEN`
 on the agent's host to the new client's token, register the endpoint again
-with it and check the connection:
+with it and check the connection. `read -rs` shows no prompt and echoes
+nothing: paste the `ww_...` value of the new client's `token:` line and press
+Enter, so the token stays out of the shell's history file:
 
 ```sh
 ./wawarden admin clients create --token-file admin.token \
   --name claude-code-2 --read <id, +E.164 number or ref>
-export WAWARDEN_TOKEN=<the ww_... value of the new client's token: line>
+read -rs WAWARDEN_TOKEN && export WAWARDEN_TOKEN
 claude mcp remove whatsapp
 claude mcp add --transport http whatsapp https://<your-host>/mcp --header "Authorization: Bearer $WAWARDEN_TOKEN"
 claude mcp get whatsapp
