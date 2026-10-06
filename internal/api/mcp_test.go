@@ -385,10 +385,11 @@ func TestMCPBodiesAreCheckedBeforeTheLibrary(t *testing.T) {
 		"invalid UTF-8":           legacyCall("tools/call", `{"name":"get_chat","arguments":{"chat":"`+"\xff"+`"}}`),
 		"nesting past 16":         deep,
 	} {
-		rec := rawMCP(t, f.handler, keyGroup, body, legacyHeader)
-		requireError(t, rec, http.StatusBadRequest, codeInvalidBody)
-		requireSecurityHeaders(t, rec.Header())
-		_ = name
+		t.Run(name, func(t *testing.T) {
+			rec := rawMCP(t, f.handler, keyGroup, body, legacyHeader)
+			requireError(t, rec, http.StatusBadRequest, codeInvalidBody)
+			requireSecurityHeaders(t, rec.Header())
+		})
 	}
 	requireError(t, rawMCP(t, f.handler, keyGroup, valid, http.Header{"Content-Type": {"text/plain"}}), http.StatusUnsupportedMediaType, codeUnsupportedMediaType)
 
