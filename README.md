@@ -320,12 +320,15 @@ included, in its own configuration; `claude mcp remove whatsapp` deletes it.
 The tools, arguments and codes are in
 [docs/configuration.md](docs/configuration.md#mcp).
 
-Stop the service; it shuts down gracefully and exits `0`. Then delete the
-temporary directory, which holds the admin token and the data directory:
+Stop the service; it shuts down gracefully and exits `0`. Then clear the
+token from the shell, since `serve` refuses an unknown `WAWARDEN_` variable,
+and delete the temporary directory, which holds the admin token and the data
+directory:
 
 ```sh
 kill %1
 wait
+unset WAWARDEN_TOKEN
 rm -rf "$demo"
 ```
 
@@ -642,7 +645,9 @@ prints, and can be repeated; the client expires after 90 days unless
 
 It prints the client's lines, then `token: ww_...`, once. Keep the token in a
 secret manager or in the agent host's environment as `WAWARDEN_TOKEN`, never
-in a repository. `admin status` now counts the client under `clients active`,
+in a repository. `WAWARDEN_TOKEN` is read by the agent's host only; never put
+it in the service's environment, where `serve` refuses it as
+`unknown_variable`. `admin status` now counts the client under `clients active`,
 and each request it makes is written on standard output with its chain head
 (see [the audit chain](docs/configuration.md#audit-chain)).
 
