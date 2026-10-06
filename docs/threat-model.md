@@ -535,7 +535,7 @@ event.
 | Text that the admin CLI prints from a server answer passes through a terminal sanitiser that replaces every control, format, line-separator and paragraph-separator character and every invalid byte with U+FFFD, so an answer cannot move the cursor, rewrite the screen, set a link or write the clipboard. | M1 |
 | The notification webhook is off unless configured; it accepts only `https`, takes no proxy, follows no redirect, uses TLS 1.2 or later and timeouts, and refuses link-local and metadata addresses, IPv6 addresses with a zone and the local-use NAT64 prefix always, and loopback, private and shared addresses unless allowed, checked on every connection after name resolution, with a well-known NAT64 address checked as the IPv4 address it embeds. | M1 |
 | Live status, broadcast and newsletter traffic, and live traffic of every other chat that is not a phone-number user, a LID user or a group, is dropped at ingest, before it is written anywhere. Such conversations inside a history-sync blob are dropped while the blob is applied; the blob's file and its inline content, which hold them until then, are deleted once the blob is processed or quarantined. | M1 |
-| Raw protocol messages are not stored: the engine receives each message as plain data, a type with no field for a media key, a message secret or the protocol message, and the archive's `messages` table has no `raw` column, which a test checks. A history blob's download reference, its media key included, and its inline content stay in the archive only until the blob is processed or quarantined. The protocol library keeps its own state, message secrets included, in `session.db` (see [Assets](#assets)). | M1 |
+| Live protocol messages are not stored: the engine receives each live message as plain data, a type with no field for a media key, a message secret or the protocol message, and the archive's `messages` table has no `raw` column, which a test checks. History sync is the exception: each history blob, the protocol's own messages with their media keys and message secrets, is kept as received, in a `0600` file under `history/` or, when it arrives inline, in the archive with its download reference, media key included, only until it is processed or quarantined, and a start deletes the files of blobs no longer pending. The protocol library keeps its own state, message secrets included, in `session.db` (see [Assets](#assets)). | M1 |
 | Never sends read receipts, presence, typing indicators or status updates: no code asks the protocol library for them, and an architecture test refuses the calls. The library sends delivery receipts in their inactive form and other traffic by itself (see residual risks). | M1 |
 | A service without a paired device makes no connection to WhatsApp, not even the version fetch, until pairing is requested, and reports `unpaired` once, and again whenever a paired device is lost. | M1 |
 | Outbound HTTP to WhatsApp uses no proxy from the environment, a timeout on every step, TLS 1.2 or later, response caps (8 MiB for the version page, the history cap plus 32 bytes for a history download) and no redirect to another host. | M1 |
@@ -713,6 +713,11 @@ These remain at v1.0, after every control above is in place.
   by a crash three times is quarantined like a failing one: the batches it had
   applied before each crash stay in the archive, and its remaining messages do
   not reach it. A graceful stop gives its attempt back (M1).
+- **Raw history blobs wait on disk.** A downloaded history blob, the protocol's
+  own messages with their media keys and message secrets, stays in its file
+  under `history/` until it is processed or quarantined, and a start keeps the
+  files of pending blobs, so while ingest is paused or the service is stopped,
+  it can stay there indefinitely (M1).
 - **An interrupted revoke.** A crash in the middle of a revoke, an edit or an
   expiry rolls it back, so the old text is in the database again until the
   change is applied again, and the journal keeps the pre-image until the next
