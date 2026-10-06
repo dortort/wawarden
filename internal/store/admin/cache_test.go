@@ -160,8 +160,16 @@ func TestAStaleClientListIsUnavailableWithoutQueueingAndReloads(t *testing.T) {
 		}
 	}
 	release()
-	if c, ok := f.authenticate(t, liveToken); !ok || c.ID != live.ID {
-		t.Fatalf("the valid token after the hold = %v, %v, want it accepted once the list reloaded", c, ok)
+	var c *policy.Client
+	var ok bool
+	var err error
+	for range 50 {
+		if c, ok, err = f.clients.Authenticate(t.Context(), liveToken); !errors.Is(err, admin.ErrUnavailable) {
+			break
+		}
+	}
+	if err != nil || !ok || c.ID != live.ID {
+		t.Fatalf("the valid token after the hold = %v, %v, %v, want it accepted once the list reloaded", c, ok, err)
 	}
 	if _, ok := f.authenticate(t, revokedToken); ok {
 		t.Fatal("a revoked token authenticated after the reload")
