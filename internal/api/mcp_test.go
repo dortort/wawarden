@@ -175,9 +175,8 @@ func TestMCPToolsAnswerLikeRESTOnBothProtocols(t *testing.T) {
 		t.Run(p.name, func(t *testing.T) {
 			f := newMCPFixture(t)
 			cs := connect(t, f.handler, keyGroup, p)
-			caps := cs.InitializeResult().Capabilities
-			if caps.Tools == nil || caps.Tools.ListChanged || caps.Logging != nil || caps.Prompts != nil || caps.Resources != nil || caps.Completions != nil {
-				t.Fatalf("capabilities = %+v, want tools only, without list changes", caps)
+			if caps, err := json.Marshal(cs.InitializeResult().Capabilities); err != nil || string(caps) != `{"tools":{}}` {
+				t.Fatalf("capabilities = %s, %v, want tools only, without list changes", caps, err)
 			}
 			tools, err := cs.ListTools(t.Context(), nil)
 			if err != nil {
