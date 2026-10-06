@@ -111,6 +111,9 @@ func (h *historian) drain(ctx context.Context) {
 			pending, err = r.PendingBlobs(pendingWindow)
 			return err
 		}); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			h.p.logger.Warn("reading the pending history blobs failed", slog.String("event", "ingest_failed"), slog.String("queue", queueHistory), slog.String("error_type", fmt.Sprintf("%T", err)))
 			_ = wait(ctx, h.p.clock, retryBase)
 			return
@@ -324,6 +327,9 @@ func (h *historian) clean(ctx context.Context) {
 			return err
 		})
 		if err != nil && !errors.Is(err, ingest.ErrInvalid) {
+			if ctx.Err() != nil {
+				break
+			}
 			h.kept(err)
 			continue
 		}

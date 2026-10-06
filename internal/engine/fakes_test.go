@@ -101,6 +101,16 @@ func (c *fakeClock) slept() []time.Duration {
 	return slices.Clone(c.waits)
 }
 
+type stoppingClock struct {
+	Clock
+	stop context.CancelFunc
+}
+
+func (c stoppingClock) Now() time.Time {
+	c.stop()
+	return c.Clock.Now()
+}
+
 type gatedClock struct {
 	mu      sync.Mutex
 	now     time.Time

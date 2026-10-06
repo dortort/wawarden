@@ -361,6 +361,42 @@ func TestCleanKeepsOnlyTheFilesOfPendingBlobs(t *testing.T) {
 	}
 }
 
+func TestAStopDuringThePendingBlobsReadIsNotLoggedAsAFailure(t *testing.T) {
+	r := newHistRig(t)
+	r.online.Store(true)
+	r.client.blobs["HS1"] = r.blob("synthetic left for the next start", History{})
+	r.notify(HistoryRef{ID: "HS1"})
+	ctx, stop := context.WithCancel(t.Context())
+	r.p.clock = stoppingClock{Clock: r.clock, stop: stop}
+	r.h.drain(ctx)
+	if e := r.logs.events("ingest_failed"); len(e) != 0 {
+		t.Fatalf("the stop was logged as %v", e)
+	}
+	if n := r.client.count("download:HS1"); n != 0 {
+		t.Fatalf("%d downloads after the stop", n)
+	}
+}
+
+func TestAStopDuringCleanKeepsTheFilesWithoutAWarning(t *testing.T) {
+	r := newHistRig(t)
+	dir := filepath.Join(r.opts.DataDir, "history")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "HS9.bin"), []byte("synthetic"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, stop := context.WithCancel(t.Context())
+	stop()
+	r.h.clean(ctx)
+	if e := r.logs.events("history_file_kept"); len(e) != 0 {
+		t.Fatalf("the stop was logged as %v", e)
+	}
+	if names := r.historyFiles(); !slices.Equal(names, []string{"HS9.bin"}) {
+		t.Fatalf("history files %v, want the file kept for the next start", names)
+	}
+}
+
 func TestQuarantineDeletesTheDownloadedBlob(t *testing.T) {
 	r := newHistRig(t)
 	r.online.Store(true)

@@ -171,6 +171,9 @@ func (p *pipeline) drainInbox(ctx context.Context) {
 			return err
 		})
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			p.logger.Warn("reading the inbox failed", slog.String("event", "ingest_failed"), slog.String("queue", queueInbox), slog.String("error_type", fmt.Sprintf("%T", err)))
 			_ = wait(ctx, p.clock, retryBase)
 			return
@@ -266,7 +269,9 @@ func (p *pipeline) sweep(ctx context.Context) {
 			purged, err = tx.PurgeExpired(p.clock.Now(), sweepBatch)
 			return err
 		}); err != nil {
-			p.logger.Warn("purging expired messages failed", slog.String("event", "expiry_sweep_failed"), slog.String("error_type", fmt.Sprintf("%T", err)))
+			if ctx.Err() == nil {
+				p.logger.Warn("purging expired messages failed", slog.String("event", "expiry_sweep_failed"), slog.String("error_type", fmt.Sprintf("%T", err)))
+			}
 			return
 		}
 		if purged < sweepBatch {

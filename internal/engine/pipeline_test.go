@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -280,6 +281,30 @@ func TestPoisonRowIsQuarantinedAfterThreeAttempts(t *testing.T) {
 	db := r.inspect()
 	if got := query[string](t, db, "SELECT attempts || ' ' || quarantined || ' ' || (payload IS NULL) FROM inbox"); got != "3 1 1" {
 		t.Fatalf("quarantined row = %q, want three attempts, quarantined and no payload", got)
+	}
+}
+
+func TestAStopDuringTheInboxReadIsNotLoggedAsAFailure(t *testing.T) {
+	r := newPipeRig(t)
+	r.appendRaw(mustPayload(t, dm("M1", alice, "left for the next start")))
+	ctx, stop := context.WithCancel(t.Context())
+	r.p.clock = stoppingClock{Clock: r.clock, stop: stop}
+	r.p.drainInbox(ctx)
+	if e := r.logs.events("ingest_failed"); len(e) != 0 {
+		t.Fatalf("the stop was logged as %v", e)
+	}
+	if n := query[int](t, r.inspect(), "SELECT count(*) FROM inbox"); n != 1 {
+		t.Fatalf("%d inbox rows, want the row kept for the next start", n)
+	}
+}
+
+func TestAStopDuringTheExpirySweepIsNotLoggedAsAFailure(t *testing.T) {
+	r := newPipeRig(t)
+	ctx, stop := context.WithCancel(t.Context())
+	r.p.clock = stoppingClock{Clock: r.clock, stop: stop}
+	r.p.sweep(ctx)
+	if e := r.logs.events("expiry_sweep_failed"); len(e) != 0 {
+		t.Fatalf("the stop was logged as %v", e)
 	}
 }
 
