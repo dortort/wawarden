@@ -1844,9 +1844,11 @@ notification answered `202` is `ok`. A row names a chat only for a successful
 
    or replace `headers` with `headersHelper`, a command that prints the headers
    as a JSON object and that Claude Code runs at each connection and again
-   after a `401` or `403`.
+   after a `401` or `403`. Claude Code asks once, when `claude` starts in that
+   project, whether to use a server from `.mcp.json`; until it is approved,
+   `claude mcp list` shows it as pending approval.
 3. `claude mcp get whatsapp` or `claude mcp list` shows the server as
-   connected, and `/mcp` in a session lists its five tools: `get_changes`,
+   connected (a server from `.mcp.json` once it is approved), and `/mcp` in a session lists its five tools: `get_changes`,
    `get_chat`, `get_messages`, `list_chats` and `search_messages`. There is no
    `send_message`. A wrong, expired or revoked token shows as a failed
    connection rather than as a server that needs authentication: the endpoint
