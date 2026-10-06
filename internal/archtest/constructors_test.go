@@ -237,12 +237,13 @@ func checkSealConstructors(f *sourceFile) []string {
 	return out
 }
 
-func TestSealFunctionsHaveOneSite(t *testing.T) {
-	files, err := moduleFiles(os.DirFS(filepath.Join(moduleRoot(t), sealDir)))
-	if err != nil {
-		t.Fatalf("walk %s: %v", sealDir, err)
-	}
-	exported := map[string]bool{}
+var (
+	sealedTypes = set(sealChat, "ReadGrant", "WriteGrant", "AdminGrant", "AdminCredential")
+	sealMethods = set("ReadGrant.Chats")
+)
+
+func sealExports(files []*sourceFile) (funcs, methods map[string]bool) {
+	funcs, methods = map[string]bool{}, map[string]bool{}
 	for _, f := range files {
 		if f.test || f.dir != "." {
 			continue
@@ -250,8 +251,12 @@ func TestSealFunctionsHaveOneSite(t *testing.T) {
 		for _, decl := range f.file.Decls {
 			switch d := decl.(type) {
 			case *ast.FuncDecl:
-				if d.Recv == nil && d.Name.IsExported() {
-					exported[d.Name.Name] = true
+				switch {
+				case !d.Name.IsExported():
+				case d.Recv == nil:
+					funcs[d.Name.Name] = true
+				case d.Type.Results != nil && mentionsSealedType(d.Type.Results):
+					methods[receiverPrefix(d)+d.Name.Name] = true
 				}
 			case *ast.GenDecl:
 				if d.Tok != token.VAR {
@@ -260,15 +265,65 @@ func TestSealFunctionsHaveOneSite(t *testing.T) {
 				for _, spec := range d.Specs {
 					for _, id := range spec.(*ast.ValueSpec).Names {
 						if id.IsExported() {
-							exported[id.Name] = true
+							funcs[id.Name] = true
 						}
 					}
 				}
 			}
 		}
 	}
+	return funcs, methods
+}
+
+func mentionsSealedType(n ast.Node) bool {
+	found := false
+	ast.Inspect(n, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && sealedTypes[id.Name] {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+func TestSealFunctionsHaveOneSite(t *testing.T) {
+	files, err := moduleFiles(os.DirFS(filepath.Join(moduleRoot(t), sealDir)))
+	if err != nil {
+		t.Fatalf("walk %s: %v", sealDir, err)
+	}
+	exported, methods := sealExports(files)
 	got, want := slices.Sorted(maps.Keys(exported)), slices.Sorted(maps.Keys(sealFunctions))
 	if !slices.Equal(got, want) {
 		t.Fatalf("package seal exports the functions and variables %q, but the seal-constructors rule confines %q: they must match", got, want)
+	}
+	if got, want := slices.Sorted(maps.Keys(methods)), slices.Sorted(maps.Keys(sealMethods)); !slices.Equal(got, want) {
+		t.Fatalf("package seal declares the exported methods %q returning a sealed type, but %q were reviewed: a method that returns one can mint it, so review it and update the list", got, want)
+	}
+}
+
+func TestSealMethodInventory(t *testing.T) {
+	f, err := parseSource("seal.go", []byte(`package seal
+
+type ChatKind int
+
+func (c Chat) JID() string                                { return "" }
+func (c Chat) Kind() ChatKind                             { return 0 }
+func (g ReadGrant) Valid() bool                           { return false }
+func (g ReadGrant) Chats() map[Chat]struct{}              { return nil }
+func (g ReadGrant) With(c Chat) ReadGrant                 { return g }
+func (g *WriteGrant) widen() WriteGrant                   { return *g }
+func (k ChatKind) Grant() (AdminGrant, error)             { return AdminGrant{}, nil }
+func (k ChatKind) Credential() func() AdminCredential     { return nil }
+func NewChat(string, ChatKind) Chat                       { return Chat{} }
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	funcs, methods := sealExports([]*sourceFile{f})
+	if want := set("NewChat"); !maps.Equal(funcs, want) {
+		t.Errorf("functions %q, want %q", slices.Sorted(maps.Keys(funcs)), slices.Sorted(maps.Keys(want)))
+	}
+	if want := set("ReadGrant.Chats", "ReadGrant.With", "ChatKind.Grant", "ChatKind.Credential"); !maps.Equal(methods, want) {
+		t.Errorf("methods %q, want %q", slices.Sorted(maps.Keys(methods)), slices.Sorted(maps.Keys(want)))
 	}
 }
