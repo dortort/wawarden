@@ -33,6 +33,8 @@ const usage = `usage:
                                    call the admin listener; ADMIN is [--addr URL] and one of
                                    --token-file PATH, --token-stdin or --token-command COMMAND
                                    (default --addr http://127.0.0.1:8082)
+  wawarden audit verify --db PATH --master-key-file PATH [--log PATH]
+                                   verify the audit chain of a copy of the archive, offline
 `
 
 const healthcheckTimeout = 2 * time.Second
@@ -55,6 +57,8 @@ func run(ctx context.Context, args, environ []string, stdin io.Reader, stdout, s
 		return version(args[1:], stdout, stderr)
 	case "admin":
 		return admin(ctx, args[1:], environ, stdin, stdout, stderr)
+	case "audit":
+		return audit(ctx, args[1:], stdout, stderr)
 	}
 	return usageError(stderr)
 }
