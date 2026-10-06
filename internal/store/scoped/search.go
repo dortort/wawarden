@@ -5,6 +5,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 const (
@@ -21,7 +23,11 @@ type Query struct {
 }
 
 func ParseQuery(s string) (Query, error) {
-	if len(s) < minQueryBytes || len(s) > maxQueryBytes || !utf8.ValidString(s) || strings.ContainsFunc(s, unicode.IsControl) {
+	if len(s) > maxQueryBytes || !utf8.ValidString(s) {
+		return Query{}, ErrInvalidQuery
+	}
+	s = norm.NFC.String(s)
+	if len(s) < minQueryBytes || len(s) > maxQueryBytes || strings.ContainsFunc(s, unicode.IsControl) {
 		return Query{}, ErrInvalidQuery
 	}
 	terms := strings.Fields(s)

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/text/unicode/norm"
+
 	"github.com/dortort/wawarden/internal/store/ingest"
 	"github.com/dortort/wawarden/internal/store/scoped"
 )
@@ -49,7 +51,7 @@ func isASCII(s string) bool {
 
 func FuzzSearchQuery(f *testing.F) {
 	for _, seed := range []string{"alpha", "alpha beta", `abc" OR "secret`, `"secret"`, "NEAR(alpha", "text:column", "{text}:braces", "star*", "^caret",
-		"secret\x00", `abc"`, `""""`, "MIXED case", "café", "שלום", "alpha AND beta", "alpha OR beta", "-minus", `back\slash`} {
+		"secret\x00", `abc"`, `""""`, "MIXED case", "café", "cafe\u0301", "\u212bngstr\u00f6m", "שלום", "alpha AND beta", "alpha OR beta", "-minus", `back\slash`} {
 		f.Add(seed)
 	}
 	s, err := ingest.Open(f.Context(), testOptions(f.TempDir()))
@@ -76,7 +78,7 @@ func FuzzSearchQuery(f *testing.F) {
 			}
 			return
 		}
-		terms := strings.Fields(input)
+		terms := strings.Fields(norm.NFC.String(input))
 		phrases := strings.Split(q.Expression(), " AND ")
 		if len(phrases) != len(terms) {
 			t.Fatalf("expression %q for %d terms", q.Expression(), len(terms))

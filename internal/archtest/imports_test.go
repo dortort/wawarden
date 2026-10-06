@@ -37,7 +37,7 @@ const apiStore = module + "/" + scopedDir
 var policyAllowed = set("bytes", "cmp", "crypto/sha256", "crypto/subtle", "encoding/base64", "encoding/binary", "encoding/hex",
 	"errors", "hash/crc32", "iter", "maps", "slices", "sort", "strconv", "strings", "time", "unicode", "unicode/utf8", "unique")
 
-var importableModules = []string{"filippo.io/age", "go.mau.fi/libsignal", "go.mau.fi/whatsmeow", "google.golang.org/protobuf", "modernc.org/sqlite", rapidModule}
+var importableModules = []string{"filippo.io/age", "go.mau.fi/libsignal", "go.mau.fi/whatsmeow", "google.golang.org/protobuf", "modernc.org/sqlite", rapidModule, textModule}
 
 var indirectOnlyModules = []string{
 	"filippo.io/edwards25519",
@@ -60,7 +60,6 @@ var indirectOnlyModules = []string{
 	"golang.org/x/net",
 	"golang.org/x/sync",
 	"golang.org/x/sys",
-	"golang.org/x/text",
 	"modernc.org/libc",
 	"modernc.org/mathutil",
 	"modernc.org/memory",

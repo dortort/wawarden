@@ -19,6 +19,7 @@ const (
 	protobufModule  = "google.golang.org/protobuf"
 	signalModule    = "go.mau.fi/libsignal"
 	rapidModule     = "pgregory.net/rapid"
+	textModule      = "golang.org/x/text"
 	scopedDir       = storeDir + "/scoped"
 )
 
@@ -34,6 +35,7 @@ var confinements = []confinement{
 	{pkg: protobufModule, dirs: []string{adapterDir}},
 	{pkg: signalModule, dirs: []string{adapterDir}},
 	{pkg: ageModule, dirs: []string{backupDir}},
+	{pkg: textModule, dirs: []string{scopedDir}},
 	{pkg: rapidModule},
 }
 
@@ -169,6 +171,18 @@ import (
 		{name: "a signal library test in the adapter", rel: "internal/engine/wa/x_test.go", src: `package wa
 
 import "go.mau.fi/libsignal/protocol"
+`},
+		{name: "the text module outside the scoped store", rel: "internal/store/ingest/x.go", want: 2, src: `package ingest
+
+import (
+	"golang.org/x/text/unicode/norm"
+	_ "golang.org/x/text/language"
+	_ "golang.org/x/textx"
+)
+`},
+		{name: "the scoped store", rel: "internal/store/scoped/x.go", src: `package scoped
+
+import "golang.org/x/text/unicode/norm"
 `},
 		{name: "a test-only module outside tests", rel: "internal/store/scoped/x.go", want: 2, src: `package scoped
 

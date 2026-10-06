@@ -312,6 +312,16 @@ func TestSearchFindsTextInScopeNewestFirstAcrossWindows(t *testing.T) {
 	}
 }
 
+func TestSearchFindsComposedTextFromADecomposedQuery(t *testing.T) {
+	s := openStore(t)
+	insert(t, s, message(t, alice, "A1", alice, "un caf\u00e9 noir", epoch), message(t, alice, "A2", alice, "un cafe noir", epoch))
+	for _, text := range []string{"caf\u00e9", "cafe\u0301", "CAFE\u0301 noir"} {
+		if got := searchAll(t, s.Scoped(), grantAll(t), text, "", 5); !slices.Equal(got, []string{"A1"}) {
+			t.Fatalf("search for %+q = %q, want the composed text", text, got)
+		}
+	}
+}
+
 func TestChangesFollowTheChangeNumbers(t *testing.T) {
 	s := openStore(t)
 	refs := insert(t, s, message(t, alice, "A1", alice, "one", epoch), message(t, bob, "B1", bob, "two", epoch), message(t, alice, "A2", alice, "three", epoch))
@@ -426,6 +436,9 @@ func TestParseQuery(t *testing.T) {
 		"\u00a0abc\u2003":                 `"abc"`,
 		"日本語":                             `"日本語"`,
 		strings.Repeat("x", 128):          `"` + strings.Repeat("x", 128) + `"`,
+		"cafe\u0301 noir":                 "\"caf\u00e9\" AND \"noir\"",
+		"\u212bngstr\u00f6m":              "\"\u00c5ngstr\u00f6m\"",
+		strings.Repeat("e\u0301", 42):     `"` + strings.Repeat("\u00e9", 42) + `"`,
 	} {
 		q, err := scoped.ParseQuery(in)
 		if err != nil || q.Expression() != want {
@@ -433,7 +446,7 @@ func TestParseQuery(t *testing.T) {
 		}
 	}
 	for _, in := range []string{"", "ab", "abc de", "  ", strings.Repeat("x", 129), "abc\x00def", "abc\tdef", "abc\ndef", "abc\u0085def", "abc\x7f",
-		"\xff\xfeabc", "aaa bbb ccc ddd eee fff ggg hhh iii", "👍🏽", "日本"} {
+		"\xff\xfeabc", "aaa bbb ccc ddd eee fff ggg hhh iii", "👍🏽", "日本", "abc e\u0301e\u0301", strings.Repeat("\u0958", 42), strings.Repeat("e\u0301", 43)} {
 		if q, err := scoped.ParseQuery(in); !errors.Is(err, scoped.ErrInvalidQuery) {
 			t.Errorf("ParseQuery(%q) = %q, %v, want ErrInvalidQuery", in, q.Expression(), err)
 		}
