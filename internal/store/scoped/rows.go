@@ -25,6 +25,7 @@ type SearchPosition struct {
 
 type ChangePosition struct {
 	ChangeSeq int64 `json:"-"`
+	Since     int64 `json:"-"`
 }
 
 type Direction uint8
@@ -147,6 +148,12 @@ func scanChat(rs rowScanner) (Chat, error) {
 	c.Chat, c.Name, c.NameSource, c.LastAt = chat, name.String, source.String, fromMS(last)
 	c.Position.LastTS, c.Position.Undated = last.Int64, !last.Valid
 	return c, nil
+}
+
+func scanFirst(rs rowScanner) (sql.NullInt64, error) {
+	var first sql.NullInt64
+	err := rs.Scan(&first)
+	return first, err
 }
 
 func scanMessage(rs rowScanner) (Message, error) {

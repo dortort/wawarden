@@ -28,8 +28,10 @@ const (
 		" WHERE m.change_seq > ?1 AND m.change_seq <= ?2{scope m.chat_jid} ORDER BY m.change_seq LIMIT ?3"
 	selectChatChanges = "SELECT " + messageColumns + " FROM messages m" + messageJoins +
 		" WHERE m.chat_jid = ?4 AND m.change_seq > ?1 AND m.change_seq <= ?2{scope m.chat_jid} ORDER BY m.change_seq LIMIT ?3"
-	selectTopChange = "SELECT coalesce(max(change_seq), 0) FROM messages"
-	selectLID       = "SELECT lid FROM lid_map WHERE pn = ?1"
+	selectFirstChange     = "SELECT min(m.change_seq) FROM messages m WHERE m.change_seq > ?1 AND m.change_seq <= ?2 AND m.ts >= ?3{scope m.chat_jid}"
+	selectChatFirstChange = "SELECT min(m.change_seq) FROM messages m WHERE m.chat_jid = ?4 AND m.change_seq > ?1 AND m.change_seq <= ?2 AND m.ts >= ?3{scope m.chat_jid}"
+	selectTopChange       = "SELECT coalesce(max(change_seq), 0) FROM messages"
+	selectLID             = "SELECT lid FROM lid_map WHERE pn = ?1"
 )
 
 var messageID = regexp.MustCompile(`^[\x21-\x7e]{1,128}$`)
@@ -110,7 +112,7 @@ func canonical(ctx context.Context, q querier, c policy.CanonicalChat) (policy.C
 }
 
 func (r *Reader) Changes(g policy.ReadGrant, ctx context.Context, ref string, pos ChangePosition, limit int) (ChangePage, bool, error) {
-	if !validLimit(limit) || pos.ChangeSeq < 0 {
+	if !validLimit(limit) || pos.ChangeSeq < 0 || pos.Since < 0 {
 		return ChangePage{}, false, ErrInvalid
 	}
 	var page ChangePage
@@ -129,7 +131,8 @@ func (r *Reader) Changes(g policy.ReadGrant, ctx context.Context, ref string, po
 			return err
 		}
 		messages := rowsOf[Message]{q, scanMessage}
-		after := pos.ChangeSeq
+		firsts := rowsOf[sql.NullInt64]{q, scanFirst}
+		after, since := pos.ChangeSeq, pos.Since
 		for i := 0; i < maxWindows && after < top && len(page.Messages) <= limit; i++ {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -137,6 +140,22 @@ func (r *Reader) Changes(g policy.ReadGrant, ctx context.Context, ref string, po
 			upto := min(after+window, top)
 			var got []Message
 			var err error
+			if since != 0 {
+				var first []sql.NullInt64
+				if chat == "" {
+					first, err = firsts.QueryContext(ctx, selectFirstChange, after, upto, since)
+				} else {
+					first, err = firsts.QueryContext(ctx, selectChatFirstChange, after, upto, since, chat)
+				}
+				if err != nil {
+					return err
+				}
+				if len(first) == 0 || !first[0].Valid {
+					after = upto
+					continue
+				}
+				after, since = first[0].Int64-1, 0
+			}
 			if chat == "" {
 				got, err = messages.QueryContext(ctx, selectChanges, after, upto, limit+1-len(page.Messages))
 			} else {
@@ -148,7 +167,7 @@ func (r *Reader) Changes(g policy.ReadGrant, ctx context.Context, ref string, po
 			page.Messages = append(page.Messages, got...)
 			after = upto
 		}
-		page.Next, page.More = ChangePosition{ChangeSeq: after}, after < top
+		page.Next, page.More = ChangePosition{ChangeSeq: after, Since: since}, after < top
 		if len(page.Messages) > limit {
 			page.Messages, page.Next, page.More = page.Messages[:limit], page.Messages[limit-1].Change, true
 		}

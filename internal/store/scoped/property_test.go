@@ -352,7 +352,8 @@ func TestPropertyScopedReadsMatchTheOracle(t *testing.T) {
 		}
 		cov.add(a.seen)
 	})
-	cov.require(t, "re-key moved a scope", "re-key refused for a scope", "a client sees some messages and not others", "revoke", "edit", "dead canary")
+	cov.require(t, "re-key moved a scope", "re-key refused for a scope", "a client sees some messages and not others", "revoke", "edit", "dead canary",
+		"changes from a time skipped a change", "changes from a time kept a later change dated before it")
 }
 
 func checkChats(t *rapid.T, a *archive, g policy.ReadGrant, set scopeSet, chats []scoped.DumpChat, limit int) {
@@ -454,12 +455,26 @@ func checkDeniedEqualsMissing(t *rapid.T, a *archive, g policy.ReadGrant, ref st
 func checkChanges(t *rapid.T, a *archive, g policy.ReadGrant, set scopeSet, messages []scoped.DumpMessage, limit int) []scoped.Message {
 	of := slices.DeleteFunc(slices.Clone(messages), func(m scoped.DumpMessage) bool { return !set.has(m.Chat) })
 	slices.SortFunc(of, func(x, y scoped.DumpMessage) int { return cmp.Compare(x.ChangeSeq, y.ChangeSeq) })
+	var pos scoped.ChangePosition
+	if rapid.Bool().Draw(t, "changes from a time") {
+		pos.Since = epoch.Add(time.Duration(rapid.IntRange(0, 5).Draw(t, "since minute")) * time.Minute).UnixMilli()
+		first := slices.IndexFunc(of, func(m scoped.DumpMessage) bool { return m.TS >= pos.Since })
+		if first < 0 {
+			first = len(of)
+		}
+		if first > 0 && first < len(of) {
+			a.seen["changes from a time skipped a change"] = true
+		}
+		of = of[first:]
+		if slices.ContainsFunc(of, func(m scoped.DumpMessage) bool { return m.TS < pos.Since }) {
+			a.seen["changes from a time kept a later change dated before it"] = true
+		}
+	}
 	var want, got []int64
 	for _, m := range of {
 		want = append(want, m.Seq)
 	}
 	var rows []scoped.Message
-	var pos scoped.ChangePosition
 	for range 100 {
 		page, _, err := a.store.Scoped().Changes(g, t.Context(), "", pos, limit)
 		if err != nil {

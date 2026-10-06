@@ -94,6 +94,11 @@ func TestReadsRefuseAnInvalidLimit(t *testing.T) {
 	if _, _, err := r.Search(g, t.Context(), scoped.Query{}, "", scoped.SearchPosition{}, 1); !errors.Is(err, scoped.ErrInvalid) {
 		t.Fatalf("the zero query = %v", err)
 	}
+	for _, pos := range []scoped.ChangePosition{{ChangeSeq: -1}, {Since: -1}} {
+		if _, _, err := r.Changes(g, t.Context(), "", pos, 1); !errors.Is(err, scoped.ErrInvalid) {
+			t.Fatalf("the change position %+v = %v, want ErrInvalid", pos, err)
+		}
+	}
 }
 
 func traced(s *ingest.Store) (*scoped.Reader, *[]string) {
@@ -346,6 +351,66 @@ func TestChangesFollowTheChangeNumbers(t *testing.T) {
 	page, _, err := s.Scoped().Changes(grant(t, alice), t.Context(), "", scoped.ChangePosition{ChangeSeq: 5}, 5)
 	if err != nil || len(page.Messages) != 0 || !page.More || page.Next.ChangeSeq != 5+5*scoped.Window {
 		t.Fatalf("a page across empty windows = %+v, %v", page, err)
+	}
+}
+
+func TestChangesFromATimeStartAtTheFirstChangeOfAMessageDatedFromIt(t *testing.T) {
+	s := openStore(t)
+	refs := insert(t, s, message(t, alice, "A1", alice, "one", epoch), message(t, bob, "B1", bob, "two", epoch.Add(2*time.Minute)),
+		message(t, alice, "A2", alice, "three", epoch.Add(time.Minute)), message(t, bob, "B0", bob, "zero", epoch))
+	exec(t, s, "UPDATE messages SET change_seq = 150000 WHERE id = 'A2'")
+	write(t, s, func(tx *ingest.Tx) error { return tx.ApplyEdit(refs[0], "edited", epoch.Add(time.Hour)) })
+	exec(t, s, "UPDATE messages SET change_seq = 120000 WHERE id = 'B0'")
+	since := func(d time.Duration) scoped.ChangePosition {
+		return scoped.ChangePosition{Since: epoch.Add(d).UnixMilli()}
+	}
+	collect := func(g policy.ReadGrant, ref string, pos scoped.ChangePosition, limit int) ([]string, scoped.ChangePosition, int) {
+		var got []string
+		for calls := 1; calls <= 100; calls++ {
+			page, ok, err := s.Scoped().Changes(g, t.Context(), ref, pos, limit)
+			if err != nil || !ok {
+				t.Fatalf("Changes = %v, %v", ok, err)
+			}
+			got = append(got, ids(page.Messages)...)
+			pos = page.Next
+			if !page.More {
+				return got, pos, calls
+			}
+		}
+		t.Fatal("Changes never ended")
+		return nil, pos, 0
+	}
+	for limit := 1; limit <= 3; limit++ {
+		got, _, calls := collect(grant(t, alice), "", since(time.Minute), limit)
+		if !slices.Equal(got, []string{"A2", "A1"}) || calls < 2 {
+			t.Fatalf("alice's changes from a minute in, in pages of %d = %q in %d calls, want A2 then the edit of A1 after more than five windows", limit, got, calls)
+		}
+	}
+	if got, _, _ := collect(grant(t, bob), "", since(time.Minute), 5); !slices.Equal(got, []string{"B1", "B0"}) {
+		t.Fatalf("bob's changes from a minute in = %q", got)
+	}
+	if got, _, _ := collect(grantAll(t), "", since(time.Minute), 5); !slices.Equal(got, []string{"B1", "B0", "A2", "A1"}) {
+		t.Fatalf("all changes from a minute in = %q", got)
+	}
+	if got, _, _ := collect(grantAll(t), "", since(0), 5); !slices.Equal(got, []string{"B1", "B0", "A2", "A1"}) {
+		t.Fatalf("all changes from the first message = %q", got)
+	}
+	got, idle, _ := collect(grantAll(t), "", since(3*time.Minute), 5)
+	gotChat, idleChat, _ := collect(grantAll(t), refOf(t, s, bob), since(3*time.Minute), 5)
+	if len(got) != 0 || len(gotChat) != 0 || idle.Since != since(3*time.Minute).Since || idleChat.Since != idle.Since {
+		t.Fatalf("changes from after every message = %q, %q, next %+v, %+v, want none and still waiting for the time", got, gotChat, idle, idleChat)
+	}
+	write(t, s, func(tx *ingest.Tx) error { return tx.ApplyEdit(refs[0], "edited again", epoch.Add(2*time.Hour)) })
+	insert(t, s, message(t, bob, "B2", bob, "four", epoch.Add(4*time.Minute)), message(t, alice, "A3", alice, "five", epoch.Add(5*time.Minute)))
+	write(t, s, func(tx *ingest.Tx) error { return tx.ApplyRevoke(refs[1]) })
+	if got, _, _ := collect(grantAll(t), "", idle, 5); !slices.Equal(got, []string{"B2", "A3", "B1"}) {
+		t.Fatalf("changes once a message is dated from the time = %q, want B2 and what changed after it", got)
+	}
+	if got, _, _ := collect(grantAll(t), refOf(t, s, bob), idleChat, 5); !slices.Equal(got, []string{"B2", "B1"}) {
+		t.Fatalf("changes of bob's chat once a message is dated from the time = %q", got)
+	}
+	if _, ok, err := s.Scoped().Changes(grant(t, alice), t.Context(), refOf(t, s, bob), since(time.Minute), 5); ok || err != nil {
+		t.Fatalf("changes from a time of a chat out of scope = %v, %v, want not found", ok, err)
 	}
 }
 

@@ -11,19 +11,21 @@ import (
 )
 
 var Queries = map[string]string{
-	"selectChat":        selectChat,
-	"selectDated":       selectDated,
-	"selectUndated":     selectUndated,
-	"selectOlder":       selectOlder,
-	"selectNewer":       selectNewer,
-	"selectMessage":     selectMessage,
-	"selectChanges":     selectChanges,
-	"selectChatChanges": selectChatChanges,
-	"selectTopChange":   selectTopChange,
-	"selectLID":         selectLID,
-	"selectSearch":      selectSearch,
-	"selectChatSearch":  selectChatSearch,
-	"selectTopSeq":      selectTopSeq,
+	"selectChat":            selectChat,
+	"selectDated":           selectDated,
+	"selectUndated":         selectUndated,
+	"selectOlder":           selectOlder,
+	"selectNewer":           selectNewer,
+	"selectMessage":         selectMessage,
+	"selectChanges":         selectChanges,
+	"selectChatChanges":     selectChatChanges,
+	"selectFirstChange":     selectFirstChange,
+	"selectChatFirstChange": selectChatFirstChange,
+	"selectTopChange":       selectTopChange,
+	"selectLID":             selectLID,
+	"selectSearch":          selectSearch,
+	"selectChatSearch":      selectChatSearch,
+	"selectTopSeq":          selectTopSeq,
 }
 
 const Window = window

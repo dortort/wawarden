@@ -1,0 +1,8 @@
+== all
+SEARCH m USING INDEX messages_change (change_seq>? AND change_seq<?)
+== none
+SEARCH m USING COVERING INDEX messages_change
+== one
+SEARCH m USING INDEX messages_change_chat (chat_jid=? AND change_seq>? AND change_seq<?)
+== three
+SEARCH m USING INDEX messages_change_chat (chat_jid=? AND change_seq>? AND change_seq<?)
