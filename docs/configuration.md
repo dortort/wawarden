@@ -1,8 +1,8 @@
 # Configuration reference
 
 This is the authoritative reference for configuring and running WaWarden. It
-describes the current build on `main`, which holds milestone **M1** and is not
-released yet; the latest release, `v0.1.0`, is milestone **M0**. To M0's
+describes the current build on `main`, which holds milestone **M2** and is not
+released yet; the latest release, `v0.2.0`, is milestone **M1**. To M0's
 configuration checks, listeners, admin token and metrics, M1 adds the
 [master key](#master-key), the pseudonyms and dropped lines in the
 [logs](#pseudonyms-and-dropped-lines), the
@@ -14,9 +14,15 @@ library, the [admin routes](#admin-routes) with the
 [notifications](#notifications),
 [metrics in embedded metric format](#embedded-metric-format),
 [backups](#backups) and, in development builds only, the
-[fake engine](#fake-engine). Of M2, it holds the client listener's
-[read API](#read-api); sending comes with M3. A service without a paired device makes no connection to
-WhatsApp until `wawarden admin pair` requests pairing. Everything listed here
+[fake engine](#fake-engine). M2 adds clients with per-chat read scopes and
+expiring tokens, which [`admin clients`](#admin-clients-and-admin-chats)
+creates and revokes; the client listener's [read API](#read-api) and the same
+reads as [MCP tools](#mcp); the names the owner saved for contacts; per-client
+[read rate limits](#read-rate-limits); and the [audit chain](#audit-chain) with
+[`audit verify`](#audit-verify). Sending comes with M3. How an agent should
+treat what it reads is in [docs/agents.md](agents.md). A service without a
+paired device makes no connection to WhatsApp until `wawarden admin pair`
+requests pairing. Everything listed here
 is implemented, and nothing else is. Settings planned for later milestones are
 listed under [Reserved names](#reserved-names) and are refused by this build.
 
@@ -141,8 +147,7 @@ The shell, not WaWarden, creates the file when you redirect this output; set a
 restrictive `umask` or write it into a private directory.
 
 The other `admin` subcommands of this build call the admin listener; see
-below. Client management (M2) and `backfill` (M3) do not exist in this build and
-are usage errors.
+below. `backfill` (M3) does not exist in this build and is a usage error.
 
 ### `admin status`, `admin pair` and `admin reconnect`
 
@@ -151,7 +156,7 @@ makes one request with the admin token and prints the answer:
 
 | Command | Request | Prints on standard output |
 |---|---|---|
-| `admin status` | `GET /admin/v1/status` | One `key: value` line each for `state`, `reason` (`none` when empty), `paired`, `chats`, `messages`, `history blobs pending`, `history blobs quarantined`, `inbox backlog`, `inbox quarantined`, `last ingest` (`never` before the first message) and `version`. |
+| `admin status` | `GET /admin/v1/status` | One `key: value` line each for `state`, `reason` (`none` when empty), `paired`, `chats`, `messages`, `history blobs pending`, `history blobs quarantined`, `inbox backlog`, `inbox quarantined`, `clients active`, `clients expired`, `clients revoked`, `all-chats clients active`, `last ingest` (`never` before the first message) and `version`. |
 | `admin pair` | `POST /admin/v1/pair` with the body `{}` | `pairing code: <code>`. Standard error says where to enter it on the phone: Linked devices, Link a device, then Link with phone number instead. |
 | `admin reconnect` | `POST /admin/v1/reconnect` with the body `{}` | `reconnect requested` |
 
@@ -196,10 +201,8 @@ cursor, rewrite the screen, set a link or write the clipboard.
 A refusal prints `admin <command>: refused with <code> (HTTP <status>)` on
 standard error; see the [exit codes](#exit-codes).
 
-`admin status` also prints `clients active`, `clients expired`, `clients
-revoked` and `all-chats clients active`, after `inbox quarantined`, and writes
-`admin status: warning: <code>` on standard error for each code in the
-answer's `warnings`.
+`admin status` also writes `admin status: warning: <code>` on standard error
+for each code in the answer's `warnings`.
 
 ### `admin clients` and `admin chats`
 
@@ -1282,7 +1285,7 @@ public internet.
 | Listener | Address | Opened | Serves |
 |---|---|---|---|
 | `client` | `WAWARDEN_LISTEN`, default `127.0.0.1:8080` | Always | The [read API](#read-api) and the [MCP endpoint](#mcp) `POST /mcp`, with a client token. |
-| `admin` | `WAWARDEN_ADMIN_LISTEN`, default `127.0.0.1:8082` | Only when an admin token hash is configured | `GET /metrics` and the [admin routes](#admin-routes) `GET /admin/v1/status`, `POST /admin/v1/pair` and `POST /admin/v1/reconnect`, all with the admin token. |
+| `admin` | `WAWARDEN_ADMIN_LISTEN`, default `127.0.0.1:8082` | Only when an admin token hash is configured | `GET /metrics` and the [admin routes](#admin-routes): the status, pairing and reconnection, the clients (create, list, show, revoke) and the chat lookup, all with the admin token. |
 | `health` | `WAWARDEN_HEALTH_LISTEN`, default `127.0.0.1:8081`, loopback only | Always | `GET /healthz`, without authentication. |
 
 Every start logs a `listening` event for each listener with its bound address,
@@ -1504,9 +1507,8 @@ requests.
 #### Request bodies
 
 The admin routes `pair`, `reconnect` and the client revoke route read their
-body, which must be the empty object `{}`, the client create route reads the
-client to create, and later client routes will read theirs, all with one
-decoder. Only a
+body, which must be the empty object `{}`, and the client create route reads the
+client to create, all with one decoder. No client REST route reads a body. Only a
 route handler can call it, so it runs only after authentication and after the
 route's grant was decided. It answers with a fixed error and reads no further when:
 
@@ -1550,6 +1552,9 @@ untrusted}`:
   name, or `null`.
 - `ts` and `edited_at` are RFC 3339 times in UTC with milliseconds.
 - `kind` is `text`, `media`, `reaction`, `poll_update` or `other`.
+- `text_display` is `text` without control, bidirectional, zero-width and tag
+  characters, for showing to a person; neither is safe to act on (see
+  [docs/agents.md](agents.md)).
 - `text` and `text_display` are `null` for a revoked message, which is answered
   with `revoked: true`, and when the message has no text. Each is cut on a
   character boundary so that it encodes to at most 32 KiB, and `text_truncated`
@@ -2088,8 +2093,9 @@ never as its content.
 
 The archive's `audit` table records every change of a client: creating one
 (`client_create`) and revoking one (`client_revoke`, once; repeating it records
-nothing), and every request a client makes to the [read API](#read-audit) that
-its read budget admits. Failed authentications are not recorded. A row holds an id one more than the
+nothing), and every request a client makes to the [read API](#read-audit) or
+the [MCP endpoint](#mcp-audit) that its read budget admits. Failed
+authentications are not recorded. A row holds an id one more than the
 previous row's, the time in milliseconds, the client id, the action, the chat
 (none for these two actions), its `chat-hmac` value, whether the action was
 allowed, a reason code (`ok` for these two actions), the peer address when one is known, the
@@ -2311,7 +2317,7 @@ deadline. In development builds, the [fake engine](#fake-engine) adds
 `fake.connection`.
 
 Anything that scrapes `/metrics` holds the full admin token, which can also
-start pairing, ask for a reconnect and read the status, and from M2 create
+start pairing, ask for a reconnect, read the status, and create and revoke
 clients. Treat a scrape configuration as holding the admin credential, and
 prefer the embedded-metric-format lines, which need no token, for alerting.
 
@@ -2392,9 +2398,9 @@ at once.
 Release images are published as `ghcr.io/dortort/wawarden` for `linux/amd64` and
 `linux/arm64`, by the release workflow only. Deploy them by digest;
 [`RELEASING.md`](../RELEASING.md) explains how to verify one. The latest
-release, `v0.1.0`, is milestone M0: its image has no WhatsApp engine and is
-licensed under MIT. Until M1 is released, build `main` from source to run what
-this document describes. The contract below applies to release images from M1
+release, `v0.2.0`, is milestone M1: its image has the WhatsApp engine but no
+clients, read API, MCP endpoint or audit chain. Until M2 is released, build
+`main` from source to run what this document describes. The contract below applies to release images from M1
 on:
 
 | Item | Value |
