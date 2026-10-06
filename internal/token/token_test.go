@@ -188,6 +188,7 @@ func TestParseClientRefusesNonCanonicalTokens(t *testing.T) {
 		"newline in the id":           recrc("ww_aaaq\neye" + body[11:]),
 		"wrong prefix":                recrc("wx" + body[2:]),
 		"separator moved":             recrc("ww_aaaqeay_e" + body[12:]),
+		"separator replaced":          recrc(body[:11] + "x" + body[12:]),
 		"space in the token":          recrc(body[:20] + " " + body[21:]),
 		"trailing newline":            sequentialClient[:clientLen-1] + "\n",
 	}
