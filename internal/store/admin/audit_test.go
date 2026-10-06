@@ -237,6 +237,17 @@ func TestTheTriggersRefuseUpdatesAndDeletes(t *testing.T) {
 	}
 }
 
+func TestRowMACCoversTheKeyID(t *testing.T) {
+	f, _ := chainFixture(t)
+	r := readRows(t, rawOpen(t, f.copyArchive(t)))[4]
+	key, prev := f.master.AuditChainKey(), make([]byte, 32)
+	moved := r
+	moved.Key = "00000000"
+	if hmac.Equal(admin.RowMAC(key, r, prev), admin.RowMAC(key, moved, prev)) {
+		t.Fatal("the row HMAC ignores key_id")
+	}
+}
+
 func TestVerifyRefusesWithoutAKeyOrACopy(t *testing.T) {
 	f, _ := chainFixture(t)
 	if _, err := admin.Verify(t.Context(), f.copyArchive(t), nil, nil); err == nil {
