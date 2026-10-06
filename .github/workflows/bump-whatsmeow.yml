@@ -133,6 +133,15 @@ jobs:
           shorten() {
             head -n 200 "$1" | cut -c -200 > "$2"
           }
+          commits() {
+            local n
+            n=$(($(wc -l < "$1")))
+            if [ "$n" -eq 1 ]; then
+              printf '1 commit'
+            else
+              printf '%d commits' "$n"
+            fi
+          }
 
           git clone --quiet --filter=blob:none --no-checkout "$upstream.git" "$work/upstream"
           old_commit=$(git -C "$work/upstream" rev-parse --verify "${OLD##*-}^{commit}")
@@ -165,14 +174,19 @@ jobs:
             printf -- '- Upstream: %s/compare/%s...%s. The new commit %s.\n' "$upstream" "$old_commit" "$new_commit" "$lineage"
             printf -- "- Opened by the \`bump-whatsmeow\` workflow (%s, [run %s](%s)), which never merges. That run passed \`go mod tidy\`, \`go mod verify\`, \`go build\` for the release and \`dev\` tag sets, and \`hack/offline-test.sh\`, which runs the whole suite, release and dev builds, in a container without a network, before it opened or updated this pull request.\n" "$GITHUB_EVENT_NAME" "$GITHUB_RUN_ID" "$run_url"
             printf -- '- CI does not start on its own for a pull request that the workflow token opened or updated: a maintainer starts it with **Approve workflows to run** in the merge box. RELEASING.md, under The whatsmeow bump workflow, gives the review.\n\n'
-            printf "### Upstream commits\n\n\`git log --oneline %s..%s\`: %d commits, newest first" "${OLD##*-}" "${NEW##*-}" "$(($(wc -l < "$work/log.full")))"
-            if ! cmp -s "$work/log.full" "$work/log.txt"; then
-              printf '; at most 200 shown, each cut at 200 characters'
+            printf '### Upstream commits\n\n'
+            if [ -s "$work/log.full" ]; then
+              printf "\`git log --oneline %s..%s\`: %s, newest first" "${OLD##*-}" "${NEW##*-}" "$(commits "$work/log.full")"
+              if ! cmp -s "$work/log.full" "$work/log.txt"; then
+                printf '; at most 200 shown, each cut at 200 characters'
+              fi
+              printf '.\n\n'
+              block text "$work/log.txt"
+            else
+              printf 'None: the target is an ancestor of the pinned commit.\n'
             fi
-            printf '.\n\n'
-            block text "$work/log.txt"
             if [ -s "$work/dropped.full" ]; then
-              printf "\n### Commits of the pinned version that the new one drops\n\n\`git log --oneline %s..%s\`: %d commits.\n\n" "${NEW##*-}" "${OLD##*-}" "$(($(wc -l < "$work/dropped.full")))"
+              printf "\n### Commits of the pinned version that the new one drops\n\n\`git log --oneline %s..%s\`: %s.\n\n" "${NEW##*-}" "${OLD##*-}" "$(commits "$work/dropped.full")"
               block text "$work/dropped.txt"
             fi
             printf '\n### Diffstat\n\nBetween the module sources of the two versions as the Go module proxy serves them, at most 100 files listed:\n\n'
