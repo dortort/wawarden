@@ -38,7 +38,12 @@ const (
 		WHERE contacts.jid = ?2 AND (other.origin = 'live' AND contacts.origin = 'history' OR other.origin = contacts.origin AND other.updated_ts > contacts.updated_ts)`
 	dropMergedContact = "DELETE FROM contacts WHERE jid = ?1 AND EXISTS (SELECT 1 FROM contacts WHERE jid = ?2)"
 	rekeyContact      = "UPDATE contacts SET jid = ?2 WHERE jid = ?1"
-	selectScopes      = `SELECT
+	takeNewerSaved    = `UPDATE contact_names SET full_name = other.full_name, first_name = other.first_name, updated_ts = other.updated_ts
+		FROM (SELECT full_name, first_name, updated_ts FROM contact_names WHERE jid = ?1) AS other
+		WHERE contact_names.jid = ?2 AND other.updated_ts > contact_names.updated_ts`
+	dropMergedSaved = "DELETE FROM contact_names WHERE jid = ?1 AND EXISTS (SELECT 1 FROM contact_names WHERE jid = ?2)"
+	rekeySaved      = "UPDATE contact_names SET jid = ?2 WHERE jid = ?1"
+	selectScopes    = `SELECT
 		EXISTS (SELECT 1 FROM client_read_chats a JOIN clients c ON c.id = a.client_id WHERE a.chat_jid = ?1 AND c.revoked_at IS NULL
 			AND NOT EXISTS (SELECT 1 FROM client_read_chats b WHERE b.client_id = a.client_id AND b.chat_jid = ?2)),
 		EXISTS (SELECT 1 FROM client_read_chats a JOIN clients c ON c.id = a.client_id WHERE a.chat_jid = ?2 AND c.revoked_at IS NULL
@@ -160,6 +165,9 @@ func (tx *Tx) rekey(pn, lid string, pnChat, lidChat, pnMessages bool) (bool, err
 	exec(q.ExecContext(ctx, takeNewerPushName, pn, lid))
 	exec(q.ExecContext(ctx, dropMergedContact, pn, lid))
 	exec(q.ExecContext(ctx, rekeyContact, pn, lid))
+	exec(q.ExecContext(ctx, takeNewerSaved, pn, lid))
+	exec(q.ExecContext(ctx, dropMergedSaved, pn, lid))
+	exec(q.ExecContext(ctx, rekeySaved, pn, lid))
 	rescope(q.ExecContext(ctx, rescopeReads, pn, lid))
 	rescope(q.ExecContext(ctx, dropReads, pn))
 	rescope(q.ExecContext(ctx, rescopeWrites, pn, lid))

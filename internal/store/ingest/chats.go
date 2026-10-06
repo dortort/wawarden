@@ -60,6 +60,8 @@ const (
 	upsertPushName = `INSERT INTO contacts (jid, push_name, name_source, updated_ts, origin) VALUES (?, ?, 'push_name', ?, ?)
 		ON CONFLICT (jid) DO UPDATE SET push_name = excluded.push_name, name_source = excluded.name_source, updated_ts = excluded.updated_ts, origin = excluded.origin
 		WHERE excluded.origin = 'live' OR contacts.origin = 'history'`
+	upsertContactName = `INSERT INTO contact_names (jid, full_name, first_name, updated_ts) VALUES (?, ?, ?, ?)
+		ON CONFLICT (jid) DO UPDATE SET full_name = excluded.full_name, first_name = excluded.first_name, updated_ts = excluded.updated_ts`
 	selectMembersLive     = "SELECT members_live FROM chats WHERE jid = ?"
 	markMembersLive       = "UPDATE chats SET members_live = 1 WHERE jid = ?"
 	deleteParticipants    = "DELETE FROM group_participants WHERE group_jid = ?"
@@ -141,6 +143,18 @@ func (tx *Tx) SetPushName(u policy.CanonicalChat, name string, at time.Time, ori
 		return invalid("time")
 	}
 	_, err = tx.q.ExecContext(tx.ctx, upsertPushName, u.JID(), nullString(name), ms(at), string(origin))
+	return err
+}
+
+func (tx *Tx) SetContactName(u policy.CanonicalChat, fullName, firstName string, at time.Time) error {
+	u, err := tx.canonicalUser(u, "user")
+	if err != nil {
+		return err
+	}
+	if at.IsZero() {
+		return invalid("time")
+	}
+	_, err = tx.q.ExecContext(tx.ctx, upsertContactName, u.JID(), nullString(fullName), nullString(firstName), ms(at))
 	return err
 }
 

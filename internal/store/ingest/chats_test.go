@@ -35,7 +35,7 @@ func canonical(t *testing.T, s *Store, jid string) string {
 func snapshot(t *testing.T, s *Store) map[string]int {
 	t.Helper()
 	out := map[string]int{}
-	for _, table := range []string{"chats", "chat_aliases", "lid_map", "contacts", "group_participants", "messages", "client_read_chats", "client_write_chats"} {
+	for _, table := range []string{"chats", "chat_aliases", "lid_map", "contacts", "contact_names", "group_participants", "messages", "client_read_chats", "client_write_chats"} {
 		out[table] = scalar[int](t, s, "SELECT count(*) FROM "+table)
 	}
 	out["lid chats"] = scalar[int](t, s, "SELECT count(*) FROM chats WHERE jid LIKE '%@lid'")
@@ -313,6 +313,64 @@ func TestRekeyingMovesSendersParticipantsAndContacts(t *testing.T) {
 	}
 	if n, name := scalar[int](t, s, "SELECT count(*) FROM contacts"), scalar[string](t, s, "SELECT push_name FROM contacts WHERE jid = ?", bobLID); n != 1 || name != "Bob by phone" {
 		t.Fatalf("%d contacts, LID contact named %q, want one keeping the newer push name", n, name)
+	}
+}
+
+func savedNames(t *testing.T, s *Store) string {
+	t.Helper()
+	return scalar[string](t, s, "SELECT coalesce(group_concat(jid || '=' || coalesce(full_name, '-') || '/' || coalesce(first_name, '-'), ' '), '') FROM (SELECT * FROM contact_names ORDER BY jid)")
+}
+
+func TestSavedNamesAreKeyedByTheCanonicalUser(t *testing.T) {
+	s := openStore(t)
+	write(t, s, func(tx *Tx) error {
+		for _, n := range []struct {
+			jid, full, first string
+			after            time.Duration
+		}{
+			{alice, "Alice Saved", "Alice", 0},
+			{bob, "Bob Old", "", 0},
+			{bob, "", "Bobby", 2 * time.Minute},
+			{bobLID, "Bob by LID", "", time.Minute},
+			{carol, "Carol by phone", "", time.Minute},
+			{carolLID, "Carol by LID", "", 2 * time.Minute},
+		} {
+			if err := tx.SetContactName(chat(t, n.jid), n.full, n.first, epoch.Add(n.after)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	for _, m := range [][2]string{{aliceLID, alice}, {bobLID, bob}, {carolLID, carol}} {
+		if res := learn(t, s, m[0], m[1], MappingSenderAlt); res.Outcome != LIDLearned {
+			t.Fatalf("LearnLID(%s) = %+v", m[0], res)
+		}
+	}
+	if got, want := savedNames(t, s), aliceLID+"=Alice Saved/Alice "+bobLID+"=-/Bobby "+carolLID+"=Carol by LID/-"; got != want {
+		t.Fatalf("saved names after rekeying = %q, want %q: each moves to the LID and the newer of two is kept", got, want)
+	}
+	if ts := scalar[int64](t, s, "SELECT updated_ts FROM contact_names WHERE jid = ?", bobLID); ts != epoch.Add(2*time.Minute).UnixMilli() {
+		t.Fatalf("updated_ts = %d, want the kept name's", ts)
+	}
+	write(t, s, func(tx *Tx) error {
+		if err := tx.SetContactName(chat(t, alice), "Alice Renamed", "", epoch.Add(time.Hour)); err != nil {
+			return err
+		}
+		return tx.SetContactName(chat(t, bob), "", "", epoch.Add(time.Hour))
+	})
+	if got, want := savedNames(t, s), aliceLID+"=Alice Renamed/- "+bobLID+"=-/- "+carolLID+"=Carol by LID/-"; got != want {
+		t.Fatalf("saved names after a rename and a clear by phone number = %q, want %q", got, want)
+	}
+	for name, call := range map[string]func(*Tx) error{
+		"a group's saved name":       func(tx *Tx) error { return tx.SetContactName(chat(t, groupJID), "x", "x", epoch) },
+		"the zero user's saved name": func(tx *Tx) error { return tx.SetContactName(policy.CanonicalChat{}, "x", "x", epoch) },
+		"a saved name without a time": func(tx *Tx) error {
+			return tx.SetContactName(chat(t, carol), "x", "x", time.Time{})
+		},
+	} {
+		if err := s.Write(t.Context(), "test.saved_names", call); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s = %v, want ErrInvalid", name, err)
+		}
 	}
 }
 
