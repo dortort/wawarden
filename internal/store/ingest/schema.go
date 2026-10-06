@@ -2,12 +2,47 @@ package ingest
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"fmt"
 
 	"github.com/dortort/wawarden/internal/store/internal/db"
 )
 
 func migrate(ctx context.Context, d *db.DB) (int, error) {
-	return d.Migrate(ctx, []string{schemaV1, schemaV2})
+	return d.Migrate(ctx, []string{schemaV1, schemaV2, schemaV3})
+}
+
+const (
+	changeBackfillBatch = 10000
+	selectUnnumbered    = "SELECT seq FROM messages WHERE change_seq = 0 ORDER BY seq LIMIT 1"
+	selectLastSeq       = "SELECT coalesce(max(seq), 0) FROM messages"
+	numberChanges       = "UPDATE messages SET change_seq = seq WHERE seq > ?1 AND seq <= ?2 AND change_seq = 0"
+)
+
+func backfillChanges(ctx context.Context, d *db.DB) error {
+	var first, last int64
+	err := d.Read(ctx, "ingest.change_backfill", func(ctx context.Context, q db.Querier) error {
+		if err := q.QueryRowContext(ctx, selectUnnumbered).Scan(&first); err != nil {
+			return err
+		}
+		return q.QueryRowContext(ctx, selectLastSeq).Scan(&last)
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("ingest: find the messages without a change number: %w", err)
+	}
+	for from := first - 1; from < last; from += changeBackfillBatch {
+		if err := d.Rewrite(ctx, "ingest.change_backfill", func(ctx context.Context, q db.Querier) error {
+			_, err := q.ExecContext(ctx, numberChanges, from, min(from+changeBackfillBatch, last))
+			return err
+		}); err != nil {
+			return fmt.Errorf("ingest: number the changes of messages %d to %d: %w", from+1, min(from+changeBackfillBatch, last), err)
+		}
+	}
+	return nil
 }
 
 const schemaV1 = `
@@ -112,4 +147,105 @@ ALTER TABLE contacts ADD COLUMN origin TEXT NOT NULL DEFAULT 'live' CHECK (origi
 ALTER TABLE group_participants ADD COLUMN origin TEXT NOT NULL DEFAULT 'live' CHECK (origin = 'live' OR origin = 'history');
 
 ALTER TABLE group_participants ADD COLUMN present INTEGER NOT NULL DEFAULT 1 CHECK (present BETWEEN 0 AND 1);
+`
+
+const schemaV3 = `
+ALTER TABLE chats ADD COLUMN ref TEXT CHECK (ref IS NULL OR length(ref) = 32);
+
+UPDATE chats SET ref = lower(hex(randomblob(16)));
+
+CREATE UNIQUE INDEX chats_ref ON chats (ref);
+
+CREATE INDEX chats_last ON chats (last_ts);
+
+CREATE TRIGGER chats_assign_ref AFTER INSERT ON chats WHEN NEW.ref IS NULL BEGIN
+	UPDATE chats SET ref = lower(hex(randomblob(16))) WHERE rowid = NEW.rowid;
+END;
+
+CREATE TABLE contact_names (
+	jid TEXT PRIMARY KEY,
+	full_name TEXT,
+	first_name TEXT,
+	updated_ts INTEGER NOT NULL
+) STRICT;
+
+ALTER TABLE messages ADD COLUMN change_seq INTEGER NOT NULL DEFAULT 0;
+
+CREATE INDEX messages_chat_ts ON messages (chat_jid, ts);
+
+CREATE INDEX messages_change ON messages (change_seq);
+
+CREATE INDEX messages_change_chat ON messages (chat_jid, change_seq);
+
+CREATE TRIGGER messages_change_insert AFTER INSERT ON messages BEGIN
+	UPDATE messages SET change_seq = (SELECT max(change_seq) FROM messages) + 1 WHERE seq = NEW.seq;
+END;
+
+CREATE TRIGGER messages_change_update AFTER UPDATE OF text, text_display, edited_ts, revoked ON messages BEGIN
+	UPDATE messages SET change_seq = (SELECT max(change_seq) FROM messages) + 1 WHERE seq = NEW.seq;
+END;
+
+CREATE TABLE clients (
+	id TEXT PRIMARY KEY CHECK (length(id) = 8),
+	name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+	token_hash BLOB NOT NULL CHECK (length(token_hash) = 32),
+	read_all INTEGER NOT NULL CHECK (read_all BETWEEN 0 AND 1),
+	allow_first_contact INTEGER NOT NULL DEFAULT 0 CHECK (allow_first_contact BETWEEN 0 AND 1),
+	created_at INTEGER NOT NULL,
+	expires_at INTEGER NOT NULL CHECK (expires_at > created_at AND expires_at - created_at <= 31622400000),
+	revoked_at INTEGER
+) STRICT;
+
+CREATE TABLE client_read_chats (
+	client_id TEXT NOT NULL REFERENCES clients (id),
+	chat_jid TEXT NOT NULL,
+	PRIMARY KEY (client_id, chat_jid)
+) STRICT, WITHOUT ROWID;
+
+CREATE INDEX client_read_chats_chat ON client_read_chats (chat_jid);
+
+CREATE TABLE client_write_chats (
+	client_id TEXT NOT NULL REFERENCES clients (id),
+	chat_jid TEXT NOT NULL,
+	PRIMARY KEY (client_id, chat_jid)
+) STRICT, WITHOUT ROWID;
+
+CREATE INDEX client_write_chats_chat ON client_write_chats (chat_jid);
+
+CREATE TRIGGER client_write_chats_insert BEFORE INSERT ON client_write_chats
+WHEN (SELECT read_all FROM clients WHERE id = NEW.client_id) = 1 BEGIN
+	SELECT RAISE(ABORT, 'a client that reads all chats holds no write chat');
+END;
+
+CREATE TRIGGER client_write_chats_update BEFORE UPDATE ON client_write_chats
+WHEN (SELECT read_all FROM clients WHERE id = NEW.client_id) = 1 BEGIN
+	SELECT RAISE(ABORT, 'a client that reads all chats holds no write chat');
+END;
+
+CREATE TRIGGER clients_read_all BEFORE UPDATE OF read_all ON clients
+WHEN NEW.read_all = 1 AND EXISTS (SELECT 1 FROM client_write_chats WHERE client_id = NEW.id) BEGIN
+	SELECT RAISE(ABORT, 'a client that reads all chats holds no write chat');
+END;
+
+CREATE TABLE audit (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	ts INTEGER NOT NULL,
+	client_id TEXT NOT NULL,
+	action TEXT NOT NULL,
+	chat TEXT,
+	chat_hmac TEXT,
+	ok INTEGER NOT NULL CHECK (ok BETWEEN 0 AND 1),
+	reason TEXT NOT NULL,
+	peer TEXT,
+	key_id TEXT NOT NULL,
+	row_hmac BLOB NOT NULL CHECK (length(row_hmac) = 32)
+) STRICT;
+
+CREATE TRIGGER audit_no_update BEFORE UPDATE ON audit BEGIN
+	SELECT RAISE(ABORT, 'audit rows are append-only');
+END;
+
+CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit BEGIN
+	SELECT RAISE(ABORT, 'audit rows are append-only');
+END;
 `

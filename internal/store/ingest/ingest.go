@@ -54,6 +54,9 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 		return nil, err
 	}
 	version, err := migrate(ctx, d)
+	if err == nil {
+		err = backfillChanges(ctx, d)
+	}
 	if err != nil {
 		return nil, errors.Join(err, d.Close())
 	}
