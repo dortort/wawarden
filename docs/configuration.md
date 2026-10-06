@@ -1693,8 +1693,10 @@ it translates one of the protocol library's events or the engine handles it,
 which refuses the event. Other code on goroutines that the protocol library
 starts itself is not covered: a panic there ends the process. The notifier adds
 `notify.flush` and `notify.webhook`, the embedded-metric-format writer
-`metrics.emf`, and the [backup](#backups) check `backup.initial`. In
-development builds, the [fake engine](#fake-engine) adds `fake.connection`.
+`metrics.emf`, the [backup](#backups) check `backup.initial`, and each
+database call the watcher `db.deadline`, which logs a call that runs past its
+deadline. In development builds, the [fake engine](#fake-engine) adds
+`fake.connection`.
 
 Anything that scrapes `/metrics` holds the full admin token, which can also
 start pairing, ask for a reconnect and read the status, and from M2 create
