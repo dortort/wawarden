@@ -365,6 +365,20 @@ func TestARevokedRowShowsNoTextWhileItsTextAndIndexEntryRemain(t *testing.T) {
 	}
 }
 
+func TestARowWithoutTextIsNeverFoundThroughALeftoverIndexEntry(t *testing.T) {
+	s := openStore(t)
+	insert(t, s, message(t, alice, "N1", alice, "a nulled needle", epoch))
+	exec(t, s, "UPDATE messages SET text = NULL, text_display = NULL WHERE id = 'N1'")
+	if rows, err := s.Scoped().Column(t.Context(), "SELECT rowid FROM messages_fts WHERE messages_fts MATCH 'needle'"); err != nil || len(rows) != 1 {
+		t.Fatalf("the row's index entry = %q, %v, want it still present", rows, err)
+	}
+	for _, in := range []string{"", refOf(t, s, alice)} {
+		if got := searchAll(t, s.Scoped(), grantAll(t), "needle", in, 5); len(got) != 0 {
+			t.Fatalf("search in %q found the row without text: %q", in, got)
+		}
+	}
+}
+
 func TestSearchFindsComposedTextFromADecomposedQuery(t *testing.T) {
 	s := openStore(t)
 	insert(t, s, message(t, alice, "A1", alice, "un caf\u00e9 noir", epoch), message(t, alice, "A2", alice, "un cafe noir", epoch))
