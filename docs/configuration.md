@@ -364,8 +364,8 @@ library and of its JSON Schema library, such as how tool schemas and results are
 encoded, so a set value, even an empty one, is refused. The MCP library reads
 `MCPGODEBUG` when the program starts, before `serve` checks anything: a value
 that is not a comma-separated list of `key=value` pairs makes the binary panic
-with exit status 2 and a message that repeats the malformed part, so leave the
-variable unset.
+in every subcommand, with exit status 2, no `startup_refused` event and a
+message that repeats the malformed part, so leave the variable unset.
 
 ### Listen addresses
 
@@ -410,7 +410,7 @@ The checks run in this order:
 | 2 | `dev_variable_in_release` | the first such name, in sorted order | A release build sees any `WAWARDEN_DEV_*` variable. |
 | 3 | `unknown_variable` | the first such name, in sorted order | Any other `WAWARDEN_` name is not one of the [environment variables](#environment-variables). |
 | 4 | `traceback_level_unsafe` | `GOTRACEBACK` | `GOTRACEBACK` is set to anything other than empty, `none` or `single`, a numeric level included. |
-| 5 | `library_debug_set` | the variable | `MCPGODEBUG` or `JSONSCHEMAGODEBUG` is set, to any value, an empty one included. |
+| 5 | `library_debug_set` | the variable | `MCPGODEBUG` or `JSONSCHEMAGODEBUG` is set, to any value, an empty one included. A value of `MCPGODEBUG` that is not a comma-separated list of `key=value` pairs never reaches this check: the MCP library panics while the program initialises, in every subcommand, and the process exits 2 without a `startup_refused` event (see [Environment variables](#environment-variables)). |
 | 6 | `listen_address_invalid` | the listen variable | `WAWARDEN_LISTEN`, `WAWARDEN_ADMIN_LISTEN` or `WAWARDEN_HEALTH_LISTEN` (checked in that order) is not a valid [listen address](#listen-addresses). |
 | 7 | `health_address_not_loopback` | `WAWARDEN_HEALTH_LISTEN` | The health address is not a loopback address. |
 | 8 | `admin_hash_sources_conflict` | `WAWARDEN_ADMIN_TOKEN_SHA256_FILE` | Both admin hash variables are set. |
