@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"go.mau.fi/whatsmeow"
@@ -384,22 +385,23 @@ func TestAFailedPairingClosesTheAttemptForTheEngine(t *testing.T) {
 }
 
 func TestALoginRequestIsADropForTheEngine(t *testing.T) {
-	r := newRig(t, pairedDevice())
-	_, _, cancel := r.c.prepare()
-	defer cancel()
-	for range 2 {
-		if !r.dispatch(&events.ManualLoginReconnect{}) {
-			t.Fatal("the login request was not acknowledged")
+	synctest.Test(t, func(t *testing.T) {
+		r := newRig(t, pairedDevice())
+		_, _, cancel := r.c.prepare()
+		defer cancel()
+		for range 2 {
+			if !r.dispatch(&events.ManualLoginReconnect{}) {
+				t.Fatal("the login request was not acknowledged")
+			}
 		}
-	}
-	eventually(t, "the engine hears of the drop", func() bool { return len(r.events()) > 0 })
-	time.Sleep(50 * time.Millisecond)
-	if got := r.events(); len(got) != 1 || got[0] != (engine.Disconnected{}) {
-		t.Fatalf("engine events %v, want one Disconnected so that the engine re-dials with its own backoff", got)
-	}
-	if r.c.current().IsConnected() {
-		t.Fatal("the connection that WhatsApp asked to log in again is still open")
-	}
+		synctest.Wait()
+		if got := r.events(); len(got) != 1 || got[0] != (engine.Disconnected{}) {
+			t.Fatalf("engine events %v, want one Disconnected so that the engine re-dials with its own backoff", got)
+		}
+		if r.c.current().IsConnected() {
+			t.Fatal("the connection that WhatsApp asked to log in again is still open")
+		}
+	})
 }
 
 func TestALoggedOutDeviceIsReplacedByAFreshOneBeforeTheNextConnection(t *testing.T) {
@@ -527,20 +529,22 @@ func TestAPanicInTheEventHandlerIsRecoveredAndRefusesTheEvent(t *testing.T) {
 }
 
 func TestADeadConnectionIsDroppedAndReported(t *testing.T) {
-	r := newRig(t, pairedDevice())
-	_, _, cancel := r.c.prepare()
-	defer cancel()
-	r.dispatch(&events.KeepAliveTimeout{ErrorCount: 1, LastSuccess: time.Now()})
-	r.dispatch(&events.KeepAliveTimeout{ErrorCount: 9, LastSuccess: time.Now().Add(-whatsmeow.KeepAliveMaxFailTime - time.Second)})
-	r.dispatch(&events.KeepAliveTimeout{ErrorCount: 10, LastSuccess: time.Now().Add(-whatsmeow.KeepAliveMaxFailTime - time.Second)})
-	deadline := time.Now().Add(5 * time.Second)
-	for len(r.events()) == 0 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	time.Sleep(50 * time.Millisecond)
-	if got := r.events(); len(got) != 1 || got[0] != (engine.Disconnected{}) {
-		t.Fatalf("engine events %v, want one Disconnected after keepalives failed for longer than the library's limit", got)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		r := newRig(t, pairedDevice())
+		_, _, cancel := r.c.prepare()
+		defer cancel()
+		r.dispatch(&events.KeepAliveTimeout{ErrorCount: 1, LastSuccess: time.Now()})
+		synctest.Wait()
+		if got := r.events(); len(got) != 0 {
+			t.Fatalf("engine events %v after one keepalive failure within the library's limit, want none", got)
+		}
+		r.dispatch(&events.KeepAliveTimeout{ErrorCount: 9, LastSuccess: time.Now().Add(-whatsmeow.KeepAliveMaxFailTime - time.Second)})
+		r.dispatch(&events.KeepAliveTimeout{ErrorCount: 10, LastSuccess: time.Now().Add(-whatsmeow.KeepAliveMaxFailTime - time.Second)})
+		synctest.Wait()
+		if got := r.events(); len(got) != 1 || got[0] != (engine.Disconnected{}) {
+			t.Fatalf("engine events %v, want one Disconnected after keepalives failed for longer than the library's limit", got)
+		}
+	})
 }
 
 func TestTheProtocolVersionIsSetAndRead(t *testing.T) {
