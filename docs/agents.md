@@ -104,7 +104,9 @@ search as well.
   `next` it returns, which is always set. `more: true` means more changes are
   waiting now; otherwise, wait before the next poll. A revoked message comes
   back with `revoked: true` and no text: drop what you kept of it.
-- **Watch `session.state`.** Every answer carries it. `connected` means the
+- **Watch `session.state`.** Every list, search and change page, `/v1/me`
+  and every MCP tool result (errors included) carries it; a single chat, a
+  single message and REST error answers do not. `connected` means the
   archive is receiving messages. `connecting`, `disconnected` and `unpaired`
   mean it is not, so what you read may be stale; say so rather than conclude
   that nothing new was said.
