@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"syscall"
 
 	"github.com/dortort/wawarden/internal/keys"
 	adminstore "github.com/dortort/wawarden/internal/store/admin"
@@ -103,7 +104,7 @@ func audit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 }
 
 func shippedHeads(path string) ([]string, error) {
-	f, err := os.Open(filepath.Clean(path))
+	f, err := os.OpenFile(filepath.Clean(path), os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}

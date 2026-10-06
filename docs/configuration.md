@@ -286,7 +286,8 @@ first missing head: none
 `unknown_key` when the row was written under another key id than the master
 key's, and `hmac_mismatch` when its HMAC is not the one the key gives. Without
 `--log` it warns on standard error that rows removed from the end of the chain
-go unnoticed.
+go unnoticed. The log must be a regular file; a pipe or a directory is refused
+without waiting for a writer.
 
 ## Exit codes
 

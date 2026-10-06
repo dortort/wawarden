@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -120,6 +121,32 @@ func TestAuditVerify(t *testing.T) {
 	code, stdout, _ = invokeWith(t, []string{"audit", "verify", "--db", archive, "--master-key-file", key, "--log", log}, nil, nil)
 	if code != exitUnverified || !strings.Contains(stdout, "rows failing: 1\nfirst failing row: 3\nproblem: hmac_mismatch\n") {
 		t.Fatalf("an edited row = %d\n%s", code, stdout)
+	}
+}
+
+func TestAuditVerifyRefusesALogThatIsAFIFO(t *testing.T) {
+	archive, key, _, _ := auditedArchive(t)
+	fifo := filepath.Join(t.TempDir(), "stdout.fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatalf("Mkfifo: %v", err)
+	}
+	type result struct {
+		code           int
+		stdout, stderr string
+	}
+	done := make(chan result, 1)
+	go func() {
+		stdout, stderr := newOutput(), newOutput()
+		code := run(t.Context(), []string{"audit", "verify", "--db", archive, "--master-key-file", key, "--log", fifo}, nil, nil, stdout, stderr)
+		done <- result{code, stdout.String(), stderr.String()}
+	}()
+	select {
+	case r := <-done:
+		if r.code != exitFailed || r.stdout != "" || !strings.Contains(r.stderr, "the log cannot be read") {
+			t.Fatalf("audit verify with a FIFO log = %d %q %q", r.code, r.stdout, r.stderr)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("audit verify blocked opening a FIFO log")
 	}
 }
 
