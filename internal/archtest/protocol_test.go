@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"testing"
 )
 
 const waLogPath = whatsmeowModule + "/util/log"
@@ -564,6 +565,7 @@ var (
 	urlLiteral  = regexp.MustCompile(`(?i)\b(?:https?|wss?)://([^/\s"'?#\\]*)`)
 	hostAndPort = regexp.MustCompile(`(?i)(?:^|[^@\w./-])((?:[a-z0-9-]+\.)+[a-z]{2,}):[0-9]{1,5}\b`)
 	metaHost    = regexp.MustCompile(`(?i)(?:^|[^@\w.-])((?:[a-z0-9-]+\.)*(?:whatsapp\.(?:com|net)|wa\.me|facebook\.com|fbcdn\.net|fbsbx\.com|instagram\.com|cdninstagram\.com|messenger\.com))\b`)
+	ipAndPort   = regexp.MustCompile(`(?:^|[^\w.])((?:[0-9]{1,3}\.){3}[0-9]{1,3}|\[[0-9a-fA-F:.]*(?:%[^\]\s]*)?\]):([0-9]{1,5})\b`)
 )
 
 var serverNames = set("s.whatsapp.net", "whatsapp.net")
@@ -578,11 +580,22 @@ const whatsmeowSocket = whatsmeowModule + "/socket"
 
 var frameSocket = set("FrameSocket", "NewFrameSocket")
 
+type addressAllowance struct {
+	addresses map[string]bool
+	reason    string
+}
+
+var testAddressAllowances = map[string]addressAllowance{
+	"internal/app/inventory_test.go":  {addresses: set("192.0.2.1", "2001:db8::1"), reason: "health addresses beyond loopback that are refused before anything binds"},
+	"internal/config/config_test.go":  {addresses: set("192.0.2.1", "192.0.2.10", "::ffff:192.0.2.1", "fe80::1%en0"), reason: "addresses the validator accepts or refuses; package config never binds or dials"},
+	"internal/notify/webhook_test.go": {addresses: set("169.254.169.254", "240.0.0.1", "64:ff9b::a9fe:a9fe", "fd00:ec2::254%eth0", "fe80::1%lo", "2001:db8::10%eth0"), reason: "destinations the webhook's destination check refuses before a connection starts"},
+}
+
 var offlineTestRule = rule{
 	name:  "offline-tests",
-	check: checkOfflineTests,
+	check: offlineTests(testAddressAllowances),
 	cases: []snippet{
-		{name: "protocol hosts and network calls in a test", rel: "internal/engine/wa/x_test.go", want: 12, src: `package wa
+		{name: "protocol hosts and network calls in a test", rel: "internal/engine/wa/x_test.go", want: 17, src: `package wa
 
 import (
 	"context"
@@ -597,6 +610,11 @@ const (
 	dial   = "` + webHost + `:443"
 	other  = "http://` + documentationAddress + `/x"
 	named  = "relay.` + documentationName + `:8443"
+	ip4    = "` + documentationAddress + `:443"
+	ip6    = "[` + documentationAddress6 + `]:443"
+	mapped = "[::ffff:` + documentationAddress + `]:443"
+	zoned  = "[fe80::1%` + zone + `]:443"
+	split  = "` + documentationAddress + `" + ":8443"
 )
 
 func f(ctx context.Context, cli *whatsmeow.Client) {
@@ -673,6 +691,12 @@ const (
 	test    = "https://app.example.test:8443"
 	built   = "http://"
 	paths   = "go.mau.fi/whatsmeow@v0.0.0/send.go:12 and 15550100004@s.whatsapp.net:0"
+	loop4   = "127.0.0.1:0"
+	loop6   = "[::1]:0"
+	mapped  = "[::ffff:127.0.0.1]:0"
+	any4    = "0.0.0.0:0"
+	any6    = "[::]:8080"
+	version = "release 1.2.3.4 and v1.2.3.4:5"
 )
 `},
 		{name: "protocol hosts outside a test", rel: "internal/engine/wa/x.go", src: `package wa
@@ -695,17 +719,26 @@ func f(ctx context.Context, cli *whatsmeow.Client) error {
 }
 
 var (
-	webHost              = "web." + strings.ToLower("WhatsApp") + ".com"
-	mediaHost            = "mmg." + strings.ToLower("WhatsApp") + ".net"
-	documentationAddress = "198.51.100." + strings.Repeat("7", 1)
-	documentationName    = "corp." + strings.ToLower("INTERNAL")
+	webHost               = "web." + strings.ToLower("WhatsApp") + ".com"
+	mediaHost             = "mmg." + strings.ToLower("WhatsApp") + ".net"
+	documentationAddress  = "198.51.100." + strings.Repeat("7", 1)
+	documentationAddress6 = "2001:db8::" + strings.Repeat("7", 1)
+	zone                  = "eth" + strings.Repeat("0", 1)
+	documentationName     = "corp." + strings.ToLower("INTERNAL")
 )
 
-func checkOfflineTests(f *sourceFile) []string {
-	if !f.test {
-		return nil
+func offlineTests(allowed map[string]addressAllowance) func(*sourceFile) []string {
+	return func(f *sourceFile) []string {
+		if !f.test {
+			return nil
+		}
+		return checkOfflineTests(f, allowed[f.rel])
 	}
+}
+
+func checkOfflineTests(f *sourceFile, allowed addressAllowance) []string {
 	var out []string
+	used := map[string]bool{}
 	literalRuns(f.file, func(at ast.Node, s string) {
 		for _, m := range urlLiteral.FindAllStringSubmatch(s, -1) {
 			if host := m[1]; host != "" && !offlineHost(host) {
@@ -722,7 +755,22 @@ func checkOfflineTests(f *sourceFile) []string {
 				out = append(out, f.at(at, "a test names the WhatsApp or Meta host %q: no test may contact WhatsApp", m[1]))
 			}
 		}
+		for _, m := range ipAndPort.FindAllStringSubmatch(urlLiteral.ReplaceAllString(s, " "), -1) {
+			ap, err := netip.ParseAddrPort(m[1] + ":" + m[2])
+			switch {
+			case err != nil || offlineAddress(ap.Addr()):
+			case allowed.addresses[ap.Addr().String()]:
+				used[ap.Addr().String()] = true
+			default:
+				out = append(out, f.at(at, "a test names the network address %q: tests reach only loopback", ap))
+			}
+		}
 	})
+	for _, a := range slices.Sorted(maps.Keys(allowed.addresses)) {
+		if !used[a] {
+			out = append(out, f.at(f.file, "the address allow-list names %s for this file (%s), which no longer names it with a port: remove it", a, allowed.reason))
+		}
+	}
 	ast.Inspect(f.file, func(n ast.Node) bool {
 		sel, ok := n.(*ast.SelectorExpr)
 		if !ok {
@@ -754,7 +802,7 @@ func offlineHost(host string) bool {
 		host = host[:i]
 	}
 	if addr, err := netip.ParseAddr(host); err == nil {
-		return addr.IsLoopback()
+		return addr.Unmap().IsLoopback()
 	}
 	if host == "localhost" || host == "example.com" || host == "example.net" || host == "example.org" {
 		return true
@@ -765,4 +813,35 @@ func offlineHost(host string) bool {
 		}
 	}
 	return false
+}
+
+func offlineAddress(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	return addr.IsLoopback() || addr.IsUnspecified()
+}
+
+func TestAddressAllowance(t *testing.T) {
+	check := offlineTests(map[string]addressAllowance{"internal/app/x_test.go": {addresses: set(documentationAddress), reason: "synthetic"}})
+	listed := `"` + documentationAddress + `:80", "` + documentationAddress + `:443"`
+	for _, tt := range []struct {
+		name string
+		rel  string
+		src  string
+		want int
+	}{
+		{name: "listed", rel: "internal/app/x_test.go", src: listed},
+		{name: "listed beside another address", rel: "internal/app/x_test.go", src: listed + `, "[` + documentationAddress6 + `]:80"`, want: 1},
+		{name: "listed but no longer named", rel: "internal/app/x_test.go", src: `"127.0.0.1:0"`, want: 1},
+		{name: "not listed", rel: "internal/app/y_test.go", src: listed, want: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f, err := parseSource(tt.rel, []byte("package app\n\nvar _ = []string{"+tt.src+"}\n"))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if got := check(f); len(got) != tt.want {
+				t.Fatalf("%d findings, want %d: %q", len(got), tt.want, got)
+			}
+		})
+	}
 }

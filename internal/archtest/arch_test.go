@@ -360,6 +360,11 @@ func TestArchitecture(t *testing.T) {
 			t.Errorf("the wildcard allow-list names %s, which the walk did not find", rel)
 		}
 	}
+	for rel := range testAddressAllowances {
+		if !walked[rel] {
+			t.Errorf("the test address allow-list names %s, which the walk did not find", rel)
+		}
+	}
 	for dir := range reflectAllowed {
 		if !slices.ContainsFunc(files, func(f *sourceFile) bool {
 			return !f.test && f.dir == dir && slices.ContainsFunc(f.imports, func(imp importSpec) bool { return imp.path == "reflect" })

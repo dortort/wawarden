@@ -92,7 +92,7 @@ var (
 	_ = "127.0.0.1:0"
 	_ = "[::1]:0"
 	_ = "localhost:0"
-	_ = "192.0.2.1:80"
+	_ = "` + documentationAddress + `:80"
 	_ = "fe80::1"
 	_ = "a::b"
 	_ = "std::string"
