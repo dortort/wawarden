@@ -355,21 +355,36 @@ rm -rf "$demo"
 The last three commands remove the container, its data volume and the temporary
 directory that holds the admin token.
 
-The image runs as `65532:65532` with `serve` as its default command. `/data` is
-the only path the service writes and the only one that must be writable; a new
-named volume mounted there gets the right owner and mode. Run the container with
-a read-only root filesystem, as the example does with `--read-only`, so that
-`/data` is also the only writable path.
+The container contract, in full in
+[the configuration reference](docs/configuration.md#container-image):
 
-Inside the container, a listener on `127.0.0.1` cannot be reached through a
-published port, so the example binds the client and admin listeners to `0.0.0.0`
-and publishes them on the host's loopback only. The service logs a
-`listener_not_loopback` warning for each of them, and other containers on the
-same Docker network can reach them. The image has no shell, so `docker run
---health-cmd` cannot run its health check; use the exec form
-`["/wawarden","healthcheck"]` in Compose or Kubernetes.
-[The configuration reference](docs/configuration.md#container-image) describes
-the full container contract.
+- **Binary and user.** The binary is `/wawarden`, the entrypoint, with `serve`
+  as the default command; the image runs as `65532:65532` and has no shell.
+- **Directories.** `/data` is the only path the service writes and the only one
+  that must be writable: a directory owned by `65532:65532` with mode `0700`,
+  which a new named volume mounted there inherits. In it, the service creates
+  `keys/`, `history/` and `backups/` with mode `0700` and every file with mode
+  `0600`, and refuses to start on any that is not private to its user.
+- **Read-only root filesystem.** Run the container with one, as the example
+  does with `--read-only`, so that `/data` is also the only writable path.
+- **Health check.** `["/wawarden","healthcheck"]`, in exec form in Compose or
+  Kubernetes. The image declares none, and `docker run --health-cmd` wraps the
+  command in a shell the image does not have.
+- **Listeners.** Client `8080`, admin `8082` (only with an admin token hash) and
+  health `8081`, plain HTTP and on `127.0.0.1` by default. A listener on
+  `127.0.0.1` cannot be reached through a published port, so the example binds
+  the client and admin listeners to `0.0.0.0` and publishes them on the host's
+  loopback only; the service logs a `listener_not_loopback` warning for each,
+  and other containers on the same Docker network can reach them. The health
+  listener stays on loopback, where the health check reaches it.
+- **Network.** Outbound only: WhatsApp over HTTPS and a WebSocket on port 443,
+  while a device is paired or pairing was requested, and the webhook when one
+  is set. Nothing needs to reach the container from outside but the clients and
+  the operator, and never from the public internet.
+- **Licence.** WaWarden is `GPL-3.0-or-later`, as the image's
+  `org.opencontainers.image.licenses` label says; the licence texts of
+  WaWarden, the Go standard library and every linked module are under
+  `/licenses` in the image (see [Licence](#licence)).
 
 ## Documentation
 
