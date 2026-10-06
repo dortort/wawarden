@@ -1,13 +1,13 @@
 # WaWarden
 
-WaWarden is a self-hosted WhatsApp gateway whose REST and MCP interfaces are
-planned and not built yet: the latest release, M0, is a scaffold, and the link
-to a WhatsApp account is being built on `main` (see [Status](#status)). When
-complete, it will link to one
-personal WhatsApp account as a companion device and expose that account to your
-own AI agents and applications, over REST and MCP, with access scoped per client
-and per chat: each client will get a token that may read, or read and write,
-only the chats on its allowlist.
+WaWarden is a self-hosted WhatsApp gateway. It links to one personal WhatsApp
+account as a companion device and keeps that account's messages in a local
+archive. When complete, it will expose that account to your own AI agents and
+applications, over REST and MCP, with access scoped per client and per chat:
+each client will get a token that may read, or read and write, only the chats
+on its allowlist. The link and the archive (milestone M1) are on `main` and not
+released yet; the REST and MCP interfaces are planned for M2 and M3; the latest
+release, `v0.1.0`, is the M0 scaffold (see [Status](#status)).
 
 It is not:
 
@@ -59,91 +59,87 @@ It is not:
 
 ## Status
 
-WaWarden is at milestone **M0**, a scaffold. It does not connect to WhatsApp yet.
+The latest release, `v0.1.0`, is milestone **M0**, a scaffold that makes no
+connection to WhatsApp. `main` holds milestone **M1**, which is not released
+yet: built from `main`, WaWarden links to the owner's WhatsApp account and
+archives its messages, but serves no client API.
 
-What works today:
+| Milestone | State | Scope |
+|---|---|---|
+| M0 | Released as `v0.1.0` | Configuration checks and startup refusals; the client, admin and health listeners; the admin token; Prometheus metrics; `healthcheck` and `version`; the policy core; the container image and verifiable releases. |
+| M1 | On `main`, not released | The WhatsApp engine: pairing guarded by an account check, history sync, the session and the message archive in SQLite; `admin status`, `pair` and `reconnect`; notification events and a signed webhook; metrics on standard output; one encrypted backup per paired device. |
+| M2 | Planned | Clients with per-chat read scopes and expiring tokens; the read API over REST (chats, messages, search, change feed) and MCP; the audit trail. |
+| M3 | Planned | Sending over REST and MCP, with idempotency, pacing, per-client budgets and a first-contact rule; nightly encrypted backups with retention; the v1.0 documentation. |
 
-- `wawarden serve` validates its configuration, refuses to start on anything it
-  does not implement, and opens the client and health listeners, and the admin
-  listener when an admin token hash is configured.
-- The client listener has no routes and no client tokens yet: it refuses every
-  request, with `401` for anything that reaches authentication.
-- The admin listener, opened only when an admin token hash is configured, serves
-  Prometheus metrics at `GET /metrics` to the admin token.
-- The health listener answers `GET /healthz`.
-- `wawarden admin init` generates the admin token; `wawarden healthcheck` is the
-  container health check; `wawarden version` prints the build.
-- Internally: the policy core that mints read, write and admin grants, route
-  registration that requires a policy class, and architecture tests and lint rules
-  that enforce both.
-- On `main`, ahead of the M1 release: a strict normaliser for WhatsApp chat
-  identifiers (phone-number users, LID users and groups), the only source of a
-  chat that a grant can allow, with a fuzz target. Nothing calls it yet. See the
-  [threat model](docs/threat-model.md#secure-by-construction), row 4.
-- Also on `main`: `serve` creates a master key in the data directory on first
-  start and refuses one that is not private to its user; every log line it writes
-  passes through one writer that turns WhatsApp identifiers into pseudonyms keyed
-  by that key and drops lines carrying XML in the recognised shapes (see
-  [logging](docs/configuration.md#pseudonyms-and-dropped-lines)). Internally:
-  sanitisers for display text and terminal output, and a strict JSON decoder for
-  request bodies, which the admin routes below use.
-- Also on `main`: `serve` opens the message archive, `archive.db` in the data
-  directory, in SQLite through one connection that holds an exclusive lock and
-  whose settings it verifies, and `/healthz` answers `200` only while it holds
-  it; a second instance waits for the lock. The engine below writes WhatsApp
-  traffic into it once a device is paired. Internally: the archive's schema and
-  write side, which keys
-  every chat canonically and removes revoked, edited and expired text from the
-  disk, rewriting the full-text index when one of its page keys still holds a
-  trigram of that text. See
-  [the message archive](docs/configuration.md#message-archive).
-- Also on `main`: the WhatsApp engine, which `serve` runs: the state machine
-  that refreshes the protocol version, reconnects with backoff, stops on a
-  replaced session or a ban and guards pairing with the owner's number
-  (`WAWARDEN_OWNER_PHONE`); the durable inbox and the ingest rules that apply
-  edits, revocations, reactions and poll votes only inside their own chat; the
-  history-sync worker with its size cap (`WAWARDEN_HISTORY_MAX_BYTES`); and the
-  adapter to the WhatsApp protocol library, `go.mau.fi/whatsmeow`, whose device
-  store `serve` keeps in `session.db` beside the archive, under the same lock
-  and health rules. Without a paired device, `serve` reports `unpaired` and
-  makes no connection to WhatsApp until pairing is requested. The library's
-  debug output is discarded unless `WAWARDEN_UNSAFE_DEBUG` opens a window of a
-  few minutes. See [the WhatsApp engine](docs/configuration.md#whatsapp-engine).
-- Also on `main`: the admin listener serves the engine's status, pairing and
-  reconnection, and `wawarden admin status`, `pair` and `reconnect` call them
-  with the admin token taken from a file, standard input or a command, never
-  from an argument or the environment (see
-  [admin routes](docs/configuration.md#admin-routes)). Operational events such
-  as `unpaired`, `disconnected` and `admin_mutation` are written as JSON lines
-  on standard output and, with `WAWARDEN_NOTIFY_URL`, posted with an HMAC
-  signature to a webhook (see [notifications](docs/configuration.md#notifications)).
-  With `WAWARDEN_METRICS_EMF=1`, metrics are also written on standard output in
+What `main` does:
+
+- **Start.** `wawarden serve` validates its configuration and refuses to start
+  on anything it does not implement. It creates a master key in the data
+  directory on first start; opens the message archive, `archive.db`, and the
+  device store, `session.db`, in SQLite, each through one connection that holds
+  an exclusive lock and whose settings it verifies; and opens the client and
+  health listeners, and the admin listener when an admin token hash is
+  configured. `/healthz` answers `200` only while it holds both locks; a second
+  instance waits for them. See
+  [the data directory](docs/configuration.md#data-directory).
+- **Engine.** The WhatsApp engine, through the protocol library
+  `go.mau.fi/whatsmeow`, links the account whose number is
+  `WAWARDEN_OWNER_PHONE`, and no other, by a pairing code. It refreshes the
+  protocol version, reconnects with backoff, and stops for the operator on a
+  logout, a replaced session or a ban. It writes every message to a durable
+  inbox before acknowledging it, applies edits, revocations, reactions and poll
+  votes only inside their own chat, takes the history the phone sends under a
+  size cap (`WAWARDEN_HISTORY_MAX_BYTES`), and removes revoked, edited and
+  expired text from the disk. Without a paired device it makes no connection to
+  WhatsApp until pairing is requested. See
+  [the WhatsApp engine](docs/configuration.md#whatsapp-engine).
+- **Admin.** The admin listener serves `GET /metrics` and the engine's status,
+  pairing and reconnection to the admin token. `wawarden admin status`, `pair`
+  and `reconnect` call them with the token taken from a file, standard input or
+  a command, never from an argument or the environment. See
+  [admin routes](docs/configuration.md#admin-routes).
+- **Events and metrics.** Operational events such as `unpaired`,
+  `disconnected`, `quarantine`, `backup_done` and `admin_mutation` are written
+  as JSON lines on standard output and, with `WAWARDEN_NOTIFY_URL`, posted with
+  an HMAC signature to a webhook (see
+  [notifications](docs/configuration.md#notifications)). With
+  `WAWARDEN_METRICS_EMF=1`, metrics are also written on standard output in
   CloudWatch's embedded metric format, which needs no token (see
   [metrics](docs/configuration.md#embedded-metric-format)).
-- Also on `main`: with `WAWARDEN_BACKUP_AGE_RECIPIENT`, an age public key,
-  `serve` writes one encrypted backup of `archive.db` and `session.db` to
-  `backups/` once a paired device's initial history sync has settled, and
-  reports `backup_done` or `backup_failed`. It holds only the recipient and
-  cannot read a backup; without it, no backup is taken. There is no schedule,
-  retention or restore tool yet (see
+- **Backups.** With `WAWARDEN_BACKUP_AGE_RECIPIENT`, an age public key, `serve`
+  writes one encrypted backup of `archive.db` and `session.db` to `backups/`
+  once a paired device's initial history sync has settled. It holds only the
+  recipient and cannot read a backup; without it, no backup is taken. There is
+  no schedule, retention or restore tool yet (see
   [backups](docs/configuration.md#backups)).
-- Also on `main`: development builds, made with the `dev` build tag, can run a
-  scripted fake engine in place of WhatsApp (`WAWARDEN_DEV_FAKE_ENGINE=1`) that
-  pairs, connects and plays synthetic messages and history offline. Release
-  builds refuse the variable and contain no part of the fake (see
+- **Logs.** Every log line passes through one writer that turns WhatsApp
+  identifiers into pseudonyms keyed by the master key and drops lines carrying
+  XML in the recognised shapes. The protocol library's debug output is
+  discarded unless `WAWARDEN_UNSAFE_DEBUG` opens a window of a few minutes (see
+  [logging](docs/configuration.md#pseudonyms-and-dropped-lines)).
+- **Development builds.** Built with the `dev` tag, WaWarden can run a scripted
+  fake engine in place of WhatsApp (`WAWARDEN_DEV_FAKE_ENGINE=1`) that pairs,
+  connects and plays synthetic messages and history offline. Release builds
+  refuse the variable and contain no part of the fake (see
   [the fake engine](docs/configuration.md#fake-engine) and
   [below](#with-the-fake-engine)).
+- **Internally.** The policy core that mints read, write and admin grants;
+  route registration that requires a policy class; the strict normaliser for
+  WhatsApp chat identifiers (phone-number users, LID users and groups), which
+  the engine applies to what it ingests and which is the only source of a chat
+  that a grant can allow, with a fuzz target (see the
+  [threat model](docs/threat-model.md#secure-by-construction), row 4);
+  sanitisers for display text and terminal output; a strict JSON decoder for
+  request bodies; and the architecture tests and lint rules that enforce them.
 
-Planned:
+Not in this build: the client listener has no routes and no client tokens and
+refuses every request, with `401` for anything that reaches authentication;
+no client can read the archive (M2) or send a message (M3).
 
-| Milestone | Scope |
-|---|---|
-| M1 | The WhatsApp engine: pairing guarded by an account check, history sync, the session and the message archive in SQLite, `admin status`, `pair` and `reconnect`, notification events, metrics on standard output, encrypted backups. |
-| M2 | Clients with per-chat read scopes and expiring tokens; the read API over REST (chats, messages, search, change feed) and MCP; the audit trail. |
-| M3 | Sending over REST and MCP, with idempotency, pacing, per-client budgets and a first-contact rule; nightly encrypted backups with retention; the v1.0 documentation. |
+## Quick start
 
-## Quick start (M0)
-
+These steps start the service without linking an account; to link one, continue
+with [First run with a WhatsApp account](#first-run-with-a-whatsapp-account).
 The commands below use the default ports `8080`, `8081` and `8082` on
 `127.0.0.1`. If one is taken, choose other addresses with `WAWARDEN_LISTEN`,
 `WAWARDEN_HEALTH_LISTEN` or `WAWARDEN_ADMIN_LISTEN` (see the
@@ -197,7 +193,8 @@ curl -i http://127.0.0.1:8080/v1/me
 curl -H @"$demo/admin.header" http://127.0.0.1:8082/metrics
 ```
 
-M0 has no client routes and no client tokens, so every client request is refused:
+This build has no client routes and no client tokens yet (they come with M2), so
+every client request is refused:
 
 ```text
 HTTP/1.1 401 Unauthorized
@@ -242,7 +239,8 @@ wawarden_sends_rejected_total 0
 ```
 
 The admin commands call the admin listener with the token from a file; this one
-prints the engine's state and the archive's counts:
+prints the engine's state and the archive's counts. With no device paired, the
+state is `unpaired` and the service makes no connection to WhatsApp:
 
 ```sh
 sed -n 's/^token: //p' "$demo/admin.txt" > "$demo/admin.token"
@@ -308,8 +306,10 @@ holds the fake's code (see [the fake engine](docs/configuration.md#fake-engine))
 
 Images are published to `ghcr.io/dortort/wawarden` by the release workflow only.
 Take the image index digest from a release's notes, and verify the image as
-[`RELEASING.md`](RELEASING.md#verifying-a-release) describes. If no release is
-listed yet, use the steps from source.
+[`RELEASING.md`](RELEASING.md#verifying-a-release) describes. The latest
+release, `v0.1.0`, is M0: its image has no WhatsApp engine and no
+`admin status`, `pair` or `reconnect`, so until M1 is released, use the steps
+from source to run `main`. The example below works with either.
 
 ```sh
 image=ghcr.io/dortort/wawarden@sha256:<digest>
