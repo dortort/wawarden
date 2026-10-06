@@ -1692,7 +1692,8 @@ one standard-output line before it is answered, allowed or not. The action is
 `rest.changes` or `rest.message` for the routes above, in that order, and
 `rest.unrouted` for an unknown path or method; the reason is `ok` or the error
 code of the answer (`not_found`, `invalid_query`, `invalid_cursor`,
-`rate_limited`, `busy`, `method_not_allowed` or `internal_error`). The row names
+`rate_limited`, `busy`, `method_not_allowed` or `internal_error`, which a handler
+that panics also records). The row names
 a chat only when the answer is about one chat (`rest.chat`, `rest.messages` and
 `rest.message` that succeed); a `404` names none. Every `POST /mcp` writes one
 row too, with the actions and reasons listed under [MCP audit](#mcp-audit). A request whose row cannot be

@@ -64,7 +64,7 @@ func (p *pipeline) serve(w http.ResponseWriter, r *http.Request) {
 	if p.audit != nil {
 		w, authenticated = audited(w, authenticated, p.audit, p.now)
 	}
-	p.router.ServeHTTP(w, authenticated)
+	recovering(p.name, w, authenticated, p.router.ServeHTTP)
 }
 
 func refuse(w http.ResponseWriter, r *http.Request, status int, code string) {

@@ -103,12 +103,16 @@ func registerReads(rt *router, s *reads) {
 func noted(action string, h readHandler) func(context.Context, policy.ReadGrant, *Request) (dto.Response, error) {
 	return func(ctx context.Context, g policy.ReadGrant, r *Request) (dto.Response, error) {
 		ignoreBody(r.w, r.req)
+		n := noteFrom(ctx)
+		if n != nil {
+			n.action = action
+		}
 		resp, chat, err := h(ctx, g, r)
 		if errors.Is(err, scoped.ErrBusy) {
 			err = errBusy
 		}
-		if n := noteFrom(ctx); n != nil {
-			n.action, n.chat = action, chat
+		if n != nil {
+			n.chat = chat
 			if refusal, ok := errors.AsType[*codedError](err); ok {
 				n.reason = refusal.code
 			}

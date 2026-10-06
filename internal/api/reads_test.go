@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dortort/wawarden/internal/cursor"
+	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/store/scoped"
 )
@@ -572,6 +573,19 @@ func TestAFailedAuditFailsTheRequestClosed(t *testing.T) {
 	requireError(t, rec, http.StatusInternalServerError, codeInternal)
 	if rec.Header().Get("Retry-After") != "" {
 		t.Fatal("a refused audit of a rate-limited search kept Retry-After")
+	}
+}
+
+func TestAPanickingReadIsAuditedAsAnInternalError(t *testing.T) {
+	f := newReadFixture(t)
+	installPanicReporter(t, metrics.NewRegistry())
+	deps := testClientDeps(t, f.clients, f.clock.now)
+	deps.Archive, deps.Audit = faultyArchive{fakeArchive: f.archive, panics: true}, f.audit
+	rec := serve(NewClientHandler(deps), newRequest(t, http.MethodGet, "/v1/chats", bearer(keyGroup)))
+	requireError(t, rec, http.StatusInternalServerError, codeInternal)
+	want := []ReadEvent{{At: testNow, Client: "client-group", Action: actionChats, Reason: codeInternal, Peer: "192.0.2.1"}}
+	if got := f.audit.recorded(); !slices.Equal(got, want) {
+		t.Fatalf("audit = %+v, want %+v", got, want)
 	}
 }
 
