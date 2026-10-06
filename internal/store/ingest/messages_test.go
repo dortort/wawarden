@@ -226,6 +226,15 @@ func TestEditsAndRevokesApplyOnlyInTheirChat(t *testing.T) {
 	ftsIntegrity(t, s)
 }
 
+func TestAnEditStoresItsDisplayText(t *testing.T) {
+	s := openStore(t)
+	ref := insert(t, s, textMessage(t, alice, "M1", alice, "first wording"))
+	write(t, s, func(tx *Tx) error { return tx.ApplyEdit(ref, "second \u202ewording\u200b", epoch.Add(time.Minute)) })
+	if d := scalar[string](t, s, "SELECT text_display FROM messages WHERE seq = ?", ref.seq); d != "second wording" {
+		t.Fatalf("text_display after an edit = %q, want the display sanitiser's output of the new text", d)
+	}
+}
+
 func TestReactionsCannotBeEdited(t *testing.T) {
 	s := openStore(t)
 	m := textMessage(t, groupJID, "R1", alice, "")
