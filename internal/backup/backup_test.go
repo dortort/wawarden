@@ -531,6 +531,22 @@ func TestEveryFailureLeavesNoStagingOrPartialFile(t *testing.T) {
 	}
 }
 
+func TestAMemberOf8GiBOrMoreIsRecorded(t *testing.T) {
+	for _, size := range []int64{4096, 8 << 30, 1 << 40} {
+		var b bytes.Buffer
+		if err := tar.NewWriter(&b).WriteHeader(header("archive.db", size, epoch)); err != nil {
+			t.Fatalf("the header of a %d-byte member: %v", size, err)
+		}
+		if size < 8<<30 && b.Len() != 512 {
+			t.Fatalf("the header of a %d-byte member takes %d bytes, want one 512-byte block and no extended record", size, b.Len())
+		}
+		h, err := tar.NewReader(&b).Next()
+		if err != nil || h.Name != "archive.db" || h.Size != size || !h.ModTime.Equal(epoch) {
+			t.Fatalf("read back %+v, %v: want archive.db of %d bytes", h, err, size)
+		}
+	}
+}
+
 func TestAFailedSizeCheckNeverEncryptsBeyondTheDeclaredSize(t *testing.T) {
 	a := fakeArchive()
 	a.size--

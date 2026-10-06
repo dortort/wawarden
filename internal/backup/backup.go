@@ -260,7 +260,7 @@ func (t *Taker) encrypt(ctx context.Context, began time.Time, staging string, ou
 }
 
 func header(name string, size int64, at time.Time) *tar.Header {
-	return &tar.Header{Typeflag: tar.TypeReg, Name: name, Size: size, Mode: 0o600, ModTime: at, Format: tar.FormatUSTAR}
+	return &tar.Header{Typeflag: tar.TypeReg, Name: name, Size: size, Mode: 0o600, ModTime: at, Format: tar.FormatPAX}
 }
 
 func (t *Taker) prepare(dir string) error {
