@@ -2,26 +2,30 @@
 
 > **Status: draft for v1.0.** This document describes the security design that
 > v1.0 will ship and marks which parts are in place. The latest release,
-> `v0.1.0`, is milestone **M0**, a scaffold: a loopback health endpoint; a client
-> listener that has no routes and refuses every request; and, when an admin
-> token hash is configured, an admin listener that serves metrics to the admin
-> token. `main` holds milestone **M1**, which is not released yet. Built from
-> `main`, `serve` also opens and locks the message archive and the device store,
-> `session.db`; runs the WhatsApp engine, which every release build links with
+> `v0.2.0`, is milestone **M1**: a loopback health endpoint; when an admin token
+> hash is configured, an admin listener that serves metrics, the engine's
+> status, pairing and reconnection to the admin token, which `wawarden admin`
+> calls; the message archive and the device store, `session.db`, opened and
+> locked by `serve`; the WhatsApp engine, which every release build links with
 > the WhatsApp protocol library and always uses, through an adapter to that
 > library (only a development build can run a scripted fake in its place, row
-> 21); links the owner's account, and no other, when the administrator requests
-> pairing through the admin listener, which also serves the engine's status and
-> reconnection and which `wawarden admin` calls; writes operational events to
-> standard output and, optionally, to a signed webhook; can write metrics on
-> standard output in embedded metric format; and, when an age recipient is
-> configured, writes one encrypted backup of both databases per paired device.
-> A service without a paired device makes no connection to WhatsApp until
-> pairing is requested. Client management, the REST read API and the MCP read
-> tools are on `main` as part of M2; sending arrives in M3.
+> 21), and which links the owner's account, and no other, when the
+> administrator requests pairing; operational events on standard output and,
+> optionally, a signed webhook; metrics on standard output in embedded metric
+> format; and, when an age recipient is configured, one encrypted backup of both
+> databases per paired device. Its client listener has no routes and refuses
+> every request. `main` holds milestone **M2**, which is not released yet:
+> clients with per-chat read scopes and expiring tokens, which the
+> administrator creates and revokes; the REST read API and the same reads as
+> MCP tools at `POST /mcp`, with sealed cursors and message references and
+> per-client read and search budgets; the names the owner saved for contacts;
+> and the audit chain of client changes and client requests, with
+> `wawarden audit verify`. Nothing sends a message; sending arrives in M3. A
+> service without a paired device makes no connection to WhatsApp until
+> pairing is requested.
 >
-> Every control carries a status. **M0** means it is in place in the M0 release.
-> **M1** means it is in place on `main` and ships with the M1 release. **M2** or
+> Every control carries a status. **M0** and **M1** mean it is in place in that
+> release. **M2** means it is in place on `main` and ships with the M2 release.
 > **M3** means it is planned for that milestone and does not exist yet. The
 > residual-risks section describes the state at v1.0, and the controls it names
 > carry their milestone too. [`configuration.md`](configuration.md) documents
@@ -70,7 +74,7 @@ Most sensitive first.
 | Admin credential | Gates the admin listener: metrics (M0), the engine's status, pairing and reconnection (M1), and minting clients (M2). It does not expire. The service holds only its SHA-256. | M0 |
 | Client tokens | Bearer credentials: whoever holds one and can reach the client listener has its access. The service stores only their SHA-256 digests; a token is shown once, in the answer that creates its client. | M2 |
 | Master key (`keys/master` in the data directory) | The key of the log pseudonyms is derived from it (M1), and so are the audit chain's key and the key of the chat HMACs in audit lines (M2); so are the keys that seal the read API's cursors and message references (M2). Whoever holds it can test a guessed identifier against the pseudonyms in the logs and the chat HMACs in audit lines, can recompute the audit chain, and can open and forge cursors and message references, which still never widen a client's scope. | M1 |
-| Audit chain (the `audit` table, and its chain heads on standard output) | The record of every client change (M2), and later of every client read. Whoever can write `archive.db` and holds the master key can rewrite it; the heads shipped on standard output are what reveal that. | M2 |
+| Audit chain (the `audit` table, and its chain heads on standard output) | The record of every client change and of every client request the read budget admits, REST and MCP alike (M2). Whoever can write `archive.db` and holds the master key can rewrite it; the heads shipped on standard output are what reveal that. | M2 |
 | Webhook signing secret (`WAWARDEN_NOTIFY_SECRET_FILE`) | Shared with the receiver of notification events. Whoever holds it can forge events that the receiver accepts. The service reads it once, at start, and never writes it out. | M1 |
 | Outbound integrity | Messages sent through WaWarden appear as sent by the account owner. | M3 |
 | Account standing | WhatsApp can restrict or ban an account that links an unofficial client. | M1 |
@@ -156,7 +160,10 @@ These are stated so that nobody relies on WaWarden for them:
    engine's state and reason, counts, a time and the build version, never an
    identifier; pairing returns its code to the caller and nowhere else; every
    call of a route that changes state reports an `admin_mutation` event with its
-   action and outcome. `internal/api` reaches the engine and the archive only
+   action and outcome. The client routes and the chat lookup (M2) answer chat
+   identifiers and names, to the administrator only and by design, and a
+   client token only in the answer that creates its client.
+   `internal/api` reaches the engine and the archive only
    through interfaces that `internal/app` implements. What the token must
    satisfy, and the controls that detect its misuse, are under
    [The admin token](#the-admin-token).
@@ -213,13 +220,16 @@ These are stated so that nobody relies on WaWarden for them:
    zero-width and tag characters removed. The function that removes them is in
    place (M1): it keeps newline and tab, also removes every other format
    character, and replaces invalid UTF-8. The archive stores the field beside a
-   message's text when it writes the message and when it applies an edit (M1);
-   no route returns either before M2. MCP tool names, descriptions and schemas are
+   message's text when it writes the message and when it applies an edit (M1),
+   and the read API and the MCP tools return both (M2). `origin` is `owner` for
+   a message the owner's account sent and `peer` otherwise; neither makes the
+   text trustworthy, since the owner can paste third-party text. MCP tool names, descriptions and schemas are
    built from constants and Go types, so no chat-controlled string reaches a tool
    definition (M2, row 11). The names the owner saved for contacts come from the
    contact list the owner's phone syncs, not from the contacts themselves; a
    read returns one only when that contact's direct chat is in the client's
-   scope, and returns it as the phone sent it (M2).
+   scope, and returns it as the phone sent it (M2). How an agent should treat
+   all of this is in [docs/agents.md](agents.md).
 6. **Service to logs, metrics and notifications.** Chat identities leave the
    process only as keyed HMACs, and message text, query text, tokens and protocol
    messages never leave it. As of M0: no request is logged; failed authentications
@@ -294,8 +304,9 @@ These are stated so that nobody relies on WaWarden for them:
    events it cannot deliver are counted and dropped, and those dropped when the
    shutdown's grace period runs out are also reported in one line and make
    `serve` exit `1`.
-10. **Admin CLI to the admin listener (M1).** `wawarden admin
-    status`, `pair` and `reconnect` take the token from a file, standard input
+10. **Admin CLI to the admin listener (M1, M2).** `wawarden admin
+    status`, `pair` and `reconnect` (M1), and `admin clients` and `admin chats
+    list` (M2), take the token from a file, standard input
     or a command, never from an argument or the environment, check its form
     before sending it, take no proxy, follow no redirect, warn when plain HTTP
     leaves loopback, cap what they read, and pass everything they print from an
@@ -304,7 +315,10 @@ These are stated so that nobody relies on WaWarden for them:
     standard error. The token command runs without a
     shell, with its standard input and error closed, its output capped, a
     timeout, its own process group, killed after it finishes, and no `WAWARDEN_`
-    variable in its environment.
+    variable in its environment. `admin clients create` prints the new client
+    token once, on standard output, and nothing shows it again (M2).
+    `wawarden audit verify` (M2) contacts no service: it reads a copy of the
+    archive, read-only, with a copy of the master key.
 
 ## Bearer tokens without network binding
 
@@ -377,6 +391,10 @@ entropy of the tokens; the counters exist to alert on.
 - **All-chats clients (M2).** A client that reads every chat is created only by
   asking for it explicitly; the CLI warns, and the admin status reports the
   number of active ones and the `all_chats_client` warning while one is active.
+- **Rotation (M2).** A token is never renewed or shown again. Rotating it means
+  creating a client with the same scope under a new name, switching the agent
+  to the new token, and revoking the old client; see
+  [docs/agents.md](agents.md#tokens).
 
 ### The admin token
 
@@ -499,7 +517,7 @@ or a nested module.
 | 5 | **One `IN` builder.** All chat-set SQL goes through `internal/store/scoped/inbuilder.go`. Each read query carries scope markers that only the builder expands: an invalid grant or an empty set yields `AND 0`, an all-chats grant `AND 1`, and a set `AND <column> IN (?n, …)` with one numbered parameter per chat, bound to the grant's sorted, distinct canonical identifiers, so the SQL text never holds an identifier. The column comes from the constant query text, and the same parameters serve every marker of a query, so the sender-name join is restricted by the same set. A set of more than 1,000 chats is an error, never a truncation. The builder refuses a query without a marker, and an unexpanded marker is not valid SQL. | I-1 | An architecture test rejects an `IN (` string literal, including one assembled by concatenation, and an SQL argument whose text holds one once the file's constants are resolved, in every file except the builder's. Tests of the three cases and of the cap; a property over random grants and a fuzz target over the SQL text (every chat bound, in order, none written into the text); a test proves that `AND 0` ends a query before its first row, against a control whose rows would make SQLite fail. | M2 (the rule in force from M0). |
 | 5a | **Uniform resolution.** A chat reference, the chat filter of a search or of the change feed, and a message's chat are resolved by one query that carries the scope clause, never by a lookup followed by a check: a chat outside the grant, a missing chat and a malformed reference all return "not found", with the same SQL text and the same empty result. A message named by its chat, identifier and sender is canonicalised through the identity mappings and refused, before any message query runs, when the grant does not allow its chat; the message query carries the scope clause as well. | I-1, I-4 | Tests that an out-of-scope chat, a missing one and garbage issue identical SQL and return identical results; a property over random archives and clients that repeats the comparison for an out-of-scope chat and a missing one (row 7); a test that an out-of-scope message issues no message query. | M2 |
 | 5b | **Bounded reads.** Every read query has a `LIMIT` of at most 201, works on index ranges, counts nothing, and finishes within the read deadline: search walks the full-text index in windows of 20,000 sequence numbers and the change feed in windows of 20,000 change numbers, at most five windows a call, with a cancellation check between them; a change feed started from a time looks in the same windows for the first change of a message in scope dated at or after that time, carries the time in its position until it finds one, and from there returns every change in scope. At most 8 reads run at once; a read that finds every slot taken, or that passes its 2-second deadline, fails with a "busy" error at once instead of queueing behind the engine's writes, and the audit row of its answer waits at most 2 seconds for the connection before the answer is also "busy". Nothing runs `ANALYZE` or `PRAGMA optimize`, so the planner keeps choosing by the schema alone: statistics can turn a cross-chat search of index entries into a scan of every message followed by a sort. | Availability of reads and of ingest, which share the archive's one connection | `EXPLAIN QUERY PLAN` golden files for every read query with an all-chats, an empty, a one-chat and a three-chat grant; the test refuses a scan of a table and a temporary b-tree other than the chat list's sort of at most 1,000 granted chats and the change feed's sort of one window, and a source test requires every `SELECT` constant of the package to have a golden plan. An architecture test refuses `ANALYZE` and `PRAGMA optimize` in every non-test file. Tests of the read slots and of a read past its deadline; an HTTP test with the real audit chain that a read with every slot held, and a read behind a held write, are answered `503` (`busy`) within seconds rather than when the hold ends. The plans are those of the SQLite version the driver pins; a driver upgrade that changes a plan fails the golden test until it is reviewed. | M2 |
-| 6 | **DTO firewall.** Response bodies are types of `internal/api/dto`, built field by field. Every field of a database row struct carries `json:"-"`. | I-5 | Compile time (the response interface has an unexported method, so a type declared elsewhere cannot be returned; a fixture proves it) and a run-time check in the encoder; a test that fails if a response type can produce the keys `raw`, `media_meta`, `sender_alt`, `seq` or `token`; a test that fails if any response type but the client create answer declares the key `credential`, or any other sample encodes it; a reflection test over the rows, pages and positions of `internal/store/scoped` (every exported field, nested ones included, carries `json:"-"`, and each type encodes to `{}`), which a source test keeps complete by requiring it to list every exported struct of the package. Rows carry no `raw`, `sender_alt`, `media_meta` or `origin` field. The read API builds each chat and message body field by field from a scoped row: `untrusted` is a constant `true` of the builder, `origin` is `owner` or `peer` from the row's `from_me`, and `sender.name` is the owner-saved name only when the scoped read returned it, which it does only when the contact's direct chat is in the grant.; API tests that every message body carries `untrusted: true`, the `origin` of its row, the saved or the push name, and null text when revoked. | M0 for response types and the key test. M2 for the row structs and the read API's bodies. |
+| 6 | **DTO firewall.** Response bodies are types of `internal/api/dto`, built field by field. Every field of a database row struct carries `json:"-"`. | I-5 | Compile time (the response interface has an unexported method, so a type declared elsewhere cannot be returned; a fixture proves it) and a run-time check in the encoder; a test that fails if a response type can produce the keys `raw`, `media_meta`, `sender_alt`, `seq` or `token`; a test that fails if any response type but the client create answer declares the key `credential`, or any other sample encodes it; a reflection test over the rows, pages and positions of `internal/store/scoped` (every exported field, nested ones included, carries `json:"-"`, and each type encodes to `{}`), which a source test keeps complete by requiring it to list every exported struct of the package. Rows carry no `raw`, `sender_alt`, `media_meta` or `origin` field. The read API builds each chat and message body field by field from a scoped row: `untrusted` is a constant `true` of the builder, `origin` is `owner` or `peer` from the row's `from_me`, and `sender.name` is the owner-saved name only when the scoped read returned it, which it does only when the contact's direct chat is in the grant; API tests that every message body carries `untrusted: true`, the `origin` of its row, the saved or the push name, and null text when revoked. | M0 for response types and the key test. M2 for the row structs and the read API's bodies. |
 | 7 | **Property tests.** Random archives built with the real store (phone-number and LID pairs, messages in chats and groups, edits, revokes, re-keys, chats without messages) crossed with random clients (all chats, a set, revoked), run through every read of the scoped store and compared with a pure model over an unscoped copy of the archive: every read returns exactly the rows in scope, in order, across pages of random sizes in both directions, and a change feed started from a random time returns exactly the changes in scope from the first change of a message dated at or after it; a revoked or edited canary never appears in search, the change feed or a read row; an out-of-scope chat and a missing chat return the same result through the same SQL; a re-key never lets a client see a message, stored before it, that the client could not see; a message read or change carries a sender's saved contact name exactly when that sender's own chat is in the scope; and the `IN` builder's three cases. A tally fails the test when 100 checks do not cover re-keys that move and that are refused for a scope, revokes, edits, partly visible archives, change feeds from a time that skip a change and that return a later change of an earlier message, and saved names both shown and withheld. A second property drives the same archives through the REST read API's real handler and pipeline: every client's chat listing, every chat's messages across pages, the change feed and a search for every canary equal the model; every message reference a client was given opens; a chat outside the scope answers the same bytes and headers, through the same SQL, as a missing chat on the chat, message-list, change-feed and search routes, also with an invalid cursor or `since`; a revoked client's listing answers as an unknown route without SQL; cursors replayed after the client's grant narrowed answer `404` or stay inside the new grant; and no response byte outside the sealed references and cursors, which are ciphertext and can match a short canary by chance, carries a revoked or edited canary. A third property drives the same archives through the MCP tools at `POST /mcp` of the same handler: `list_chats`, `get_messages` across pages, `get_changes` and `search_messages` for every canary equal the model; an out-of-scope chat answers the same bytes, through the same SQL, as a missing one on every tool that takes a chat, also with an invalid cursor or `since`; a revoked client's `list_chats` answers `not_found` without SQL; replayed cursors stay inside a narrowed grant; and no result carries a revoked or edited canary. | I-1, I-3, I-4, I-8 | `pgregory.net/rapid` in CI: 100 checks with the race detector in every test run, 1,000 without it in a separate job, which uploads the failure files. | M2 |
 | 8 | **Fuzzing.** The admin token syntax check (never panics; anything accepted has the generated form). `Normalize` (never panics; accepts exactly what a regular-expression model of the forms in row 4 accepts, with the agent and device ranges applied, and returns the identifier the model derives; a rejection returns the zero value; an accepted input is at most 128 bytes, and its result has exactly one `@`, no `:` or `.` before it, one of the servers `s.whatsapp.net`, `lid` and `g.us` with the matching kind, and normalises to itself). The display and terminal sanitisers (output is valid UTF-8, holds none of the characters each one removes or replaces, and sanitising it again changes nothing; the terminal sanitiser keeps one character for each character or invalid byte of its input; text with nothing to change is returned unchanged). Strict JSON decoding of request bodies (refusals are only the three fixed errors; an accepted body is valid UTF-8 without a byte-order mark and at most 16384 bytes, one JSON object at most 8 levels deep whose keys are all lower-case `snake_case`, and what it decodes to is accepted again once re-encoded). Crafted protocol messages: up to 64 KiB decoded with a protobuf recursion limit of 24 and translated for three kinds of sender (never panics; a revocation or an edit only from a protocol message with that type set; identifiers, kinds and lengths within what the input allows). `Normalize` against the protocol library's identifier parser (every chat `Normalize` accepts is read by the library as the same user and server, and its result carries no device or agent). The client token parser (never panics; everything accepted re-encodes to itself and has the generated form). The full-text query builder (each term of the query, normalised to NFC, becomes one double-quoted phrase with its quotes doubled, so no operator or column filter reaches FTS5, the search provokes no SQLite error, and for ASCII queries it returns exactly the rows that hold every term); the `IN` builder's SQL text (row 5). Cursor and message-reference opening (row 23: never panics, refuses with the one error, never opens under another client, and what it accepts re-seals to the same length and opens to the same value). The read API's query parsing (refuses only with `invalid_query`; what it accepts holds only the route's parameters, each once and non-empty, and a `limit` from 1 to 200). Idempotency keys. | I-1, I-3, I-5, I-7, I-9 | Go native fuzzing; seed corpora replay in every test run, and CI fuzzes every target for 60 seconds. | M0 for the admin token check. M1 for `Normalize`, the sanitisers, JSON decoding, crafted protocol messages and the comparison with the library's parser. M2 for the others; M3 for idempotency keys. |
 | 9 | **`safego.Go` for every goroutine WaWarden starts.** It recovers a panic, logs the panic's type and stack (never its value) and counts it per goroutine name. WaWarden's HTTP handlers recover the same way and answer a fixed `500`; the protocol adapter's event handler recovers the same way under the name `wa.event` and refuses the event, so WhatsApp is not acknowledged. | I-5, I-9 | An architecture test rejects, in non-test files outside `internal/safego`, a `go` statement, `time.AfterFunc`, `context.AfterFunc`, `runtime.AddCleanup`, `runtime.SetFinalizer`, and any method named `Go` or `RegisterOnShutdown`. Goroutines that other standard-library code starts internally, such as `http.Server`'s per-connection goroutines, are not covered by the test; the handlers that run on them recover as described. A test makes the engine's handler panic on a message and checks that the handler the adapter registers with the protocol library (row 17) refuses it, logs the panic without its value and counts it. | M0. M1 for the protocol adapter's event handler. |
@@ -606,7 +624,7 @@ event.
 | Every request on the client and admin listeners is authenticated before its body is read; error bodies are fixed strings that never echo the request. | M0 |
 | The container image runs as a non-root user (`65532:65532`) on a distroless static base with no shell, and works with a read-only root filesystem. | M0 |
 | The data directory is created with mode `0700`. | M0 |
-| Request bodies are read only by a route handler, after authentication and the route's decision, through one strict JSON decoder: at most 16 KiB, exactly one `Content-Type` of `application/json`, valid UTF-8 without a byte-order mark, one object at most 8 levels deep with lower-case `snake_case` keys, no duplicate key once escapes are decoded, no unknown field and no trailing data; refusals are fixed `415`, `413` and `400` answers that never repeat the request. The admin routes that change state accept only the empty object. | M1 for the decoder and the admin routes; M2 for client routes. |
+| Request bodies are read only by a route handler, after authentication and the route's decision, through one strict JSON decoder: at most 16 KiB (64 KiB for the client create route, so that two sets of 256 chats fit), exactly one `Content-Type` of `application/json`, valid UTF-8 without a byte-order mark, one object at most 8 levels deep with lower-case `snake_case` keys, no duplicate key once escapes are decoded, no unknown field and no trailing data; refusals are fixed `415`, `413` and `400` answers that never repeat the request. The pairing, reconnection and revocation routes accept only the empty object. No client REST route reads a body; `POST /mcp` checks its body before the MCP library reads it, with the same media type rule, a 64 KiB cap, 16 levels and no duplicate key (row 24). | M1 for the decoder and the admin routes; M2 for the client create route and the MCP body check. |
 | Secrets reach the service as `_FILE` paths, never as command-line arguments. The CLI reads the admin token from a file, standard input or a token command, never from command-line arguments or environment variables, and checks its form before sending it. | M0 for the admin hash file. M1 for the CLI and the webhook's secret file. |
 | The service holds one injected secret, the optional webhook signing secret, which the operator supplies as a `_FILE` path and the service reads once at start: the admin credential is a hash, client tokens are hashed in the database, and every other key is derived from a master key generated on first start (mode `0600`). | M0 for the admin credential. M1 for the master key, the log pseudonym key and the webhook signing secret. M2 for client tokens and the cursor and audit keys. |
 | Database files are created with mode `0600` before SQLite opens them, and their journals take that mode. | M1 |
@@ -697,6 +715,13 @@ These remain at v1.0, after every control above is in place.
 - **Search normalisation.** The search query is normalised to NFC, but stored
   text is kept as it arrived, so a message whose text arrived decomposed (NFD)
   is not found by a query for a word in it that has a precomposed form.
+- **Search terms in proxy logs** (M2). `GET /v1/search` carries its query in
+  the URL, as `q`. WaWarden never logs it, but a reverse proxy in front of the
+  client listener usually logs every URL, so its access logs then hold what
+  clients searched for; keeping, trimming or protecting them is the deployer's
+  concern. The MCP tool `search_messages` carries its query in the request
+  body instead. The other paths and parameters hold only chat references and
+  sealed cursors and message references, which name no chat or person.
 - **The MCP library** (M2). `POST /mcp` relies on the MCP Go SDK to parse and
   dispatch JSON-RPC. Its own refusals, before a request reaches the server, can
   repeat the caller's method name, header values or message text, though never
@@ -750,16 +775,20 @@ These remain at v1.0, after every control above is in place.
 - **Prompt injection through message text.** Message text, contact names and group
   subjects are written by third parties and reach agents by design. WaWarden limits
   what a manipulated agent can do (per-chat scopes, no write access for read-all
-  clients, `untrusted` and `origin` marking, constant tool definitions and a
-  `PolicyDenials` metric to alert on, M2; no first contact, M3), but it cannot stop
-  an agent from acting on what it reads.
+  clients, `untrusted` and `origin` marking, constant tool definitions and an
+  audit row for every request, M2; no first contact, M3), but it cannot stop an
+  agent from acting on what it reads. A request outside the scope cannot be
+  counted apart from a request for something missing, since both are the same
+  `404`, so `wawarden_policy_denials_total` stays `0` and is no alarm; the audit
+  rows' `not_found` reasons are what shows a client probing. How an agent
+  should treat what it reads is in [docs/agents.md](agents.md).
 - **A stolen token works from anywhere it can reach the service.** Its scope,
   expiry, revocation and rate limits (M2) bound the damage; nothing in the service
   ties it to a place.
 - **The admin credential is a single factor.** Within whatever network boundary
   the deployer provides, anyone who can reach the admin listener and holds the
-  admin token can read the metrics (M0), start pairing (M1) and create
-  clients (M2). The token does not expire. With it, a caller can also read the status
+  admin token can read the metrics (M0), start pairing (M1), create and revoke
+  clients, and list every chat's identifier and name (M2). The token does not expire. With it, a caller can also read the status
   (the engine's state, counts and the last ingest time, no identifier), request
   pairing codes for the owner's number while no device is paired, which shows
   a notification on the owner's phone, and request reconnections, which are not
@@ -934,7 +963,8 @@ outside the service.
 2. **One host is one trust domain for tokens.** Processes running as the same user
    can read each other's tokens, and nothing in WaWarden can tell them apart. Do not
    place a token that reads every chat, or a write token, on a host where agents
-   with shell access read untrusted input.
+   with shell access read untrusted input. [docs/agents.md](agents.md#tokens)
+   gives the token rules for agents.
 3. **Other linked devices bypass the gateway.** Any other client linked to the same
    account has unrestricted access to it, and the protocol library accepts
    history-sync and identity-mapping payloads from any of the account's own
