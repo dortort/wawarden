@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func schemaVersion(t *testing.T, d *DB) int {
@@ -32,6 +33,28 @@ func TestMigrateAppliesEachStepOnce(t *testing.T) {
 	}
 	if n := count(t, d, "SELECT count(*) FROM a"); n != 1 {
 		t.Fatalf("the first step ran %d times, want once", n)
+	}
+}
+
+func TestMigrateRunsWithoutTheWriteDeadline(t *testing.T) {
+	opts, logs := testOptions(t)
+	d := mustOpen(t, opts)
+	d.writeTimeout, d.rewriteTimeout = time.Nanosecond, time.Nanosecond
+	step := "CREATE TABLE a(x INTEGER) STRICT; WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000) INSERT INTO a SELECT i FROM n;"
+	if err := d.Write(t.Context(), "test.write", func(ctx context.Context, q Querier) error {
+		_, err := q.ExecContext(ctx, step)
+		return err
+	}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a write under a 1 ns deadline = %v, want its deadline exceeded", err)
+	}
+	if v, err := d.Migrate(t.Context(), []string{step}); err != nil || v != 1 {
+		t.Fatalf("Migrate under a 1 ns write and rewrite deadline = %d, %v", v, err)
+	}
+	if n := count(t, d, "SELECT count(*) FROM a"); n != 20000 {
+		t.Fatalf("%d rows, want the step's 20000", n)
+	}
+	if events := logs.events("db_deadline"); len(events) != 1 || events[0]["operation"] != "test.write" {
+		t.Fatalf("db_deadline events = %v, want the write's only", events)
 	}
 }
 

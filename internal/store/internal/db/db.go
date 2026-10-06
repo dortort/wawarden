@@ -379,16 +379,18 @@ func (d *DB) Rewrite(ctx context.Context, op string, fn func(context.Context, Qu
 }
 
 func (d *DB) write(ctx context.Context, op string, timeout time.Duration, fn func(context.Context, Querier) error) error {
-	return d.within(ctx, op, timeout, func(ctx context.Context) error {
-		tx, err := d.sql.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		if err := fn(ctx, tx); err != nil {
-			return errors.Join(err, rollback(tx))
-		}
-		return tx.Commit()
-	})
+	return d.within(ctx, op, timeout, func(ctx context.Context) error { return d.commit(ctx, fn) })
+}
+
+func (d *DB) commit(ctx context.Context, fn func(context.Context, Querier) error) error {
+	tx, err := d.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	if err := fn(ctx, tx); err != nil {
+		return errors.Join(err, rollback(tx))
+	}
+	return tx.Commit()
 }
 
 func rollback(tx *sql.Tx) error {

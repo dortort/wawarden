@@ -17,7 +17,7 @@ func (d *DB) Migrate(ctx context.Context, steps []string) (int, error) {
 		return 0, &Refusal{Reason: d.name.label() + "_schema_newer", detail: fmt.Sprintf("%s has schema version %d, newer than the %d this build knows: it was written by a newer release", d.name.file(), version, len(steps))}
 	}
 	for next := version + 1; next <= len(steps); next++ {
-		err := d.Write(ctx, "db.migrate", func(ctx context.Context, q Querier) error {
+		err := d.commit(ctx, func(ctx context.Context, q Querier) error {
 			if _, err := q.ExecContext(ctx, steps[next-1]); err != nil {
 				return err
 			}
