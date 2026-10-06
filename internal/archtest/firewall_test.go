@@ -87,6 +87,11 @@ func anchorProblems(t *testing.T, root string) []string {
 	if !api[muxDecide] {
 		out = append(out, fmt.Sprintf("package api no longer declares %s, so the mux-ownership rule guards nothing by that name: update it", muxDecide))
 	}
+	for _, helper := range []string{mcpToolHelper, mcpEndpointFunc} {
+		if !api[helper] {
+			out = append(out, fmt.Sprintf("package api no longer declares %s, the only function where the mcp-registration rule allows its registrations: update it", helper))
+		}
+	}
 	handlers := map[string]bool{}
 	for name := range declarations(t, root, listenersDir) {
 		if typ, ok := strings.CutSuffix(name, ".Handler"); ok && ast.IsExported(typ) {
@@ -141,9 +146,9 @@ func TestRuleAnchors(t *testing.T) {
 		db   string
 		want int
 	}{
-		{name: "the names the rules guard", api: "func (rt *router) register() {}\nfunc decided() {}\n", lis: "type Spec struct{ Handler http.Handler }\n", db: "func (d *DB) RawHandle() *sql.DB { return nil }\n"},
-		{name: "renamed", api: "func (rt *router) add() {}\nfunc guard() {}\n", lis: "type Endpoint struct{ Handler http.Handler }\n", db: "func (d *DB) SQLHandle() *sql.DB { return nil }\n", want: 4},
-		{name: "added beside them", api: "func (rt *router) register() {}\nfunc (rt *router) open() {}\nfunc decided() {}\n", lis: "type Spec struct{ Handler http.Handler }\ntype Wrapped struct{ Handler http.Handler }\n", db: "func (d *DB) RawHandle() *sql.DB { return nil }\nfunc (d *DB) Conn() *sql.DB { return nil }\n", want: 3},
+		{name: "the names the rules guard", api: "func (rt *router) register() {}\nfunc decided() {}\nfunc readTool() {}\nfunc newMCPEndpoint() {}\n", lis: "type Spec struct{ Handler http.Handler }\n", db: "func (d *DB) RawHandle() *sql.DB { return nil }\n"},
+		{name: "renamed", api: "func (rt *router) add() {}\nfunc guard() {}\nfunc addTool() {}\nfunc (rt *router) readTool() {}\n", lis: "type Endpoint struct{ Handler http.Handler }\n", db: "func (d *DB) SQLHandle() *sql.DB { return nil }\n", want: 6},
+		{name: "added beside them", api: "func (rt *router) register() {}\nfunc (rt *router) open() {}\nfunc decided() {}\nfunc readTool() {}\nfunc newMCPEndpoint() {}\n", lis: "type Spec struct{ Handler http.Handler }\ntype Wrapped struct{ Handler http.Handler }\n", db: "func (d *DB) RawHandle() *sql.DB { return nil }\nfunc (d *DB) Conn() *sql.DB { return nil }\n", want: 3},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			root := t.TempDir()
