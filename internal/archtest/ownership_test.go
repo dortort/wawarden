@@ -723,6 +723,14 @@ func f(ln net.Listener) error {
 	return srv.Serve(ln)
 }
 `},
+		{name: "an alias of the server pointer", rel: "internal/app/x.go", want: 1, src: `package app
+
+import "net/http"
+
+type serverPtr = *http.Server
+
+var _ = []serverPtr{{ReadTimeout: 1}}
+`},
 		{name: "ListenAndServe on any receiver", rel: "internal/app/x_test.go", want: 3, src: `package app
 
 type srv struct{}
@@ -836,6 +844,10 @@ func checkServers(f *sourceFile) []string {
 				if sel, ok := ast.Unparen(lhs).(*ast.SelectorExpr); ok && sel.Sel.Name == "Handler" {
 					out = append(out, f.at(lhs, "Handler assigned after the http.Server literal, where it can become nil and serve http.DefaultServeMux: set it only in the literal"))
 				}
+			}
+		case *ast.TypeSpec:
+			if star, ok := ast.Unparen(n.Type).(*ast.StarExpr); ok && n.Assign.IsValid() && f.isType(star.X, "net/http", "Server") {
+				out = append(out, f.at(n, "type %s is an alias of *http.Server, whose elided literals this rule then cannot see", n.Name.Name))
 			}
 		case *ast.SelectorExpr:
 			if n.Sel.Name == "ListenAndServe" || n.Sel.Name == "ListenAndServeTLS" {

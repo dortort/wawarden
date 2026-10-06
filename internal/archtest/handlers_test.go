@@ -97,6 +97,25 @@ func f(ready func() bool, local struct{ Name string }, p *struct{ Name string })
 	return []listeners.Spec{s, listeners.Spec(local), *(*listeners.Spec)(p)}
 }
 `},
+		{name: "aliases of the spec", rel: "internal/app/x.go", want: 2, src: `package app
+
+import (
+	"net/http"
+
+	"github.com/dortort/wawarden/internal/listeners"
+)
+
+type spec = listeners.Spec
+
+type specPointer = *listeners.Spec
+
+type wrapped struct{ http.Handler }
+
+func f(s listeners.Spec, h http.Handler) []spec {
+	_ = spec(s)
+	return []spec{{Name: "client", Handler: wrapped{h}}}
+}
+`},
 		{name: "a handler built in an api subpackage", rel: "internal/api/dto/x.go", want: 1, src: `package dto
 
 import "net/http"
@@ -204,6 +223,10 @@ func checkHandlers(f *sourceFile) []string {
 		case *ast.UnaryExpr:
 			if sel, ok := ast.Unparen(n.X).(*ast.SelectorExpr); ok && n.Op == token.AND && sel.Sel.Name == "Handler" {
 				out = append(out, f.at(n, "the address of a Handler field taken outside %s, through which it could be changed after its literal", apiDir))
+			}
+		case *ast.TypeSpec:
+			if n.Assign.IsValid() && f.isType(n.Type, module+"/"+listenersDir, listenerSpec) && !within(f.dir, listenersDir) {
+				out = append(out, f.at(n, "type %s is an alias of listeners.Spec, whose literals and conversions this rule then cannot see", n.Name.Name))
 			}
 		case *ast.CallExpr:
 			if f.isType(n.Fun, module+"/"+listenersDir, listenerSpec) && !within(f.dir, listenersDir) {
