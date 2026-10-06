@@ -1,4 +1,4 @@
-// Package admin reads the archive's counters for the admin status route: counts and a time, never an identifier.
+// Package admin holds the archive's administrative side: the status counters, the clients with their cached credentials, the hash-chained audit table and the chat listing.
 package admin
 
 import (

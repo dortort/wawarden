@@ -111,6 +111,7 @@ func (tx *Tx) LearnLID(lid, pn policy.CanonicalChat, source MappingSource, at ti
 	if _, err := tx.q.ExecContext(tx.ctx, insertMapping, lid.JID(), pn.JID(), string(source), ms(at)); err != nil {
 		return LIDResult{}, err
 	}
+	tx.rescoped = tx.rescoped || rescoped
 	return LIDResult{Outcome: LIDLearned, Rescoped: rescoped}, nil
 }
 

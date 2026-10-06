@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dortort/wawarden/internal/keys"
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/store/admin"
 	"github.com/dortort/wawarden/internal/store/internal/db"
@@ -38,6 +39,10 @@ type Options struct {
 	WriteTimeout   time.Duration
 	RewriteTimeout time.Duration
 	ReadSlots      int
+
+	Master   *keys.Master
+	AuditOut io.Writer
+	Now      func() time.Time
 }
 
 type Store struct {
@@ -46,6 +51,8 @@ type Store struct {
 	floor   uint64
 	admin   *admin.Reader
 	scoped  *scoped.Reader
+	audit   *admin.Audit
+	clients *admin.Clients
 
 	mu     sync.Mutex
 	paused bool
@@ -67,7 +74,9 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 	if opts.ReadSlots > 0 {
 		slots = append(slots, scoped.WithReadSlots(opts.ReadSlots))
 	}
-	s := &Store{db: d, version: version, floor: opts.MinFreeBytes, admin: admin.New(d), scoped: scoped.New(d, slots...)}
+	audit := admin.NewAudit(d, opts.Master, opts.AuditOut)
+	s := &Store{db: d, version: version, floor: opts.MinFreeBytes, admin: admin.New(d), scoped: scoped.New(d, slots...),
+		audit: audit, clients: admin.NewClients(d, &admin.Generation{}, audit, opts.Now)}
 	if err := s.finishRewrite(ctx); err != nil {
 		return nil, errors.Join(err, d.Close())
 	}
@@ -88,6 +97,10 @@ func (s *Store) Admin() *admin.Reader { return s.admin }
 
 func (s *Store) Scoped() *scoped.Reader { return s.scoped }
 
+func (s *Store) Audit() *admin.Audit { return s.audit }
+
+func (s *Store) Clients() *admin.Clients { return s.clients }
+
 func (s *Store) Backup(ctx context.Context, staging string, write func(name string, size int64, r io.Reader) error) error {
 	return s.db.Backup(ctx, staging, write)
 }
@@ -100,6 +113,7 @@ type Reader struct {
 type Tx struct {
 	Reader
 	forgotten bool
+	rescoped  bool
 }
 
 func (s *Store) Read(ctx context.Context, op string, fn func(*Reader) error) error {
@@ -116,7 +130,9 @@ func (s *Store) Write(ctx context.Context, op string, fn func(*Tx) error) error 
 			return err
 		}
 		var err error
-		stale, err = tx.markStaleKeys()
+		if stale, err = tx.markStaleKeys(); err == nil && tx.rescoped {
+			s.clients.Invalidate()
+		}
 		return err
 	}); err != nil || !stale {
 		return err
