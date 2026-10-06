@@ -24,6 +24,9 @@ const (
 	vectorID        = "6a53922c"
 	vectorLogRedact = "2b5bed1f6ae0a12443e399c345dc73267d0a36a83a3096356445bdc293a96f55"
 	vectorChatHMAC  = "3a3dfe0058f126cf88a2cddae5304fb7efd5dbe350ee066c52fa8d8ebcf743b2"
+	vectorCursor    = "497e790a7e9ede5e9802cb058072ec6c8e72e816d68679582c31df6704e93608"
+	vectorMref      = "d38e7716d67bbe35f4280e2ff20a733c05af9007f459a8307d9fc1044d17c578"
+	vectorAudit     = "ffe711ed496756b9b35266179d8289a0dab2e7b38ab4ee393f2a2fa36d6622a1"
 )
 
 var keyID = regexp.MustCompile(`^[0-9a-f]{8}$`)
@@ -218,6 +221,9 @@ func TestDerivationVectors(t *testing.T) {
 		{name: "key id", got: m.ID(), want: vectorID, info: "wawarden/v1/key-id", length: idSize},
 		{name: "log-redact", got: hex.EncodeToString(m.LogRedactKey()), want: vectorLogRedact, info: "wawarden/v1/log-redact", length: keySize},
 		{name: "chat-hmac", got: hex.EncodeToString(m.ChatHMACKey()), want: vectorChatHMAC, info: "wawarden/v1/chat-hmac", length: keySize},
+		{name: "cursor-seal", got: hex.EncodeToString(m.CursorSealKey()), want: vectorCursor, info: "wawarden/v1/cursor-seal", length: keySize},
+		{name: "mref", got: hex.EncodeToString(m.MessageRefKey()), want: vectorMref, info: "wawarden/v1/mref", length: keySize},
+		{name: "audit-chain", got: hex.EncodeToString(m.AuditChainKey()), want: vectorAudit, info: "wawarden/v1/audit-chain", length: keySize},
 	}
 	for _, tt := range tests {
 		if independent := hex.EncodeToString(hkdfSHA256(vectorMaster(), tt.info, tt.length)); independent != tt.want {
@@ -227,18 +233,77 @@ func TestDerivationVectors(t *testing.T) {
 			t.Fatalf("%s = %s, want %s: a derived key changed, which changes every pseudonym and HMAC made with it", tt.name, tt.got, tt.want)
 		}
 	}
-	if bytes.Equal(m.LogRedactKey(), m.ChatHMACKey()) {
-		t.Fatal("the purpose keys are equal")
+	purposes := []func() []byte{m.LogRedactKey, m.ChatHMACKey, m.CursorSealKey, m.MessageRefKey, m.AuditChainKey}
+	for i, a := range purposes {
+		for _, b := range purposes[i+1:] {
+			if bytes.Equal(a(), b()) {
+				t.Fatal("two purpose keys are equal")
+			}
+		}
+		want := hex.EncodeToString(a())
+		k := a()
+		clear(k)
+		if hex.EncodeToString(a()) != want {
+			t.Fatal("changing a returned key changed the key the master holds")
+		}
 	}
-	k := m.LogRedactKey()
-	clear(k)
-	if hex.EncodeToString(m.LogRedactKey()) != vectorLogRedact {
-		t.Fatal("changing a returned key changed the key the master holds")
+}
+
+func TestLoadFileReadsACopyWithoutCreatingOrChanging(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "copy")
+	if err := os.WriteFile(path, vectorMaster(), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
 	}
-	k = m.ChatHMACKey()
-	clear(k)
-	if hex.EncodeToString(m.ChatHMACKey()) != vectorChatHMAC {
-		t.Fatal("changing a returned key changed the key the master holds")
+	chmod(t, path, 0o444)
+	m, r := LoadFile(path)
+	if r != nil {
+		t.Fatalf("LoadFile: %v", r)
+	}
+	if m.ID() != vectorID || hex.EncodeToString(m.AuditChainKey()) != vectorAudit || hex.EncodeToString(m.ChatHMACKey()) != vectorChatHMAC {
+		t.Fatal("LoadFile derived other keys than Load")
+	}
+	if got := entries(t, dir); !slices.Equal(got, []string{"copy"}) {
+		t.Fatalf("LoadFile left %q in the directory", got)
+	}
+	tests := []struct {
+		name, reason string
+		setup        func() string
+	}{
+		{name: "missing", reason: reasonMasterUnusable, setup: func() string { return filepath.Join(dir, "absent") }},
+		{name: "directory", reason: reasonMasterNotRegular, setup: func() string { return dir }},
+		{name: "short", reason: reasonMasterSize, setup: func() string {
+			short := filepath.Join(t.TempDir(), "short")
+			if err := os.WriteFile(short, vectorMaster()[1:], 0o600); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+			return short
+		}},
+		{name: "long", reason: reasonMasterSize, setup: func() string {
+			long := filepath.Join(t.TempDir(), "long")
+			if err := os.WriteFile(long, append(vectorMaster(), 0), 0o600); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+			return long
+		}},
+		{name: "fifo", reason: reasonMasterNotRegular, setup: func() string {
+			fifo := filepath.Join(t.TempDir(), "fifo")
+			if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+				t.Fatalf("Mkfifo: %v", err)
+			}
+			return fifo
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := tt.setup()
+			if m, r := LoadFile(path); m != nil || r == nil || r.Reason != tt.reason {
+				t.Fatalf("LoadFile(%s) = %v, %v, want refusal %s", tt.name, m, r, tt.reason)
+			}
+			if _, err := os.Lstat(path); tt.name == "missing" && err == nil {
+				t.Fatal("LoadFile created the missing file")
+			}
+		})
 	}
 }
 
@@ -441,7 +506,7 @@ func TestMasterPrintsNoKey(t *testing.T) {
 	slog.New(slog.NewJSONHandler(&out, nil)).Info("master", "m", m, "v", *m)
 	slog.New(slog.NewTextHandler(&out, nil)).Info("master", "m", m, "v", *m)
 	text := strings.ToLower(out.String())
-	for _, secret := range [][]byte{vectorMaster(), m.LogRedactKey(), m.ChatHMACKey()} {
+	for _, secret := range [][]byte{vectorMaster(), m.LogRedactKey(), m.ChatHMACKey(), m.CursorSealKey(), m.MessageRefKey(), m.AuditChainKey()} {
 		for _, form := range []string{hex.EncodeToString(secret), hex.EncodeToString(secret[:8]), string(secret[8:16]), decimal(secret[:8])} {
 			if strings.Contains(text, strings.ToLower(form)) {
 				t.Fatalf("printing a Master revealed key material %q:\n%s", form, out.String())

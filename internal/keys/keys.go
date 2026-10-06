@@ -24,6 +24,9 @@ const (
 	idInfo     = infoPrefix + "key-id"
 	logInfo    = infoPrefix + "log-redact"
 	chatInfo   = infoPrefix + "chat-hmac"
+	cursorInfo = infoPrefix + "cursor-seal"
+	mrefInfo   = infoPrefix + "mref"
+	auditInfo  = infoPrefix + "audit-chain"
 )
 
 const (
@@ -50,8 +53,11 @@ func (r *Refusal) Error() string { return "keys: " + r.detail }
 type Master struct {
 	id string
 	// Behind *string because fmt prints a nested *string as an address but a nested *[32]byte as its bytes.
-	logRedact *string
-	chatHMAC  *string
+	logRedact  *string
+	chatHMAC   *string
+	cursorSeal *string
+	mref       *string
+	auditChain *string
 }
 
 func (m *Master) ID() string { return m.id }
@@ -59,6 +65,12 @@ func (m *Master) ID() string { return m.id }
 func (m *Master) LogRedactKey() []byte { return []byte(*m.logRedact) }
 
 func (m *Master) ChatHMACKey() []byte { return []byte(*m.chatHMAC) }
+
+func (m *Master) CursorSealKey() []byte { return []byte(*m.cursorSeal) }
+
+func (m *Master) MessageRefKey() []byte { return []byte(*m.mref) }
+
+func (m *Master) AuditChainKey() []byte { return []byte(*m.auditChain) }
 
 func Load(dataDir string, uid int) (*Master, *Refusal) {
 	return load(dataDir, uid, fileOwner)
@@ -72,6 +84,30 @@ func load(dataDir string, uid int, owner func(fs.FileInfo) (int, bool)) (*Master
 	secret, r := readOrCreate(dir, uid, owner)
 	if r != nil {
 		return nil, r
+	}
+	return derive(secret)
+}
+
+func LoadFile(path string) (*Master, *Refusal) {
+	const name = "the master key file"
+	f, err := os.OpenFile(filepath.Clean(path), os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, &Refusal{Reason: reasonMasterUnusable, detail: name + " cannot be opened: " + cause(err)}
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	switch {
+	case err != nil:
+		return nil, &Refusal{Reason: reasonMasterUnusable, detail: name + " cannot be inspected: " + cause(err)}
+	case !fi.Mode().IsRegular():
+		return nil, &Refusal{Reason: reasonMasterNotRegular, detail: name + " is not a regular file"}
+	}
+	secret, err := io.ReadAll(io.LimitReader(f, masterSize+1))
+	if err != nil {
+		return nil, &Refusal{Reason: reasonMasterUnusable, detail: name + " cannot be read: " + cause(err)}
+	}
+	if len(secret) != masterSize {
+		return nil, &Refusal{Reason: reasonMasterSize, detail: name + " must hold exactly 32 bytes"}
 	}
 	return derive(secret)
 }
@@ -179,13 +215,24 @@ var syncDir = func(dir string) error {
 
 func derive(secret []byte) (*Master, *Refusal) {
 	id, idErr := hkdf.Key(sha256.New, secret, nil, idInfo, idSize)
-	logRedact, logErr := hkdf.Key(sha256.New, secret, nil, logInfo, keySize)
-	chatHMAC, chatErr := hkdf.Key(sha256.New, secret, nil, chatInfo, keySize)
-	if errors.Join(idErr, logErr, chatErr) != nil {
+	if idErr != nil {
 		return nil, &Refusal{Reason: reasonMasterUnusable, detail: dirName + "/" + masterName + ": no key can be derived from it"}
 	}
-	logKey, chatKey := string(logRedact), string(chatHMAC)
-	return &Master{id: hex.EncodeToString(id), logRedact: &logKey, chatHMAC: &chatKey}, nil
+	m := &Master{id: hex.EncodeToString(id)}
+	for _, purpose := range []struct {
+		info string
+		key  **string
+	}{
+		{logInfo, &m.logRedact}, {chatInfo, &m.chatHMAC}, {cursorInfo, &m.cursorSeal}, {mrefInfo, &m.mref}, {auditInfo, &m.auditChain},
+	} {
+		k, err := hkdf.Key(sha256.New, secret, nil, purpose.info, keySize)
+		if err != nil {
+			return nil, &Refusal{Reason: reasonMasterUnusable, detail: dirName + "/" + masterName + ": no key can be derived from it"}
+		}
+		text := string(k)
+		*purpose.key = &text
+	}
+	return m, nil
 }
 
 func ownedBy(fi fs.FileInfo, uid int, owner func(fs.FileInfo) (int, bool)) bool {
