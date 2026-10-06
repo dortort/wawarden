@@ -92,8 +92,11 @@ above after any change to the repository settings.
   results. It runs on pushes to `main` and on a schedule, does not build or run the
   repository's code, and holds no `contents`, `packages` or `attestations` write
   permission. The other write permissions outside the release workflow are
-  `security-events: write` (Scorecard and CodeQL upload code-scanning results) and
-  `issues: write` (the daily `govulncheck` job manages one issue).
+  `security-events: write` (Scorecard and CodeQL upload code-scanning results),
+  `issues: write` (the daily `govulncheck` job manages one issue), and
+  `contents: write` and `pull-requests: write`, held by the job of the
+  [whatsmeow bump workflow](#the-whatsmeow-bump-workflow) that pushes the
+  branch `bump/whatsmeow` and opens its pull request, and runs no Go code.
 - The publishing job pushes the image by digest, without a tag. Only after the
   pushed digest matches the build job's, and the index is signed and attested,
   does it add the version tag.
@@ -117,8 +120,9 @@ release workflow, by CI and by anyone reproducing a release:
   `-trimpath`, `-buildvcs=true`, `-mod=readonly` and an empty build ID, with the
   toolchain named by the `toolchain` line in `go.mod` (`GOTOOLCHAIN=local`): the
   script stops unless `go env GOVERSION` equals that line. In `ci.yml`,
-  `codeql.yml`, `release.yml` and `govulncheck-daily.yml`, every job that runs
-  Go also runs `hack/check-go-version.sh` right after setting Go up, which makes
+  `codeql.yml`, `release.yml`, `govulncheck-daily.yml` and `bump-whatsmeow.yml`,
+  every job that runs Go also runs `hack/check-go-version.sh` right after
+  setting Go up, which makes
   the same comparison in the job's own environment. The script accepts any
   `VERSION` that is a valid image tag (CI builds with `VERSION=ci`); the version
   string is injected at link time into `internal/buildinfo.Version`, and
