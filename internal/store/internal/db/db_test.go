@@ -660,6 +660,24 @@ func TestTheDeadlineEventComesWhileTheCallStillRuns(t *testing.T) {
 	}
 }
 
+func TestACallThatItsDeadlineEndsIsReportedOnce(t *testing.T) {
+	opts, logs := testOptions(t)
+	d := mustOpen(t, opts)
+	const calls = 50
+	for range calls {
+		err := d.within(t.Context(), "test.ended", time.Millisecond, func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		})
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("a call that its deadline ended = %v", err)
+		}
+	}
+	if events := logs.events("db_deadline"); len(events) != calls {
+		t.Fatalf("db_deadline events = %d, want one for each of the %d calls that their deadline ended", len(events), calls)
+	}
+}
+
 func TestRewriteRunsUnderItsOwnDeadline(t *testing.T) {
 	opts, logs := testOptions(t)
 	d := mustOpen(t, opts)

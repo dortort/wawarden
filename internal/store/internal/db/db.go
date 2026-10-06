@@ -404,28 +404,32 @@ func (d *DB) within(ctx context.Context, op string, timeout time.Duration, fn fu
 	}
 	dctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	expired := func() bool { return ctx.Err() == nil && errors.Is(dctx.Err(), context.DeadlineExceeded) }
+	report := func() {
+		d.logger.Error("database call exceeded its deadline",
+			slog.String("event", "db_deadline"), slog.String("database", d.name.label()),
+			slog.String("operation", op), slog.Int64("timeout_ms", timeout.Milliseconds()),
+			slog.String("goroutines", goroutineDump()))
+	}
 	returned, watched := make(chan struct{}), make(chan struct{})
+	var reported bool
 	safego.Go("db.deadline", func() {
 		defer close(watched)
 		select {
 		case <-returned:
 		case <-dctx.Done():
-			select {
-			case <-returned:
-				return
-			default:
-			}
-			if ctx.Err() == nil && errors.Is(dctx.Err(), context.DeadlineExceeded) {
-				d.logger.Error("database call exceeded its deadline",
-					slog.String("event", "db_deadline"), slog.String("database", d.name.label()),
-					slog.String("operation", op), slog.Int64("timeout_ms", timeout.Milliseconds()),
-					slog.String("goroutines", goroutineDump()))
+			if reported = expired(); reported {
+				report()
 			}
 		}
 	})
 	err := fn(dctx)
+	overran := expired()
 	close(returned)
 	<-watched
+	if overran && !reported {
+		report()
+	}
 	return err
 }
 
