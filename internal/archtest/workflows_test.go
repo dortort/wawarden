@@ -239,11 +239,13 @@ func bumpWorkflowProblems(config string) []string {
 			out = append(out, fmt.Sprintf("jobs.%s.permissions is %q %q, want exactly %q", job.name, inline, granted, want.permissions))
 		}
 		writes := strings.Contains(inline, "write") || slices.ContainsFunc(granted, func(p string) bool { return strings.Contains(p, "write") })
-		setup, runsGo := -1, false
+		setup, firstGo := -1, -1
 		for i, step := range job.steps {
 			uses, _ := yamlValue(step, "uses")
 			script, _ := stepScript(step)
-			runsGo = runsGo || goCommand.MatchString(script)
+			if firstGo < 0 && goCommand.MatchString(script) {
+				firstGo = i
+			}
 			if strings.HasPrefix(uses, "actions/setup-go@") {
 				setup = i
 			}
@@ -272,7 +274,7 @@ func bumpWorkflowProblems(config string) []string {
 				}
 			}
 		}
-		if setup >= 0 || runsGo {
+		if setup >= 0 || firstGo >= 0 {
 			check := ""
 			if setup >= 0 && setup+1 < len(job.steps) {
 				check, _ = yamlValue(job.steps[setup+1], "run")
@@ -280,6 +282,9 @@ func bumpWorkflowProblems(config string) []string {
 			if check != "hack/check-go-version.sh" {
 				out = append(out, fmt.Sprintf("jobs.%s runs Go but does not run hack/check-go-version.sh in the step right after actions/setup-go", job.name))
 			}
+		}
+		if firstGo >= 0 && firstGo < setup {
+			out = append(out, fmt.Sprintf("jobs.%s step %d runs Go before actions/setup-go, on the runner's own Go, which hack/check-go-version.sh does not check", job.name, firstGo+1))
 		}
 	}
 	slices.Sort(names)
@@ -367,6 +372,7 @@ jobs:
 		{name: "no Go version check", old: check, want: 1},
 		{name: "Go used before the version check", old: setupGo + check, new: setupGo + "      - run: go version\n" + check, want: 1},
 		{name: "Go without setup-go", old: setupGo + check, want: 1},
+		{name: "Go before setup-go", old: setupGo, new: "      - run: go mod download\n" + setupGo, want: 1},
 		{name: "fork pull requests", old: "--json number,isCrossRepository --jq 'map(select(.isCrossRepository | not)) | .[0].number // empty'", new: "--json number --jq '.[0].number // empty'", want: 1},
 		{name: "no lookup", old: "          " + openPullRequestLookup + "\n", want: 1},
 		{name: "edit by branch", old: `gh pr edit "$number"`, new: `gh pr edit "$branch"`, want: 1},

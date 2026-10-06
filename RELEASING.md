@@ -565,8 +565,8 @@ merges, tags or releases. It runs two jobs:
    An architecture test (`internal/archtest/workflows_test.go`) holds the
    workflow to this split: main only, no workflow-wide permission, no Go and no
    `hack/` script in the job that can write, credentials never persisted by a
-   checkout, the Go version check after setup-go, and the lookup that skips
-   pull requests from forks.
+   checkout, the Go version check right after setup-go and before any Go command,
+   and the lookup that skips pull requests from forks.
 
 The description carries the old and new pseudo-versions, the upstream compare
 link, whether the new commit descends from the pinned one (and if not, the
