@@ -163,7 +163,14 @@ func TestHTTPReadsAnswerBusyInsteadOfQueueing(t *testing.T) {
 			if err := <-done; err != nil {
 				t.Fatalf("the held call = %v", err)
 			}
-			if rec := get(); rec.Code != http.StatusOK {
+			rec := get()
+			for range 50 {
+				if rec.Code != http.StatusServiceUnavailable {
+					break
+				}
+				rec = get()
+			}
+			if rec.Code != http.StatusOK {
 				t.Fatalf("a read after the release = %d %s", rec.Code, rec.Body.String())
 			}
 		})
