@@ -184,6 +184,7 @@ func TestCompileTimeFirewalls(t *testing.T) {
 		{name: "grantliteral", fragment: "cannot refer to unexported field ok in struct literal of type policy.ReadGrant"},
 		{name: "grantfield", fragment: "g.ok undefined (cannot refer to unexported field ok)"},
 		{name: "credentialcompare", fragment: "invalid operation: a == b (struct containing [0]func() cannot be compared)"},
+		{name: "digestcompare", fragment: "invalid operation: a == b (struct containing [0]func() cannot be compared)"},
 		{name: "unexportedmux", fragment: "undefined: api.newRouter"},
 		{name: "unexportedrouter", fragment: "undefined: api.router"},
 		{name: "foreignresponse", fragment: "leak does not implement dto.Response (unexported method encode)"},
