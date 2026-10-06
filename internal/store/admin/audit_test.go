@@ -68,8 +68,8 @@ func TestAuditLinesCarryTheShapeAndTheHead(t *testing.T) {
 			keys = append(keys, k)
 		}
 		slices.Sort(keys)
-		if got := strings.Join(keys, " "); got != "action chain_head chat_hmac client ok reason ts" {
-			t.Fatalf("audit line %d has the keys %s", i, got)
+		if got := strings.Join(keys, " "); got != "action chain_head chat_hmac client event ok reason ts" || line["event"] != "audit" {
+			t.Fatalf("audit line %d has the keys %s and the event %v, want the audit event", i, got, line["event"])
 		}
 		if heads[i] != hex.EncodeToString(stored[i][:16]) {
 			t.Fatalf("line %d ships the head %s, the row's HMAC starts %x", i, heads[i], stored[i][:16])

@@ -25,6 +25,7 @@ const (
 	rowDomain   = "wawarden/audit-row/v1\x00"
 	headBytes   = 16
 	maxPeer     = 64
+	auditEvent  = "audit"
 	verifyLimit = 30 * time.Minute
 
 	ReasonIDGap        = "id_gap"
@@ -70,6 +71,7 @@ type Event struct {
 type Line struct{ text []byte }
 
 type auditLine struct {
+	Event     string  `json:"event"`
 	TS        string  `json:"ts"`
 	Client    string  `json:"client"`
 	Action    string  `json:"action"`
@@ -127,7 +129,7 @@ func (a *Audit) Append(ctx context.Context, q db.Querier, e Event) (Line, error)
 		return Line{}, err
 	}
 	text, err := json.Marshal(auditLine{
-		TS: e.At.UTC().Format("2006-01-02T15:04:05.000Z07:00"), Client: r.client, Action: r.action, ChatHMAC: chatHMAC,
+		Event: auditEvent, TS: e.At.UTC().Format("2006-01-02T15:04:05.000Z07:00"), Client: r.client, Action: r.action, ChatHMAC: chatHMAC,
 		OK: r.ok, Reason: r.reason, ChainHead: hex.EncodeToString(mac[:headBytes]),
 	})
 	if err != nil {

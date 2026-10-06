@@ -1935,8 +1935,8 @@ has these keys:
 | `msg` | A human-readable sentence; it may change between releases |
 | `event` | A stable, machine-readable event name; match on this, not on `msg` |
 
-The [audit lines](#audit-chain) are the one exception: they have their own
-fixed keys, and a `chain_head` instead of an `event`.
+The [audit lines](#audit-chain) are the one exception: they carry the `event`
+`audit` and their own fixed keys, with no `time`, `level` or `msg`.
 
 `WAWARDEN_LOG_LEVEL` sets the lowest level written, with exceptions that ignore
 the setting. The `startup_refused` line is written before the configuration is
@@ -2005,6 +2005,7 @@ notices of a [debug window](#protocol-library-logs). Lines in
 | `emf_failed` | `WARN` | `error_type` | Writing the [embedded-metric-format](#embedded-metric-format) lines failed. |
 | `backup_disabled` | `WARN`, at every log level | | `WAWARDEN_BACKUP_AGE_RECIPIENT` is not set, or the [fake engine](#fake-engine) runs and opens no device store, so no [backup](#backups) is ever taken. Logged once per start. |
 | `backup_check_failed` | `WARN` | `error_type` | Reading or recording whether the [backup](#backups) is due failed; the check runs again 30 seconds later. |
+| `audit` | none, written at every log level | `ts`, `client`, `action`, `chat_hmac`, `ok`, `reason`, `chain_head` | An [audit row](#audit-chain) was committed; the line has no `time`, `level` or `msg`. |
 
 What is never logged: requests (there is no access log), request bodies, header
 values, tokens, failed authentications other than the count in
@@ -2175,7 +2176,7 @@ After the transaction commits, the service writes one line on standard output,
 through the same scrubbing writer as every log line:
 
 ```json
-{"ts":"2026-10-06T12:00:00.000Z","client":"aaaqeaye","action":"client_create","chat_hmac":null,"ok":true,"reason":"ok","chain_head":"3fa8c2d14be0917a5c6e2b8f0d4a7c19"}
+{"event":"audit","ts":"2026-10-06T12:00:00.000Z","client":"aaaqeaye","action":"client_create","chat_hmac":null,"ok":true,"reason":"ok","chain_head":"3fa8c2d14be0917a5c6e2b8f0d4a7c19"}
 ```
 
 `chat_hmac` is the first 16 bytes, in hexadecimal, of HMAC-SHA256 under the
