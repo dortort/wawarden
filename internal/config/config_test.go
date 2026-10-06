@@ -128,6 +128,8 @@ func TestDefaults(t *testing.T) {
 		StorageProfile:  StorageLocal,
 		MinFreeBytes:    268435456,
 		HistoryMaxBytes: 33554432,
+		ReadPerMinute:   600,
+		SearchPerMinute: 60,
 	}
 	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("Load = %+v, want %+v", cfg, want)
@@ -253,6 +255,23 @@ func TestRefusals(t *testing.T) {
 		{name: "metrics as a word", vars: map[string]string{envMetricsEMF: "true"}, reason: "metrics_emf_invalid", variable: envMetricsEMF},
 		{name: "empty metrics switch", vars: map[string]string{envMetricsEMF: ""}, reason: "metrics_emf_invalid", variable: envMetricsEMF},
 		{name: "metrics switch with a space", vars: map[string]string{envMetricsEMF: "1 "}, reason: "metrics_emf_invalid", variable: envMetricsEMF},
+
+		{name: "rate caps as a word", vars: map[string]string{envUnsafeRateCaps: "yes"}, reason: "unsafe_rate_caps_invalid", variable: envUnsafeRateCaps},
+		{name: "empty rate caps switch", vars: map[string]string{envUnsafeRateCaps: ""}, reason: "unsafe_rate_caps_invalid", variable: envUnsafeRateCaps},
+		{name: "empty read rate", vars: map[string]string{envReadPerMinute: ""}, reason: "read_per_minute_invalid", variable: envReadPerMinute},
+		{name: "zero read rate", vars: map[string]string{envReadPerMinute: "0"}, reason: "read_per_minute_invalid", variable: envReadPerMinute},
+		{name: "negative read rate", vars: map[string]string{envReadPerMinute: "-1"}, reason: "read_per_minute_invalid", variable: envReadPerMinute},
+		{name: "signed read rate", vars: map[string]string{envReadPerMinute: "+10"}, reason: "read_per_minute_invalid", variable: envReadPerMinute},
+		{name: "read rate with a leading zero", vars: map[string]string{envReadPerMinute: "060"}, reason: "read_per_minute_invalid", variable: envReadPerMinute},
+		{name: "read rate above its cap", vars: map[string]string{envReadPerMinute: "601"}, reason: "read_per_minute_invalid", variable: envReadPerMinute},
+		{name: "read rate above its cap with the caps kept", vars: map[string]string{envReadPerMinute: "601", envUnsafeRateCaps: "0"}, reason: "read_per_minute_invalid", variable: envReadPerMinute},
+		{name: "zero read rate with the caps lifted", vars: map[string]string{envReadPerMinute: "0", envUnsafeRateCaps: "1"}, reason: "read_per_minute_invalid", variable: envReadPerMinute},
+		{name: "read rate above the lifted cap", vars: map[string]string{envReadPerMinute: "1000001", envUnsafeRateCaps: "1"}, reason: "read_per_minute_invalid", variable: envReadPerMinute},
+		{name: "read rate beyond 64 bits", vars: map[string]string{envReadPerMinute: "18446744073709551616", envUnsafeRateCaps: "1"}, reason: "read_per_minute_invalid", variable: envReadPerMinute},
+		{name: "zero search rate", vars: map[string]string{envSearchPerMinute: "0"}, reason: "search_per_minute_invalid", variable: envSearchPerMinute},
+		{name: "search rate above its cap", vars: map[string]string{envSearchPerMinute: "61"}, reason: "search_per_minute_invalid", variable: envSearchPerMinute},
+		{name: "search rate with a unit", vars: map[string]string{envSearchPerMinute: "60/m"}, reason: "search_per_minute_invalid", variable: envSearchPerMinute},
+		{name: "negative search rate with the caps lifted", vars: map[string]string{envSearchPerMinute: "-5", envUnsafeRateCaps: "1"}, reason: "search_per_minute_invalid", variable: envSearchPerMinute},
 
 		{name: "plain http webhook", vars: map[string]string{envNotifyURL: "http://hooks.example.test/x", envNotifySecret: secretFile(t, 0o600)}, reason: "notify_url_invalid", variable: envNotifyURL},
 		{name: "webhook with credentials", vars: map[string]string{envNotifyURL: (&url.URL{Scheme: "https", User: url.UserPassword("synthetic", "synthetic"), Host: "hooks.example.test"}).String(), envNotifySecret: secretFile(t, 0o600)}, reason: "notify_url_invalid", variable: envNotifyURL},
@@ -727,6 +746,27 @@ func TestAccepted(t *testing.T) {
 			}
 			if tt.check != nil {
 				tt.check(t, cfg)
+			}
+		})
+	}
+}
+
+func TestRateLimits(t *testing.T) {
+	for _, tt := range []struct {
+		name           string
+		vars           map[string]string
+		read, search   int
+		unsafeRateCaps bool
+	}{
+		{name: "lowest", vars: map[string]string{envReadPerMinute: "1", envSearchPerMinute: "1"}, read: 1, search: 1},
+		{name: "caps", vars: map[string]string{envReadPerMinute: "600", envSearchPerMinute: "60", envUnsafeRateCaps: "0"}, read: 600, search: 60},
+		{name: "caps lifted", vars: map[string]string{envReadPerMinute: "1000000", envSearchPerMinute: "601", envUnsafeRateCaps: "1"}, read: 1000000, search: 601, unsafeRateCaps: true},
+		{name: "caps lifted without a rate", vars: map[string]string{envUnsafeRateCaps: "1"}, read: 600, search: 60, unsafeRateCaps: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, r := Load(environ(withDataDir(t, tt.vars)), testOptions())
+			if r != nil || cfg.ReadPerMinute != tt.read || cfg.SearchPerMinute != tt.search || cfg.UnsafeRateCaps != tt.unsafeRateCaps {
+				t.Fatalf("Load = %d reads, %d searches, unsafe caps %v, %v", cfg.ReadPerMinute, cfg.SearchPerMinute, cfg.UnsafeRateCaps, r)
 			}
 		})
 	}

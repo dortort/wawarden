@@ -43,6 +43,9 @@ const (
 	envNotifySecret    = "WAWARDEN_NOTIFY_SECRET_FILE"
 	envNotifyPrivate   = "WAWARDEN_NOTIFY_ALLOW_PRIVATE"
 	envBackupRecipient = "WAWARDEN_BACKUP_AGE_RECIPIENT"
+	envReadPerMinute   = "WAWARDEN_READ_PER_CLIENT_PER_MINUTE"
+	envSearchPerMinute = "WAWARDEN_SEARCH_PER_CLIENT_PER_MINUTE"
+	envUnsafeRateCaps  = "WAWARDEN_UNSAFE_RATE_CAPS"
 
 	prefix    = "WAWARDEN_"
 	devPrefix = "WAWARDEN_DEV_"
@@ -58,6 +61,10 @@ const (
 	MaxHistoryMaxBytes     = 256 << 20
 
 	MaxUnsafeDebug = 60 * time.Minute
+
+	DefaultReadPerMinute   = 600
+	DefaultSearchPerMinute = 60
+	MaxUnsafeRatePerMinute = 1000000
 
 	maxHashFileBytes = 4096
 
@@ -95,10 +102,14 @@ const (
 	reasonNotifySecretPermissions  = "notify_secret_permissions"
 	reasonNotifySecretInvalid      = "notify_secret_invalid"
 	reasonBackupRecipientInvalid   = "backup_recipient_invalid"
+	reasonUnsafeRateCapsInvalid    = "unsafe_rate_caps_invalid"
+	reasonReadPerMinuteInvalid     = "read_per_minute_invalid"
+	reasonSearchPerMinuteInvalid   = "search_per_minute_invalid"
 )
 
 var known = []string{envDataDir, envListen, envAdminListen, envHealthListen, envAdminHash, envAdminHashFile, envLogLevel, envStorageProfile, envMinFreeBytes,
-	envOwnerPhone, envHistoryMax, envUnsafeDebug, envMetricsEMF, envNotifyURL, envNotifySecret, envNotifyPrivate, envBackupRecipient}
+	envOwnerPhone, envHistoryMax, envUnsafeDebug, envMetricsEMF, envNotifyURL, envNotifySecret, envNotifyPrivate, envBackupRecipient,
+	envReadPerMinute, envSearchPerMinute, envUnsafeRateCaps}
 
 type StorageProfile string
 
@@ -132,6 +143,9 @@ type Config struct {
 	MetricsEMF      bool
 	Notify          Notify
 	BackupRecipient string
+	ReadPerMinute   int
+	SearchPerMinute int
+	UnsafeRateCaps  bool
 	Dev             Dev
 }
 
@@ -210,6 +224,15 @@ func Load(environ []string, opts Options) (Config, *Refusal) {
 		return Config{}, r
 	}
 	if cfg.BackupRecipient, r = backupRecipient(env); r != nil {
+		return Config{}, r
+	}
+	if cfg.UnsafeRateCaps, r = unsafeRateCaps(env); r != nil {
+		return Config{}, r
+	}
+	if cfg.ReadPerMinute, r = perMinute(env, envReadPerMinute, reasonReadPerMinuteInvalid, DefaultReadPerMinute, cfg.UnsafeRateCaps); r != nil {
+		return Config{}, r
+	}
+	if cfg.SearchPerMinute, r = perMinute(env, envSearchPerMinute, reasonSearchPerMinuteInvalid, DefaultSearchPerMinute, cfg.UnsafeRateCaps); r != nil {
 		return Config{}, r
 	}
 	if cfg.Dev, r = devSettings(env); r != nil {
@@ -461,6 +484,29 @@ func metricsEMF(env map[string]string) (bool, *Refusal) {
 		return false, &Refusal{Reason: reasonMetricsEMFInvalid, Variable: envMetricsEMF, detail: "must be 0 or 1"}
 	}
 	return v == "1", nil
+}
+
+func unsafeRateCaps(env map[string]string) (bool, *Refusal) {
+	v, ok := env[envUnsafeRateCaps]
+	if ok && v != "0" && v != "1" {
+		return false, &Refusal{Reason: reasonUnsafeRateCapsInvalid, Variable: envUnsafeRateCaps, detail: "must be 0 or 1"}
+	}
+	return v == "1", nil
+}
+
+func perMinute(env map[string]string, name, reason string, limit int, unsafe bool) (int, *Refusal) {
+	v, ok := env[name]
+	if !ok {
+		return limit, nil
+	}
+	if unsafe {
+		limit = MaxUnsafeRatePerMinute
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || strconv.Itoa(n) != v || n < 1 || n > limit {
+		return 0, &Refusal{Reason: reason, Variable: name, detail: "must be a number of requests per minute written in decimal digits, from 1 to " + strconv.Itoa(limit)}
+	}
+	return n, nil
 }
 
 func notifySettings(env map[string]string) (Notify, *Refusal) {
