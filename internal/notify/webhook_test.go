@@ -449,6 +449,47 @@ func TestASlowReceiverBlocksNeitherEmitNorStop(t *testing.T) {
 	}
 }
 
+func TestAnEventWaitingToRetryIsReportedWhenTheGracePeriodEnds(t *testing.T) {
+	recv := newReceiver(t, func(w http.ResponseWriter) {
+		w.Header().Set("Retry-After", "60")
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	r := newHookRig(t, recv.srv.URL, true, roots(recv.srv))
+	waiting := make(chan struct{})
+	r.n.hook.sleep = func(ctx context.Context, _ time.Duration) error {
+		close(waiting)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	r.n.Start(t.Context())
+	r.n.Unpaired()
+	select {
+	case <-waiting:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the webhook never waited to retry the refused event")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	if err := r.n.Stop(ctx); !errors.Is(err, errShutdownDrop) {
+		t.Fatalf("Stop = %v, want the event waiting to retry reported as dropped", err)
+	}
+	if len(recv.requests()) != 1 {
+		t.Fatalf("%d posts, want the one refused attempt", len(recv.requests()))
+	}
+	var reported []map[string]any
+	for _, rec := range r.out.records(t) {
+		if rec["event"] == "notify_dropped" {
+			reported = append(reported, rec)
+		}
+	}
+	if len(reported) != 1 || reported[0]["count"] != float64(1) {
+		t.Fatalf("notify_dropped lines %v, want one with count 1", reported)
+	}
+	if got := r.dropped(t, dropShutdown); got != "1" {
+		t.Fatalf("shutdown drops = %s, want 1", got)
+	}
+}
+
 func TestStopWithAnExpiredContextStillFlushes(t *testing.T) {
 	recv := newReceiver(t)
 	r := newHookRig(t, recv.srv.URL, true, roots(recv.srv))
