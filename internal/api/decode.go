@@ -23,7 +23,9 @@ var (
 	errBadBody   = &codedError{status: http.StatusBadRequest, code: codeInvalidBody}
 )
 
-func (r *Request) DecodeJSON(dst any) error {
+func (r *Request) DecodeJSON(dst any) error { return r.decodeJSON(dst, maxBodyBytes) }
+
+func (r *Request) decodeJSON(dst any, limit int64) error {
 	if r == nil || r.w == nil || r.req == nil || r.req.Body == nil {
 		return errBadBody
 	}
@@ -31,11 +33,11 @@ func (r *Request) DecodeJSON(dst any) error {
 		ignoreBody(r.w, r.req)
 		return errMediaType
 	}
-	if r.req.ContentLength > maxBodyBytes {
+	if r.req.ContentLength > limit {
 		ignoreBody(r.w, r.req)
 		return errTooLarge
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(r.w, r.req.Body, maxBodyBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(r.w, r.req.Body, limit))
 	if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
 		return errTooLarge
 	}

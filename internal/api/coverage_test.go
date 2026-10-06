@@ -27,6 +27,11 @@ func TestRoutesMatchTheGoldenList(t *testing.T) {
 			{pattern: "GET /admin/v1/status", class: classAdmin},
 			{pattern: "POST /admin/v1/pair", class: classAdmin},
 			{pattern: "POST /admin/v1/reconnect", class: classAdmin},
+			{pattern: "POST /admin/v1/clients", class: classAdmin},
+			{pattern: "GET /admin/v1/clients", class: classAdmin},
+			{pattern: "GET /admin/v1/clients/{id}", class: classAdmin},
+			{pattern: "POST /admin/v1/clients/{id}/revoke", class: classAdmin},
+			{pattern: "GET /admin/v1/chats", class: classAdmin},
 		},
 	}
 	handlers := map[string]http.Handler{

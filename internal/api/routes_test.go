@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/dortort/wawarden/internal/policy"
 )
 
 type fakeAdmin struct {
@@ -25,6 +27,16 @@ type fakeAdmin struct {
 	panics       bool
 	calls        []string
 	pairBudget   time.Duration
+
+	view       ClientView
+	credential string
+	clientErr  error
+	spec       policy.ClientSpec
+	clientID   string
+	chats      []ChatEntry
+	truncated  bool
+	match      string
+	limit      int
 }
 
 func (f *fakeAdmin) record(call string) {
@@ -63,6 +75,52 @@ func (f *fakeAdmin) Reconnect(context.Context) error {
 		panic(secretPanic{text: panicCanary})
 	}
 	return f.reconnectErr
+}
+
+func (f *fakeAdmin) CreateClient(_ context.Context, spec policy.ClientSpec) (ClientView, string, error) {
+	f.record("create")
+	f.mu.Lock()
+	f.spec = spec
+	f.mu.Unlock()
+	if f.panics {
+		panic(secretPanic{text: panicCanary})
+	}
+	if f.clientErr != nil {
+		return ClientView{}, "", f.clientErr
+	}
+	return f.view, f.credential, nil
+}
+
+func (f *fakeAdmin) Clients(context.Context) ([]ClientView, error) {
+	f.record("clients")
+	if f.clientErr != nil {
+		return nil, f.clientErr
+	}
+	return []ClientView{f.view}, nil
+}
+
+func (f *fakeAdmin) Client(_ context.Context, id string) (ClientView, error) {
+	f.record("client")
+	f.mu.Lock()
+	f.clientID = id
+	f.mu.Unlock()
+	return f.view, f.clientErr
+}
+
+func (f *fakeAdmin) RevokeClient(_ context.Context, id string) (ClientView, error) {
+	f.record("revoke")
+	f.mu.Lock()
+	f.clientID = id
+	f.mu.Unlock()
+	return f.view, f.clientErr
+}
+
+func (f *fakeAdmin) Chats(_ context.Context, match string, limit int) ([]ChatEntry, bool, error) {
+	f.record("chats")
+	f.mu.Lock()
+	f.match, f.limit = match, limit
+	f.mu.Unlock()
+	return f.chats, f.truncated, f.clientErr
 }
 
 type fakeEvents struct {
@@ -114,16 +172,20 @@ func TestStatusAnswersAFixedShape(t *testing.T) {
 	}
 	rec := adminRequest(t, f, http.MethodGet, "/admin/v1/status", "", "")
 	want := `{"state":"disconnected","reason":"replaced","paired":true,"counts":{"chats":3,"messages":120,"history_blobs_pending":1,` +
-		`"history_blobs_quarantined":2,"inbox_backlog":4,"inbox_quarantined":5},"last_ingest_at":"2026-10-05T08:30:15Z","version":"v0.2.0"}`
+		`"history_blobs_quarantined":2,"inbox_backlog":4,"inbox_quarantined":5},"clients":{"active":0,"expired":0,"revoked":0,"all_chats_active":0},` +
+		`"warnings":[],"last_ingest_at":"2026-10-05T08:30:15Z","version":"v0.2.0"}`
 	if rec.Code != http.StatusOK || rec.Body.String() != want {
 		t.Fatalf("status = %d %s, want 200 %s", rec.Code, rec.Body, want)
 	}
 	requireSecurityHeaders(t, rec.Header())
 
-	f.service.status = AdminStatus{State: "unpaired", Version: "dev"}
+	f.service.status = AdminStatus{State: "unpaired", Version: "dev", Clients: ClientCounts{Active: 3, Expired: 1, Revoked: 2, AllChatsActive: 1}}
 	rec = adminRequest(t, f, http.MethodGet, "/admin/v1/status", "", "")
 	if !strings.Contains(rec.Body.String(), `"last_ingest_at":null`) {
 		t.Fatalf("status before any ingest = %s, want last_ingest_at null", rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), `"clients":{"active":3,"expired":1,"revoked":2,"all_chats_active":1},"warnings":["all_chats_client"]`) {
+		t.Fatalf("status with an all-chats client = %s, want its counts and the all_chats_client warning", rec.Body)
 	}
 	if got := f.events.recorded(); len(got) != 0 {
 		t.Fatalf("status emitted admin_mutation events %v: it changes nothing", got)
@@ -291,7 +353,7 @@ func TestStatusCarriesNoIdentifier(t *testing.T) {
 	if err := json.Unmarshal(adminRequest(t, f, http.MethodGet, "/admin/v1/status", "", "").Body.Bytes(), &body); err != nil {
 		t.Fatalf("status is not JSON: %v", err)
 	}
-	if keys := slices.Sorted(maps.Keys(body)); !slices.Equal(keys, []string{"counts", "last_ingest_at", "paired", "reason", "state", "version"}) {
+	if keys := slices.Sorted(maps.Keys(body)); !slices.Equal(keys, []string{"clients", "counts", "last_ingest_at", "paired", "reason", "state", "version", "warnings"}) {
 		t.Fatalf("status keys %q", keys)
 	}
 }
