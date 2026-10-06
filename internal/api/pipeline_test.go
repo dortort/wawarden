@@ -58,17 +58,15 @@ type clientFixture struct {
 func newClientFixture(t *testing.T) *clientFixture {
 	t.Helper()
 	f := &clientFixture{reg: metrics.NewRegistry(), clock: newClock()}
-	f.handler = NewClientHandler(ClientDeps{
-		Authenticator: fakeAuthenticator{
-			keyLive:     liveClient("client-live"),
-			keyReadAll:  &policy.Client{ID: "client-all", ReadAll: true, ExpiresAt: testNow.Add(24 * time.Hour)},
-			keyRevoked:  &policy.Client{ID: "client-revoked", ReadAll: true, ExpiresAt: testNow.Add(24 * time.Hour), Revoked: true},
-			keyExpired:  &policy.Client{ID: "client-expired", ReadAll: true, ExpiresAt: testNow.Add(-time.Second)},
-			keyNoClient: nil,
-		},
-		Metrics: f.reg,
-		Now:     f.clock.now,
-	})
+	deps := testClientDeps(t, fakeAuthenticator{
+		keyLive:     liveClient("client-live"),
+		keyReadAll:  &policy.Client{ID: "client-all", ReadAll: true, ExpiresAt: testNow.Add(24 * time.Hour)},
+		keyRevoked:  &policy.Client{ID: "client-revoked", ReadAll: true, ExpiresAt: testNow.Add(24 * time.Hour), Revoked: true},
+		keyExpired:  &policy.Client{ID: "client-expired", ReadAll: true, ExpiresAt: testNow.Add(-time.Second)},
+		keyNoClient: nil,
+	}, f.clock.now)
+	deps.Metrics = f.reg
+	f.handler = NewClientHandler(deps)
 	rt := f.handler.(*pipeline).router
 	rt.read("GET /probe/read", func(_ context.Context, g policy.ReadGrant, _ *Request) (dto.Response, error) {
 		f.mu.Lock()
@@ -350,7 +348,7 @@ func TestPanicsBecomeFixedInternalErrors(t *testing.T) {
 	requireError(t, rec, http.StatusInternalServerError, codeInternal)
 	requireSecurityHeaders(t, rec.Header())
 
-	panicking := NewClientHandler(ClientDeps{Authenticator: panickingAuthenticator{}, Metrics: metrics.NewRegistry(), Now: fixedNow})
+	panicking := NewClientHandler(testClientDeps(t, panickingAuthenticator{}, fixedNow))
 	rec = serve(panicking, newRequest(t, http.MethodGet, "/probe/read", bearer(keyLive)))
 	requireError(t, rec, http.StatusInternalServerError, codeInternal)
 	requireSecurityHeaders(t, rec.Header())
@@ -548,12 +546,20 @@ func TestRefusalsAnswerAtOnceAndCloseInsteadOfReadingTheBody(t *testing.T) {
 }
 
 func TestNewClientHandlerRequiresItsDependencies(t *testing.T) {
+	without := func(drop func(*ClientDeps)) ClientDeps {
+		d := testClientDeps(t, fakeAuthenticator{}, fixedNow)
+		drop(&d)
+		return d
+	}
 	tests := []struct {
 		name string
 		deps ClientDeps
 	}{
-		{name: "no authenticator", deps: ClientDeps{Metrics: metrics.NewRegistry()}},
-		{name: "no registry", deps: ClientDeps{Authenticator: fakeAuthenticator{}}},
+		{name: "no authenticator", deps: without(func(d *ClientDeps) { d.Authenticator = nil })},
+		{name: "no registry", deps: without(func(d *ClientDeps) { d.Metrics = nil })},
+		{name: "no archive", deps: without(func(d *ClientDeps) { d.Archive = nil })},
+		{name: "no auditor", deps: without(func(d *ClientDeps) { d.Audit = nil })},
+		{name: "no session state", deps: without(func(d *ClientDeps) { d.Session = nil })},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

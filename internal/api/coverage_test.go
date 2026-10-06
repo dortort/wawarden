@@ -21,7 +21,15 @@ func init() {
 
 func TestRoutesMatchTheGoldenList(t *testing.T) {
 	golden := map[string][]route{
-		"client": nil,
+		"client": {
+			{pattern: "GET /v1/me", class: classRead},
+			{pattern: "GET /v1/chats", class: classRead},
+			{pattern: "GET /v1/chats/{ref}", class: classRead},
+			{pattern: "GET /v1/chats/{ref}/messages", class: classRead},
+			{pattern: "GET /v1/search", class: classRead},
+			{pattern: "GET /v1/changes", class: classRead},
+			{pattern: "GET /v1/messages/{mref}", class: classRead},
+		},
 		"admin": {
 			{pattern: "GET /metrics", class: classAdmin},
 			{pattern: "GET /admin/v1/status", class: classAdmin},
@@ -35,7 +43,7 @@ func TestRoutesMatchTheGoldenList(t *testing.T) {
 		},
 	}
 	handlers := map[string]http.Handler{
-		"client": NewClientHandler(ClientDeps{Authenticator: fakeAuthenticator{}, Metrics: metrics.NewRegistry()}),
+		"client": NewClientHandler(testClientDeps(t, fakeAuthenticator{}, nil)),
 		"admin":  NewAdminHandler(AdminDeps{Metrics: metrics.NewRegistry(), Service: &fakeAdmin{}, Events: &fakeEvents{}}),
 	}
 	if len(handlers) != len(golden) {

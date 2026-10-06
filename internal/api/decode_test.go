@@ -12,7 +12,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/dortort/wawarden/internal/api/dto"
-	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/policy"
 )
 
@@ -307,14 +306,10 @@ func newDecodeFixture(t *testing.T) *decodeFixture {
 		t.Fatal("Normalize refused the synthetic group")
 	}
 	f := &decodeFixture{decoded: make(chan sample, 1)}
-	f.handler = NewClientHandler(ClientDeps{
-		Authenticator: fakeAuthenticator{
-			keyWriter: &policy.Client{ID: "client-writer", Write: map[policy.CanonicalChat]struct{}{chat: {}}, ExpiresAt: testNow.Add(time.Hour)},
-			keyReader: liveClient("client-reader"),
-		},
-		Metrics: metrics.NewRegistry(),
-		Now:     fixedNow,
-	})
+	f.handler = NewClientHandler(testClientDeps(t, fakeAuthenticator{
+		keyWriter: &policy.Client{ID: "client-writer", Write: map[policy.CanonicalChat]struct{}{chat: {}}, ExpiresAt: testNow.Add(time.Hour)},
+		keyReader: liveClient("client-reader"),
+	}, fixedNow))
 	f.handler.(*pipeline).router.write("POST /probe/decode", func(_ context.Context, _ policy.WriteGrant, r *Request) (dto.Response, error) {
 		var in sample
 		if err := r.DecodeJSON(&in); err != nil {

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/dortort/wawarden/internal/metrics"
+	"github.com/dortort/wawarden/internal/ratelimit"
 	"github.com/dortort/wawarden/internal/safego"
 )
 
@@ -15,6 +16,9 @@ type pipeline struct {
 	failures     *metrics.Counter
 	failed       func()
 	throttle     *bucket
+	budget       *ratelimit.Limiter
+	audit        Auditor
+	now          func() time.Time
 }
 
 func (p *pipeline) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -44,6 +48,16 @@ func (p *pipeline) serve(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		refuse(w, r, http.StatusUnauthorized, codeUnauthorized)
 		return
+	}
+	if p.budget != nil {
+		if wait, ok := p.budget.Allow(clientFrom(authenticated.Context()).ID); !ok {
+			setRetryAfter(w.Header(), wait)
+			refuse(w, r, http.StatusTooManyRequests, codeRateLimited)
+			return
+		}
+	}
+	if p.audit != nil {
+		w, authenticated = audited(w, authenticated, p.audit, p.now)
 	}
 	p.router.ServeHTTP(w, authenticated)
 }

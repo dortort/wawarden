@@ -68,6 +68,9 @@ func decided[G any](decide func(*http.Request) (G, bool), h func(context.Context
 		}
 		resp, err := h(r.Context(), g, &Request{w: w, req: r})
 		if refusal, ok := errors.AsType[*codedError](err); ok {
+			if refusal.retryAfter > 0 {
+				setRetryAfter(w.Header(), refusal.retryAfter)
+			}
 			writeError(w, refusal.status, refusal.code)
 			return
 		}

@@ -26,7 +26,7 @@ var (
 	ErrNotPaired         error = &codedError{status: http.StatusConflict, code: "not_paired"}
 	ErrOwnerPhoneMissing error = &codedError{status: http.StatusConflict, code: "owner_phone_missing"}
 	ErrOwnerMismatch     error = &codedError{status: http.StatusConflict, code: "owner_mismatch"}
-	ErrRateLimited       error = &codedError{status: http.StatusTooManyRequests, code: "rate_limited"}
+	ErrRateLimited       error = &codedError{status: http.StatusTooManyRequests, code: codeRateLimited}
 	ErrPairFailed        error = &codedError{status: http.StatusBadGateway, code: "pair_failed"}
 	ErrEngineUnavailable error = &codedError{status: http.StatusServiceUnavailable, code: "engine_unavailable"}
 )

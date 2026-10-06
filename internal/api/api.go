@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/dortort/wawarden/internal/api/dto"
+	"github.com/dortort/wawarden/internal/cursor"
 	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/policy"
 )
@@ -18,18 +19,28 @@ type ClientDeps struct {
 	Authenticator Authenticator
 	Metrics       *metrics.Registry
 	Now           func() time.Time
+	Archive       ReadArchive
+	Audit         Auditor
+	Session       func() string
+	Cursors       *cursor.Sealer
+	Refs          *cursor.Sealer
+	Limits        ReadLimits
 }
 
 func NewClientHandler(d ClientDeps) http.Handler {
-	if d.Authenticator == nil || d.Metrics == nil {
-		panic("api: NewClientHandler needs an Authenticator and a metrics registry")
+	if d.Authenticator == nil || d.Metrics == nil || d.Archive == nil || d.Audit == nil || d.Session == nil {
+		panic("api: NewClientHandler needs an Authenticator, a metrics registry, an archive, an auditor and a session state")
 	}
 	now := clockOrSystem(d.Now)
-	return &pipeline{
+	budget, searches := readBudgets(d.Limits, now)
+	p := &pipeline{
 		name:     "api.client",
 		router:   newRouter(now, policy.AdminCredential{}),
 		failures: d.Metrics.Counter("wawarden_auth_failures_total", "Failed client authentications."),
 		throttle: newBucket(now),
+		budget:   budget,
+		audit:    d.Audit,
+		now:      now,
 		authenticate: func(r *http.Request) (*http.Request, bool) {
 			presented, ok := bearerToken(r.Header)
 			if !ok {
@@ -42,6 +53,8 @@ func NewClientHandler(d ClientDeps) http.Handler {
 			return r.WithContext(withClient(r.Context(), c)), true
 		},
 	}
+	registerReads(p.router, &reads{archive: d.Archive, cursors: d.Cursors, refs: d.Refs, searches: searches, session: d.Session})
+	return p
 }
 
 type AdminDeps struct {
