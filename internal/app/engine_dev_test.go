@@ -46,6 +46,27 @@ func TestTheFakeEngineOpensNoSessionAndWaitsForPairing(t *testing.T) {
 	requireReleased(t, cfg.DataDir)
 }
 
+func TestTheFakeEngineWarnsAtEveryLogLevel(t *testing.T) {
+	for _, level := range everyLogLevel {
+		t.Run(level.String(), func(t *testing.T) {
+			cfg := testConfig(t, "")
+			cfg.OwnerPhone, cfg.HistoryMaxBytes = "+15550100009", config.DefaultHistoryMaxBytes
+			cfg.Dev.FakeEngine, cfg.LogLevel = true, level
+			logs := &syncBuffer{}
+			a, err := New(t.Context(), cfg, logx.NewWriter(logs))
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if err := run(t, a)(); err != nil {
+				t.Fatalf("Run = %v", err)
+			}
+			if f := logs.find("fake_engine"); len(f) != 1 || f[0]["level"] != "WARN" {
+				t.Fatalf("fake_engine events %v at level %v, want one warning", f, level)
+			}
+		})
+	}
+}
+
 func TestARefusedFakeEngineClosesTheArchive(t *testing.T) {
 	cfg := testConfig(t, "")
 	cfg.OwnerPhone, cfg.HistoryMaxBytes = "+15550100021", config.DefaultHistoryMaxBytes
