@@ -503,6 +503,7 @@ Dependabot does not update the following, so they are bumped by hand:
 | govulncheck | The `go install golang.org/x/vuln/cmd/govulncheck@<version>` step in `.github/workflows/ci.yml` and in `.github/workflows/govulncheck-daily.yml`. |
 | buildx | `BUILDX_VERSION` in the `env` block of `.github/workflows/ci.yml` and of `.github/workflows/release.yml`. |
 | BuildKit | The default of `BUILDKIT_IMAGE` (version and digest) in `hack/repro-build.sh`. |
+| The Go image of the offline run | `default_image` (version and digest) in `hack/offline-test.sh`. The script stops unless the image's Go equals the `toolchain` version, so bump it with Go. |
 | cosign | The `cosign-release` input of the `sigstore/cosign-installer` step in `.github/workflows/release.yml`. Update the cosign version this document names with it. |
 
 For every update:
