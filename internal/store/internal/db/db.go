@@ -357,6 +357,8 @@ func (d *DB) RawHandle() *sql.DB { return d.sql }
 
 func (d *DB) Profile() Profile { return d.profile }
 
+func (d *DB) ReadTimeout() time.Duration { return d.readTimeout }
+
 func (d *DB) OFDLocking() bool { return sqlite.OFDLockingEnabled() }
 
 func (d *DB) Read(ctx context.Context, op string, fn func(context.Context, Querier) error) error {

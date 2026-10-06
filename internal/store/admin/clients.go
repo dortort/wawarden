@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/dortort/wawarden/internal/policy"
+	"github.com/dortort/wawarden/internal/safego"
 	"github.com/dortort/wawarden/internal/store/internal/db"
 	"github.com/dortort/wawarden/internal/token"
 )
@@ -27,13 +27,10 @@ const (
 
 var (
 	ErrNotFound    = errors.New("admin: no such client")
+	ErrUnavailable = errors.New("admin: the client list is being reloaded")
 	errCorruptRow  = errors.New("admin: a stored client row is not one the service writes")
 	errIDExhausted = errors.New("admin: no unused client id was drawn")
 )
-
-type Generation struct{ n atomic.Uint64 }
-
-func (g *Generation) Bump() { g.n.Add(1) }
 
 type ClientChat struct {
 	Chat  policy.CanonicalChat
@@ -65,16 +62,19 @@ type ClientCounts struct {
 
 type Clients struct {
 	db    *db.DB
-	gen   *Generation
 	now   func() time.Time
 	audit *Audit
+	wait  time.Duration
 
 	dummy  token.Digest
 	digest func(string) token.Digest
 	match  func(stored, presented token.Digest) bool
 
-	mu   sync.Mutex
-	snap atomic.Pointer[snapshot]
+	mu      sync.Mutex
+	gen     uint64
+	snap    *snapshot
+	loading bool
+	changed chan struct{}
 }
 
 type snapshot struct {
@@ -87,17 +87,49 @@ type credential struct {
 	client *policy.Client
 }
 
-func NewClients(d *db.DB, gen *Generation, audit *Audit, now func() time.Time) *Clients {
+func NewClients(d *db.DB, audit *Audit, now func() time.Time) *Clients {
 	if now == nil {
 		now = time.Now
 	}
-	return &Clients{db: d, gen: gen, now: now, audit: audit, dummy: token.RandomDigest(), digest: token.DigestOf, match: token.Match}
+	return &Clients{db: d, now: now, audit: audit, wait: d.ReadTimeout(), dummy: token.RandomDigest(), digest: token.DigestOf, match: token.Match, changed: make(chan struct{})}
 }
 
-func (c *Clients) Invalidate() { c.gen.Bump() }
+func (c *Clients) Load(ctx context.Context) error {
+	c.mu.Lock()
+	gen := c.gen
+	c.mu.Unlock()
+	clients, err := c.load(ctx)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.publishLocked(&snapshot{gen: gen, clients: clients})
+	return nil
+}
 
-func (c *Clients) Authenticate(ctx context.Context, presented string) (*policy.Client, bool) {
-	snap, loadErr := c.current(ctx)
+func (c *Clients) Stage(ctx context.Context, q db.Querier) func(committed bool) {
+	c.mu.Lock()
+	c.gen++
+	gen := c.gen
+	c.mu.Unlock()
+	var next *snapshot
+	if clients, err := loadFrom(ctx, q); err == nil {
+		next = &snapshot{gen: gen, clients: clients}
+	}
+	return func(committed bool) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if committed && next != nil {
+			c.publishLocked(next)
+			return
+		}
+		c.reloadLocked()
+	}
+}
+
+func (c *Clients) Authenticate(ctx context.Context, presented string) (*policy.Client, bool, error) {
+	snap, unavailable := c.current(ctx)
 	id, wellFormed := token.ParseClient(presented)
 	var cred credential
 	found := false
@@ -109,32 +141,69 @@ func (c *Clients) Authenticate(ctx context.Context, presented string) (*policy.C
 		stored = cred.digest
 	}
 	matched := c.match(stored, c.digest(presented))
-	if loadErr != nil || !wellFormed || !found || !matched {
-		return nil, false
+	if unavailable != nil {
+		return nil, false, unavailable
+	}
+	if !wellFormed || !found || !matched {
+		return nil, false, nil
 	}
 	if cred.client.Revoked || !c.now().Before(cred.client.ExpiresAt) {
-		return nil, false
+		return nil, false, nil
 	}
-	return cred.client, true
+	return cred.client, true, nil
 }
 
 func (c *Clients) current(ctx context.Context) (*snapshot, error) {
-	if s := c.snap.Load(); s != nil && s.gen == c.gen.n.Load() {
-		return s, nil
+	var timeout <-chan time.Time
+	for {
+		c.mu.Lock()
+		if c.snap != nil && c.snap.gen == c.gen {
+			s := c.snap
+			c.mu.Unlock()
+			return s, nil
+		}
+		c.reloadLocked()
+		changed := c.changed
+		c.mu.Unlock()
+		if timeout == nil {
+			t := time.NewTimer(c.wait)
+			defer t.Stop()
+			timeout = t.C
+		}
+		select {
+		case <-changed:
+		case <-timeout:
+			return nil, ErrUnavailable
+		case <-ctx.Done():
+			return nil, ErrUnavailable
+		}
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	gen := c.gen.n.Load()
-	if s := c.snap.Load(); s != nil && s.gen == gen {
-		return s, nil
+}
+
+func (c *Clients) publishLocked(s *snapshot) {
+	if c.snap != nil && s.gen <= c.snap.gen {
+		return
 	}
-	clients, err := c.load(ctx)
-	if err != nil {
-		return nil, err
+	c.snap = s
+	close(c.changed)
+	c.changed = make(chan struct{})
+}
+
+func (c *Clients) reloadLocked() {
+	if c.loading {
+		return
 	}
-	s := &snapshot{gen: gen, clients: clients}
-	c.snap.Store(s)
-	return s, nil
+	c.loading = true
+	gen := c.gen
+	safego.Go("admin.clients_reload", func() {
+		clients, err := c.load(context.Background())
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.loading = false
+		if err == nil {
+			c.publishLocked(&snapshot{gen: gen, clients: clients})
+		}
+	})
 }
 
 const (
@@ -144,50 +213,60 @@ const (
 )
 
 func (c *Clients) load(ctx context.Context) (map[string]credential, error) {
-	out := map[string]credential{}
+	var out map[string]credential
 	err := c.db.Read(ctx, "admin.clients_load", func(ctx context.Context, q db.Querier) error {
-		rows, err := q.QueryContext(ctx, selectAuthRows)
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var cl policy.Client
-			var hash []byte
-			var expires int64
-			var revoked sql.NullInt64
-			if err := rows.Scan(&cl.ID, &cl.Name, &hash, &cl.ReadAll, &cl.AllowFirstContact, &expires, &revoked); err != nil {
-				return errors.Join(err, rows.Close())
-			}
-			digest, ok := token.ParseDigest(hash)
-			if !ok || !token.WellFormedClientID(cl.ID) {
-				return errors.Join(errCorruptRow, rows.Close())
-			}
-			cl.ExpiresAt, cl.Revoked = fromMS(expires), revoked.Valid
-			cl.Read, cl.Write = map[policy.CanonicalChat]struct{}{}, map[policy.CanonicalChat]struct{}{}
-			out[cl.ID] = credential{digest: digest, client: &cl}
-		}
-		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-			return err
-		}
-		add := func(pick func(*policy.Client) map[policy.CanonicalChat]struct{}) func(string, policy.CanonicalChat) error {
-			return func(id string, chat policy.CanonicalChat) error {
-				cred, ok := out[id]
-				if !ok {
-					return errCorruptRow
-				}
-				pick(cred.client)[chat] = struct{}{}
-				return nil
-			}
-		}
-		rows, err = q.QueryContext(ctx, selectReadSets)
-		if err := scanSets(rows, err, add(func(cl *policy.Client) map[policy.CanonicalChat]struct{} { return cl.Read })); err != nil {
-			return err
-		}
-		rows, err = q.QueryContext(ctx, selectWriteSets)
-		return scanSets(rows, err, add(func(cl *policy.Client) map[policy.CanonicalChat]struct{} { return cl.Write }))
+		var err error
+		out, err = loadFrom(ctx, q)
+		return err
 	})
 	if err != nil {
 		return nil, fmt.Errorf("admin: load the clients: %w", err)
+	}
+	return out, nil
+}
+
+func loadFrom(ctx context.Context, q db.Querier) (map[string]credential, error) {
+	out := map[string]credential{}
+	rows, err := q.QueryContext(ctx, selectAuthRows)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var cl policy.Client
+		var hash []byte
+		var expires int64
+		var revoked sql.NullInt64
+		if err := rows.Scan(&cl.ID, &cl.Name, &hash, &cl.ReadAll, &cl.AllowFirstContact, &expires, &revoked); err != nil {
+			return nil, errors.Join(err, rows.Close())
+		}
+		digest, ok := token.ParseDigest(hash)
+		if !ok || !token.WellFormedClientID(cl.ID) {
+			return nil, errors.Join(errCorruptRow, rows.Close())
+		}
+		cl.ExpiresAt, cl.Revoked = fromMS(expires), revoked.Valid
+		cl.Read, cl.Write = map[policy.CanonicalChat]struct{}{}, map[policy.CanonicalChat]struct{}{}
+		out[cl.ID] = credential{digest: digest, client: &cl}
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, err
+	}
+	add := func(pick func(*policy.Client) map[policy.CanonicalChat]struct{}) func(string, policy.CanonicalChat) error {
+		return func(id string, chat policy.CanonicalChat) error {
+			cred, ok := out[id]
+			if !ok {
+				return errCorruptRow
+			}
+			pick(cred.client)[chat] = struct{}{}
+			return nil
+		}
+	}
+	rows, err = q.QueryContext(ctx, selectReadSets)
+	if err := scanSets(rows, err, add(func(cl *policy.Client) map[policy.CanonicalChat]struct{} { return cl.Read })); err != nil {
+		return nil, err
+	}
+	rows, err = q.QueryContext(ctx, selectWriteSets)
+	if err := scanSets(rows, err, add(func(cl *policy.Client) map[policy.CanonicalChat]struct{} { return cl.Write })); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -237,6 +316,7 @@ func (c *Clients) Create(ctx context.Context, spec policy.ClientSpec) (Client, s
 	var view Client
 	var full string
 	var line Line
+	var settle func(bool)
 	err = c.db.Write(ctx, "admin.client_create", func(ctx context.Context, q db.Querier) error {
 		var taken bool
 		if err := q.QueryRowContext(ctx, selectNameTaken, want.Name).Scan(&taken); err != nil {
@@ -285,9 +365,12 @@ func (c *Clients) Create(ctx context.Context, spec policy.ClientSpec) (Client, s
 		if view, err = clientView(ctx, q, id, now); err != nil {
 			return err
 		}
-		c.gen.Bump()
+		settle = c.Stage(ctx, q)
 		return nil
 	})
+	if settle != nil {
+		settle(err == nil)
+	}
 	if err != nil {
 		return Client{}, "", err
 	}
@@ -338,6 +421,7 @@ func (c *Clients) Revoke(ctx context.Context, id string) (Client, error) {
 	var view Client
 	var line Line
 	var changed bool
+	var settle func(bool)
 	err := c.db.Write(ctx, "admin.client_revoke", func(ctx context.Context, q db.Querier) error {
 		res, err := q.ExecContext(ctx, revokeClient, now.UnixMilli(), id)
 		if err != nil {
@@ -354,10 +438,13 @@ func (c *Clients) Revoke(ctx context.Context, id string) (Client, error) {
 			if line, err = c.audit.Append(ctx, q, Event{At: now, Client: id, Action: actionClientRevoke, OK: true, Reason: reasonOK}); err != nil {
 				return err
 			}
-			c.gen.Bump()
+			settle = c.Stage(ctx, q)
 		}
 		return nil
 	})
+	if settle != nil {
+		settle(err == nil)
+	}
 	if err != nil {
 		return Client{}, err
 	}

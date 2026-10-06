@@ -12,7 +12,7 @@ import (
 )
 
 type Authenticator interface {
-	Authenticate(ctx context.Context, token string) (*policy.Client, bool)
+	Authenticate(ctx context.Context, token string) (*policy.Client, bool, error)
 }
 
 type ClientDeps struct {
@@ -41,16 +41,19 @@ func NewClientHandler(d ClientDeps) http.Handler {
 		budget:   budget,
 		audit:    d.Audit,
 		now:      now,
-		authenticate: func(r *http.Request) (*http.Request, bool) {
+		authenticate: func(r *http.Request) (*http.Request, bool, error) {
 			presented, ok := bearerToken(r.Header)
 			if !ok {
-				return r, false
+				return r, false, nil
 			}
-			c, ok := d.Authenticator.Authenticate(r.Context(), presented)
+			c, ok, err := d.Authenticator.Authenticate(r.Context(), presented)
+			if err != nil {
+				return r, false, err
+			}
 			if !ok || c == nil {
-				return r, false
+				return r, false, nil
 			}
-			return r.WithContext(withClient(r.Context(), c)), true
+			return r.WithContext(withClient(r.Context(), c)), true, nil
 		},
 	}
 	s := &reads{archive: d.Archive, cursors: d.Cursors, refs: d.Refs, searches: searches, session: d.Session}
@@ -78,10 +81,10 @@ func NewAdminHandler(d AdminDeps) http.Handler {
 		failures: d.Metrics.Counter("wawarden_admin_auth_failures_total", "Failed admin authentications."),
 		failed:   d.Events.AdminAuthFailure,
 		throttle: newBucket(now),
-		authenticate: func(r *http.Request) (*http.Request, bool) {
+		authenticate: func(r *http.Request) (*http.Request, bool, error) {
 			presented, _ := bearerToken(r.Header)
 			_, ok := policy.DecideAdmin(d.Credential, presented)
-			return r, ok
+			return r, ok, nil
 		},
 	}
 	p.router.admin("GET /metrics", func(context.Context, policy.AdminGrant, *Request) (dto.Response, error) {

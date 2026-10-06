@@ -76,8 +76,11 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 	}
 	audit := admin.NewAudit(d, opts.Master, opts.AuditOut)
 	s := &Store{db: d, version: version, floor: opts.MinFreeBytes, admin: admin.New(d), scoped: scoped.New(d, slots...),
-		audit: audit, clients: admin.NewClients(d, &admin.Generation{}, audit, opts.Now)}
+		audit: audit, clients: admin.NewClients(d, audit, opts.Now)}
 	if err := s.finishRewrite(ctx); err != nil {
+		return nil, errors.Join(err, d.Close())
+	}
+	if err := s.clients.Load(ctx); err != nil {
 		return nil, errors.Join(err, d.Close())
 	}
 	return s, nil
@@ -124,17 +127,22 @@ func (s *Store) Read(ctx context.Context, op string, fn func(*Reader) error) err
 
 func (s *Store) Write(ctx context.Context, op string, fn func(*Tx) error) error {
 	var stale bool
-	if err := s.db.Write(ctx, op, func(ctx context.Context, q db.Querier) error {
+	var settle func(bool)
+	err := s.db.Write(ctx, op, func(ctx context.Context, q db.Querier) error {
 		tx := &Tx{Reader: Reader{ctx: ctx, q: q}}
 		if err := fn(tx); err != nil {
 			return err
 		}
 		var err error
 		if stale, err = tx.markStaleKeys(); err == nil && tx.rescoped {
-			s.clients.Invalidate()
+			settle = s.clients.Stage(ctx, q)
 		}
 		return err
-	}); err != nil || !stale {
+	})
+	if settle != nil {
+		settle(err == nil)
+	}
+	if err != nil || !stale {
 		return err
 	}
 	if err := s.rewriteIndex(ctx); err != nil {

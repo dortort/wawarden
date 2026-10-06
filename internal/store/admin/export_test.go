@@ -1,10 +1,36 @@
 package admin
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 
+	"github.com/dortort/wawarden/internal/store/internal/db"
 	"github.com/dortort/wawarden/internal/token"
 )
+
+var ErrRolledBack = errors.New("admin: a synthetic change was rolled back")
+
+func (c *Clients) MarkStale() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.gen++
+}
+
+func (c *Clients) RollBack(ctx context.Context, stmt string) error {
+	var settle func(bool)
+	err := c.db.Write(ctx, "test.roll_back", func(ctx context.Context, q db.Querier) error {
+		if _, err := q.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+		settle = c.Stage(ctx, q)
+		return ErrRolledBack
+	})
+	if settle != nil {
+		settle(err == nil)
+	}
+	return err
+}
 
 type Operations struct{ Hashes, Compares, AgainstDummy int }
 

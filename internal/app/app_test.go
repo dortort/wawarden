@@ -106,11 +106,11 @@ func (b *syncBuffer) find(event string) []map[string]any {
 
 type oneClient struct{}
 
-func (oneClient) Authenticate(_ context.Context, presented string) (*policy.Client, bool) {
+func (oneClient) Authenticate(_ context.Context, presented string) (*policy.Client, bool, error) {
 	if presented != syntheticClientToken {
-		return nil, false
+		return nil, false, nil
 	}
-	return &policy.Client{ID: "synthaaa", ExpiresAt: time.Now().Add(time.Hour)}, true
+	return &policy.Client{ID: "synthaaa", ExpiresAt: time.Now().Add(time.Hour)}, true, nil
 }
 
 type heldClient struct {
@@ -118,10 +118,10 @@ type heldClient struct {
 	release <-chan struct{}
 }
 
-func (h heldClient) Authenticate(context.Context, string) (*policy.Client, bool) {
+func (h heldClient) Authenticate(context.Context, string) (*policy.Client, bool, error) {
 	h.entered()
 	<-h.release
-	return nil, false
+	return nil, false, nil
 }
 
 func testConfig(t *testing.T, adminToken string) config.Config {
@@ -157,7 +157,9 @@ func testMaster(t *testing.T) *keys.Master {
 
 type noClients struct{}
 
-func (noClients) Authenticate(context.Context, string) (*policy.Client, bool) { return nil, false }
+func (noClients) Authenticate(context.Context, string) (*policy.Client, bool, error) {
+	return nil, false, nil
+}
 
 func open(t *testing.T, cfg config.Config, auth api.Authenticator) (*App, *syncBuffer) {
 	t.Helper()

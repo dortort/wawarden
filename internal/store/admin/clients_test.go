@@ -99,6 +99,11 @@ func syntheticMaster(t *testing.T, first byte) *keys.Master {
 
 func openWith(t *testing.T, dir string, master *keys.Master) *fixture {
 	t.Helper()
+	return openTimed(t, dir, master, 0)
+}
+
+func openTimed(t *testing.T, dir string, master *keys.Master, readTimeout time.Duration) *fixture {
+	t.Helper()
 	f := &fixture{master: master, clock: &clock{at: start}, audit: &lockedBuffer{}, logs: &lockedBuffer{}, dir: dir}
 	logs := logx.NewWriter(f.logs)
 	logs.SetKey(make([]byte, 32))
@@ -106,7 +111,7 @@ func openWith(t *testing.T, dir string, master *keys.Master) *fixture {
 	out.SetKey(make([]byte, 32))
 	s, err := ingest.Open(t.Context(), ingest.Options{
 		DataDir: dir, UID: os.Geteuid(), Profile: ingest.ProfileLocal, Logger: logx.New(logs, slog.LevelDebug),
-		Master: master, AuditOut: out, Now: f.clock.Now,
+		Master: master, AuditOut: out, Now: f.clock.Now, ReadTimeout: readTimeout,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -151,6 +156,15 @@ func (f *fixture) create(t *testing.T, spec policy.ClientSpec) (admin.Client, st
 		t.Fatalf("Create(%+v): %v", spec, err)
 	}
 	return c, full
+}
+
+func (f *fixture) authenticate(t *testing.T, presented string) (*policy.Client, bool) {
+	t.Helper()
+	c, ok, err := f.clients.Authenticate(t.Context(), presented)
+	if err != nil {
+		t.Fatalf("Authenticate: %v, want an answer from a loaded client list", err)
+	}
+	return c, ok
 }
 
 func (f *fixture) auditLines(t *testing.T) []map[string]any {
@@ -267,7 +281,7 @@ func TestAuthenticationHashesAndComparesOncePerOutcome(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			f.clock.advance(tt.advance)
 			*ops = admin.Operations{}
-			c, ok := f.clients.Authenticate(t.Context(), tt.presented)
+			c, ok := f.authenticate(t, tt.presented)
 			if ok != tt.ok || (c != nil) != tt.ok {
 				t.Fatalf("Authenticate = %v, %v, want %v", c, ok, tt.ok)
 			}
@@ -291,7 +305,7 @@ func checksumOf(body string) string {
 func TestRevocationAndReKeysReachTheNextAuthentication(t *testing.T) {
 	f := open(t)
 	c, full := f.create(t, policy.ClientSpec{Name: "agent", Read: []string{phoneA}})
-	got, ok := f.clients.Authenticate(t.Context(), full)
+	got, ok := f.authenticate(t, full)
 	if !ok || len(got.Read) != 1 {
 		t.Fatalf("Authenticate = %+v, %v", got, ok)
 	}
@@ -299,7 +313,7 @@ func TestRevocationAndReKeysReachTheNextAuthentication(t *testing.T) {
 		t.Fatalf("the client reads %v, want %s", got.Read, phoneA)
 	}
 	later, laterToken := f.create(t, policy.ClientSpec{Name: "later", Read: []string{phoneB}})
-	if got, ok := f.clients.Authenticate(t.Context(), laterToken); !ok || got.ID != later.ID {
+	if got, ok := f.authenticate(t, laterToken); !ok || got.ID != later.ID {
 		t.Fatalf("a client created after the cache loaded = %+v, %v: the create did not invalidate the cache", got, ok)
 	}
 	err := f.store.Write(t.Context(), "test.rekey", func(tx *ingest.Tx) error {
@@ -312,7 +326,7 @@ func TestRevocationAndReKeysReachTheNextAuthentication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LearnLID: %v", err)
 	}
-	got, ok = f.clients.Authenticate(t.Context(), full)
+	got, ok = f.authenticate(t, full)
 	if !ok {
 		t.Fatal("the re-keyed client no longer authenticates")
 	}
@@ -322,7 +336,7 @@ func TestRevocationAndReKeysReachTheNextAuthentication(t *testing.T) {
 	if _, err := f.clients.Revoke(t.Context(), c.ID); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
-	if got, ok := f.clients.Authenticate(t.Context(), full); ok || got != nil {
+	if got, ok := f.authenticate(t, full); ok || got != nil {
 		t.Fatal("a revoked client authenticated on the next request")
 	}
 	again, err := f.clients.Revoke(t.Context(), c.ID)
@@ -358,10 +372,10 @@ func TestCountsFollowTheClock(t *testing.T) {
 func TestTheCredentialAppearsOnlyInTheCreateResult(t *testing.T) {
 	f := open(t)
 	c, full := f.create(t, policy.ClientSpec{Name: "canary", Read: []string{phoneA}})
-	if _, ok := f.clients.Authenticate(t.Context(), full); !ok {
+	if _, ok := f.authenticate(t, full); !ok {
 		t.Fatal("Authenticate refused the credential")
 	}
-	f.clients.Authenticate(t.Context(), full[:63]+"x")
+	f.authenticate(t, full[:63]+"x")
 	if _, err := f.clients.Revoke(t.Context(), c.ID); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
@@ -395,11 +409,11 @@ func TestFailedAuthenticationsWriteNoAuditRow(t *testing.T) {
 	before := f.audit.String()
 	_, other := token.NewClient()
 	for _, presented := range []string{"", "garbage", full[:56] + other[56:], full[:12] + other[12:]} {
-		if _, ok := f.clients.Authenticate(t.Context(), presented); ok {
+		if _, ok := f.authenticate(t, presented); ok {
 			t.Fatalf("Authenticate(%q) succeeded", presented)
 		}
 	}
-	if _, ok := f.clients.Authenticate(t.Context(), full); !ok {
+	if _, ok := f.authenticate(t, full); !ok {
 		t.Fatal("Authenticate refused the credential")
 	}
 	if f.audit.String() != before {
@@ -438,7 +452,7 @@ func TestAnUnkeyedAuditRefusesEveryChange(t *testing.T) {
 	if text := unkeyed.audit.String(); text != "" {
 		t.Fatalf("the refused revoke wrote the audit line %q", text)
 	}
-	if _, ok := unkeyed.clients.Authenticate(t.Context(), full); !ok {
+	if _, ok := unkeyed.authenticate(t, full); !ok {
 		t.Fatal("the client no longer authenticates after a refused revoke")
 	}
 }

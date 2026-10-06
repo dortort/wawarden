@@ -12,7 +12,7 @@ import (
 type pipeline struct {
 	name         string
 	router       *router
-	authenticate func(*http.Request) (*http.Request, bool)
+	authenticate func(*http.Request) (*http.Request, bool, error)
 	failures     *metrics.Counter
 	failed       func()
 	throttle     *bucket
@@ -35,7 +35,12 @@ func (p *pipeline) serve(w http.ResponseWriter, r *http.Request) {
 		refuse(w, r, http.StatusMethodNotAllowed, codeMethodNotAllowed)
 		return
 	}
-	authenticated, ok := p.authenticate(r)
+	authenticated, ok, err := p.authenticate(r)
+	if err != nil {
+		setRetryAfter(w.Header(), errBusy.retryAfter)
+		refuse(w, r, http.StatusServiceUnavailable, codeBusy)
+		return
+	}
 	if !ok {
 		p.failures.Inc()
 		if p.failed != nil {

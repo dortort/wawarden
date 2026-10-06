@@ -31,15 +31,32 @@ const (
 
 type fakeAuthenticator map[string]*policy.Client
 
-func (f fakeAuthenticator) Authenticate(_ context.Context, presented string) (*policy.Client, bool) {
+func (f fakeAuthenticator) Authenticate(_ context.Context, presented string) (*policy.Client, bool, error) {
 	c, ok := f[presented]
-	return c, ok
+	return c, ok, nil
 }
 
 type panickingAuthenticator struct{}
 
-func (panickingAuthenticator) Authenticate(context.Context, string) (*policy.Client, bool) {
+func (panickingAuthenticator) Authenticate(context.Context, string) (*policy.Client, bool, error) {
 	panic(secretPanic{text: panicCanary})
+}
+
+type reloadingAuthenticator struct {
+	fakeAuthenticator
+	mu       sync.Mutex
+	reloaded bool
+	calls    int
+}
+
+func (r *reloadingAuthenticator) Authenticate(ctx context.Context, presented string) (*policy.Client, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls++
+	if !r.reloaded {
+		return nil, false, errors.New("synthetic reload in progress")
+	}
+	return r.fakeAuthenticator.Authenticate(ctx, presented)
 }
 
 type secretPanic struct{ text string }
@@ -474,6 +491,44 @@ func TestFailedAuthenticationIsThrottled(t *testing.T) {
 	expect("refill is capped at the burst", nil, http.StatusTooManyRequests)
 	if got := f.failures(t); got != "67" {
 		t.Fatalf("authentication failures = %s, want 67", got)
+	}
+}
+
+func TestAnUnavailableClientListAnswersBusyWithoutSpendingTheFailureBudget(t *testing.T) {
+	auth := &reloadingAuthenticator{fakeAuthenticator: fakeAuthenticator{keyLive: liveClient("client-live")}}
+	reg := metrics.NewRegistry()
+	deps := testClientDeps(t, auth, newClock().now)
+	deps.Metrics = reg
+	h := NewClientHandler(deps)
+	busy := 0
+	for i := range 2 * failureBurst {
+		for _, presented := range []string{keyLive, "synthetic-unknown-client", "ww_not_a_token"} {
+			for _, route := range [][2]string{{http.MethodGet, "/v1/chats"}, {http.MethodPost, "/mcp"}} {
+				rec := serve(h, newRequest(t, route[0], route[1], bearer(presented)))
+				requireError(t, rec, http.StatusServiceUnavailable, codeBusy)
+				if rec.Header().Get("Retry-After") != "1" || rec.Header().Get("WWW-Authenticate") != "" {
+					t.Fatalf("request %d to %s with %q: Retry-After %q, WWW-Authenticate %q, want 1 and none", i, route[1], presented, rec.Header().Get("Retry-After"), rec.Header().Get("WWW-Authenticate"))
+				}
+				busy++
+			}
+		}
+	}
+	if got := metricValue(t, reg, "wawarden_auth_failures_total"); got != "0" {
+		t.Fatalf("authentication failures = %s after %d busy answers, want 0", got, busy)
+	}
+	if auth.calls != busy {
+		t.Fatalf("the authenticator ran %d times for %d requests", auth.calls, busy)
+	}
+	auth.mu.Lock()
+	auth.reloaded = true
+	auth.mu.Unlock()
+	for i := range failureBurst {
+		requireError(t, serve(h, newRequest(t, http.MethodGet, "/v1/chats", bearer("synthetic-unknown-client"))), http.StatusUnauthorized, codeUnauthorized)
+		if i == 0 {
+			if rec := serve(h, newRequest(t, http.MethodGet, "/v1/chats", bearer(keyLive))); rec.Code != http.StatusOK {
+				t.Fatalf("a valid key after the reload = %d %s", rec.Code, rec.Body.String())
+			}
+		}
 	}
 }
 

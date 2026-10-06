@@ -41,11 +41,11 @@ type httpClients struct {
 	clients map[string]*policy.Client
 }
 
-func (h *httpClients) Authenticate(_ context.Context, presented string) (*policy.Client, bool) {
+func (h *httpClients) Authenticate(_ context.Context, presented string) (*policy.Client, bool, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	c, ok := h.clients[presented]
-	return c, ok
+	return c, ok, nil
 }
 
 func (h *httpClients) set(token string, c *policy.Client) {
