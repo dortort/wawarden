@@ -37,7 +37,7 @@ const apiStore = module + "/" + scopedDir
 var policyAllowed = set("bytes", "cmp", "crypto/sha256", "crypto/subtle", "encoding/base64", "encoding/binary", "encoding/hex",
 	"errors", "hash/crc32", "iter", "maps", "slices", "sort", "strconv", "strings", "time", "unicode", "unicode/utf8", "unique")
 
-var importableModules = []string{"filippo.io/age", "go.mau.fi/libsignal", "go.mau.fi/whatsmeow", "google.golang.org/protobuf", "modernc.org/sqlite", rapidModule, textModule}
+var importableModules = []string{"filippo.io/age", "go.mau.fi/libsignal", "go.mau.fi/whatsmeow", "google.golang.org/protobuf", "modernc.org/sqlite", rapidModule, textModule, mcpModule}
 
 var indirectOnlyModules = []string{
 	"filippo.io/edwards25519",
@@ -46,6 +46,7 @@ var indirectOnlyModules = []string{
 	"github.com/coder/websocket",
 	"github.com/dustin/go-humanize",
 	"github.com/elliotchance/orderedmap",
+	"github.com/google/jsonschema-go",
 	"github.com/google/uuid",
 	"github.com/mattn/go-colorable",
 	"github.com/mattn/go-isatty",
@@ -53,13 +54,18 @@ var indirectOnlyModules = []string{
 	"github.com/petermattis/goid",
 	"github.com/remyoudompheng/bigfft",
 	"github.com/rs/zerolog",
+	"github.com/segmentio/asm",
+	"github.com/segmentio/encoding",
 	"github.com/vektah/gqlparser",
+	"github.com/yosida95/uritemplate",
 	"go.mau.fi/util",
 	"golang.org/x/crypto",
 	"golang.org/x/exp",
 	"golang.org/x/net",
+	"golang.org/x/oauth2",
 	"golang.org/x/sync",
 	"golang.org/x/sys",
+	"golang.org/x/time",
 	"modernc.org/libc",
 	"modernc.org/mathutil",
 	"modernc.org/memory",

@@ -10,6 +10,9 @@ var handlerBuilders = map[string]map[string]bool{
 		"NewCrossOriginProtection", "NotFoundHandler", "RedirectHandler", "StripPrefix", "TimeoutHandler"),
 	"net/http/httputil": set("NewSingleHostReverseProxy", "ReverseProxy"),
 	"net/rpc":           set("DefaultServer", "NewServer", "Server"),
+	mcpModule + "/mcp": set("NewSSEHandler", "NewStreamableHTTPHandler", "SSEHandler", "SSEServerTransport", "StreamableHTTPHandler",
+		"StreamableServerTransport"),
+	mcpModule + "/auth": set("ProtectedResourceMetadataHandler", "RequireBearerToken"),
 }
 
 var handlerRule = rule{
@@ -115,6 +118,33 @@ func f(s listeners.Spec, h http.Handler) []spec {
 	_ = spec(s)
 	return []spec{{Name: "client", Handler: wrapped{h}}}
 }
+`},
+		{name: "MCP handlers built or wrapped outside api", rel: "internal/api/dto/x.go", want: 8, src: `package dto
+
+import (
+	"github.com/modelcontextprotocol/go-sdk/auth"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+func f() {
+	_ = mcp.NewStreamableHTTPHandler(nil, nil)
+	_ = mcp.NewSSEHandler(nil, nil)
+	_ = &mcp.StreamableHTTPHandler{}
+	_ = &mcp.SSEHandler{}
+	_ = &mcp.SSEServerTransport{}
+	_ = &mcp.StreamableServerTransport{}
+	_ = auth.RequireBearerToken(nil, nil)
+	_ = auth.ProtectedResourceMetadataHandler(nil)
+}
+`},
+		{name: "MCP handlers in api", rel: "internal/api/x.go", src: `package api
+
+import (
+	"github.com/modelcontextprotocol/go-sdk/auth"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+var _ = auth.RequireBearerToken(nil, nil)(mcp.NewStreamableHTTPHandler(nil, nil))
 `},
 		{name: "a handler built in an api subpackage", rel: "internal/api/dto/x.go", want: 1, src: `package dto
 

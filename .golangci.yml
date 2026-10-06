@@ -75,6 +75,14 @@ linters:
           deny:
             - pkg: golang.org/x/text
               desc: golang.org/x/text is confined to internal/store/scoped, which normalises search queries to NFC
+        mcp-library:
+          files:
+            - $all
+            - "!$test"
+            - "!${base-path}/internal/api/**"
+          deny:
+            - pkg: github.com/modelcontextprotocol/go-sdk
+              desc: the MCP library is confined to internal/api, which serves its tools behind the client pipeline
         test-only-modules:
           files:
             - $all

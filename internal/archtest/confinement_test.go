@@ -20,6 +20,7 @@ const (
 	signalModule    = "go.mau.fi/libsignal"
 	rapidModule     = "pgregory.net/rapid"
 	textModule      = "golang.org/x/text"
+	mcpModule       = "github.com/modelcontextprotocol/go-sdk"
 	scopedDir       = storeDir + "/scoped"
 )
 
@@ -36,6 +37,7 @@ var confinements = []confinement{
 	{pkg: signalModule, dirs: []string{adapterDir}},
 	{pkg: ageModule, dirs: []string{backupDir}},
 	{pkg: textModule, dirs: []string{scopedDir}},
+	{pkg: mcpModule, dirs: []string{apiDir}},
 	{pkg: rapidModule},
 }
 
@@ -183,6 +185,27 @@ import (
 		{name: "the scoped store", rel: "internal/store/scoped/x.go", src: `package scoped
 
 import "golang.org/x/text/unicode/norm"
+`},
+		{name: "the MCP library outside the api", rel: "internal/app/x.go", want: 3, src: `package app
+
+import (
+	"github.com/modelcontextprotocol/go-sdk/auth"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+	_ "github.com/modelcontextprotocol/go-sdkx"
+)
+`},
+		{name: "the MCP library in the api", rel: "internal/api/x.go", src: `package api
+
+import (
+	"github.com/modelcontextprotocol/go-sdk/auth"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+`},
+		{name: "the MCP library in another package's tests", rel: "internal/store/scoped/x_test.go", src: `package scoped
+
+import "github.com/modelcontextprotocol/go-sdk/mcp"
 `},
 		{name: "a test-only module outside tests", rel: "internal/store/scoped/x.go", want: 2, src: `package scoped
 
