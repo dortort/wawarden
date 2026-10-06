@@ -356,6 +356,91 @@ func TestMCPToolPanicsBecomeInternalErrors(t *testing.T) {
 	}
 }
 
+type panickingArchive struct{}
+
+func (panickingArchive) Chats(policy.ReadGrant, context.Context, scoped.ChatPosition, int) (scoped.ChatPage, error) {
+	panic(secretPanic{text: panicCanary})
+}
+
+func (panickingArchive) Chat(policy.ReadGrant, context.Context, string) (scoped.Chat, bool, error) {
+	panic(secretPanic{text: panicCanary})
+}
+
+func (panickingArchive) Messages(policy.ReadGrant, context.Context, string, scoped.MessagePosition, scoped.Direction, int) (scoped.MessagePage, bool, error) {
+	panic(secretPanic{text: panicCanary})
+}
+
+func (panickingArchive) Message(policy.ReadGrant, context.Context, policy.CanonicalChat, string, policy.CanonicalChat) (scoped.Message, bool, error) {
+	panic(secretPanic{text: panicCanary})
+}
+
+func (panickingArchive) Changes(policy.ReadGrant, context.Context, string, scoped.ChangePosition, int) (scoped.ChangePage, bool, error) {
+	panic(secretPanic{text: panicCanary})
+}
+
+func (panickingArchive) Search(policy.ReadGrant, context.Context, scoped.Query, string, scoped.SearchPosition, int) (scoped.SearchPage, bool, error) {
+	panic(secretPanic{text: panicCanary})
+}
+
+func sampleArguments(t *testing.T, tool *mcp.Tool) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(tool.InputSchema)
+	if err != nil {
+		t.Fatalf("marshal the input schema of %s: %v", tool.Name, err)
+	}
+	var schema struct {
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("decode the input schema of %s: %v", tool.Name, err)
+	}
+	samples := map[string]any{"chat": groupRef, "query": "synthetic"}
+	args := map[string]any{}
+	for _, name := range schema.Required {
+		v, ok := samples[name]
+		if !ok {
+			t.Fatalf("no sample value for the required parameter %s of %s: add one", name, tool.Name)
+		}
+		args[name] = v
+	}
+	return args
+}
+
+func TestEveryListedToolAnswersThroughReadTool(t *testing.T) {
+	for _, p := range protocols {
+		t.Run(p.name, func(t *testing.T) {
+			f := newMCPFixture(t)
+			f.clients[keyRevoked] = &policy.Client{ID: "client-revoked", ReadAll: true, Revoked: true, ExpiresAt: mcpExpiry}
+			logs := installPanicReporter(t, metrics.NewRegistry())
+			panicking := connectAt(t, f.handler, probeEndpoint(t, f, panickingArchive{}, mcpCallDeadline), keyGroup, p)
+			reader, revoked := connect(t, f.handler, keyGroup, p), connect(t, f.handler, keyRevoked, p)
+			tools, err := reader.ListTools(t.Context(), nil)
+			if err != nil || len(tools.Tools) == 0 {
+				t.Fatalf("list tools = %v, %v", tools, err)
+			}
+			f.archive.mu.Lock()
+			f.archive.err = errors.New("synthetic store failure " + argCanary)
+			f.archive.mu.Unlock()
+			for _, tool := range tools.Tools {
+				if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint || tool.OutputSchema == nil {
+					t.Errorf("%s is listed without the read-only hint and output schema that readTool gives every tool", tool.Name)
+				}
+				args := sampleArguments(t, tool)
+				requireToolError(t, call(t, revoked, tool.Name, args), codeNotFound)
+				requireToolError(t, call(t, panicking, tool.Name, args), codeInternal)
+				res := call(t, reader, tool.Name, args)
+				requireToolError(t, res, codeInternal)
+				if wire, _ := json.Marshal(res); bytes.Contains(wire, []byte(argCanary)) {
+					t.Fatalf("%s put the store error on the wire: %s", tool.Name, wire)
+				}
+			}
+			if strings.Contains(logs.String(), panicCanary) {
+				t.Fatalf("the panic value leaked: %s", logs.String())
+			}
+		})
+	}
+}
+
 func TestOnlyToolsRegisteredThroughReadToolAreCallable(t *testing.T) {
 	f := newMCPFixture(t)
 	server := mcp.NewServer(&mcp.Implementation{Name: "wawarden-test", Version: "0"}, nil)
