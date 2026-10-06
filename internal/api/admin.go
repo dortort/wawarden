@@ -81,14 +81,14 @@ func registerAdmin(rt *router, svc AdminService, events AdminEvents) {
 }
 
 func mutation(events AdminEvents, action string, run func(context.Context) (dto.Response, error)) func(context.Context, policy.AdminGrant, *Request) (dto.Response, error) {
-	return func(ctx context.Context, _ policy.AdminGrant, r *Request) (dto.Response, error) {
+	return func(ctx context.Context, _ policy.AdminGrant, r *Request) (resp dto.Response, err error) {
+		result := codeInternal
+		defer func() { events.AdminMutation(action, result) }()
 		var empty struct{}
-		if err := r.DecodeJSON(&empty); err != nil {
-			events.AdminMutation(action, outcome(err))
-			return nil, err
+		if err = r.DecodeJSON(&empty); err == nil {
+			resp, err = run(ctx)
 		}
-		resp, err := run(ctx)
-		events.AdminMutation(action, outcome(err))
+		result = outcome(err)
 		return resp, err
 	}
 }

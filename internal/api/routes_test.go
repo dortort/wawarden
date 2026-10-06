@@ -22,6 +22,7 @@ type fakeAdmin struct {
 	code         string
 	pairErr      error
 	reconnectErr error
+	panics       bool
 	calls        []string
 	pairBudget   time.Duration
 }
@@ -50,11 +51,17 @@ func (f *fakeAdmin) Pair(ctx context.Context) (string, error) {
 		f.pairBudget = time.Until(deadline)
 		f.mu.Unlock()
 	}
+	if f.panics {
+		panic(secretPanic{text: panicCanary})
+	}
 	return f.code, f.pairErr
 }
 
 func (f *fakeAdmin) Reconnect(context.Context) error {
 	f.record("reconnect")
+	if f.panics {
+		panic(secretPanic{text: panicCanary})
+	}
 	return f.reconnectErr
 }
 
@@ -166,6 +173,27 @@ func TestMutationsAnswerWithFixedCodesAndEmitTheirOutcome(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestPanickingMutationsEmitAnInternalErrorOutcome(t *testing.T) {
+	for _, action := range []string{actionPair, actionReconnect} {
+		t.Run(action, func(t *testing.T) {
+			f := newAdminFixture(t)
+			logs := installPanicReporter(t, f.reg)
+			f.service.panics = true
+			rec := adminRequest(t, f, http.MethodPost, "/admin/v1/"+action, jsonType, "{}")
+			requireError(t, rec, http.StatusInternalServerError, codeInternal)
+			if got := f.events.recorded(); !slices.Equal(got, [][2]string{{action, codeInternal}}) {
+				t.Fatalf("admin_mutation events %v, want one %s with outcome %s", got, action, codeInternal)
+			}
+			if got := metricValue(t, f.reg, `wawarden_panics_total{name="api.admin"}`); got != "1" {
+				t.Fatalf("wawarden_panics_total{name=\"api.admin\"} = %q, want 1", got)
+			}
+			if out := logs.String(); strings.Contains(out, panicCanary) || strings.Contains(fmt.Sprint(f.events.recorded()), panicCanary) {
+				t.Fatalf("the panic value leaked:\n%s", out)
+			}
+		})
 	}
 }
 
