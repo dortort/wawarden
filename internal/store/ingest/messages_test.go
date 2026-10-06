@@ -237,13 +237,15 @@ func TestAnEditStoresItsDisplayText(t *testing.T) {
 
 func TestReactionsCannotBeEdited(t *testing.T) {
 	s := openStore(t)
-	m := textMessage(t, groupJID, "R1", alice, "")
-	m.Kind = KindReaction
-	ref := insert(t, s, m)
-	if err := s.Write(t.Context(), "test.edit", func(tx *Tx) error { return tx.ApplyEdit(ref, "injected", epoch) }); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("an edit of a reaction = %v, want ErrInvalid", err)
+	for _, kind := range []Kind{KindReaction, KindPollUpdate} {
+		m := textMessage(t, groupJID, "R-"+string(kind), alice, "")
+		m.Kind = kind
+		ref := insert(t, s, m)
+		if err := s.Write(t.Context(), "test.edit", func(tx *Tx) error { return tx.ApplyEdit(ref, "injected", epoch) }); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("an edit of a %s = %v, want ErrInvalid", kind, err)
+		}
+		write(t, s, func(tx *Tx) error { return tx.ApplyRevoke(ref) })
 	}
-	write(t, s, func(tx *Tx) error { return tx.ApplyRevoke(ref) })
 	ftsIntegrity(t, s)
 }
 
