@@ -418,8 +418,8 @@ their own licences:
 | MPL-2.0 | `go.mau.fi/whatsmeow`, `go.mau.fi/util` |
 | Apache-2.0 | `github.com/petermattis/goid` |
 | ISC | `github.com/coder/websocket` |
-| MIT | `github.com/beeper/argo-go`, `github.com/dustin/go-humanize`, `github.com/elliotchance/orderedmap/v3`, `github.com/mattn/go-colorable`, `github.com/mattn/go-isatty`, `github.com/rs/zerolog`, `github.com/vektah/gqlparser/v2` |
-| BSD-3-Clause | the Go standard library, `filippo.io/edwards25519`, `github.com/google/uuid`, `github.com/remyoudompheng/bigfft`, `golang.org/x/crypto`, `golang.org/x/exp`, `golang.org/x/net`, `golang.org/x/sync`, `golang.org/x/sys`, `golang.org/x/text`, `google.golang.org/protobuf`, and the SQLite driver `modernc.org/sqlite` with `modernc.org/libc`, `modernc.org/mathutil` and `modernc.org/memory`, which also carry the licences of the C code they translate, SQLite's public-domain dedication among them |
+| MIT | `github.com/beeper/argo-go`, `github.com/dustin/go-humanize`, `github.com/elliotchance/orderedmap/v3`, `github.com/mattn/go-colorable`, `github.com/mattn/go-isatty`, `github.com/ncruces/go-strftime`, `github.com/rs/zerolog`, `github.com/vektah/gqlparser/v2` |
+| BSD-3-Clause | the Go standard library, the backup encryption `filippo.io/age` with `filippo.io/hpke`, `filippo.io/edwards25519`, `github.com/google/uuid`, `github.com/remyoudompheng/bigfft`, `golang.org/x/crypto`, `golang.org/x/exp`, `golang.org/x/net`, `golang.org/x/sync`, `golang.org/x/sys`, `golang.org/x/text`, `google.golang.org/protobuf`, and the SQLite driver `modernc.org/sqlite` with `modernc.org/libc`, `modernc.org/mathutil` and `modernc.org/memory`, which also carry the licences of the C code they translate, SQLite's public-domain dedication among them |
 
 Every release ships their licence files, and WaWarden's, as
 `wawarden_<version>_licenses.tar.gz` and under
