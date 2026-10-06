@@ -400,8 +400,9 @@ entropy of the tokens; the counters exist to alert on.
   pipeline answers an unavailable copy `503` on REST and MCP without counting
   a failure or spending the failure budget.
 - **Write chats are readable chats (M2).** Write chats must be a subset of read
-  chats, and a client that reads every chat holds no write chat (also a
-  database trigger). A client allowed to write to a chat it cannot read could
+  chats, and a client that reads every chat holds no write chat (also
+  database triggers, one of which refuses to replace a client row, since a
+  replacement would keep its chats without the update trigger running). A client allowed to write to a chat it cannot read could
   learn from the answer to a reply whether a message exists. A write chat the
   archive has not seen is refused unless it is a direct chat and first contact
   is allowed. A read chat not seen yet is allowed, and reported as not known.

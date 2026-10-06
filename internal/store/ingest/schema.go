@@ -227,6 +227,11 @@ WHEN NEW.read_all = 1 AND EXISTS (SELECT 1 FROM client_write_chats WHERE client_
 	SELECT RAISE(ABORT, 'a client that reads all chats holds no write chat');
 END;
 
+CREATE TRIGGER clients_no_replace BEFORE INSERT ON clients
+WHEN EXISTS (SELECT 1 FROM clients WHERE id = NEW.id) BEGIN
+	SELECT RAISE(ABORT, 'a client row is never replaced');
+END;
+
 CREATE TABLE audit (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	ts INTEGER NOT NULL,

@@ -654,8 +654,9 @@ queue, it holds:
   identifier (see [Ingest](#ingest));
 - read clients and the chats each one may read and write. A client row has
   room for a 32-byte digest of its token, not for the token; its expiry must be
-  at most 366 days after its creation, and a trigger refuses a write chat for a
-  client that reads every chat. A client's chats are canonical identifiers, not references to stored
+  at most 366 days after its creation, and triggers refuse a write chat for a
+  client that reads every chat, and an `INSERT OR REPLACE` or `REPLACE` that
+  would swap a client row under its chats. A client's chats are canonical identifiers, not references to stored
   chats, so they may name a chat the archive has not seen yet, and a re-key
   moves them from the phone number to the LID (see [Ingest](#ingest));
 - the audit table, whose rows triggers refuse to update, delete or replace.

@@ -194,7 +194,11 @@ func TestClientTablesRefuseInvalidRows(t *testing.T) {
 	); err != nil {
 		t.Fatalf("valid client rows refused: %v", err)
 	}
-	const scopeRefusal = "a client that reads all chats holds no write chat"
+	const (
+		scopeRefusal   = "a client that reads all chats holds no write chat"
+		replaceRefusal = "a client row is never replaced"
+		replacedClient = " INTO clients (id, name, token_hash, read_all, created_at, expires_at) VALUES ('aaaaaaaa', 'Reader', " + hash32 + ", 1, 1, 2)"
+	)
 	for name, tt := range map[string]struct{ stmt, want string }{
 		"a short id":                              {clientRow("cccccc", "Short", 0, 1, 2), "CHECK constraint failed"},
 		"a name taken in another case":            {clientRow("cccccccc", "READER", 0, 1, 2), "UNIQUE constraint failed: clients.name"},
@@ -206,10 +210,15 @@ func TestClientTablesRefuseInvalidRows(t *testing.T) {
 		"a write chat for a read-all client":      {"INSERT INTO client_write_chats (client_id, chat_jid) VALUES ('bbbbbbbb', '" + alice + "')", scopeRefusal},
 		"a write chat moved to a read-all client": {"UPDATE client_write_chats SET client_id = 'bbbbbbbb'", scopeRefusal},
 		"read_all for a client with write chats":  {"UPDATE clients SET read_all = 1 WHERE id = 'aaaaaaaa'", scopeRefusal},
+		"a client replaced by an insert":          {"INSERT OR REPLACE" + replacedClient, replaceRefusal},
+		"a client replaced":                       {"REPLACE" + replacedClient, replaceRefusal},
 	} {
 		if err := execAll(t, s, tt.stmt); err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("%s = %v, want %q", name, err, tt.want)
 		}
+	}
+	if got := scalar[string](t, s, "SELECT read_all || expires_at || (SELECT count(*) FROM client_write_chats WHERE client_id = id) FROM clients WHERE id = 'aaaaaaaa'"); got != "0"+strconv.FormatInt(1+366*dayMS, 10)+"1" {
+		t.Fatalf("client aaaaaaaa = %q, want it unchanged with its write chat", got)
 	}
 }
 
