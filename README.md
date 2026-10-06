@@ -381,7 +381,7 @@ The container contract, in full in
   while a device is paired or pairing was requested, and the webhook when one
   is set. Nothing needs to reach the container from outside but the clients and
   the operator, and never from the public internet.
-- **Licence.** WaWarden is `GPL-3.0-or-later`, as the image's
+- **Licence.** From M1 on, WaWarden is `GPL-3.0-or-later`, as the image's
   `org.opencontainers.image.licenses` label says; the licence texts of
   WaWarden, the Go standard library and every linked module are under
   `/licenses` in the image (see [Licence](#licence)).
