@@ -35,12 +35,133 @@ func canonical(t *testing.T, s *Store, jid string) string {
 func snapshot(t *testing.T, s *Store) map[string]int {
 	t.Helper()
 	out := map[string]int{}
-	for _, table := range []string{"chats", "chat_aliases", "lid_map", "contacts", "group_participants", "messages"} {
+	for _, table := range []string{"chats", "chat_aliases", "lid_map", "contacts", "group_participants", "messages", "client_read_chats", "client_write_chats"} {
 		out[table] = scalar[int](t, s, "SELECT count(*) FROM "+table)
 	}
 	out["lid chats"] = scalar[int](t, s, "SELECT count(*) FROM chats WHERE jid LIKE '%@lid'")
 	out["lid senders"] = scalar[int](t, s, "SELECT count(*) FROM messages WHERE sender_jid LIKE '%@lid'")
+	out["lid scopes"] = scalar[int](t, s, "SELECT count(*) FROM client_read_chats WHERE chat_jid LIKE '%@lid'")
 	return out
+}
+
+func addClient(t *testing.T, s *Store, id string, readAll, revoked bool, read, writes []string) {
+	t.Helper()
+	write(t, s, func(tx *Tx) error {
+		var revokedAt any
+		if revoked {
+			revokedAt = int64(2)
+		}
+		if _, err := tx.q.ExecContext(tx.ctx, "INSERT INTO clients (id, name, token_hash, read_all, created_at, expires_at, revoked_at) VALUES (?1, ?1, zeroblob(32), ?2, 1, 2, ?3)",
+			id, boolInt(readAll), revokedAt); err != nil {
+			return err
+		}
+		for _, jid := range read {
+			if _, err := tx.q.ExecContext(tx.ctx, "INSERT INTO client_read_chats (client_id, chat_jid) VALUES (?, ?)", id, jid); err != nil {
+				return err
+			}
+		}
+		for _, jid := range writes {
+			if _, err := tx.q.ExecContext(tx.ctx, "INSERT INTO client_write_chats (client_id, chat_jid) VALUES (?, ?)", id, jid); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func scopeOf(t *testing.T, s *Store, table, id string) string {
+	t.Helper()
+	return scalar[string](t, s, "SELECT coalesce(group_concat(chat_jid, ' '), '') FROM (SELECT chat_jid FROM "+table+" WHERE client_id = ? ORDER BY chat_jid)", id)
+}
+
+func TestRekeyingMovesClientScopes(t *testing.T) {
+	s := openStore(t)
+	insert(t, s, textMessage(t, alice, "A1", alice, "alice by phone"))
+	addClient(t, s, "client01", false, false, []string{alice, groupJID}, []string{alice})
+	addClient(t, s, "client02", false, false, []string{alice, aliceLID}, nil)
+	addClient(t, s, "client03", false, false, []string{bob}, []string{bob})
+	addClient(t, s, "client04", false, true, []string{carol}, nil)
+	res := learn(t, s, aliceLID, alice, MappingSenderAlt)
+	if res.Outcome != LIDLearned || !res.Rescoped {
+		t.Fatalf("LearnLID = %+v, want a mapping that moved client scopes", res)
+	}
+	for _, tt := range []struct{ table, id, want string }{
+		{"client_read_chats", "client01", aliceLID + " " + groupJID},
+		{"client_write_chats", "client01", aliceLID},
+		{"client_read_chats", "client02", aliceLID},
+		{"client_read_chats", "client03", bob},
+		{"client_write_chats", "client03", bob},
+	} {
+		if got := scopeOf(t, s, tt.table, tt.id); got != tt.want {
+			t.Errorf("%s of %s = %q, want %q", tt.table, tt.id, got, tt.want)
+		}
+	}
+	if res := learn(t, s, carolLID, carol, MappingHistory); res.Outcome != LIDLearned || !res.Rescoped || scopeOf(t, s, "client_read_chats", "client04") != carolLID {
+		t.Fatalf("LearnLID for a chat that only a grant names = %+v, scope %q, want the grant moved", res, scopeOf(t, s, "client_read_chats", "client04"))
+	}
+	if res := learn(t, s, bobLID, bob, MappingSenderAlt); res.Outcome != LIDLearned || !res.Rescoped || scopeOf(t, s, "client_write_chats", "client03") != bobLID {
+		t.Fatalf("LearnLID for a write chat = %+v, want the write scope moved", res)
+	}
+	if res := learn(t, s, "100000000000004@lid", "15550100004@s.whatsapp.net", MappingSenderAlt); res.Outcome != LIDLearned || res.Rescoped {
+		t.Fatalf("LearnLID for a number no client holds = %+v, want no scope moved", res)
+	}
+}
+
+func TestRekeyingThatWouldWidenOrDropAScopeIsRefused(t *testing.T) {
+	type world struct {
+		phoneChat, phoneMessages, lidChat, lidMessages bool
+		read                                           []string
+		readAll, revoked                               bool
+	}
+	for _, tt := range []struct {
+		name string
+		w    world
+		want Conflict
+	}{
+		{"a grant on the unseen LID would gain the phone chat's messages", world{phoneChat: true, phoneMessages: true, read: []string{aliceLID}}, ConflictScopedChat},
+		{"a grant on the unseen number would gain the LID chat's messages", world{lidChat: true, lidMessages: true, read: []string{alice}}, ConflictScopedChat},
+		{"a grant on an empty phone chat merged into a LID chat with messages", world{phoneChat: true, lidChat: true, lidMessages: true, read: []string{alice}}, ConflictScopedChat},
+		{"a grant on both chats when the empty phone chat is merged away", world{phoneChat: true, lidChat: true, lidMessages: true, read: []string{alice, aliceLID}}, ConflictScopedChat},
+		{"a grant on an empty phone chat merged away into an empty LID chat", world{phoneChat: true, lidChat: true, read: []string{alice}}, ConflictScopedChat},
+		{"a grant on an empty LID chat merged away", world{phoneChat: true, phoneMessages: true, lidChat: true, read: []string{aliceLID}}, ConflictScopedChat},
+		{"a grant on both chats when the empty LID chat is merged away", world{phoneChat: true, phoneMessages: true, lidChat: true, read: []string{alice, aliceLID}}, ConflictScopedChat},
+		{"a revoked client", world{phoneChat: true, phoneMessages: true, read: []string{aliceLID}, revoked: true}, ""},
+		{"a client that reads every chat", world{phoneChat: true, phoneMessages: true, lidChat: true, readAll: true}, ""},
+		{"a grant on the phone chat that is re-keyed", world{phoneChat: true, phoneMessages: true, read: []string{alice}}, ""},
+		{"a grant on both identities of a renamed chat", world{phoneChat: true, phoneMessages: true, read: []string{alice, aliceLID}}, ""},
+		{"a grant on the LID chat that absorbs an empty phone chat", world{phoneChat: true, lidChat: true, lidMessages: true, read: []string{aliceLID}}, ""},
+		{"a grant on the phone chat that absorbs an empty LID chat", world{phoneChat: true, phoneMessages: true, lidChat: true, read: []string{alice}}, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := openStore(t)
+			for _, c := range []struct {
+				jid            string
+				exists, filled bool
+			}{{alice, tt.w.phoneChat, tt.w.phoneMessages}, {aliceLID, tt.w.lidChat, tt.w.lidMessages}} {
+				switch {
+				case c.filled:
+					insert(t, s, textMessage(t, c.jid, "M-"+c.jid, c.jid, "a message"))
+				case c.exists:
+					write(t, s, func(tx *Tx) error { return tx.SetChatName(chat(t, c.jid), "Alice", NamePushName, OriginLive) })
+				}
+			}
+			addClient(t, s, "client01", tt.w.readAll, tt.w.revoked, tt.w.read, nil)
+			before := snapshot(t, s)
+			res := learn(t, s, aliceLID, alice, MappingSenderAlt)
+			if tt.want == "" {
+				if res.Outcome != LIDLearned {
+					t.Fatalf("LearnLID = %+v, want the mapping learned", res)
+				}
+				return
+			}
+			if res.Outcome != LIDConflict || res.Conflict != tt.want {
+				t.Fatalf("LearnLID = %+v, want a %s conflict", res, tt.want)
+			}
+			if after := snapshot(t, s); !equalCounts(after, before) {
+				t.Fatalf("a refused mapping changed the archive: %v, was %v", after, before)
+			}
+		})
+	}
 }
 
 func TestLearningAMappingRekeysThePhoneChat(t *testing.T) {

@@ -38,6 +38,19 @@ const (
 		WHERE contacts.jid = ?2 AND (other.origin = 'live' AND contacts.origin = 'history' OR other.origin = contacts.origin AND other.updated_ts > contacts.updated_ts)`
 	dropMergedContact = "DELETE FROM contacts WHERE jid = ?1 AND EXISTS (SELECT 1 FROM contacts WHERE jid = ?2)"
 	rekeyContact      = "UPDATE contacts SET jid = ?2 WHERE jid = ?1"
+	selectScopes      = `SELECT
+		EXISTS (SELECT 1 FROM client_read_chats a JOIN clients c ON c.id = a.client_id WHERE a.chat_jid = ?1 AND c.revoked_at IS NULL
+			AND NOT EXISTS (SELECT 1 FROM client_read_chats b WHERE b.client_id = a.client_id AND b.chat_jid = ?2)),
+		EXISTS (SELECT 1 FROM client_read_chats a JOIN clients c ON c.id = a.client_id WHERE a.chat_jid = ?2 AND c.revoked_at IS NULL
+			AND NOT EXISTS (SELECT 1 FROM client_read_chats b WHERE b.client_id = a.client_id AND b.chat_jid = ?1)),
+		EXISTS (SELECT 1 FROM client_read_chats a JOIN clients c ON c.id = a.client_id WHERE a.chat_jid = ?1 AND c.revoked_at IS NULL
+			UNION ALL SELECT 1 FROM client_write_chats w JOIN clients c ON c.id = w.client_id WHERE w.chat_jid = ?1 AND c.revoked_at IS NULL),
+		EXISTS (SELECT 1 FROM client_read_chats a JOIN clients c ON c.id = a.client_id WHERE a.chat_jid = ?2 AND c.revoked_at IS NULL
+			UNION ALL SELECT 1 FROM client_write_chats w JOIN clients c ON c.id = w.client_id WHERE w.chat_jid = ?2 AND c.revoked_at IS NULL)`
+	rescopeReads  = "UPDATE OR IGNORE client_read_chats SET chat_jid = ?2 WHERE chat_jid = ?1"
+	dropReads     = "DELETE FROM client_read_chats WHERE chat_jid = ?1"
+	rescopeWrites = "UPDATE OR IGNORE client_write_chats SET chat_jid = ?2 WHERE chat_jid = ?1"
+	dropWrites    = "DELETE FROM client_write_chats WHERE chat_jid = ?1"
 )
 
 func (tx *Tx) LearnLID(lid, pn policy.CanonicalChat, source MappingSource, at time.Time) (LIDResult, error) {
@@ -82,13 +95,23 @@ func (tx *Tx) LearnLID(lid, pn policy.CanonicalChat, source MappingSource, at ti
 	if collision {
 		return LIDResult{Outcome: LIDConflict, Conflict: ConflictMessageIDs}, nil
 	}
-	if err := tx.rekey(pn.JID(), lid.JID(), pnChat, lidChat, pnMessages); err != nil {
+	var pnOnly, lidOnly, pnScoped, lidScoped bool
+	if err := tx.q.QueryRowContext(tx.ctx, selectScopes, pn.JID(), lid.JID()).Scan(&pnOnly, &lidOnly, &pnScoped, &lidScoped); err != nil {
+		return LIDResult{}, err
+	}
+	widens := pnOnly && lidMessages || lidOnly && pnMessages
+	drops := pnChat && lidChat && (pnMessages && lidScoped || !pnMessages && pnScoped)
+	if widens || drops {
+		return LIDResult{Outcome: LIDConflict, Conflict: ConflictScopedChat}, nil
+	}
+	rescoped, err := tx.rekey(pn.JID(), lid.JID(), pnChat, lidChat, pnMessages)
+	if err != nil {
 		return LIDResult{}, err
 	}
 	if _, err := tx.q.ExecContext(tx.ctx, insertMapping, lid.JID(), pn.JID(), string(source), ms(at)); err != nil {
 		return LIDResult{}, err
 	}
-	return LIDResult{Outcome: LIDLearned}, nil
+	return LIDResult{Outcome: LIDLearned, Rescoped: rescoped}, nil
 }
 
 func (r *Reader) chatState(c policy.CanonicalChat) (exists, messages bool, err error) {
@@ -96,11 +119,20 @@ func (r *Reader) chatState(c policy.CanonicalChat) (exists, messages bool, err e
 	return exists, messages, err
 }
 
-func (tx *Tx) rekey(pn, lid string, pnChat, lidChat, pnMessages bool) error {
+func (tx *Tx) rekey(pn, lid string, pnChat, lidChat, pnMessages bool) (bool, error) {
 	var err error
 	exec := func(_ sql.Result, e error) {
 		if err == nil {
 			err = e
+		}
+	}
+	var rescoped bool
+	rescope := func(r sql.Result, e error) {
+		exec(r, e)
+		if e == nil {
+			n, e := r.RowsAffected()
+			exec(nil, e)
+			rescoped = rescoped || n > 0
 		}
 	}
 	q, ctx := tx.q, tx.ctx
@@ -127,5 +159,9 @@ func (tx *Tx) rekey(pn, lid string, pnChat, lidChat, pnMessages bool) error {
 	exec(q.ExecContext(ctx, takeNewerPushName, pn, lid))
 	exec(q.ExecContext(ctx, dropMergedContact, pn, lid))
 	exec(q.ExecContext(ctx, rekeyContact, pn, lid))
-	return err
+	rescope(q.ExecContext(ctx, rescopeReads, pn, lid))
+	rescope(q.ExecContext(ctx, dropReads, pn))
+	rescope(q.ExecContext(ctx, rescopeWrites, pn, lid))
+	rescope(q.ExecContext(ctx, dropWrites, pn))
+	return rescoped, err
 }

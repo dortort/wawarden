@@ -37,11 +37,13 @@ const (
 	ConflictContradicts   Conflict = "mapping_contradicts"
 	ConflictBothHaveChats Conflict = "both_chats_have_messages"
 	ConflictMessageIDs    Conflict = "message_collision"
+	ConflictScopedChat    Conflict = "scoped_chat"
 )
 
 type LIDResult struct {
 	Outcome  LIDOutcome
 	Conflict Conflict
+	Rescoped bool
 }
 
 type Participant struct {
