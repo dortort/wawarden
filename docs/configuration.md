@@ -1636,7 +1636,8 @@ Every authenticated request on the client listener costs one read, whatever its
 route or its answer, unknown routes and `404`s included, so probing spends the
 budget; a search costs one read and one search. The [MCP endpoint](#mcp) draws
 on the same two budgets: every `POST /mcp` costs one read, whatever it carries,
-and a `search_messages` call also costs one search. A spent budget is answered `429`
+and a `search_messages` call also costs one search, charged before its
+arguments are checked. A spent budget is answered `429`
 (`rate_limited`) with `Retry-After`, the whole seconds until the next request is
 admitted. Failed authentications cost nothing here; they have their own
 [budget](#failed-authentication). Each value is capped at its default unless
