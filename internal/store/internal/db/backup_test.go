@@ -84,6 +84,25 @@ func TestBackupCopiesInStepsWhileWritesContinue(t *testing.T) {
 	}
 }
 
+func TestBackupStepsAtTheDefaultSize(t *testing.T) {
+	opts, _ := testOptions(t)
+	d := mustOpen(t, opts)
+	seed(t, d, 1500)
+	pages := count(t, d, "PRAGMA page_count")
+	if pages <= 2*backupPagesPerStep {
+		t.Fatalf("the database has %d pages, want more than two steps' worth, or this test proves nothing", pages)
+	}
+	steps := 0
+	d.stepped = func() { steps++ }
+	var out bytes.Buffer
+	if err := d.Backup(t.Context(), filepath.Join(t.TempDir(), "staging"), into(&out)); err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	if want := (pages - 1) / backupPagesPerStep; steps != want {
+		t.Fatalf("the backup of %d pages paused %d times between steps, want %d: one every %d pages", pages, steps, want, backupPagesPerStep)
+	}
+}
+
 func TestBackupStagesPrivatelyAndNeverOverwrites(t *testing.T) {
 	opts, _ := testOptions(t)
 	d := mustOpen(t, opts)
