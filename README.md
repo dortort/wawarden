@@ -75,16 +75,17 @@ It is not:
 
 ## Status
 
-The latest release, `v0.1.0`, is milestone **M0**, a scaffold that makes no
-connection to WhatsApp. `main` holds milestone **M1**, which is not released
-yet: built from `main`, WaWarden links to the owner's WhatsApp account and
-archives its messages, but serves no client API.
+The latest release, `v0.2.0`, is milestone **M1**: WaWarden links to the
+owner's WhatsApp account and archives its messages, but serves no client API.
+`main` holds the first part of milestone **M2**: clients with per-chat read
+scopes and expiring tokens, which the admin creates and revokes, and the audit
+chain of those changes. The read API is not served yet.
 
 | Milestone | State | Scope |
 |---|---|---|
 | M0 | Released as `v0.1.0` | Configuration checks and startup refusals; the client, admin and health listeners; the admin token; Prometheus metrics; `healthcheck` and `version`; the policy core; the container image and verifiable releases. |
-| M1 | On `main`, not released | The WhatsApp engine: pairing guarded by an account check, history sync, the session and the message archive in SQLite; `admin status`, `pair` and `reconnect`; notification events and a signed webhook; metrics on standard output; one encrypted backup per paired device. |
-| M2 | Planned | Clients with per-chat read scopes and expiring tokens; the read API over REST (chats, messages, search, change feed) and MCP; the audit trail. |
+| M1 | Released as `v0.2.0` | The WhatsApp engine: pairing guarded by an account check, history sync, the session and the message archive in SQLite; `admin status`, `pair` and `reconnect`; notification events and a signed webhook; metrics on standard output; one encrypted backup per paired device. |
+| M2 | In progress on `main`: clients, their tokens and the audit chain | Clients with per-chat read scopes and expiring tokens; the read API over REST (chats, messages, search, change feed) and MCP; the audit trail. |
 | M3 | Planned | Sending over REST and MCP, with idempotency, pacing, per-client budgets and a first-contact rule; nightly encrypted backups with retention; the v1.0 documentation. |
 
 What `main` does:
@@ -114,6 +115,16 @@ What `main` does:
   and `reconnect` call them with the token taken from a file, standard input or
   a command, never from an argument or the environment. See
   [admin routes](docs/configuration.md#admin-routes).
+- **Clients.** `wawarden admin clients create` makes a client that may read
+  chosen chats, or every chat, for 90 days by default and 365 at most, and
+  prints its token once; `list`, `show` and `revoke` manage it, and `admin
+  chats list` finds the chats to name. The client listener accepts the token,
+  but serves no route yet. Each client change is appended to a hash-chained
+  audit table and written on standard output with its chain head, and
+  `wawarden audit verify` checks a copy of the archive against the master key
+  and those heads. See
+  [admin clients](docs/configuration.md#admin-clients-and-admin-chats) and
+  [the audit chain](docs/configuration.md#audit-chain).
 - **Events and metrics.** Operational events such as `unpaired`,
   `disconnected`, `quarantine`, `backup_done` and `admin_mutation` are written
   as JSON lines on standard output and, with `WAWARDEN_NOTIFY_URL`, posted with
