@@ -126,6 +126,11 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 	if auth == nil {
 		auth = archive.Clients()
 	}
+	cursors, refs, err := sealers(master)
+	if err != nil {
+		return nil, errors.Join(err, archive.Close())
+	}
+	warnUnsafeRateCaps(cfg, alerts)
 	starts, err := archive.RecordStart(ctx, time.Now())
 	if err != nil {
 		return nil, errors.Join(err, archive.Close())
@@ -169,9 +174,13 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 		a.backup = &initialBackup{archive: archive, status: a.engine.Status, unpairs: unpairs.count.Load, take: taker.Take, now: time.Now}
 	}
 	specs := []listeners.Spec{{
-		Name:    listenerClient,
-		Addr:    cfg.Listen,
-		Handler: api.NewClientHandler(api.ClientDeps{Authenticator: auth, Metrics: reg}),
+		Name: listenerClient,
+		Addr: cfg.Listen,
+		Handler: api.NewClientHandler(api.ClientDeps{
+			Authenticator: auth, Metrics: reg, Archive: archive.Scoped(), Audit: readAudit{audit: archive.Audit()},
+			Session: func() string { return string(a.engine.Status().State) }, Cursors: cursors, Refs: refs,
+			Limits: api.ReadLimits{ReadsPerMinute: cfg.ReadPerMinute, SearchesPerMinute: cfg.SearchPerMinute},
+		}),
 	}}
 	if cfg.AdminCredential != nil {
 		specs = append(specs, listeners.Spec{

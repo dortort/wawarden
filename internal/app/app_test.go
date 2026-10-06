@@ -110,7 +110,7 @@ func (oneClient) Authenticate(_ context.Context, presented string) (*policy.Clie
 	if presented != syntheticClientToken {
 		return nil, false
 	}
-	return &policy.Client{ID: "synthetic-client", ExpiresAt: time.Now().Add(time.Hour)}, true
+	return &policy.Client{ID: "synthaaa", ExpiresAt: time.Now().Add(time.Hour)}, true
 }
 
 type heldClient struct {
@@ -162,7 +162,7 @@ func (noClients) Authenticate(context.Context, string) (*policy.Client, bool) { 
 func open(t *testing.T, cfg config.Config, auth api.Authenticator) (*App, *syncBuffer) {
 	t.Helper()
 	logs := &syncBuffer{}
-	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), nil, auth, idle())
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), testMaster(t), auth, idle())
 	if err != nil {
 		t.Fatalf("newAppWith: %v", err)
 	}

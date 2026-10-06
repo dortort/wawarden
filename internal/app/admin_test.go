@@ -179,6 +179,18 @@ func TestClientsAreCreatedAuthenticatedAuditedAndRevoked(t *testing.T) {
 	if r := post(t, admin, "/admin/v1/clients", bearer(adminToken), `{"name":"AGENT","all_chats":true}`); r.status != http.StatusConflict || r.body != `{"error":"name_taken"}` {
 		t.Fatalf("a second client with the name = %d %s", r.status, r.body)
 	}
+	var chats struct {
+		Chats []struct {
+			ID string `json:"id"`
+		} `json:"chats"`
+	}
+	if r := mustDo(t, http.MethodGet, client, "/v1/chats", bearer(body.Credential)); r.status != http.StatusOK || json.Unmarshal([]byte(r.body), &chats) != nil || len(chats.Chats) != 1 {
+		t.Fatalf("chats = %d %s", r.status, r.body)
+	}
+	if r := mustDo(t, http.MethodGet, client, "/v1/chats/"+chats.Chats[0].ID+"/messages", bearer(body.Credential)); r.status != http.StatusOK ||
+		!strings.Contains(r.body, `"text":"synthetic"`) || !strings.Contains(r.body, `"untrusted":true`) || !strings.Contains(r.body, `"origin":"peer"`) {
+		t.Fatalf("messages = %d %s", r.status, r.body)
+	}
 	if r := mustDo(t, http.MethodGet, client, "/v1/anything", bearer(body.Credential)); r.status != http.StatusNotFound {
 		t.Fatalf("an authenticated client request to an unknown path = %d %s, want the uniform 404", r.status, r.body)
 	}
@@ -215,8 +227,8 @@ func TestClientsAreCreatedAuthenticatedAuditedAndRevoked(t *testing.T) {
 			audit = append(audit, rec["action"].(string))
 		}
 	}
-	if got := strings.Join(audit, " "); got != "client_create client_revoke" {
-		t.Fatalf("audit lines %q, want the create and the revoke on standard output", got)
+	if got := strings.Join(audit, " "); got != "client_create rest.chats rest.messages rest.unrouted client_revoke" {
+		t.Fatalf("audit lines %q, want the create, the three client requests and the revoke on standard output", got)
 	}
 	out := logs.buf.String()
 	if strings.Contains(out, body.Credential) || strings.Contains(out, body.Credential[12:55]) || strings.Contains(out, "120363000000000001@g.us") {
