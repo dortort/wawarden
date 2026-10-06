@@ -32,6 +32,8 @@ var engineDenied = []string{"go.mau.fi/whatsmeow", "google.golang.org/protobuf",
 
 var apiDenied = []string{"database/sql", "html/template", "text/template", "modernc.org/sqlite", "go.mau.fi/whatsmeow", module + "/internal/store", module + "/internal/engine"}
 
+const apiStore = module + "/" + scopedDir
+
 var policyAllowed = set("bytes", "cmp", "crypto/sha256", "crypto/subtle", "encoding/base64", "encoding/binary", "encoding/hex",
 	"errors", "hash/crc32", "iter", "maps", "slices", "sort", "strconv", "strings", "time", "unicode", "unicode/utf8", "unique")
 
@@ -212,6 +214,17 @@ import (
 	"github.com/dortort/wawarden/internal/engine/wa"
 )
 `},
+		{name: "api reads through the scoped store only", rel: "internal/api/x.go", want: 5, src: `package api
+
+import (
+	"github.com/dortort/wawarden/internal/store/scoped"
+	"github.com/dortort/wawarden/internal/store/scoped/sub"
+	"github.com/dortort/wawarden/internal/store/ingest"
+	"github.com/dortort/wawarden/internal/store/admin"
+	"github.com/dortort/wawarden/internal/store/session"
+	"github.com/dortort/wawarden/internal/store/internal/db"
+)
+`},
 		{name: "an api subpackage imports past the fence", rel: "internal/api/dto/x.go", want: 2, src: `package dto
 
 import (
@@ -373,7 +386,7 @@ func checkFences(f *sourceFile) []string {
 		}
 		switch {
 		case within(f.dir, apiDir):
-			if slices.ContainsFunc(apiDenied, func(denied string) bool { return within(imp.path, denied) }) {
+			if imp.path != apiStore && slices.ContainsFunc(apiDenied, func(denied string) bool { return within(imp.path, denied) }) {
 				out = append(out, f.at(imp.node, "%s may not import %q", apiDir, imp.path))
 			}
 		case within(f.dir, engineDir) && !within(f.dir, adapterDir):

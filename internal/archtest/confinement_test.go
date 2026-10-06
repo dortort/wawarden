@@ -19,6 +19,7 @@ const (
 	protobufModule  = "google.golang.org/protobuf"
 	signalModule    = "go.mau.fi/libsignal"
 	rapidModule     = "pgregory.net/rapid"
+	scopedDir       = storeDir + "/scoped"
 )
 
 type confinement struct {

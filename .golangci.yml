@@ -21,8 +21,11 @@ linters:
     depguard:
       rules:
         api-fence:
+          list-mode: lax
           files:
             - ${base-path}/internal/api/**
+          allow:
+            - github.com/dortort/wawarden/internal/store/scoped$
           deny:
             - pkg: database/sql
               desc: internal/api reaches data only through internal/store/scoped
@@ -37,7 +40,7 @@ linters:
             - pkg: go.mau.fi/whatsmeow
               desc: the protocol client is confined to internal/engine
             - pkg: github.com/dortort/wawarden/internal/store
-              desc: internal/api depends on interfaces that internal/app wires, never on a store package
+              desc: internal/api reads the archive only through internal/store/scoped, whose every read takes a grant, and never imports another store package
             - pkg: github.com/dortort/wawarden/internal/engine
               desc: internal/api depends on interfaces that internal/app wires, never on the engine
         store-sql:
