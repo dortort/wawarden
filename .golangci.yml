@@ -64,6 +64,13 @@ linters:
           deny:
             - pkg: filippo.io/age
               desc: age is confined to internal/backup, which encrypts to a recipient and holds no identity
+        test-only-modules:
+          files:
+            - $all
+            - "!$test"
+          deny:
+            - pkg: pgregory.net/rapid
+              desc: rapid drives property tests only and is never linked into the binary
         neutral-engine:
           files:
             - ${base-path}/internal/engine/**

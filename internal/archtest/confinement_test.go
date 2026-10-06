@@ -18,6 +18,7 @@ const (
 	whatsmeowModule = "go.mau.fi/whatsmeow"
 	protobufModule  = "google.golang.org/protobuf"
 	signalModule    = "go.mau.fi/libsignal"
+	rapidModule     = "pgregory.net/rapid"
 )
 
 type confinement struct {
@@ -32,6 +33,7 @@ var confinements = []confinement{
 	{pkg: protobufModule, dirs: []string{adapterDir}},
 	{pkg: signalModule, dirs: []string{adapterDir}},
 	{pkg: ageModule, dirs: []string{backupDir}},
+	{pkg: rapidModule},
 }
 
 var (
@@ -167,6 +169,18 @@ import (
 
 import "go.mau.fi/libsignal/protocol"
 `},
+		{name: "a test-only module outside tests", rel: "internal/store/scoped/x.go", want: 2, src: `package scoped
+
+import (
+	"pgregory.net/rapid"
+	_ "pgregory.net/rapid/sub"
+	_ "pgregory.net/rapidx"
+)
+`},
+		{name: "a test-only module in tests", rel: "internal/store/scoped/x_test.go", src: `package scoped
+
+import "pgregory.net/rapid"
+`},
 	},
 }
 
@@ -182,6 +196,10 @@ func checkConfinement(f *sourceFile) []string {
 			if within(imp.path, c.pkg) && (best == nil || len(c.pkg) > len(best.pkg)) {
 				best = c
 			}
+		}
+		if best != nil && len(best.dirs) == 0 {
+			out = append(out, f.at(imp.node, "%q is a test-only module: only test files may import it, so it is never linked into the binary", imp.path))
+			continue
 		}
 		if best != nil && !slices.ContainsFunc(best.dirs, func(d string) bool { return within(f.dir, d) }) {
 			out = append(out, f.at(imp.node, "%q may be imported only under %s", imp.path, strings.Join(best.dirs, ", ")))

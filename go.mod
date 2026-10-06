@@ -10,6 +10,7 @@ require (
 	go.mau.fi/whatsmeow v0.0.0-20260929112325-8b41cfe6d9c4
 	google.golang.org/protobuf v1.36.12
 	modernc.org/sqlite v1.60.1
+	pgregory.net/rapid v1.3.0
 )
 
 require (
