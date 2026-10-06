@@ -492,6 +492,9 @@ func TestParseQuery(t *testing.T) {
 		"cafe\u0301 noir":                 "\"caf\u00e9\" AND \"noir\"",
 		"\u212bngstr\u00f6m":              "\"\u00c5ngstr\u00f6m\"",
 		strings.Repeat("e\u0301", 42):     `"` + strings.Repeat("\u00e9", 42) + `"`,
+		"\ufb01le":                        "\"\ufb01le\"",
+		"\uff21\uff22\uff23":              "\"\uff21\uff22\uff23\"",
+		"\uff02abc":                       "\"\uff02abc\"",
 	} {
 		q, err := scoped.ParseQuery(in)
 		if err != nil || q.Expression() != want {
