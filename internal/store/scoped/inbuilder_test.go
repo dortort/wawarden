@@ -65,6 +65,20 @@ func TestTheINBuilderHasThreeCases(t *testing.T) {
 	}
 }
 
+func TestOnlyTheReviewedScalarsRunWithoutAScope(t *testing.T) {
+	s := openStore(t)
+	for _, query := range []string{"SELECT text FROM messages LIMIT 1", scoped.Queries["selectMessage"], scoped.Queries["selectChat"]} {
+		if err := s.Scoped().Scalar(grantAll(t), t.Context(), query); !errors.Is(err, scoped.ErrUnscoped) {
+			t.Errorf("a single-row read of %q = %v, want it refused", query, err)
+		}
+	}
+	for _, name := range []string{"selectTopChange", "selectTopSeq"} {
+		if err := s.Scoped().Scalar(grant(t), t.Context(), scoped.Queries[name]); err != nil {
+			t.Errorf("%s = %v, want the reviewed scalar to run", name, err)
+		}
+	}
+}
+
 func chatGenerator() *rapid.Generator[string] {
 	return rapid.Custom(func(t *rapid.T) string {
 		digits := rapid.StringMatching(`[1-9][0-9]{5,14}`).Draw(t, "digits")

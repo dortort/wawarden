@@ -88,11 +88,16 @@ func (q querier) QueryContext(ctx context.Context, query string, args ...any) (*
 	return q.raw.QueryContext(ctx, text, slices.Concat(args, bound)...)
 }
 
-func (q querier) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+var unscopedScalars = map[string]bool{selectLID: true, selectTopChange: true, selectTopSeq: true}
+
+func (q querier) scalar(ctx context.Context, query string, dest any, args ...any) error {
+	if !unscopedScalars[query] {
+		return errUnscoped
+	}
 	if q.trace != nil {
 		q.trace(query)
 	}
-	return q.raw.QueryRowContext(ctx, query, args...)
+	return q.raw.QueryRowContext(ctx, query, args...).Scan(dest)
 }
 
 type rowScanner interface {

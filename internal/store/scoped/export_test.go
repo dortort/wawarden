@@ -30,6 +30,18 @@ var Queries = map[string]string{
 
 const Window = window
 
+var (
+	UnscopedScalars = unscopedScalars
+	ErrUnscoped     = errUnscoped
+)
+
+func (r *Reader) Scalar(g policy.ReadGrant, ctx context.Context, query string) error {
+	return r.read(g, ctx, "test.scalar", func(ctx context.Context, q querier) error {
+		var v any
+		return q.scalar(ctx, query, &v)
+	})
+}
+
 var parameter = regexp.MustCompile(`\?(\d+)`)
 
 func Expand(g policy.ReadGrant, query string, bound int) (string, []any, error) {

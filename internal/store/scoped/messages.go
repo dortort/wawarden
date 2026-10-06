@@ -102,7 +102,7 @@ func canonical(ctx context.Context, q querier, c policy.CanonicalChat) (policy.C
 		return c, nil
 	}
 	var lid string
-	switch err := q.QueryRowContext(ctx, selectLID, c.JID()).Scan(&lid); {
+	switch err := q.scalar(ctx, selectLID, &lid, c.JID()); {
 	case errors.Is(err, sql.ErrNoRows):
 		return c, nil
 	case err != nil:
@@ -127,7 +127,7 @@ func (r *Reader) Changes(g policy.ReadGrant, ctx context.Context, ref string, po
 			chat = c.Chat.JID()
 		}
 		var top int64
-		if err := q.QueryRowContext(ctx, selectTopChange).Scan(&top); err != nil {
+		if err := q.scalar(ctx, selectTopChange, &top); err != nil {
 			return err
 		}
 		messages := rowsOf[Message]{q, scanMessage}
@@ -202,7 +202,7 @@ func (r *Reader) Search(g policy.ReadGrant, ctx context.Context, query Query, re
 		}
 		upper := pos.Upper
 		if upper == 0 {
-			if err := q.QueryRowContext(ctx, selectTopSeq).Scan(&upper); err != nil {
+			if err := q.scalar(ctx, selectTopSeq, &upper); err != nil {
 				return err
 			}
 			upper++

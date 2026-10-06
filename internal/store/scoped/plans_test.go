@@ -118,6 +118,24 @@ func TestEveryQueryOfThePackageIsPlanned(t *testing.T) {
 	if err != nil || len(golden) != len(planned) {
 		t.Fatalf("%d golden plans for %d queries: remove stale files", len(golden), len(planned))
 	}
+	for name, query := range scoped.Queries {
+		marked := strings.Contains(query, "{scope ")
+		switch {
+		case unscopedScalars[name] != "" && (marked || !scoped.UnscopedScalars[query]):
+			t.Errorf("%s is a reviewed unscoped scalar but carries a scope marker or is not allowed as one", name)
+		case unscopedScalars[name] == "" && !marked:
+			t.Errorf("%s carries no scope marker", name)
+		}
+	}
+	if len(scoped.UnscopedScalars) != len(unscopedScalars) {
+		t.Errorf("%d queries run without a scope, want only the %d reviewed", len(scoped.UnscopedScalars), len(unscopedScalars))
+	}
+}
+
+var unscopedScalars = map[string]string{
+	"selectLID":       "maps a phone chat to its LID chat",
+	"selectTopChange": "the highest change number, no message content",
+	"selectTopSeq":    "the highest message sequence number, no message content",
 }
 
 var selectKeyword = regexp.MustCompile(`(?i)\bSELECT\b`)
