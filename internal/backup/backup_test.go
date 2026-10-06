@@ -349,7 +349,7 @@ func TestABackupTakenWhileIngestWrites(t *testing.T) {
 		t.Fatalf("Take: %v", err)
 	}
 	if copied <= before {
-		t.Fatalf("no ingest write completed while the archive was copied (%d before, %d when copied): the copy held the connection throughout", before, copied)
+		t.Fatalf("no ingest write completed between the start of the backup and the end of the archive copy (%d before, %d when copied)", before, copied)
 	}
 	members := decrypt(t, filepath.Join(dir, Dir, backupName), id)
 	got := scalar(t, openCopy(t, members[0].body), "SELECT count(*) FROM history_blobs WHERE id LIKE 'live-%'")
