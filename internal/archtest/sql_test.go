@@ -26,6 +26,25 @@ func f(x string) {
 	_ = ("WHERE id" + " ") + "IN" + ("(" + x)
 }
 `},
+		{name: "IN lists assembled from constants of the file", rel: "internal/store/x.go", want: 2, src: `package store
+
+import "context"
+
+type querier interface {
+	QueryContext(context.Context, string, ...any) (any, error)
+}
+
+const (
+	op   = " IN"
+	open = " ("
+	list = "WHERE id" + op + open + "?)"
+)
+
+func f(ctx context.Context, q querier) {
+	_, _ = q.QueryContext(ctx, "SELECT id FROM t WHERE id"+op+open+"?)")
+	_, _ = q.QueryContext(ctx, "SELECT id FROM t "+list)
+}
+`},
 		{name: "the IN builder", rel: inBuilder, src: `package scoped
 
 const q = "WHERE chat_jid IN ("
@@ -56,6 +75,9 @@ func checkInLists(f *sourceFile) []string {
 		if inList.MatchString(s) {
 			out = append(out, f.at(at, "SQL IN list outside %s: build IN lists only there", inBuilder))
 		}
+	})
+	assembledSQL(f.file, inList, func(at ast.Expr, text, _ string) {
+		out = append(out, f.at(at, "%q, assembled from constants of this file, holds an SQL IN list outside %s: build IN lists only there", text, inBuilder))
 	})
 	return out
 }
