@@ -54,11 +54,12 @@ It is not:
 - **The protocol library sends some traffic by itself.** While a device is
   connected, it sends WhatsApp, with no way to switch any of it off: an
   acknowledgement of every stanza it receives; a delivery receipt, in its
-  inactive form, for every message it decrypts; retry receipts, at most 5 per
-  message, for a message it cannot decrypt, and a request to the owner's phone
-  to send again a message that WhatsApp marks as unavailable; an announcement
-  that the device is active, at every connection; pre-key uploads;
-  application-state fetches; and session telemetry once, after pairing.
+  inactive form, for every message it decrypts; retry receipts, at most 4 per
+  message while the process runs, for a message it cannot decrypt, and a
+  request to the owner's phone to send again a message that WhatsApp marks as
+  unavailable; an announcement that the device is active, at every connection;
+  pre-key uploads; application-state fetches; and session telemetry once, after
+  pairing.
   WaWarden never sends read receipts, presence, typing indicators or status
   updates (see
   [the configuration reference](docs/configuration.md#traffic-the-protocol-library-sends-by-itself)).
