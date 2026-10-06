@@ -91,6 +91,7 @@ func TestIdentifiersBecomePseudonyms(t *testing.T) {
 		{name: "group", in: "120363000000000001@g.us", want: expected("120363000000000001@g.us")},
 		{name: "legacy group", in: "15550100001-1600000000@g.us", want: expected("15550100001-1600000000@g.us")},
 		{name: "status broadcast", in: "status@broadcast", want: expected("status@broadcast"), letters: true},
+		{name: "upper-case status broadcast", in: "STATUS@Broadcast", want: expected("status@broadcast"), letters: true},
 		{name: "broadcast list", in: "1600000000@broadcast", want: expected("1600000000@broadcast")},
 		{name: "newsletter", in: "120363000000000002@newsletter", want: expected("120363000000000002@newsletter")},
 		{name: "bot", in: "15550100009@bot", want: expected("15550100009@bot")},
