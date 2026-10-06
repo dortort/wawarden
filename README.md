@@ -392,8 +392,14 @@ The container contract, in full in
 Read the [residual risks](docs/threat-model.md#residual-risks) before linking an
 account: WhatsApp can restrict, log out or ban an account that links an
 unofficial client. These steps link the owner's account to a build of `main`,
-made [from source](#from-source). In a container, pass the same variables with
-`-e`, and run the admin commands inside it with the token on standard input:
+made [from source](#from-source). In a container, start from
+[the container example](#from-the-container-image): leave `WAWARDEN_DATA_DIR`
+unset, so that the data stays in the `/data` volume, pass the hash itself as
+`WAWARDEN_ADMIN_TOKEN_SHA256` and the other variables with `-e`. Mount the
+webhook's secret file read-only into the container and point
+`WAWARDEN_NOTIFY_SECRET_FILE` at it there: it must be readable by `65532:65532`
+and grant no write permission to its group and no permission to others. Run the
+admin commands inside the container with the token on standard input:
 `docker exec -i wawarden /wawarden admin status --token-stdin < admin.token`.
 
 ### 1. Prepare the secrets
