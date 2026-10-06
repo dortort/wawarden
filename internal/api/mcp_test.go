@@ -8,6 +8,7 @@ import (
 	"flag"
 	"io"
 	"io/fs"
+	"log"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -573,8 +574,13 @@ func TestMCPVerifierTakesThePipelinesClient(t *testing.T) {
 func TestMCPLibraryWritesNoLogLines(t *testing.T) {
 	logs := &syncBuffer{}
 	defaultLogger := slog.Default()
+	defaultWriter, defaultFlags := log.Writer(), log.Flags()
 	slog.SetDefault(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	defer slog.SetDefault(defaultLogger)
+	defer func() {
+		slog.SetDefault(defaultLogger)
+		log.SetOutput(defaultWriter)
+		log.SetFlags(defaultFlags)
+	}()
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
