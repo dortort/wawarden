@@ -19,7 +19,7 @@ const (
 
 	maxClientBodyBytes = 64 << 10
 	maxChatMatch       = 64
-	ChatListLimit      = 100
+	chatListLimit      = 100
 
 	codeInvalidQuery = "invalid_query"
 )
@@ -131,7 +131,7 @@ func registerClients(rt *router, svc ClientService, events AdminEvents) {
 		if err != nil {
 			return nil, err
 		}
-		chats, truncated, err := svc.Chats(ctx, match, ChatListLimit)
+		chats, truncated, err := svc.Chats(ctx, match, chatListLimit)
 		if err != nil {
 			return nil, err
 		}

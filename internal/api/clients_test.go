@@ -191,7 +191,7 @@ func TestChatListing(t *testing.T) {
 	rec := adminRequest(t, f, http.MethodGet, "/admin/v1/chats?match=Synth%C3%A9tic+Group", "", "")
 	want := `{"chats":[{"id":"120363000000000001@g.us","kind":"group","ref":"` + strings.Repeat("a", 32) + `","name":"Synthetic Group"},` +
 		`{"id":"15550100001@s.whatsapp.net","kind":"phone","ref":"` + strings.Repeat("b", 32) + `","name":null}],"truncated":true}`
-	if rec.Code != http.StatusOK || rec.Body.String() != want || f.service.match != "Synthétic Group" || f.service.limit != ChatListLimit {
+	if rec.Code != http.StatusOK || rec.Body.String() != want || f.service.match != "Synthétic Group" || f.service.limit != chatListLimit {
 		t.Fatalf("chats = %d %s with match %q and limit %d", rec.Code, rec.Body, f.service.match, f.service.limit)
 	}
 	if rec := adminRequest(t, f, http.MethodGet, "/admin/v1/chats", "", ""); rec.Code != http.StatusOK || f.service.match != "" {
