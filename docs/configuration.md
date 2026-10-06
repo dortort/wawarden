@@ -1360,7 +1360,7 @@ and its outcome: `ok` or the error code it answered.
 | `GET /admin/v1/clients` | none | `200` `{"clients":[...]}`, oldest first: each client's `id`, `name`, `state`, `created_at`, `expires_at`, `revoked_at`, `all_chats`, `allow_first_contact`, `read_chat_count` and `write_chat_count`. |
 | `GET /admin/v1/clients/{id}` | none | `200` with the client. |
 | `POST /admin/v1/clients/{id}/revoke` | exactly `{}` | `200` with the revoked client. Revoking a revoked client changes nothing and answers the same. |
-| `GET /admin/v1/chats` | none; the query may hold one `match` | `200` `{"chats":[{"id","kind","ref","name"}...],"truncated":false}`: at most 100 chats, most recent message first, whose name or identifier contains `match` (letter case is ignored for ASCII letters) or whose reference is `match`; every chat without `match`. `truncated` is `true` when more match. |
+| `GET /admin/v1/chats` | none; the query may hold one `match` | `200` `{"chats":[{"id","kind","ref","name"}...],"truncated":false}`: at most 100 chats, most recent message first, whose name contains `match` (ignoring the letter case of ASCII letters), whose identifier contains it, or whose reference is it; every chat without `match`. `truncated` is `true` when more match. |
 
 A client is:
 
