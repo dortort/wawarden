@@ -1012,9 +1012,9 @@ without a setting to stop it:
   a sender's phone does not show as delivered while the device has never
   announced itself as available, and WaWarden never does; receipts for the
   owner's own messages go to the owner's devices;
-- retry receipts, at most 5 per message, when a message cannot be decrypted, and
-  a request to the owner's phone to send again a message that WhatsApp marks as
-  unavailable;
+- retry receipts, at most 4 per message while the process runs, when a message
+  cannot be decrypted, and a request to the owner's phone to send again a
+  message that WhatsApp marks as unavailable;
 - an announcement that the device is active, at every connection;
 - uploads of new pre-keys when the server holds too few;
 - fetches of the application state (contacts, chat settings) when the server or
