@@ -277,7 +277,7 @@ jobs:
             exit 1
           fi
           {
-            printf 'The workflow run that opened or updated this pull request, [run %s](%s/%s/actions/runs/%s), did so only after its first job had passed the module checks, the release and `dev` builds and the tests without a network that RELEASING.md lists under The whatsmeow bump workflow.\n\n' "$GITHUB_RUN_ID" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            printf "The workflow run that opened or updated this pull request, [run %s](%s/%s/actions/runs/%s), did so only after its first job had passed the module checks, the release and \`dev\` builds and the tests without a network that RELEASING.md lists under The whatsmeow bump workflow.\n\n" "$GITHUB_RUN_ID" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
             cat "$RUNNER_TEMP/bump/body.md"
           } > "$body"
           if [ "$(($(wc -c < "$body")))" -gt 65536 ]; then
