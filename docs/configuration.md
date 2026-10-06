@@ -740,8 +740,10 @@ but `shutdown` also reports the notification event `disconnected`. The gauges
 - **Reconnection.** After an ordinary drop or a failed connection attempt, the
   engine reconnects after a delay that starts at 2 seconds, doubles after each
   failed attempt up to 5 minutes, and is randomised to between half and all of
-  that. A connection that stays up for at least a minute resets it; one that
-  drops sooner counts as another failed attempt, so that a server that accepts
+  that. A connection that stays up for at least a minute resets it, and so does
+  the owner's pairing, so the reconnection that follows a pairing waits no
+  longer than 2 seconds. A connection that
+  drops within a minute counts as another failed attempt, so that a server that accepts
   connections and drops them at once is dialled ever more slowly, down to once
   every 2.5 to 5 minutes. Only the connection being opened
   counts: a late report that the dropped connection came up changes nothing, and

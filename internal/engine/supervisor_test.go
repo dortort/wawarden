@@ -474,6 +474,30 @@ func TestConnectionsThatDropSoonKeepTheBackoffGrowing(t *testing.T) {
 	}
 }
 
+func TestTheFirstConnectionAfterPairingStartsTheBackoffAfresh(t *testing.T) {
+	h := newSupRig(t)
+	h.connectedNow()
+	for range 8 {
+		h.deliver(Disconnected{})
+		h.steps()
+		h.deliver(Connected{})
+	}
+	h.client.setPaired(false)
+	h.deliver(LoggedOut{})
+	h.want(StateDisconnected, ReasonLoggedOut)
+	if _, err := h.s.pair(t.Context()); err != nil {
+		t.Fatalf("Pair = %v", err)
+	}
+	h.client.pairAs(ownerDev)
+	h.deliver(Paired{JID: ownerDev}, Disconnected{})
+	h.want(StateConnecting, "")
+	before := len(h.clock.slept())
+	h.steps()
+	if got := h.clock.slept()[before:]; !slices.Equal(got, []time.Duration{time.Second}) {
+		t.Fatalf("the reconnect after pairing waited %v, want the backoff's first 1s", got)
+	}
+}
+
 func TestBackoffStaysWithinItsBounds(t *testing.T) {
 	r := rand.New(rand.NewPCG(1, 2)) //nolint:gosec // G404: a fixed seed makes the property test reproducible
 	for range 2000 {

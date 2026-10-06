@@ -480,7 +480,7 @@ func (s *supervisor) handle(ev Event) {
 				break
 			}
 			s.setLocked(StateConnecting, "")
-			s.awaiting = true
+			s.awaiting, s.attempt = true, 0
 			break
 		}
 		logout = s.rejectLocked()
