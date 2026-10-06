@@ -81,3 +81,57 @@ func checkInLists(f *sourceFile) []string {
 	})
 	return out
 }
+
+var planStatistics = regexp.MustCompile(`(?i)\bANALYZE\b|\bPRAGMA\s+(?:\w+\.)?optimize\b`)
+
+var analyzeRule = rule{
+	name:  "no-analyze",
+	check: checkNoAnalyze,
+	cases: []snippet{
+		{name: "statistics statements in the db package and elsewhere", rel: dbDir + "/x.go", want: 4, src: `package db
+
+const (
+	a = "ANALYZE"
+	b = "analyze messages"
+	c = "PRAGMA optimize"
+	d = "pragma main.optimize(0x10002)"
+)
+`},
+		{name: "statistics assembled from constants of the file", rel: "internal/store/scoped/x.go", want: 1, src: `package scoped
+
+import "context"
+
+type querier interface {
+	QueryContext(context.Context, string, ...any) (any, error)
+}
+
+const ana = "ANA"
+
+func f(ctx context.Context, q querier) { _, _ = q.QueryContext(ctx, ana+"LYZE") }
+`},
+		{name: "a test", rel: "internal/store/scoped/x_test.go", src: `package scoped
+
+const a = "ANALYZE"
+`},
+		{name: "near misses", rel: "internal/store/scoped/x.go", src: `package scoped
+
+var _ = []string{"analyzed", "the analyzer", "PRAGMA optimizer"}
+`},
+	},
+}
+
+func checkNoAnalyze(f *sourceFile) []string {
+	if f.test {
+		return nil
+	}
+	var out []string
+	literalRuns(f.file, func(at ast.Node, s string) {
+		if planStatistics.MatchString(s) {
+			out = append(out, f.at(at, "%q gathers planner statistics, which would let SQLite trade the per-chat index seeks of the read queries for a whole-table scan and sort: never run ANALYZE or PRAGMA optimize", s))
+		}
+	})
+	assembledSQL(f.file, planStatistics, func(at ast.Expr, text, _ string) {
+		out = append(out, f.at(at, "%q, assembled from constants of this file, gathers planner statistics: never run ANALYZE or PRAGMA optimize", text))
+	})
+	return out
+}
