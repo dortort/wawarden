@@ -7,7 +7,7 @@ import (
 
 const inBuilder = "internal/store/scoped/inbuilder.go"
 
-var inList = regexp.MustCompile(`(?i)\bIN\s*\(`)
+var inList = regexp.MustCompile(`(?i)\bIN(?:[\s\v]|/\*(?s:.*?)\*/|--[^\n]*\n)*\(`)
 
 var inListRule = rule{
 	name:  "sql-in-lists",
@@ -17,6 +17,11 @@ var inListRule = rule{
 			"const a = \"SELECT id FROM t WHERE id IN (?)\"\n\n" +
 			"var b = `select id from t where id in(?)`\n\n" +
 			"func f() { _ = []string{\"x\", \"chat IN\\t(\"} }\n"},
+		{name: "comments and SQLite's other white space between IN and its list", rel: "internal/store/x.go", want: 5, src: "package store\n\n" +
+			"const a = \"SELECT id FROM t WHERE id IN/**/(?)\"\n\n" +
+			"var b = `select id from t where id in /* a\n list */ -- of ids\n(?)`\n\n" +
+			"func f() { _ = []string{\"chat IN--\\n(\", \"chat in \\v\\f(\"} }\n\n" +
+			"func g(x string) { _ = \"WHERE id IN/*\" + \" */(\" + x }\n"},
 		{name: "concatenations", rel: "internal/store/x.go", want: 4, src: `package store
 
 func f(x string) {
@@ -61,6 +66,8 @@ func f(x string) {
 	_ = "IN"
 	_ = "IN" + x + "("
 	_ = 'I'
+	_ = "id IN /* ( */ t"
+	_ = "id IN -- ("
 }
 `},
 	},
