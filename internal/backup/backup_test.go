@@ -442,7 +442,11 @@ func TestEveryFailureLeavesNoStagingOrPartialFile(t *testing.T) {
 			if err := os.Mkdir(filepath.Join(dir, Dir), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.Symlink(t.TempDir(), filepath.Join(dir, Dir, stagingDir)); err != nil {
+			target := t.TempDir()
+			if err := os.Chmod(target, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, filepath.Join(dir, Dir, stagingDir)); err != nil {
 				t.Fatal(err)
 			}
 		}},
