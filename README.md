@@ -80,14 +80,14 @@ owner's WhatsApp account and archives its messages, but serves no client API.
 `main` holds most of milestone **M2**: clients with per-chat read scopes and
 expiring tokens, which the admin creates and revokes; the REST read API (chats,
 messages, search and a change feed) with sealed cursors and per-client read and
-search budgets; and the audit chain of client changes and of every client
-request. MCP is not served yet.
+search budgets; the same reads as five MCP tools at `POST /mcp`; and the audit
+chain of client changes and of every client request.
 
 | Milestone | State | Scope |
 |---|---|---|
 | M0 | Released as `v0.1.0` | Configuration checks and startup refusals; the client, admin and health listeners; the admin token; Prometheus metrics; `healthcheck` and `version`; the policy core; the container image and verifiable releases. |
 | M1 | Released as `v0.2.0` | The WhatsApp engine: pairing guarded by an account check, history sync, the session and the message archive in SQLite; `admin status`, `pair` and `reconnect`; notification events and a signed webhook; metrics on standard output; one encrypted backup per paired device. |
-| M2 | In progress on `main`: clients, their tokens, the REST read API and the audit chain | Clients with per-chat read scopes and expiring tokens; the read API over REST (chats, messages, search, change feed) and MCP; the audit trail. |
+| M2 | In progress on `main`: clients, their tokens, the REST read API, the MCP read tools and the audit chain | Clients with per-chat read scopes and expiring tokens; the read API over REST (chats, messages, search, change feed) and MCP; the audit trail. |
 | M3 | Planned | Sending over REST and MCP, with idempotency, pacing, per-client budgets and a first-contact rule; nightly encrypted backups with retention; the v1.0 documentation. |
 
 What `main` does:
@@ -123,7 +123,9 @@ What `main` does:
   chats list` finds the chats to name. With the token, the client reads its
   chats through the [read API](docs/configuration.md#read-api): `/v1/me`,
   `/v1/chats`, a chat's messages, search and a change feed, in pages with
-  sealed cursors, within per-client read and search budgets. Each client
+  sealed cursors, within per-client read and search budgets, or through five
+  [MCP tools](docs/configuration.md#mcp) at `POST /mcp` that an MCP client such
+  as Claude Code calls with the same token and budgets. Each client
   change, and each client request, is appended to a hash-chained audit table
   and written on standard output with its chain head, and `wawarden audit
   verify` checks a copy of the archive against the master key and those heads. See
@@ -296,6 +298,22 @@ cursor to pass back as `cursor` (or, for `/v1/changes`, as `since`). With no
 device paired the archive is empty, and the lists are too. The routes, limits
 and codes are in
 [docs/configuration.md](docs/configuration.md#read-api).
+
+The same client can read through MCP. To register the demo endpoint in Claude
+Code (for a deployment, use the HTTPS address of the proxy in front of the
+client listener, `https://<your-host>/mcp`):
+
+```sh
+export WAWARDEN_TOKEN="$(sed -n 's/^token: //p' "$demo/client.txt")"
+claude mcp add --transport http whatsapp http://127.0.0.1:8080/mcp --header "Authorization: Bearer $WAWARDEN_TOKEN"
+```
+
+`claude mcp list` shows `whatsapp` as connected, and `/mcp` in a Claude Code
+session lists five tools: `get_changes`, `get_chat`, `get_messages`,
+`list_chats` and `search_messages`. Claude Code keeps the header, token
+included, in its own configuration; `claude mcp remove whatsapp` deletes it.
+The tools, arguments and codes are in
+[docs/configuration.md](docs/configuration.md#mcp).
 
 Stop the service; it shuts down gracefully and exits `0`. Then delete the
 temporary directory, which holds the admin token and the data directory:
@@ -644,10 +662,10 @@ their own licences:
 |---|---|
 | GPL-3.0 | `go.mau.fi/libsignal` |
 | MPL-2.0 | `go.mau.fi/whatsmeow`, `go.mau.fi/util` |
-| Apache-2.0 | `github.com/petermattis/goid` |
+| Apache-2.0 | `github.com/petermattis/goid`, and the MCP library `github.com/modelcontextprotocol/go-sdk`, whose code contributed before its move to Apache-2.0 stays under MIT unless its authors relicensed it (its licence file carries both texts) |
 | ISC | `github.com/coder/websocket` |
-| MIT | `github.com/beeper/argo-go`, `github.com/dustin/go-humanize`, `github.com/elliotchance/orderedmap/v3`, `github.com/mattn/go-colorable`, `github.com/mattn/go-isatty`, `github.com/rs/zerolog`, `github.com/vektah/gqlparser/v2` |
-| BSD-3-Clause | the Go standard library, the backup encryption `filippo.io/age` with `filippo.io/hpke`, `filippo.io/edwards25519`, `github.com/google/uuid`, `github.com/remyoudompheng/bigfft`, `golang.org/x/crypto`, `golang.org/x/exp`, `golang.org/x/net`, `golang.org/x/sync`, `golang.org/x/sys`, `golang.org/x/text`, `google.golang.org/protobuf`, and the SQLite driver `modernc.org/sqlite` with `modernc.org/libc`, `modernc.org/mathutil` and `modernc.org/memory`, which also carry the licences of the C code they translate, SQLite's public-domain dedication among them |
+| MIT | `github.com/beeper/argo-go`, `github.com/dustin/go-humanize`, `github.com/elliotchance/orderedmap/v3`, `github.com/mattn/go-colorable`, `github.com/mattn/go-isatty`, `github.com/rs/zerolog`, `github.com/vektah/gqlparser/v2`, and with the MCP library `github.com/google/jsonschema-go`, `github.com/segmentio/asm`, `github.com/segmentio/encoding` |
+| BSD-3-Clause | the Go standard library, the backup encryption `filippo.io/age` with `filippo.io/hpke`, `filippo.io/edwards25519`, `github.com/google/uuid`, `github.com/remyoudompheng/bigfft`, `github.com/yosida95/uritemplate/v3`, `golang.org/x/crypto`, `golang.org/x/exp`, `golang.org/x/net`, `golang.org/x/oauth2`, `golang.org/x/sync`, `golang.org/x/sys`, `golang.org/x/text`, `golang.org/x/time`, `google.golang.org/protobuf`, and the SQLite driver `modernc.org/sqlite` with `modernc.org/libc`, `modernc.org/mathutil` and `modernc.org/memory`, which also carry the licences of the C code they translate, SQLite's public-domain dedication among them |
 
 A build from source for macOS also links `github.com/ncruces/go-strftime`,
 under MIT; the release binaries, built for Linux, do not.

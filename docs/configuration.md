@@ -1262,7 +1262,7 @@ public internet.
 
 | Listener | Address | Opened | Serves |
 |---|---|---|---|
-| `client` | `WAWARDEN_LISTEN`, default `127.0.0.1:8080` | Always | The [read API](#read-api), with a client token. |
+| `client` | `WAWARDEN_LISTEN`, default `127.0.0.1:8080` | Always | The [read API](#read-api) and the [MCP endpoint](#mcp) `POST /mcp`, with a client token. |
 | `admin` | `WAWARDEN_ADMIN_LISTEN`, default `127.0.0.1:8082` | Only when an admin token hash is configured | `GET /metrics` and the [admin routes](#admin-routes) `GET /admin/v1/status`, `POST /admin/v1/pair` and `POST /admin/v1/reconnect`, all with the admin token. |
 | `health` | `WAWARDEN_HEALTH_LISTEN`, default `127.0.0.1:8081`, loopback only | Always | `GET /healthz`, without authentication. |
 
@@ -1302,8 +1302,9 @@ Requests to the client and admin listeners pass these checks in order:
    header) when the failure budget is spent; see
    [Failed authentication](#failed-authentication).
 4. On the client listener, the request then costs one from the client's
-   [read budget](#read-rate-limits); when the budget is spent, it is answered
-   `429` (`rate_limited`) with `Retry-After`, before routing.
+   [read budget](#read-rate-limits), every `POST /mcp` included; when the budget
+   is spent, it is answered `429` (`rate_limited`) with `Retry-After`, before
+   routing.
 5. Only an authenticated request reaches routing: an unknown path is `404`
    (`not_found`) and a known path with another method is `405`
    (`method_not_allowed`) with an `Allow` header.
@@ -1496,6 +1497,9 @@ route's grant was decided. It answers with a fixed error and reads no further wh
 | `413` `{"error":"body_too_large"}` | The body is longer than 16384 bytes, or 65536 bytes for the client create route so that two sets of 256 chats fit, as announced by `Content-Length` (the body is not read) or found while reading; the connection is closed. |
 | `400` `{"error":"invalid_body"}` | The body is not valid UTF-8, starts with a byte-order mark, or is not exactly one JSON object with nothing but white space after it; it nests objects and arrays more than 8 levels deep, counting the outer object; an object holds a key that is not lower-case `snake_case` (a letter `a` to `z`, then letters, digits and `_`), or holds the same key twice once escapes are decoded (`"te\u0078t"` is `"text"`); a key is not a field of the route's request; or a value does not fit its field. |
 
+`POST /mcp` checks its bodies with the same media type rule and its own size,
+depth and key rules; see [MCP requests](#mcp-requests).
+
 ### Read API
 
 The client listener serves these routes, all read-only, with a client token. A
@@ -1606,7 +1610,9 @@ queued:
 
 Every authenticated request on the client listener costs one read, whatever its
 route or its answer, unknown routes and `404`s included, so probing spends the
-budget; a search costs one read and one search. A spent budget is answered `429`
+budget; a search costs one read and one search. The [MCP endpoint](#mcp) draws
+on the same two budgets: every `POST /mcp` costs one read, whatever it carries,
+and a `search_messages` call also costs one search. A spent budget is answered `429`
 (`rate_limited`) with `Retry-After`, the whole seconds until the next request is
 admitted. Failed authentications cost nothing here; they have their own
 [budget](#failed-authentication). Each value is capped at its default unless
@@ -1636,11 +1642,154 @@ one standard-output line before it is answered, allowed or not. The action is
 code of the answer (`not_found`, `invalid_query`, `invalid_cursor`,
 `rate_limited`, `busy`, `method_not_allowed` or `internal_error`). The row names
 a chat only when the answer is about one chat (`rest.chat`, `rest.messages` and
-`rest.message` that succeed); a `404` names none. A request whose row cannot be
+`rest.message` that succeed); a `404` names none. Every `POST /mcp` writes one
+row too, with the actions and reasons listed under [MCP audit](#mcp-audit). A request whose row cannot be
 written within 2 seconds is answered `503` (`busy`) with `Retry-After: 1`, and
 one whose row fails for another reason `500` (`internal_error`); either way
 nothing of the read leaves the service. A request refused by the read budget,
 and a failed authentication, write no row.
+
+### MCP
+
+The client listener also serves the read API as [Model Context
+Protocol](https://modelcontextprotocol.io) tools at `POST /mcp`, through the MCP
+Go SDK `v1.8.0`, over its streamable HTTP transport: stateless, every answer one
+`application/json` body, no session (`Mcp-Session-Id` is ignored and never
+sent) and no server-sent event stream. The endpoint is registered on the client
+router and passes the same [checks](#client-and-admin-requests) as every client
+request first: the client token, the browser refusal, the read budget and the
+audit row. `GET`, `PUT` and `DELETE /mcp` are answered `405`
+(`method_not_allowed`) with `Allow: POST`, like any other known path with
+another method. Both protocol paths work: the 2026-07-28 revision, where each
+request carries `Mcp-Protocol-Version`, `Mcp-Method` (and `Mcp-Name` for a tool
+call) headers and `_meta`, starting with `server/discover`, and the earlier
+`initialize` handshake.
+
+#### MCP requests
+
+Before the MCP library reads anything, the endpoint checks the body and answers
+with the fixed JSON errors of the [request bodies](#request-bodies) table:
+
+| Answer | Refused when |
+|---|---|
+| `415` `{"error":"unsupported_media_type"}` | The request does not carry exactly one `Content-Type` header of `application/json`, optionally with `charset=utf-8`; the body is not read and the connection is closed. |
+| `413` `{"error":"body_too_large"}` | The body is longer than 65536 bytes, as announced by `Content-Length` (the body is not read and the connection is closed) or found while reading. |
+| `400` `{"error":"invalid_body"}` | The body is not valid UTF-8, starts with a byte-order mark, or is not exactly one JSON object with nothing but white space after it, so a batch or a second message is refused; it nests objects and arrays more than 16 levels deep; or an object holds the same key twice once escapes are decoded, in the envelope or in tool arguments. Keys are not limited to `snake_case`: MCP uses `camelCase` and `_meta`. |
+
+The library then requires an `Accept` header listing both `application/json`
+and `text/event-stream`, and a well-formed JSON-RPC 2.0 message. It answers the
+requests it refuses itself, such as a malformed message, an unknown method name
+or a protocol version it does not support, with a plain-text `400` or a JSON-RPC
+error; those answers may repeat the caller's own method name, header values or
+message text, never anything read from the archive.
+
+The server advertises the `tools` capability only, without list changes; it has
+no logging, resources, prompts or completions. It answers `initialize`,
+`notifications/initialized`, `ping`, `server/discover`, `tools/list` and
+`tools/call`. Any other method the library knows, such as `resources/list`,
+`prompts/list`, `logging/setLevel` or `subscriptions/listen`, is answered with
+the JSON-RPC error `-32601` (method not found), with HTTP `404` on the
+2026-07-28 path and `200` before it; for `subscriptions/listen` before
+2026-07-28, the library frames that one error as a single server-sent event and
+ends the response. A notification is answered `202` without a body. A
+`tools/call` naming any other tool is answered with the JSON-RPC error `-32602`
+and the fixed message `unknown tool`, with HTTP `400` on the 2026-07-28 path
+and `200` before it, and never repeats the name.
+
+The library's check that a request arriving on a loopback address names a
+loopback `Host` is turned off: the service sits behind a loopback proxy that
+forwards the original host name, which that check would refuse. The browser
+refusal and the client token protect the endpoint instead. The library also
+checks the token's expiry against the wall clock, after the service has checked
+it, and refuses an expired one with a plain-text `401`.
+
+Every answer carries `Cache-Control: no-store` and `X-Content-Type-Options:
+nosniff`. The library's own log output is discarded.
+
+#### MCP tools
+
+The tool definitions are constants: their names, descriptions and schemas never
+contain a chat name or anything else read from the archive, and every client
+gets the same list. Each tool calls the same code as its route and answers the
+same JSON, which the [read API](#read-api) describes:
+
+| Tool | Arguments | Answer |
+|---|---|---|
+| `list_chats` | `cursor`, `limit` | As `GET /v1/chats`: `{chats, next, truncated, session}` |
+| `get_chat` | `chat` (required) | `{chat, session}`, where `chat` is the `Chat` that `GET /v1/chats/{ref}` returns |
+| `get_messages` | `chat` (required), `cursor`, `limit` | As `GET /v1/chats/{ref}/messages`: `{messages, next, truncated, session}` |
+| `search_messages` | `query` (required), `chat`, `cursor`, `limit` | As `GET /v1/search`: `{messages, next, more, truncated, session}` |
+| `get_changes` | `since`, `chat`, `limit` | As `GET /v1/changes`: `{messages, next, more, truncated, session}` |
+
+There is no tool for `GET /v1/me` or `GET /v1/messages/{mref}`.
+
+| Argument | Schema | Meaning |
+|---|---|---|
+| `chat` | string, 1 to 64 characters | A chat's `id` as `list_chats` returns it. |
+| `cursor` | string, 1 to 256 characters | The `next` value of the previous page of the same tool, chat and query. |
+| `since` | string, 1 to 256 characters | The `next` value of the previous `get_changes` call, or an RFC 3339 time for the first one, as for `GET /v1/changes`. |
+| `query` | string, 3 to 128 characters | The search query, under the rules of `GET /v1/search`: 3 to 128 bytes after NFC normalisation, 1 to 8 terms of at least 3 characters each. |
+| `limit` | integer, 1 to 200 | Items per page; 50 when omitted. |
+
+Each input schema is an object that allows no other property, and the arguments
+are checked against it before anything is read. Omitted or `null` arguments are
+an empty object. Cursors are the route's: a `next` value from a tool continues
+on its route and the other way round, under the same [cursor](#cursors-and-message-references) rules.
+Every tool carries the annotation `readOnlyHint: true` and an `outputSchema`
+inferred from the answer's type.
+
+A result carries the answer in `structuredContent` and the same JSON as text in
+`content[0]`. A refused call is a result with `isError: true`, the fixed code
+alone as the text of `content[0]`, and in `structuredContent` the answer's shape
+with empty data and the current `session`, for example
+`{"chats":null,"next":null,"truncated":false,"session":{"state":"connected"}}`.
+No error text of the service or of the library, and no argument value, reaches a
+result.
+
+| Code | Answered when |
+|---|---|
+| `not_found` | As on the routes: the chat is outside the client's scope or does not exist, including with a cursor or `since` value that does not open; or the client gets no read grant at the time of the call. A denied chat and a missing one give byte-identical answers. |
+| `invalid_arguments` | The arguments do not fit the input schema: a missing required argument, another property, a wrong type, an empty string, a value out of bounds or a non-integral `limit`. |
+| `invalid_query` | The query passes the schema but not the search rules. |
+| `invalid_cursor` | As on the routes. |
+| `rate_limited` | The client's search budget is spent. A tool result carries no `Retry-After`; at the default rate a search is admitted again within a second. A spent read budget refuses the whole `POST` with `429` before the call. |
+| `busy` | As on the routes, or the call passed its 10-second deadline. |
+| `internal_error` | Anything else failed, a panic in the tool included; the panic is counted as `api.mcp` and the endpoint keeps serving. |
+
+Pages and texts are cut as on the routes. Because a result carries the page
+twice, as structured content and as text, a full page makes an answer of about
+twice its size; Claude Code saves a tool result over 50,000 characters to a file
+instead of passing it to the model, so a smaller `limit` keeps answers inline.
+
+#### MCP audit
+
+Every `POST /mcp` that the read budget admits writes one [audit](#read-audit)
+row. The action is `mcp.list_chats`, `mcp.get_chat`, `mcp.get_messages`,
+`mcp.search_messages` or `mcp.get_changes` for a call of that tool, and
+`mcp.protocol` for everything else: the handshake, `tools/list`, `ping`,
+notifications, refused methods, unknown tools and refused bodies. The reason is
+`ok`, the tool's code, the body refusal (`unsupported_media_type`,
+`body_too_large` or `invalid_body`), `method_not_found`, `unknown_tool`, or
+`bad_request` for a message the library refused before it reached the server. A
+notification answered `202` is `ok`. A row names a chat only for a successful
+`get_chat` or `get_messages`.
+
+#### Registering with Claude Code
+
+Create a read client with [`admin clients create`](#admin-clients-and-admin-chats), put
+its token in `WAWARDEN_TOKEN`, and register the endpoint, here as `whatsapp`, at
+the address of the proxy that serves the client listener:
+
+```sh
+claude mcp add --transport http whatsapp https://<your-host>/mcp --header "Authorization: Bearer $WAWARDEN_TOKEN"
+```
+
+`claude mcp list` then shows the server as connected, and `/mcp` in a session
+lists its five tools: `get_changes`, `get_chat`, `get_messages`, `list_chats`
+and `search_messages`. A wrong, expired or revoked token shows as a failed
+connection rather than as a server that needs authentication: the endpoint
+offers no OAuth flow. Every name and text a tool returns is third-party content;
+see the `untrusted` and `origin` fields of a `Message`.
 
 ### Health listener
 
@@ -1677,10 +1826,14 @@ an `Access-Control-*` header. Their error bodies are fixed JSON objects with
 | `{"error":"invalid_query"}`, `{"error":"invalid_cursor"}` | `400`, from the [read API](#read-api) and, for `invalid_query`, `GET /admin/v1/chats` |
 | `{"error":"rate_limited"}` | `429` with `Retry-After`, from the client listener's [read and search budgets](#read-rate-limits) |
 | `{"error":"busy"}` | `503` with `Retry-After: 1`, from the [read API](#busy-reads), including when a request's audit row cannot be written within 2 seconds |
-| `{"error":"unsupported_media_type"}`, `{"error":"body_too_large"}`, `{"error":"invalid_body"}` | `415`, `413`, `400`, from a route that reads a body (`pair` and `reconnect`); see [Request bodies](#request-bodies) |
+| `{"error":"unsupported_media_type"}`, `{"error":"body_too_large"}`, `{"error":"invalid_body"}` | `415`, `413`, `400`, from a route that reads a body (`pair`, `reconnect` and `POST /admin/v1/clients`) and from `POST /mcp`; see [Request bodies](#request-bodies) and [MCP requests](#mcp-requests) |
 | `{"error":"already_paired"}`, `{"error":"already_connected"}`, `{"error":"not_paired"}`, `{"error":"owner_phone_missing"}`, `{"error":"owner_mismatch"}`, `{"error":"rate_limited"}`, `{"error":"pair_failed"}`, `{"error":"engine_unavailable"}` | `409`, `429`, `502` or `503`, from the [admin routes](#admin-routes) |
 
-Responses never echo request content, header values or tokens.
+Responses never echo request content, header values or tokens, with one
+exception: the MCP library's own refusals at `POST /mcp`, which may repeat the
+caller's method name, header values or message text; see [MCP
+requests](#mcp-requests). Results of MCP tool calls are JSON-RPC answers with
+`Content-Type: application/json`.
 
 Go's HTTP server answers some requests itself, before any handler runs: for
 example a request without a `Host` header (`400`), with headers over the 16 KiB
@@ -2117,7 +2270,8 @@ The [WhatsApp engine](#whatsapp-engine) adds these:
 
 Labelled counters appear once they count their first event.
 
-Panic names: `api.client`, `api.admin` and `api.health` for the handlers;
+Panic names: `api.client`, `api.admin` and `api.health` for the handlers,
+`api.mcp` for an MCP tool call;
 `listeners.client`, `listeners.admin`, `listeners.health`, `listeners.shutdown`
 and `signals` for goroutines. The engine adds `engine.supervisor`,
 `engine.ingest` and `engine.logout`; the first two also count a panic of one
