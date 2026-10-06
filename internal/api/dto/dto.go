@@ -51,12 +51,21 @@ type Health struct {
 func (h Health) encode() (string, []byte, error) { return encodeJSON(h) }
 
 type Status struct {
-	State        string       `json:"state"`
-	Reason       string       `json:"reason"`
-	Paired       bool         `json:"paired"`
-	Counts       StatusCounts `json:"counts"`
-	LastIngestAt *string      `json:"last_ingest_at"`
-	Version      string       `json:"version"`
+	State        string        `json:"state"`
+	Reason       string        `json:"reason"`
+	Paired       bool          `json:"paired"`
+	Counts       StatusCounts  `json:"counts"`
+	Clients      StatusClients `json:"clients"`
+	Warnings     []string      `json:"warnings"`
+	LastIngestAt *string       `json:"last_ingest_at"`
+	Version      string        `json:"version"`
+}
+
+type StatusClients struct {
+	Active         int64 `json:"active"`
+	Expired        int64 `json:"expired"`
+	Revoked        int64 `json:"revoked"`
+	AllChatsActive int64 `json:"all_chats_active"`
 }
 
 type StatusCounts struct {
@@ -81,6 +90,68 @@ type Accepted struct {
 }
 
 func (a Accepted) encode() (string, []byte, error) { return encodeJSON(a) }
+
+type ClientChat struct {
+	ID    string  `json:"id"`
+	Kind  string  `json:"kind"`
+	Known bool    `json:"known"`
+	Name  *string `json:"name"`
+}
+
+type Client struct {
+	ID                string       `json:"id"`
+	Name              string       `json:"name"`
+	State             string       `json:"state"`
+	CreatedAt         string       `json:"created_at"`
+	ExpiresAt         string       `json:"expires_at"`
+	RevokedAt         *string      `json:"revoked_at"`
+	AllChats          bool         `json:"all_chats"`
+	AllowFirstContact bool         `json:"allow_first_contact"`
+	ReadChats         []ClientChat `json:"read_chats"`
+	WriteChats        []ClientChat `json:"write_chats"`
+}
+
+func (c Client) encode() (string, []byte, error) { return encodeJSON(c) }
+
+type ClientCreated struct {
+	Client     Client `json:"client"`
+	Credential string `json:"credential"`
+}
+
+func (c ClientCreated) encode() (string, []byte, error) { return encodeJSON(c) }
+
+type ClientSummary struct {
+	ID                string  `json:"id"`
+	Name              string  `json:"name"`
+	State             string  `json:"state"`
+	CreatedAt         string  `json:"created_at"`
+	ExpiresAt         string  `json:"expires_at"`
+	RevokedAt         *string `json:"revoked_at"`
+	AllChats          bool    `json:"all_chats"`
+	AllowFirstContact bool    `json:"allow_first_contact"`
+	ReadChatCount     int64   `json:"read_chat_count"`
+	WriteChatCount    int64   `json:"write_chat_count"`
+}
+
+type ClientList struct {
+	Clients []ClientSummary `json:"clients"`
+}
+
+func (l ClientList) encode() (string, []byte, error) { return encodeJSON(l) }
+
+type AdminChat struct {
+	ID   string  `json:"id"`
+	Kind string  `json:"kind"`
+	Ref  string  `json:"ref"`
+	Name *string `json:"name"`
+}
+
+type AdminChats struct {
+	Chats     []AdminChat `json:"chats"`
+	Truncated bool        `json:"truncated"`
+}
+
+func (c AdminChats) encode() (string, []byte, error) { return encodeJSON(c) }
 
 type Prometheus struct {
 	reg *metrics.Registry

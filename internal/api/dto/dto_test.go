@@ -24,9 +24,72 @@ func samples() []dto.Response {
 		dto.Error{Code: "not_found"},
 		dto.Health{Status: "ok"},
 		dto.Metrics(metrics.NewRegistry()),
-		dto.Status{State: "connected", Paired: true, Counts: dto.StatusCounts{Chats: 1}, LastIngestAt: &last, Version: "dev"},
+		dto.Status{State: "connected", Paired: true, Counts: dto.StatusCounts{Chats: 1}, Clients: dto.StatusClients{AllChatsActive: 1}, Warnings: []string{"all_chats_client"}, LastIngestAt: &last, Version: "dev"},
 		dto.Pairing{Code: "ABCD1234"},
 		dto.Accepted{Status: "accepted"},
+		sampleClient(),
+		dto.ClientCreated{Client: sampleClient(), Credential: "ww_synthetic"},
+		dto.ClientList{Clients: []dto.ClientSummary{{ID: "aaaaaaaa", Name: "agent", State: "revoked", RevokedAt: &last, ReadChatCount: 1}}},
+		dto.AdminChats{Chats: []dto.AdminChat{{ID: "120363000000000001@g.us", Kind: "group", Ref: strings.Repeat("a", 32)}}, Truncated: true},
+	}
+}
+
+func sampleClient() dto.Client {
+	name := "Synthetic Group"
+	return dto.Client{
+		ID: "aaaaaaaa", Name: "agent", State: "active", CreatedAt: "2026-10-05T12:00:00Z", ExpiresAt: "2027-01-03T12:00:00Z",
+		ReadChats:  []dto.ClientChat{{ID: "120363000000000001@g.us", Kind: "group", Known: true, Name: &name}},
+		WriteChats: []dto.ClientChat{},
+	}
+}
+
+func TestOnlyTheCreateResponseCarriesACredential(t *testing.T) {
+	owners := map[string]int{}
+	visited := map[reflect.Type]bool{}
+	var walk func(reflect.Type)
+	walk = func(typ reflect.Type) {
+		if visited[typ] {
+			return
+		}
+		visited[typ] = true
+		switch typ.Kind() {
+		case reflect.Pointer, reflect.Slice, reflect.Array:
+			walk(typ.Elem())
+		case reflect.Struct:
+			for i := range typ.NumField() {
+				f := typ.Field(i)
+				name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+				if strings.EqualFold(name, "credential") || name == "" && strings.EqualFold(f.Name, "credential") {
+					owners[typ.Name()]++
+				}
+				walk(f.Type)
+			}
+		}
+	}
+	for _, r := range samples() {
+		walk(reflect.TypeOf(r))
+	}
+	if len(owners) != 1 || owners["ClientCreated"] != 1 {
+		t.Fatalf("the key credential is declared by %v, want once by ClientCreated only", owners)
+	}
+	for _, r := range samples() {
+		_, body, err := dto.Encode(r)
+		if err != nil {
+			t.Fatalf("Encode(%T): %v", r, err)
+		}
+		var v any
+		if json.Unmarshal(body, &v) != nil {
+			continue
+		}
+		n := 0
+		for _, key := range objectKeys(v) {
+			if strings.EqualFold(key, "credential") {
+				n++
+			}
+		}
+		if _, created := r.(dto.ClientCreated); created && n != 1 || !created && n != 0 {
+			t.Fatalf("Encode(%T) produced the key credential %d times", r, n)
+		}
 	}
 }
 
@@ -53,9 +116,9 @@ func TestEncode(t *testing.T) {
 		},
 		{
 			name:            "status",
-			response:        dto.Status{State: "disconnected", Reason: "replaced", Paired: true, Counts: dto.StatusCounts{Chats: 2, Messages: 3, BlobsPending: 4, BlobsQuarantined: 5, InboxBacklog: 6, InboxQuarantined: 7}, Version: "v0.2.0"},
+			response:        dto.Status{State: "disconnected", Reason: "replaced", Paired: true, Counts: dto.StatusCounts{Chats: 2, Messages: 3, BlobsPending: 4, BlobsQuarantined: 5, InboxBacklog: 6, InboxQuarantined: 7}, Clients: dto.StatusClients{Active: 8, Expired: 9, Revoked: 10, AllChatsActive: 1}, Warnings: []string{"all_chats_client"}, Version: "v0.2.0"},
 			wantContentType: "application/json; charset=utf-8",
-			wantBody:        `{"state":"disconnected","reason":"replaced","paired":true,"counts":{"chats":2,"messages":3,"history_blobs_pending":4,"history_blobs_quarantined":5,"inbox_backlog":6,"inbox_quarantined":7},"last_ingest_at":null,"version":"v0.2.0"}`,
+			wantBody:        `{"state":"disconnected","reason":"replaced","paired":true,"counts":{"chats":2,"messages":3,"history_blobs_pending":4,"history_blobs_quarantined":5,"inbox_backlog":6,"inbox_quarantined":7},"clients":{"active":8,"expired":9,"revoked":10,"all_chats_active":1},"warnings":["all_chats_client"],"last_ingest_at":null,"version":"v0.2.0"}`,
 		},
 		{
 			name:            "pairing",
