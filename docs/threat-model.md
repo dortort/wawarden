@@ -442,9 +442,10 @@ entropy of the tokens; the counters exist to alert on.
   a read-only copy and the master key and reports an edited row, a forged HMAC,
   a row deleted from the middle, a chain recomputed with another key, and a row
   written under another key; tests run that matrix.
-- **Anchors.** Triggers refuse an `UPDATE` or `DELETE` of a row, but whoever can
-  write `archive.db` can drop them, and whoever also holds `keys/master` can
-  recompute the whole chain after editing it, or delete rows from its end: the
+- **Anchors.** Triggers refuse an `UPDATE`, a `DELETE` or a replacing `INSERT`
+  of a row, but whoever can write `archive.db` can drop them, and whoever also
+  holds `keys/master` can recompute the whole chain after editing it, or delete
+  rows from its end: the
   table then verifies. Only the chain heads already shipped off the host reveal
   that, through `audit verify --log`, which reports every shipped head the copy
   lacks; a test shows a truncated tail verifying without the heads and failing
