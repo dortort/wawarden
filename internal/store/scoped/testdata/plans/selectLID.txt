@@ -1,0 +1,8 @@
+== all
+SEARCH lid_map USING INDEX sqlite_autoindex_lid_map_2 (pn=?)
+== none
+SEARCH lid_map USING INDEX sqlite_autoindex_lid_map_2 (pn=?)
+== one
+SEARCH lid_map USING INDEX sqlite_autoindex_lid_map_2 (pn=?)
+== three
+SEARCH lid_map USING INDEX sqlite_autoindex_lid_map_2 (pn=?)

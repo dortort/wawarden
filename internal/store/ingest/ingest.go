@@ -15,6 +15,7 @@ import (
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/store/admin"
 	"github.com/dortort/wawarden/internal/store/internal/db"
+	"github.com/dortort/wawarden/internal/store/scoped"
 )
 
 type Profile = db.Profile
@@ -36,6 +37,7 @@ type Options struct {
 	ReadTimeout    time.Duration
 	WriteTimeout   time.Duration
 	RewriteTimeout time.Duration
+	ReadSlots      int
 }
 
 type Store struct {
@@ -43,6 +45,7 @@ type Store struct {
 	version int
 	floor   uint64
 	admin   *admin.Reader
+	scoped  *scoped.Reader
 
 	mu     sync.Mutex
 	paused bool
@@ -60,7 +63,11 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 	if err != nil {
 		return nil, errors.Join(err, d.Close())
 	}
-	s := &Store{db: d, version: version, floor: opts.MinFreeBytes, admin: admin.New(d)}
+	var slots []scoped.Option
+	if opts.ReadSlots > 0 {
+		slots = append(slots, scoped.WithReadSlots(opts.ReadSlots))
+	}
+	s := &Store{db: d, version: version, floor: opts.MinFreeBytes, admin: admin.New(d), scoped: scoped.New(d, slots...)}
 	if err := s.finishRewrite(ctx); err != nil {
 		return nil, errors.Join(err, d.Close())
 	}
@@ -78,6 +85,8 @@ func (s *Store) Profile() Profile { return s.db.Profile() }
 func (s *Store) OFDLocking() bool { return s.db.OFDLocking() }
 
 func (s *Store) Admin() *admin.Reader { return s.admin }
+
+func (s *Store) Scoped() *scoped.Reader { return s.scoped }
 
 func (s *Store) Backup(ctx context.Context, staging string, write func(name string, size int64, r io.Reader) error) error {
 	return s.db.Backup(ctx, staging, write)

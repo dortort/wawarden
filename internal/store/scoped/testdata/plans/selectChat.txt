@@ -1,0 +1,8 @@
+== all
+SEARCH c USING INDEX chats_ref (ref=?)
+== none
+SCAN c
+== one
+SEARCH c USING INDEX chats_ref (ref=?)
+== three
+SEARCH c USING INDEX chats_ref (ref=?)

@@ -1,0 +1,24 @@
+== all
+SEARCH c USING INDEX sqlite_autoindex_chats_1 (jid=?)
+SEARCH m USING INDEX messages_change_chat (chat_jid=? AND change_seq>? AND change_seq<?)
+SEARCH k USING INDEX sqlite_autoindex_contacts_1 (jid=?) LEFT-JOIN
+SEARCH n USING INDEX sqlite_autoindex_contact_names_1 (jid=?) LEFT-JOIN
+SEARCH q USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN
+== none
+SCAN m USING INDEX messages_change
+SEARCH c USING INDEX sqlite_autoindex_chats_1 (jid=?)
+SEARCH k USING INDEX sqlite_autoindex_contacts_1 (jid=?) LEFT-JOIN
+SCAN n LEFT-JOIN
+SEARCH q USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN
+== one
+SEARCH c USING INDEX sqlite_autoindex_chats_1 (jid=?)
+SEARCH m USING INDEX messages_change_chat (chat_jid=? AND change_seq>? AND change_seq<?)
+SEARCH k USING INDEX sqlite_autoindex_contacts_1 (jid=?) LEFT-JOIN
+SEARCH n USING INDEX sqlite_autoindex_contact_names_1 (jid=?) LEFT-JOIN
+SEARCH q USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN
+== three
+SEARCH c USING INDEX sqlite_autoindex_chats_1 (jid=?)
+SEARCH m USING INDEX messages_change_chat (chat_jid=? AND change_seq>? AND change_seq<?)
+SEARCH k USING INDEX sqlite_autoindex_contacts_1 (jid=?) LEFT-JOIN
+SEARCH n USING INDEX sqlite_autoindex_contact_names_1 (jid=?) LEFT-JOIN
+SEARCH q USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN

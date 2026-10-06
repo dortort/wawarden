@@ -1,0 +1,8 @@
+== all
+SEARCH c USING INDEX chats_last (last_ts=? AND rowid<?)
+== none
+SCAN c
+== one
+SEARCH c USING INDEX sqlite_autoindex_chats_1 (jid=?)
+== three
+SEARCH c USING INDEX chats_last (last_ts=? AND rowid<?)
