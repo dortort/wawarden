@@ -155,16 +155,72 @@ func TestPropertyMCPToolsMatchTheOracle(t *testing.T) {
 			checkMCPReplay(t, h, a, token, c, set, cursors, refOf)
 		}
 		for _, body := range h.bodies {
-			unsealed := sealedTokens.ReplaceAll(body, nil)
-			for _, d := range a.dead {
-				if bytes.Contains(unsealed, []byte(d)) {
-					t.Fatalf("a tool result carries the revoked or edited text %s: %s", d, body)
-				}
+			if d, err := deadInToolReply(body, a.dead); err != nil || d != "" {
+				t.Fatalf("a tool result carries the revoked or edited text %q (%v): %s", d, err, body)
 			}
 		}
 		cov.add(a.seen)
 	})
 	cov.require(t, "mcp denied chat", "mcp message cursor", "mcp replay narrowed", "mcp search hit", "dead canary")
+}
+
+func deadInToolReply(body []byte, dead []string) (string, error) {
+	var reply map[string]json.RawMessage
+	if err := json.Unmarshal(body, &reply); err != nil {
+		return "", err
+	}
+	var result map[string]json.RawMessage
+	if err := json.Unmarshal(reply["result"], &result); err != nil {
+		return "", err
+	}
+	var content []struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(result["content"], &content); err != nil {
+		return "", err
+	}
+	delete(reply, "result")
+	delete(result, "content")
+	parts := slices.Concat(slices.Collect(maps.Values(reply)), slices.Collect(maps.Values(result)))
+	for _, c := range content {
+		parts = append(parts, json.RawMessage(c.Text))
+	}
+	for _, part := range parts {
+		unsealed := sealedTokens.ReplaceAll(part, nil)
+		for _, d := range dead {
+			if bytes.Contains(unsealed, []byte(d)) {
+				return d, nil
+			}
+		}
+	}
+	return "", nil
+}
+
+func TestDeadInToolReplyLooksPastSealedValuesInBothCopies(t *testing.T) {
+	dead := canary(6)
+	reply := func(structured, text string) []byte {
+		quoted, err := json.Marshal(text)
+		if err != nil {
+			t.Fatalf("encode the text: %v", err)
+		}
+		return []byte(`{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":` + string(quoted) + `}],"structuredContent":` + structured + `,"isError":false}}`)
+	}
+	sealed := `{"messages":[{"chat":"m1_` + dead + `","text":"text ` + canary(1) + ` end"}],"next":"AQob` + dead + `BnXv"}`
+	leaked := `{"messages":[{"text":"text ` + dead + ` end"}]}`
+	for name, c := range map[string]struct {
+		body []byte
+		want string
+	}{
+		"sealed values in both copies":   {body: reply(sealed, sealed)},
+		"the structured copy":            {body: reply(leaked, sealed), want: dead},
+		"the text copy":                  {body: reply(sealed, leaked), want: dead},
+		"the envelope beside the result": {body: []byte(`{"jsonrpc":"2.0","id":"` + dead + `","result":{"content":[]}}`), want: dead},
+		"a member of the result":         {body: []byte(`{"jsonrpc":"2.0","id":1,"result":{"content":[],"_meta":{"x":"` + dead + `"}}}`), want: dead},
+	} {
+		if got, err := deadInToolReply(c.body, []string{dead}); err != nil || got != c.want {
+			t.Errorf("%s: deadInToolReply = %q, %v, want %q", name, got, err, c.want)
+		}
+	}
 }
 
 func checkMCPChats(t *rapid.T, h *httpHarness, token string, set scopeSet, chats []scoped.DumpChat, limit int) {
