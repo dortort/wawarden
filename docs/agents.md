@@ -112,9 +112,11 @@ search as well.
   that nothing new was said.
 - **Keep identifiers apart.** A chat's `id` stays the same when WhatsApp
   re-keys the chat, so it can be kept. A message reference (`mref`,
-  `reply_to`) opens only for the client it was issued to and is different in
-  every answer, so do not compare two references to decide whether they name
-  the same message.
+  `reply_to`) opens only for the client it was issued to, and the same message
+  gets the same reference in every answer to that client, so you can use it to
+  recognise a message you have already seen. It changes when WhatsApp re-keys
+  the message's chat or sender, or the operator replaces the master key; an
+  older reference still opens while the master key stays the same.
 - **Keep MCP pages small.** A tool result carries its page twice, as
   structured content and as text, and Claude Code saves a result over 50,000
   characters to a file instead of passing it to the model. A smaller `limit`,

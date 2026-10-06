@@ -1615,10 +1615,14 @@ new scope.
 
 A message reference (`mref`, `reply_to`) is `m1_` followed by the sealed chat,
 message id and sender under the `mref` key, bound to the client, at most 640
-characters. A reference changes from one answer to the next, and every one
-issued to the client opens for it while the master key stays the same. It is opened, its chat mapped to the chat's
-current identifier, and the client's scope checked before the message is looked
-up.
+characters. Its nonce is derived from the key, the client and the sealed
+values, so the same message always gets the same reference for the same
+client: a client can use it to recognise a message it has seen before, while
+two clients get different references for one message. The reference changes
+only when WhatsApp re-keys the message's chat or sender, or the master key is
+replaced, and every reference issued to the client opens for it while the
+master key stays the same. It is opened, its chat mapped to the chat's current
+identifier, and the client's scope checked before the message is looked up.
 
 **Not found.** An unknown, out-of-scope or malformed chat reference in the
 path or in `chat=`, and an unknown, out-of-scope, foreign or malformed message
