@@ -204,10 +204,10 @@ both builds produced.
 |---|---|
 | Multi-arch image (`linux/amd64`, `linux/arm64`) | `ghcr.io/dortort/wawarden@sha256:<digest>`, also tagged `<version>`; the release notes state the index digest |
 | Binaries `wawarden_<version>_linux_amd64` and `wawarden_<version>_linux_arm64` | Release assets |
-| The licence files of the Go standard library and of every module linked into the binaries, `wawarden_<version>_licenses.tar.gz` | Release asset, and `/licenses` in the image |
-| `SHA256SUMS` for the binaries and the licence archive | Release asset |
+| From M1 on, the licence files of the Go standard library, of WaWarden and of every module linked into the binaries, `wawarden_<version>_licenses.tar.gz` | Release asset, and `/licenses` in the image |
+| `SHA256SUMS` for the binaries and, from M1 on, the licence archive | Release asset |
 | SPDX 2.3 SBOMs for the binaries, `wawarden_<version>_linux_<arch>.spdx.json` | Release assets, and attested to each binary in GitHub's attestation store |
-| Build provenance attestations (SLSA, via `actions/attest-build-provenance`) for the image index and for each binary | GitHub's attestation store; the image attestation is also pushed to the registry, and the binaries' Sigstore bundle is the release asset `wawarden_<version>_provenance.sigstore.json` |
+| Build provenance attestations (SLSA, via `actions/attest-build-provenance`): one for the image index, and one whose subjects are the files `SHA256SUMS` lists | GitHub's attestation store; the image attestation is also pushed to the registry, and the files' Sigstore bundle is the release asset `wawarden_<version>_provenance.sigstore.json` |
 | Keyless cosign signature on the image index, made with cosign v3.1.3 | Registry, next to the image |
 
 The SBOMs list the Go modules and the Go standard library compiled into each
@@ -338,6 +338,9 @@ gh attestation verify wawarden_<version>_linux_<arch> \
   --repo dortort/wawarden \
   --cert-identity https://github.com/dortort/wawarden/.github/workflows/release.yml@refs/heads/main
 ```
+The same command, given `wawarden_<version>_licenses.tar.gz`, checks the
+provenance of the licence archive of a release from M1 on.
+
 
 `go version -m <binary>` prints the build settings embedded in a binary. A release
 binary shows `CGO_ENABLED=0`, `-trimpath=true`, `vcs.revision` equal to the
