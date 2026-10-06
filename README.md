@@ -43,19 +43,34 @@ It is not:
   client listener.
 - **The service refuses to start rather than run misconfigured**: on any
   `WAWARDEN_` variable it does not implement, a plaintext admin token, a
-  non-loopback health address, running as root, a data directory, master key or
-  message archive that is not private to the service's user, or the default
-  storage profile on a network filesystem.
+  non-loopback health address, running as root, a data directory or anything in
+  it (the master key, the message archive, the device store, their journals,
+  `keys/`, `history/` or `backups/`) that is not private to the service's user,
+  or the default storage profile on a network filesystem.
 - **Browser-originated requests are refused.** Any request to the client or admin
   listener carrying an `Origin` or `Sec-Fetch-Site` header gets `403`.
 - **Your WhatsApp account is at risk.** See the residual risks in the
   [threat model](docs/threat-model.md#residual-risks).
-- **The protocol library sends some traffic by itself.** Once a device is
-  linked, it acknowledges what it receives and sends WhatsApp, with no way to
-  switch them off: delivery receipts in their inactive form, retry receipts for
-  messages it cannot decrypt, acknowledgements, session telemetry after pairing,
-  pre-key uploads and application-state fetches. WaWarden never sends read
-  receipts, presence or typing indicators.
+- **The protocol library sends some traffic by itself.** While a device is
+  connected, it sends WhatsApp, with no way to switch any of it off: an
+  acknowledgement of every stanza it receives; a delivery receipt, in its
+  inactive form, for every message it decrypts; retry receipts, at most 5 per
+  message, for a message it cannot decrypt, and a request to the owner's phone
+  to send again a message that WhatsApp marks as unavailable; an announcement
+  that the device is active, at every connection; pre-key uploads;
+  application-state fetches; and session telemetry once, after pairing.
+  WaWarden never sends read receipts, presence, typing indicators or status
+  updates (see
+  [the configuration reference](docs/configuration.md#traffic-the-protocol-library-sends-by-itself)).
+- **A message refused or interrupted before it is stored is lost, not
+  redelivered.** The protocol library decrypts a message, which moves its keys
+  on, before WaWarden writes it to its inbox, and acknowledges it only after
+  that write. A message WaWarden refuses (a full inbox, ingest paused for lack
+  of disk space, a failed write), or one cut short by a stop, comes back from
+  WhatsApp in a form the library can no longer decrypt, and never reaches the
+  archive; the owner's phone keeps its own copy. Refusals are counted and
+  reported, so a loss can be alerted on (see
+  [delivery](docs/configuration.md#delivery)).
 
 ## Status
 
