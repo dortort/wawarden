@@ -19,6 +19,7 @@ const (
 	sweepInterval   = time.Minute
 	sweepBatch      = 100
 	spaceInterval   = 30 * time.Second
+	maxAlerted      = 1024
 )
 
 type pipeline struct {
@@ -34,6 +35,7 @@ type pipeline struct {
 
 	nextSpace time.Time
 	nextSweep time.Time
+	alerted   map[conflict]bool
 
 	beforeApply func(seq int64)
 	space       func() (ingest.Space, error)
@@ -46,7 +48,7 @@ func newPipeline(o Options) *pipeline {
 	}
 	return &pipeline{
 		archive: o.Archive, clock: o.Clock, owner: owner, logger: o.Logger, notify: o.Notify,
-		counts: newCounters(o.Metrics), kick: make(chan struct{}, 1),
+		counts: newCounters(o.Metrics), kick: make(chan struct{}, 1), alerted: map[conflict]bool{},
 	}
 }
 
@@ -74,8 +76,15 @@ func (p *pipeline) record(out outcome) {
 		p.counts.dropped.With(reason).Inc()
 	}
 	for _, c := range out.conflicts {
-		p.counts.conflicts.With(string(c)).Inc()
-		p.notify.RekeyConflict(string(c))
+		p.counts.conflicts.With(string(c.kind)).Inc()
+		if p.alerted[c] {
+			continue
+		}
+		if len(p.alerted) == maxAlerted {
+			clear(p.alerted)
+		}
+		p.alerted[c] = true
+		p.notify.RekeyConflict(string(c.kind))
 	}
 }
 

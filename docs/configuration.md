@@ -900,8 +900,11 @@ Further, the worker:
   identifiers WhatsApp's servers attach to live messages and from history sync,
   and re-keys a direct chat from the number to the LID. A mapping that
   contradicts one already learned, or that would merge two chats that both hold
-  messages, is refused, counted in `wawarden_rekey_conflicts_total` and
-  reported as the [notification event](#notifications) `rekey_conflict`.
+  messages, is refused and counted in `wawarden_rekey_conflicts_total` every
+  time, and reported as the [notification event](#notifications)
+  `rekey_conflict` the first time the engine refuses it since the service
+  started; the engine remembers up to 1,024 refused mappings, and forgets them
+  all when that many are reached.
 
 ### Delivery
 
@@ -1530,7 +1533,7 @@ the [webhook](#webhook).
 | `pair_rejected` | `WARN` | `stage`: `before_save`, `after_pairing` | Pairing linked or tried to link an account other than the owner's; see [Pairing](#pairing). |
 | `logout_failed` | `WARN` | `attempt`, `error_type` | Logging out a rejected device failed; the engine tries again. `error_type` is the Go type of the error. |
 | `quarantine` | `WARN` | `queue`: `inbox`, `history`; `attempts` | An inbox row or a history blob was set aside after three failed attempts. |
-| `rekey_conflict` | `WARN` | `conflict`: `mapping_contradicts`, `both_chats_have_messages`, `message_collision` | A LID mapping was refused; the event that carried it is still applied. |
+| `rekey_conflict` | `WARN` | `conflict`: `mapping_contradicts`, `both_chats_have_messages`, `message_collision` | A LID mapping was refused; the event that carried it is still applied. Reported once per refused mapping, as described under [Ingest](#ingest). |
 | `ingest_paused` | `WARN` | `free_bytes`, `floor_bytes` | The data directory fell below its [free-space floor](#free-space). |
 | `admin_mutation` | `INFO` | `action`: `pair`, `reconnect`; `outcome` | A `POST` [admin route](#admin-routes) was called with the admin token; `outcome` is `ok` or the error code it answered, such as `already_paired` or `invalid_body`. |
 | `backup_done` | `INFO` | `bytes`, `archive_bytes`, `session_bytes`, `duration_ms` | A [backup](#backups) was written: `bytes` is the size of the encrypted file, the others the sizes of the two database copies and the time it took. |

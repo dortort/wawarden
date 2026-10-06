@@ -494,3 +494,23 @@ func TestLogsAndMetricsCarryNoContent(t *testing.T) {
 		}
 	}
 }
+
+func TestRefusedMappingsAreRememberedWithinABound(t *testing.T) {
+	r := newPipeRig(t)
+	refused := func(i int) outcome {
+		pn := chat(t, fmt.Sprintf("1555011%04d@s.whatsapp.net", i))
+		return outcome{conflicts: []conflict{{lid: chat(t, aliceLID), pn: pn, kind: ingest.ConflictContradicts}}}
+	}
+	for i := range maxAlerted {
+		r.p.record(refused(i))
+		r.p.record(refused(i))
+	}
+	if n := len(r.alerts("rekey_conflict")); n != maxAlerted {
+		t.Fatalf("%d rekey_conflict alerts for %d distinct mappings each refused twice", n, maxAlerted)
+	}
+	r.p.record(refused(maxAlerted))
+	r.p.record(refused(0))
+	if n, remembered := len(r.alerts("rekey_conflict")), len(r.p.alerted); n != maxAlerted+2 || remembered > maxAlerted {
+		t.Fatalf("%d alerts with %d mappings remembered, want the memory emptied once full", n, remembered)
+	}
+}

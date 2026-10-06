@@ -491,14 +491,19 @@ func TestFixtureRekeyConflictIsRefused(t *testing.T) {
 	first := dm("M1", aliceLID, "mapped")
 	first.SenderAlt = alice
 	r.ingest(first)
-	contradiction := dm("M2", aliceLID, "contradicts")
-	contradiction.SenderAlt = bob
-	r.ingest(contradiction)
-	if r.counter("wawarden_rekey_conflicts_total", "conflict", "mapping_contradicts") != 1 {
-		t.Fatal("the contradicting mapping was not counted")
+	for _, id := range []string{"M2", "M3", "M4"} {
+		contradiction := dm(id, aliceLID, "contradicts")
+		contradiction.SenderAlt = bob
+		r.ingest(contradiction)
 	}
-	if a := r.alerts("rekey_conflict"); len(a) != 1 || a[0]["conflict"] != "mapping_contradicts" {
-		t.Fatalf("rekey_conflict alerts %v", a)
+	other := dm("M5", aliceLID, "contradicts otherwise")
+	other.SenderAlt = carol
+	r.ingest(other)
+	if r.counter("wawarden_rekey_conflicts_total", "conflict", "mapping_contradicts") != 4 {
+		t.Fatal("each contradicting mapping was not counted")
+	}
+	if a := r.alerts("rekey_conflict"); len(a) != 2 || a[0]["conflict"] != "mapping_contradicts" || a[1]["conflict"] != "mapping_contradicts" {
+		t.Fatalf("rekey_conflict alerts %v, want one for each distinct refused mapping", a)
 	}
 	r.must(aliceLID, "M2", aliceLID)
 	db := r.inspect()

@@ -11,7 +11,12 @@ import (
 type outcome struct {
 	inserted  int
 	dropped   []string
-	conflicts []ingest.Conflict
+	conflicts []conflict
+}
+
+type conflict struct {
+	lid, pn policy.CanonicalChat
+	kind    ingest.Conflict
 }
 
 type applier struct {
@@ -105,7 +110,7 @@ func (a *applier) learn(primary policy.CanonicalChat, rawAlt string, source inge
 func (a *applier) mapping(lid, pn policy.CanonicalChat, source ingest.MappingSource) error {
 	res, err := a.tx.LearnLID(lid, pn, source, a.now)
 	if err == nil && res.Outcome == ingest.LIDConflict {
-		a.out.conflicts = append(a.out.conflicts, res.Conflict)
+		a.out.conflicts = append(a.out.conflicts, conflict{lid: lid, pn: pn, kind: res.Conflict})
 	}
 	return err
 }
