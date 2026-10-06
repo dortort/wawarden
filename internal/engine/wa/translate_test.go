@@ -2,6 +2,7 @@ package wa
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -280,6 +281,8 @@ func TestMediaTypesAreReducedToAPlainMIMEEssence(t *testing.T) {
 		{&waE2E.Message{VideoMessage: &waE2E.VideoMessage{Mimetype: proto.String("<script>")}}, "video"},
 		{&waE2E.Message{StickerMessage: &waE2E.StickerMessage{}}, "sticker"},
 		{&waE2E.Message{ImageMessage: &waE2E.ImageMessage{Mimetype: proto.String("image/" + string(make([]byte, 80)))}}, "image"},
+		{&waE2E.Message{ImageMessage: &waE2E.ImageMessage{Mimetype: proto.String("image/" + strings.Repeat("a", maxMediaType-6))}}, "image/" + strings.Repeat("a", maxMediaType-6)},
+		{&waE2E.Message{ImageMessage: &waE2E.ImageMessage{Mimetype: proto.String("image/" + strings.Repeat("a", maxMediaType-5))}}, "image"},
 	} {
 		got := asMessage(t, live(t, peer, peer, "3EB0F1", tt.msg))
 		if got.Kind != engine.KindMedia || got.MediaType != tt.want {
