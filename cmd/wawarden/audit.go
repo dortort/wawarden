@@ -94,8 +94,12 @@ func audit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if _, err := stdout.Write(out.Bytes()); err != nil {
 		return exitFailed
 	}
-	if *logPath == "" {
+	switch {
+	case *logPath == "":
 		_, _ = fmt.Fprintln(stderr, "audit verify: without --log no shipped chain head is compared, so rows removed from the end of the chain go unnoticed")
+	case len(heads) == 0:
+		_, _ = fmt.Fprintln(stderr, "audit verify: the log holds no line with a chain_head, so no shipped chain head is compared and rows removed from the end of the chain go unnoticed")
+		return exitUnverified
 	}
 	if !rep.OK() {
 		return exitUnverified

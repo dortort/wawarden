@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -91,6 +92,19 @@ func TestAuditVerify(t *testing.T) {
 	code, _, stderr = invokeWith(t, []string{"audit", "verify", "--db", archive, "--master-key-file", key}, nil, nil)
 	if code != 0 || !strings.Contains(stderr, "without --log") {
 		t.Fatalf("audit verify without a log = %d, stderr %q, want 0 and the truncation caveat", code, stderr)
+	}
+
+	var wrapped strings.Builder
+	for line := range strings.Lines(captured) {
+		wrapped.WriteString(`{"timestamp":1,"message":` + strconv.Quote(strings.TrimSuffix(line, "\n")) + "}\n")
+	}
+	enveloped := filepath.Join(t.TempDir(), "enveloped.log")
+	if err := os.WriteFile(enveloped, []byte(wrapped.String()), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	code, stdout, stderr = invokeWith(t, []string{"audit", "verify", "--db", archive, "--master-key-file", key, "--log", enveloped}, nil, nil)
+	if code != exitUnverified || !strings.Contains(stdout, "rows failing: 0\n") || !strings.Contains(stdout, "shipped heads: 0\n") || !strings.Contains(stderr, "holds no line with a chain_head") {
+		t.Fatalf("a log without a chain head = %d\n%s\nstderr %q, want %d and the truncation caveat", code, stdout, stderr, exitUnverified)
 	}
 
 	extended := filepath.Join(t.TempDir(), "extended.log")

@@ -286,8 +286,10 @@ first missing head: none
 `unknown_key` when the row was written under another key id than the master
 key's, and `hmac_mismatch` when its HMAC is not the one the key gives. Without
 `--log` it warns on standard error that rows removed from the end of the chain
-go unnoticed. The log must be a regular file; a pipe or a directory is refused
-without waiting for a writer.
+go unnoticed. A `--log` that holds no chain head, such as a capture whose
+lines a log pipeline wrapped in an envelope, compares nothing: it prints the
+same warning and exits `6`. The log must be a regular file; a pipe or a
+directory is refused without waiting for a writer.
 
 ## Exit codes
 
@@ -299,7 +301,7 @@ without waiting for a writer.
 | `3` | An admin command could not use its token: the file or standard input could not be read, held more than 4096 bytes or was a terminal; the token command could not start, failed, timed out, left a process holding its output or printed more than 4096 bytes; or what it read is not an admin token. Nothing was sent. |
 | `4` | The admin listener refused the token: `401` (`unauthorized`), or `429` with `too_many_requests` (the failure budget is spent, see [Failed authentication](#failed-authentication)). |
 | `5` | The service refused the operation: `409` (`already_paired`, `already_connected`, `not_paired`, `owner_phone_missing`, `owner_mismatch` or `name_taken`), `422` (a [client refusal](#admin-routes)), `404` (`not_found`, such as an unknown client id) or `429` with `rate_limited`; see [Admin routes](#admin-routes). `clients create` also exits `5` when no chat has a reference it was given. |
-| `6` | `audit verify` read everything but found a row that does not verify or a shipped head that the copy lacks. |
+| `6` | `audit verify` read everything but found a row that does not verify or a shipped head that the copy lacks, or was given a `--log` that holds no chain head. |
 
 `healthcheck` never exits `2`, because container runtimes reserve that code in
 health checks. A process stopped by a second signal during shutdown ends with
