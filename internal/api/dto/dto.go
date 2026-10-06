@@ -153,6 +153,118 @@ type AdminChats struct {
 
 func (c AdminChats) encode() (string, []byte, error) { return encodeJSON(c) }
 
+type Session struct {
+	State string `json:"state"`
+}
+
+type ScopeChat struct {
+	ID   string `json:"id"`
+	Kind string `json:"kind"`
+}
+
+type ReadScope struct {
+	All   bool        `json:"all"`
+	Chats []ScopeChat `json:"chats"`
+}
+
+type WriteScope struct {
+	Chats []ScopeChat `json:"chats"`
+}
+
+type MeClient struct {
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	ExpiresAt string     `json:"expires_at"`
+	Read      ReadScope  `json:"read"`
+	Write     WriteScope `json:"write"`
+}
+
+type Me struct {
+	Client  MeClient `json:"client"`
+	Session Session  `json:"session"`
+}
+
+func (m Me) encode() (string, []byte, error) { return encodeJSON(m) }
+
+type Chat struct {
+	ID            string  `json:"id"`
+	Kind          string  `json:"kind"`
+	Name          *string `json:"name"`
+	NameSource    *string `json:"name_source"`
+	LastMessageAt *string `json:"last_message_at"`
+}
+
+func (c Chat) encode() (string, []byte, error) { return encodeJSON(c) }
+
+type ChatPage struct {
+	Chats     []Chat  `json:"chats"`
+	Next      *string `json:"next"`
+	Truncated bool    `json:"truncated"`
+	Session   Session `json:"session"`
+}
+
+func (p ChatPage) encode() (string, []byte, error) { return encodeJSON(p) }
+
+type Sender struct {
+	ID   string  `json:"id"`
+	Name *string `json:"name"`
+}
+
+type Message struct {
+	Ref           string  `json:"mref"`
+	Chat          string  `json:"chat"`
+	Sender        Sender  `json:"sender"`
+	FromMe        bool    `json:"from_me"`
+	TS            string  `json:"ts"`
+	Kind          string  `json:"kind"`
+	Text          *string `json:"text"`
+	TextDisplay   *string `json:"text_display"`
+	TextTruncated bool    `json:"text_truncated"`
+	MediaType     *string `json:"media_type"`
+	ReplyTo       *string `json:"reply_to"`
+	QuoteVerified bool    `json:"quote_verified"`
+	EditedAt      *string `json:"edited_at"`
+	Revoked       bool    `json:"revoked"`
+	Origin        string  `json:"origin"`
+	Untrusted     bool    `json:"untrusted"`
+}
+
+func (m Message) encode() (string, []byte, error) { return encodeJSON(m) }
+
+type MessagePage struct {
+	Messages  []Message `json:"messages"`
+	Next      *string   `json:"next"`
+	Truncated bool      `json:"truncated"`
+	Session   Session   `json:"session"`
+}
+
+func (p MessagePage) encode() (string, []byte, error) { return encodeJSON(p) }
+
+type SearchPage struct {
+	Messages  []Message `json:"messages"`
+	Next      *string   `json:"next"`
+	More      bool      `json:"more"`
+	Truncated bool      `json:"truncated"`
+	Session   Session   `json:"session"`
+}
+
+func (p SearchPage) encode() (string, []byte, error) { return encodeJSON(p) }
+
+type ChangePage struct {
+	Messages  []Message `json:"messages"`
+	Next      *string   `json:"next"`
+	More      bool      `json:"more"`
+	Truncated bool      `json:"truncated"`
+	Session   Session   `json:"session"`
+}
+
+func (p ChangePage) encode() (string, []byte, error) { return encodeJSON(p) }
+
+func Size[T Chat | Message](item T) (int, error) {
+	b, err := json.Marshal(item)
+	return len(b), err
+}
+
 type Prometheus struct {
 	reg *metrics.Registry
 }

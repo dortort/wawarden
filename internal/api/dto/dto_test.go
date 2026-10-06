@@ -19,7 +19,7 @@ import (
 var forbiddenKeys = []string{"raw", "media_meta", "sender_alt", "seq", "token"}
 
 func samples() []dto.Response {
-	last := "2026-10-05T12:00:00Z"
+	last, next := "2026-10-05T12:00:00Z", "AQoLDA0OSYNTHETICCURSOR"
 	return []dto.Response{
 		dto.Error{Code: "not_found"},
 		dto.Health{Status: "ok"},
@@ -31,6 +31,29 @@ func samples() []dto.Response {
 		dto.ClientCreated{Client: sampleClient(), Credential: "ww_synthetic"},
 		dto.ClientList{Clients: []dto.ClientSummary{{ID: "aaaaaaaa", Name: "agent", State: "revoked", RevokedAt: &last, ReadChatCount: 1}}},
 		dto.AdminChats{Chats: []dto.AdminChat{{ID: "120363000000000001@g.us", Kind: "group", Ref: strings.Repeat("a", 32)}}, Truncated: true},
+		dto.Me{Client: dto.MeClient{ID: "aaaaaaaa", Name: "agent", ExpiresAt: last,
+			Read:  dto.ReadScope{Chats: []dto.ScopeChat{{ID: "120363000000000001@g.us", Kind: "group"}}},
+			Write: dto.WriteScope{Chats: []dto.ScopeChat{{ID: "120363000000000001@g.us", Kind: "group"}}}}, Session: dto.Session{State: "connected"}},
+		sampleChat(),
+		dto.ChatPage{Chats: []dto.Chat{sampleChat()}, Next: &next, Truncated: true, Session: dto.Session{State: "connected"}},
+		sampleMessage(),
+		dto.MessagePage{Messages: []dto.Message{sampleMessage()}, Next: &next, Truncated: true, Session: dto.Session{State: "connected"}},
+		dto.SearchPage{Messages: []dto.Message{sampleMessage()}, Next: &next, More: true, Truncated: true, Session: dto.Session{State: "connected"}},
+		dto.ChangePage{Messages: []dto.Message{sampleMessage()}, Next: &next, More: true, Truncated: true, Session: dto.Session{State: "connected"}},
+	}
+}
+
+func sampleChat() dto.Chat {
+	name, source, last := "Synthetic Group", "group_subject", "2026-10-05T12:00:00.000Z"
+	return dto.Chat{ID: strings.Repeat("a", 32), Kind: "group", Name: &name, NameSource: &source, LastMessageAt: &last}
+}
+
+func sampleMessage() dto.Message {
+	name, text, media, reply, edited := "Synthetic Sender", "synthetic text", "image/jpeg", "m1_SYNTHETICREPLY", "2026-10-05T12:01:00.000Z"
+	return dto.Message{
+		Ref: "m1_SYNTHETICREF", Chat: strings.Repeat("a", 32), Sender: dto.Sender{ID: "15550100001@s.whatsapp.net", Name: &name}, FromMe: true,
+		TS: "2026-10-05T12:00:00.000Z", Kind: "text", Text: &text, TextDisplay: &text, TextTruncated: true, MediaType: &media,
+		ReplyTo: &reply, QuoteVerified: true, EditedAt: &edited, Revoked: true, Origin: "owner", Untrusted: true,
 	}
 }
 
@@ -133,6 +156,24 @@ func TestEncode(t *testing.T) {
 			wantBody:        `{"status":"accepted"}`,
 		},
 		{
+			name:            "message",
+			response:        sampleMessage(),
+			wantContentType: "application/json; charset=utf-8",
+			wantBody:        `{"mref":"m1_SYNTHETICREF","chat":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","sender":{"id":"15550100001@s.whatsapp.net","name":"Synthetic Sender"},"from_me":true,"ts":"2026-10-05T12:00:00.000Z","kind":"text","text":"synthetic text","text_display":"synthetic text","text_truncated":true,"media_type":"image/jpeg","reply_to":"m1_SYNTHETICREPLY","quote_verified":true,"edited_at":"2026-10-05T12:01:00.000Z","revoked":true,"origin":"owner","untrusted":true}`,
+		},
+		{
+			name:            "empty change page",
+			response:        dto.ChangePage{Messages: []dto.Message{}, Next: nil, Session: dto.Session{State: "unpaired"}},
+			wantContentType: "application/json; charset=utf-8",
+			wantBody:        `{"messages":[],"next":null,"more":false,"truncated":false,"session":{"state":"unpaired"}}`,
+		},
+		{
+			name:            "me",
+			response:        dto.Me{Client: dto.MeClient{ID: "aaaaaaaa", Name: "agent", ExpiresAt: "2027-01-03T12:00:00Z", Read: dto.ReadScope{All: true, Chats: []dto.ScopeChat{}}, Write: dto.WriteScope{Chats: []dto.ScopeChat{}}}, Session: dto.Session{State: "connected"}},
+			wantContentType: "application/json; charset=utf-8",
+			wantBody:        `{"client":{"id":"aaaaaaaa","name":"agent","expires_at":"2027-01-03T12:00:00Z","read":{"all":true,"chats":[]},"write":{"chats":[]}},"session":{"state":"connected"}}`,
+		},
+		{
 			name:            "metrics",
 			response:        dto.Metrics(reg),
 			wantContentType: "text/plain; version=0.0.4; charset=utf-8",
@@ -149,6 +190,25 @@ func TestEncode(t *testing.T) {
 				t.Fatalf("Encode() = %q, %q; want %q, %q", contentType, body, tt.wantContentType, tt.wantBody)
 			}
 		})
+	}
+}
+
+func TestSizeIsTheEncodedLength(t *testing.T) {
+	for _, item := range []dto.Response{sampleChat(), sampleMessage()} {
+		_, body, err := dto.Encode(item)
+		if err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+		var size int
+		switch v := item.(type) {
+		case dto.Chat:
+			size, err = dto.Size(v)
+		case dto.Message:
+			size, err = dto.Size(v)
+		}
+		if err != nil || size != len(body) {
+			t.Fatalf("Size = %d, %v, want %d", size, err, len(body))
+		}
 	}
 }
 
