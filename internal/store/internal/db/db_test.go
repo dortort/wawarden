@@ -511,7 +511,7 @@ func TestInterruptedCallsKeepTheConnectionAndTheLock(t *testing.T) {
 			exec1(t, d, "CREATE TABLE t(x INTEGER)")
 			read, write := d.readTimeout, d.writeTimeout
 			d.readTimeout, d.writeTimeout = 100*time.Millisecond, 100*time.Millisecond
-			err := interrupted(t, func() error { return tt.call(d, t.Context()) })
+			err := interrupted(t, logs, func() error { return tt.call(d, t.Context()) })
 			d.readTimeout, d.writeTimeout = read, write
 			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("the slow %s = %v, want its deadline exceeded", tt.name, err)
@@ -564,7 +564,7 @@ func TestTheDeadlineEventKeepsItsGoroutineDumpUnderTheLineLimit(t *testing.T) {
 	opts, logs := testOptions(t)
 	opts.ReadTimeout = 100 * time.Millisecond
 	d := mustOpen(t, opts)
-	if err := interrupted(t, func() error {
+	if err := interrupted(t, logs, func() error {
 		return d.Read(t.Context(), "test.slow_read", func(ctx context.Context, q Querier) error {
 			var n int
 			return q.QueryRowContext(ctx, slowQuery).Scan(&n)
@@ -587,11 +587,13 @@ func TestTheDeadlineEventKeepsItsGoroutineDumpUnderTheLineLimit(t *testing.T) {
 }
 
 func TestADisposableConnectionLosesTheLockOnInterrupt(t *testing.T) {
-	opts, _ := testOptions(t)
+	opts, logs := testOptions(t)
 	opts.ReadTimeout = 100 * time.Millisecond
 	opts.disposable = true
-	d := mustOpen(t, opts)
-	if err := interrupted(t, func() error { return slowStatement(d, t.Context()) }); !errors.Is(err, context.DeadlineExceeded) {
+	if err := interrupted(t, logs, func() error {
+		opts.DataDir = t.TempDir()
+		return slowStatement(mustOpen(t, opts), t.Context())
+	}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("the slow statement = %v, want its deadline exceeded", err)
 	}
 	if got := probeFromAnotherProcess(t, filepath.Join(opts.DataDir, "archive.db")); got != probeFree {
@@ -609,9 +611,9 @@ func slowStatement(d *DB, ctx context.Context) error {
 func TestNoDeadlineEventWhenTheCallerGivesUp(t *testing.T) {
 	opts, logs := testOptions(t)
 	d := mustOpen(t, opts)
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
-	defer cancel()
-	err := interrupted(t, func() error {
+	err := interrupted(t, logs, func() error {
+		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+		defer cancel()
 		return d.Read(ctx, "test.slow_read", func(ctx context.Context, q Querier) error {
 			var n int
 			return q.QueryRowContext(ctx, slowQuery).Scan(&n)
