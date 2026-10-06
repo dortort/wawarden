@@ -59,13 +59,13 @@ checksums, signature and attestations.
 The security design, its invariants and the parts already implemented are
 described in [`docs/threat-model.md`](docs/threat-model.md); the exact behaviour
 of the current build is in [`docs/configuration.md`](docs/configuration.md).
-WaWarden is under construction. The latest release, `v0.1.0`, is the M0
-scaffold. `main` holds milestone M1, not released yet: the WhatsApp engine and
-its pairing guard, the message archive and the device store, the admin routes
-and `wawarden admin`, notification events and the webhook, and encrypted
-backups. Client tokens and the REST and MCP interfaces arrive in M2 and M3;
-until then the client listener refuses every request. Reports against `main`
-and flaws in the documented design are welcome too.
+WaWarden is under construction. The latest release, `v0.2.0`, is milestone M1:
+the WhatsApp engine and its pairing guard, the message archive and the device
+store, the admin routes and `wawarden admin`, notification events and the
+webhook, and encrypted backups. `main` holds milestone M2, not released yet:
+clients with per-chat read scopes and tokens, the REST read API and the MCP
+read tools. Sending arrives in M3. Reports against `main` and flaws in the
+documented design are welcome too.
 
 ### In scope
 
