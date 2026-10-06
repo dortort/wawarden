@@ -135,7 +135,8 @@ Every release ships with build provenance attestations for the image and the
 binaries, whose Sigstore bundle is also a release asset, a keyless signature on
 the container image, SPDX SBOMs for the binaries and checksums. From M1 on, it
 also ships the licence files of every linked module, as a release archive that
-the checksums cover and under `/licenses` in the image. With the toolchain and
-builder the release pins, it can be rebuilt bit for bit from source.
+the checksums and the binaries' provenance attestation cover, and under
+`/licenses` in the image. With the toolchain and builder the release pins, it
+can be rebuilt bit for bit from source.
 [`RELEASING.md`](RELEASING.md#verifying-a-release) lists the commands and
 prerequisites.
