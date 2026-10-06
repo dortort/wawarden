@@ -337,9 +337,9 @@ gh attestation verify wawarden_<version>_linux_<arch> \
   --repo dortort/wawarden \
   --cert-identity https://github.com/dortort/wawarden/.github/workflows/release.yml@refs/heads/main
 ```
+
 The same command, given `wawarden_<version>_licenses.tar.gz`, checks the
 provenance of the licence archive of a release from M1 on.
-
 
 `go version -m <binary>` prints the build settings embedded in a binary. A release
 binary shows `CGO_ENABLED=0`, `-trimpath=true`, `vcs.revision` equal to the
