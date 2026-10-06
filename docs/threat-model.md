@@ -537,6 +537,7 @@ event.
 | Outbound HTTP to WhatsApp uses no proxy from the environment, a timeout on every step, TLS 1.2 or later, response caps (8 MiB for the version page, the history cap plus 32 bytes for a history download) and no redirect to another host. | M1, on `main` |
 | No first contact (a DM with no prior inbound message) unless the client is allowed it; sends are paced, idempotent and budgeted per client, with `429` rather than queueing. | M3 |
 | Disconnections from WhatsApp never exit the process, and `/healthz` does not depend on them; more than five starts within ten minutes start the engine disconnected, and reconnection after a drop backs off exponentially, with jitter, up to five minutes, to avoid reconnect storms, with the protocol library's own reconnection switched off; a connection that drops within a minute of coming up counts as a failed attempt and does not reset the delay. A replaced session, a temporary ban, a refused connection, a failed token refresh or a stored device of another number than the owner's waits for the operator. | M1, on `main` |
+| With storage profile `local`, ingest pauses while the data directory's filesystem has less free space than `WAWARDEN_MIN_FREE_BYTES` (256 MiB by default; `0` turns the floor off), reports `ingest_paused`, and resumes once the free space reaches 1.25 times the floor. While it is paused the engine writes no message and no history-sync notification and leaves them unacknowledged, which loses them (see residual risks), and applies nothing from its inbox or from history sync. Profile `nfs` has no floor. | M1, on `main` |
 | No backup is taken without `WAWARDEN_BACKUP_AGE_RECIPIENT`, and the start says so with `backup_disabled`; every backup is encrypted to that recipient, and there is no plaintext backup of either database. In this release one backup is taken per paired device, once its initial history sync has settled, and nothing else. | M1, on `main` |
 
 ## Residual risks
@@ -725,8 +726,9 @@ These remain at v1.0, after every control above is in place.
 - **A refused or interrupted message is lost** (M1, on `main`). The protocol
   library advances and saves its session keys when it decrypts a message, before
   the engine sees it, and acknowledges it only after the engine wrote it to the
-  inbox. A message the engine refuses (a full inbox, a paused ingest, a failed
-  write), or one decrypted just before the process stops, is delivered again by
+  inbox. A message the engine refuses (a full inbox of 5,000 rows, an ingest
+  paused below the free-space floor, a failed write), or one decrypted just
+  before the process stops, is delivered again by
   WhatsApp, but the library can no longer decrypt that copy and drops it, so it
   never reaches the archive; group changes are acknowledged as they arrive and
   are lost the same way. The library's buffer of decrypted messages would make
