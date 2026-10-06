@@ -328,17 +328,22 @@ func TestADownloadCutShortIsDownloadedAgain(t *testing.T) {
 
 func TestHistoryFromAnotherDeviceIsDropped(t *testing.T) {
 	r := newHistRig(t)
-	for _, n := range []HistoryNotification{
-		{Sender: "15550100009:5@s.whatsapp.net", FromMe: true, Ref: HistoryRef{ID: "HS1"}},
-		{Sender: "15550100009.0:5@s.whatsapp.net", FromMe: true, Ref: HistoryRef{ID: "HS2"}},
+	notifications := []HistoryNotification{
 		{Sender: owner, FromMe: false, Ref: HistoryRef{ID: "HS3"}},
 		{Sender: "15550100009@bot", FromMe: true, Ref: HistoryRef{ID: "HS4"}},
-	} {
+	}
+	for i, device := range []string{"1", "2", "4", "5", "99"} {
+		for j, sender := range []string{"15550100009:%s@s.whatsapp.net", "15550100009.0:%s@s.whatsapp.net", "100000000000009:%s@lid"} {
+			ref := HistoryRef{ID: fmt.Sprintf("HC%d%d", i, j), Inline: []byte("x")}
+			notifications = append(notifications, HistoryNotification{Sender: fmt.Sprintf(sender, device), FromMe: true, Ref: ref})
+		}
+	}
+	for _, n := range notifications {
 		if !r.h.accept(n) {
 			t.Fatal("a dropped notification was refused instead of acknowledged")
 		}
 	}
-	if r.dropped(dropNotPrimary) != 4 {
+	if r.dropped(dropNotPrimary) != float64(len(notifications)) {
 		t.Fatalf("history drops %v", r.dropped(dropNotPrimary))
 	}
 	r.notify(HistoryRef{ID: "bad id!"})
