@@ -62,11 +62,12 @@ type toolkit struct {
 	reads    *reads
 	now      func() time.Time
 	deadline time.Duration
+	names    []string
 }
 
 type toolHandler[In, Out any] func(ctx context.Context, g policy.ReadGrant, in In) (Out, policy.CanonicalChat, error)
 
-func registerTools(server *mcp.Server, k *toolkit) []string {
+func registerTools(server *mcp.Server, k *toolkit) {
 	s := k.reads
 	readTool(server, k, &mcp.Tool{
 		Name:        toolListChats,
@@ -104,7 +105,6 @@ func registerTools(server *mcp.Server, k *toolkit) []string {
 		func(ctx context.Context, g policy.ReadGrant, in getChangesArgs) (dto.ChangePage, policy.CanonicalChat, error) {
 			return s.changePage(ctx, g, in.Since, in.Chat, pageSize(in.Limit))
 		})
-	return []string{toolListChats, toolGetChat, toolGetMessages, toolSearchMessages, toolGetChanges}
 }
 
 func readTool[In, Out any](server *mcp.Server, k *toolkit, tool *mcp.Tool, failed func(dto.Session) Out, charge func(client string) error, h toolHandler[In, Out]) {
@@ -129,6 +129,7 @@ func readTool[In, Out any](server *mcp.Server, k *toolkit, tool *mcp.Tool, faile
 		exchangeFrom(ctx).settle(action, chat, "")
 		return toolResult(out, ""), nil
 	})
+	k.names = append(k.names, tool.Name)
 }
 
 func runTool[In, Out any](ctx context.Context, k *toolkit, resolved *jsonschema.Resolved, req *mcp.CallToolRequest, charge func(string) error, h toolHandler[In, Out]) (out Out, chat policy.CanonicalChat, code string) {

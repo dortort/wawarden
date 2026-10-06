@@ -356,6 +356,35 @@ func TestMCPToolPanicsBecomeInternalErrors(t *testing.T) {
 	}
 }
 
+func TestOnlyToolsRegisteredThroughReadToolAreCallable(t *testing.T) {
+	f := newMCPFixture(t)
+	server := mcp.NewServer(&mcp.Implementation{Name: "wawarden-test", Version: "0"}, nil)
+	k := &toolkit{reads: probeReads(f, f.archive), now: fixedNow, deadline: mcpCallDeadline}
+	registerTools(server, k)
+	if names := slices.Sorted(slices.Values(k.names)); !slices.Equal(names, toolNames) {
+		t.Fatalf("readTool recorded %q, want %q", names, toolNames)
+	}
+	server.AddTool(&mcp.Tool{Name: "unrecorded", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: argCanary}}}, nil
+	})
+	server.AddReceivingMiddleware(allowedMethods(k.names))
+	serverEnd, clientEnd := mcp.NewInMemoryTransports()
+	ss, err := server.Connect(t.Context(), serverEnd, nil)
+	if err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	t.Cleanup(func() { _ = ss.Close() })
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "wawarden-test", Version: "0"}, nil).Connect(t.Context(), clientEnd, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+	if res, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "unrecorded"}); err == nil || !strings.Contains(err.Error(), "unknown tool") {
+		t.Fatalf("a tool registered outside readTool answered %+v, %v", res, err)
+	}
+	requireToolError(t, call(t, cs, toolListChats, nil), codeNotFound)
+}
+
 func TestMCPToolCallsHaveADeadline(t *testing.T) {
 	for _, p := range protocols {
 		t.Run(p.name, func(t *testing.T) {

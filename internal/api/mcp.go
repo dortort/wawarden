@@ -43,8 +43,9 @@ func newMCPEndpoint(s *reads, now func() time.Time, deadline time.Duration) *mcp
 	server := mcp.NewServer(&mcp.Implementation{Name: mcpServerName, Version: buildinfo.Version}, &mcp.ServerOptions{
 		Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{}},
 	})
-	names := registerTools(server, &toolkit{reads: s, now: now, deadline: deadline})
-	server.AddReceivingMiddleware(allowedMethods(names))
+	k := &toolkit{reads: s, now: now, deadline: deadline}
+	registerTools(server, k)
+	server.AddReceivingMiddleware(allowedMethods(k.names))
 	sdk := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{
 		Stateless:                  true,
 		JSONResponse:               true,
