@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"time"
@@ -12,6 +13,7 @@ import (
 const (
 	actionUnrouted = "rest.unrouted"
 	maxPeer        = 64
+	auditWait      = 2 * time.Second
 )
 
 type ReadEvent struct {
@@ -65,9 +67,15 @@ func audited(w http.ResponseWriter, r *http.Request, audit Auditor, now func() t
 		if reason == "" {
 			reason = statusReason(status)
 		}
-		return audit.Record(r.Context(), ReadEvent{
+		ctx, cancel := context.WithTimeout(r.Context(), auditWait)
+		defer cancel()
+		err := audit.Record(ctx, ReadEvent{
 			At: now(), Client: client.ID, Action: note.action, Chat: note.chat, OK: status == http.StatusOK, Reason: reason, Peer: peer(r.RemoteAddr),
 		})
+		if err != nil && r.Context().Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return errBusy
+		}
+		return err
 	}
 	return &auditWriter{ResponseWriter: w, record: record}, r
 }
@@ -82,8 +90,14 @@ func (a *auditWriter) WriteHeader(status int) {
 	}
 	if err := a.record(status); err != nil {
 		a.state = replaced
-		a.ResponseWriter.Header().Del("Retry-After")
-		a.ResponseWriter.Header().Del("Allow")
+		h := a.Header()
+		h.Del("Retry-After")
+		h.Del("Allow")
+		if errors.Is(err, errBusy) {
+			setRetryAfter(h, errBusy.retryAfter)
+			writeError(a.ResponseWriter, errBusy.status, errBusy.code)
+			return
+		}
 		writeError(a.ResponseWriter, http.StatusInternalServerError, codeInternal)
 		return
 	}

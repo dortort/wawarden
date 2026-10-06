@@ -101,6 +101,14 @@ func (r *Reader) Hold(g policy.ReadGrant, ctx context.Context, held chan<- struc
 	})
 }
 
+func (r *Reader) HoldWrite(ctx context.Context, held chan<- struct{}, release <-chan struct{}) error {
+	return r.db.Write(ctx, "test.hold_write", func(context.Context, db.Querier) error {
+		held <- struct{}{}
+		<-release
+		return nil
+	})
+}
+
 func (r *Reader) Stall(g policy.ReadGrant, ctx context.Context) error {
 	return r.read(g, ctx, "test.stall", func(ctx context.Context, _ querier) error {
 		<-ctx.Done()

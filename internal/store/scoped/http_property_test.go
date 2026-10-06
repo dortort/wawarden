@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -23,8 +24,11 @@ import (
 
 	"github.com/dortort/wawarden/internal/api"
 	"github.com/dortort/wawarden/internal/cursor"
+	"github.com/dortort/wawarden/internal/keys"
 	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/policy"
+	"github.com/dortort/wawarden/internal/store/admin"
+	"github.com/dortort/wawarden/internal/store/ingest"
 	"github.com/dortort/wawarden/internal/store/scoped"
 )
 
@@ -54,6 +58,29 @@ type discardAudit struct{}
 
 func (discardAudit) Record(context.Context, api.ReadEvent) error { return nil }
 
+type storeAudit struct{ audit *admin.Audit }
+
+func (s storeAudit) Record(ctx context.Context, e api.ReadEvent) error {
+	return s.audit.Record(ctx, admin.Event(e))
+}
+
+func syntheticMaster(t *testing.T) *keys.Master {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "master")
+	secret := make([]byte, 32)
+	for i := range secret {
+		secret[i] = byte(90 + i)
+	}
+	if err := os.WriteFile(path, secret, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	m, r := keys.LoadFile(path)
+	if r != nil {
+		t.Fatalf("LoadFile: %v", r)
+	}
+	return m
+}
+
 type httpHarness struct {
 	handler http.Handler
 	clients *httpClients
@@ -62,7 +89,7 @@ type httpHarness struct {
 	bodies  [][]byte
 }
 
-func clientHandler(t tb, reader api.ReadArchive, auth api.Authenticator) http.Handler {
+func clientHandler(t tb, reader api.ReadArchive, auth api.Authenticator, audit api.Auditor) http.Handler {
 	t.Helper()
 	cursors, err := cursor.New(bytes.Repeat([]byte{0x31}, 32), "0a1b2c3d")
 	if err != nil {
@@ -75,7 +102,7 @@ func clientHandler(t tb, reader api.ReadArchive, auth api.Authenticator) http.Ha
 	var ticks atomic.Int64
 	return api.NewClientHandler(api.ClientDeps{
 		Authenticator: auth, Metrics: metrics.NewRegistry(), Now: func() time.Time { return epoch.Add(time.Duration(ticks.Add(1)) * time.Second) },
-		Archive: reader, Audit: discardAudit{},
+		Archive: reader, Audit: audit,
 		Session: func() string { return "connected" }, Cursors: cursors, Refs: refs,
 		Limits: api.ReadLimits{ReadsPerMinute: 1 << 30, SearchesPerMinute: 1 << 30},
 	})
@@ -87,35 +114,59 @@ func newHTTPHarness(t *rapid.T, a *archive) *httpHarness {
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		h.sql = append(h.sql, q)
-	}), h.clients)
+	}), h.clients, discardAudit{})
 	return h
 }
 
 func TestHTTPReadsAnswerBusyInsteadOfQueueing(t *testing.T) {
-	opts := testOptions(t.TempDir())
-	opts.ReadSlots = 1
-	s := openWith(t, opts)
-	auth := &httpClients{clients: map[string]*policy.Client{"synthetic-token": {ID: "client01", ReadAll: true, ExpiresAt: epoch.AddDate(1, 0, 0)}}}
-	h := clientHandler(t, s.Scoped(), auth)
-	get := func() *httptest.ResponseRecorder {
-		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/chats", nil)
-		r.Header.Set("Authorization", "Bearer synthetic-token")
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, r)
-		return rec
-	}
-	held, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
-	go func() { done <- s.Scoped().Hold(grantAll(t), context.Background(), held, release) }()
-	<-held
-	if rec := get(); rec.Code != http.StatusServiceUnavailable || rec.Body.String() != `{"error":"busy"}` || rec.Header().Get("Retry-After") != "1" {
-		t.Fatalf("a read while every slot is held = %d %s, Retry-After %q", rec.Code, rec.Body.String(), rec.Header().Get("Retry-After"))
-	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatalf("the held read = %v", err)
-	}
-	if rec := get(); rec.Code != http.StatusOK {
-		t.Fatalf("a read after the slot was freed = %d %s", rec.Code, rec.Body.String())
+	type holder func(s *ingest.Store, held chan<- struct{}, release <-chan struct{}) error
+	for name, hold := range map[string]holder{
+		"every read slot held": func(s *ingest.Store, held chan<- struct{}, release <-chan struct{}) error {
+			return s.Scoped().Hold(grantAll(t), context.Background(), held, release)
+		},
+		"a write held past the read deadline": func(s *ingest.Store, held chan<- struct{}, release <-chan struct{}) error {
+			return s.Scoped().HoldWrite(context.Background(), held, release)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			opts := testOptions(t.TempDir())
+			opts.ReadSlots, opts.ReadTimeout, opts.Master, opts.AuditOut = 1, 100*time.Millisecond, syntheticMaster(t), &syncBuffer{}
+			s := openWith(t, opts)
+			auth := &httpClients{clients: map[string]*policy.Client{"synthetic-token": {ID: "clientaa", ReadAll: true, ExpiresAt: epoch.AddDate(1, 0, 0)}}}
+			h := clientHandler(t, s.Scoped(), auth, storeAudit{s.Audit()})
+			get := func() *httptest.ResponseRecorder {
+				r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/chats", nil)
+				r.Header.Set("Authorization", "Bearer synthetic-token")
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, r)
+				return rec
+			}
+			held, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+			go func() { done <- hold(s, held, release) }()
+			<-held
+			start, answered := time.Now(), make(chan *httptest.ResponseRecorder, 1)
+			go func() { answered <- get() }()
+			select {
+			case rec := <-answered:
+				if took := time.Since(start); took > 5*time.Second {
+					t.Fatalf("the busy answer took %v", took)
+				}
+				if rec.Code != http.StatusServiceUnavailable || rec.Body.String() != `{"error":"busy"}` || rec.Header().Get("Retry-After") != "1" {
+					t.Fatalf("a read while %s = %d %s, Retry-After %q", name, rec.Code, rec.Body.String(), rec.Header().Get("Retry-After"))
+				}
+			case <-time.After(30 * time.Second):
+				close(release)
+				<-done
+				t.Fatalf("a read while %s waited until it was released", name)
+			}
+			close(release)
+			if err := <-done; err != nil {
+				t.Fatalf("the held call = %v", err)
+			}
+			if rec := get(); rec.Code != http.StatusOK {
+				t.Fatalf("a read after the release = %d %s", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 

@@ -1607,8 +1607,13 @@ the service.
 
 Reads share the archive's single database connection with ingest. At most 8
 reads run at once: a read that finds them all taken, or that passes its
-2-second read deadline, is answered `503` (`busy`) with `Retry-After: 1` at once
-instead of waiting.
+2-second read deadline, stops at once instead of waiting and is answered `503`
+(`busy`) with `Retry-After: 1`. Every answer, `503` included, first writes its
+[audit row](#read-audit) on the same connection and waits at most 2 seconds for
+it; a row not written in that time makes the answer `503` (`busy`) with
+`Retry-After: 1`. Behind a long ingest write, a request therefore waits at most
+its 2-second read deadline and then 2 seconds for its row, never until the write
+ends.
 
 #### Read audit
 
@@ -1621,9 +1626,10 @@ code of the answer (`not_found`, `invalid_query`, `invalid_cursor`,
 `rate_limited`, `busy`, `method_not_allowed` or `internal_error`). The row names
 a chat only when the answer is about one chat (`rest.chat`, `rest.messages` and
 `rest.message` that succeed); a `404` names none. A request whose row cannot be
-written is answered `500` (`internal_error`) and nothing of the read leaves the
-service. A request refused by the read budget, and a failed authentication,
-write no row.
+written within 2 seconds is answered `503` (`busy`) with `Retry-After: 1`, and
+one whose row fails for another reason `500` (`internal_error`); either way
+nothing of the read leaves the service. A request refused by the read budget,
+and a failed authentication, write no row.
 
 ### Health listener
 
@@ -1656,10 +1662,10 @@ an `Access-Control-*` header. Their error bodies are fixed JSON objects with
 | `{"error":"too_many_requests"}` | `429` |
 | `{"error":"not_found"}` | `404` |
 | `{"error":"method_not_allowed"}` | `405` |
-| `{"error":"internal_error"}` | `500`, when a handler fails or panics, or a client request's [audit row](#read-audit) cannot be written |
+| `{"error":"internal_error"}` | `500`, when a handler fails or panics, or a client request's [audit row](#read-audit) fails for a reason other than its 2-second wait |
 | `{"error":"invalid_query"}`, `{"error":"invalid_cursor"}` | `400`, from the [read API](#read-api) and, for `invalid_query`, `GET /admin/v1/chats` |
 | `{"error":"rate_limited"}` | `429` with `Retry-After`, from the client listener's [read and search budgets](#read-rate-limits) |
-| `{"error":"busy"}` | `503` with `Retry-After: 1`, from the [read API](#busy-reads) |
+| `{"error":"busy"}` | `503` with `Retry-After: 1`, from the [read API](#busy-reads), including when a request's audit row cannot be written within 2 seconds |
 | `{"error":"unsupported_media_type"}`, `{"error":"body_too_large"}`, `{"error":"invalid_body"}` | `415`, `413`, `400`, from a route that reads a body (`pair` and `reconnect`); see [Request bodies](#request-bodies) |
 | `{"error":"already_paired"}`, `{"error":"already_connected"}`, `{"error":"not_paired"}`, `{"error":"owner_phone_missing"}`, `{"error":"owner_mismatch"}`, `{"error":"rate_limited"}`, `{"error":"pair_failed"}`, `{"error":"engine_unavailable"}` | `409`, `429`, `502` or `503`, from the [admin routes](#admin-routes) |
 
@@ -1911,8 +1917,10 @@ integers, each other field with a presence byte and its length, and the
 previous row's HMAC (32 zero bytes before the first row). The row is appended
 inside the same write transaction as the change it records, so a change whose
 row cannot be written does not happen; a client request's row is appended in a
-write transaction of its own before the answer is sent, and a request whose row
-cannot be written is answered `500` (`internal_error`) instead. Triggers refuse
+write transaction of its own before the answer is sent, waiting at most 2
+seconds for the connection, and a request whose row cannot be written is
+answered `503` (`busy`) when that wait ran out and `500` (`internal_error`)
+otherwise. Triggers refuse
 to update or delete a row.
 
 After the transaction commits, the service writes one line on standard output,
