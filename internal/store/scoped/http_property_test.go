@@ -59,8 +59,8 @@ type httpHarness struct {
 	bodies  [][]byte
 }
 
-func newHTTPHarness(t *rapid.T, a *archive) *httpHarness {
-	h := &httpHarness{clients: &httpClients{clients: map[string]*policy.Client{}}}
+func clientHandler(t tb, reader api.ReadArchive, auth api.Authenticator) http.Handler {
+	t.Helper()
 	cursors, err := cursor.New(bytes.Repeat([]byte{0x31}, 32), "0a1b2c3d")
 	if err != nil {
 		t.Fatalf("cursor.New: %v", err)
@@ -69,19 +69,51 @@ func newHTTPHarness(t *rapid.T, a *archive) *httpHarness {
 	if err != nil {
 		t.Fatalf("cursor.New: %v", err)
 	}
-	reader := a.store.Scoped().Traced(func(q string) {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		h.sql = append(h.sql, q)
-	})
 	var ticks atomic.Int64
-	h.handler = api.NewClientHandler(api.ClientDeps{
-		Authenticator: h.clients, Metrics: metrics.NewRegistry(), Now: func() time.Time { return epoch.Add(time.Duration(ticks.Add(1)) * time.Second) },
+	return api.NewClientHandler(api.ClientDeps{
+		Authenticator: auth, Metrics: metrics.NewRegistry(), Now: func() time.Time { return epoch.Add(time.Duration(ticks.Add(1)) * time.Second) },
 		Archive: reader, Audit: discardAudit{},
 		Session: func() string { return "connected" }, Cursors: cursors, Refs: refs,
 		Limits: api.ReadLimits{ReadsPerMinute: 1 << 30, SearchesPerMinute: 1 << 30},
 	})
+}
+
+func newHTTPHarness(t *rapid.T, a *archive) *httpHarness {
+	h := &httpHarness{clients: &httpClients{clients: map[string]*policy.Client{}}}
+	h.handler = clientHandler(t, a.store.Scoped().Traced(func(q string) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.sql = append(h.sql, q)
+	}), h.clients)
 	return h
+}
+
+func TestHTTPReadsAnswerBusyInsteadOfQueueing(t *testing.T) {
+	opts := testOptions(t.TempDir())
+	opts.ReadSlots = 1
+	s := openWith(t, opts)
+	auth := &httpClients{clients: map[string]*policy.Client{"synthetic-token": {ID: "client01", ReadAll: true, ExpiresAt: epoch.AddDate(1, 0, 0)}}}
+	h := clientHandler(t, s.Scoped(), auth)
+	get := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/chats", nil)
+		r.Header.Set("Authorization", "Bearer synthetic-token")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec
+	}
+	held, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() { done <- s.Scoped().Hold(grantAll(t), context.Background(), held, release) }()
+	<-held
+	if rec := get(); rec.Code != http.StatusServiceUnavailable || rec.Body.String() != `{"error":"busy"}` || rec.Header().Get("Retry-After") != "1" {
+		t.Fatalf("a read while every slot is held = %d %s, Retry-After %q", rec.Code, rec.Body.String(), rec.Header().Get("Retry-After"))
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("the held read = %v", err)
+	}
+	if rec := get(); rec.Code != http.StatusOK {
+		t.Fatalf("a read after the slot was freed = %d %s", rec.Code, rec.Body.String())
+	}
 }
 
 func (h *httpHarness) get(t *rapid.T, token, target string) (*httptest.ResponseRecorder, []string) {
