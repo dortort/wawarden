@@ -106,9 +106,12 @@ func TestCursorOpensOnlyUnderItsBinding(t *testing.T) {
 
 func TestCursorRefusesEveryAlteration(t *testing.T) {
 	s := sealer(t, key, keyID)
-	text, err := s.Cursor(binding, position)
-	if err != nil {
-		t.Fatalf("Cursor: %v", err)
+	var text string
+	for !strings.ContainsAny(text, "-_") {
+		var err error
+		if text, err = s.Cursor(binding, position); err != nil {
+			t.Fatalf("Cursor: %v", err)
+		}
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(text)
 	if err != nil {
