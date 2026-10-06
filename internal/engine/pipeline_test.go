@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/store/ingest"
 )
 
@@ -60,6 +61,26 @@ func TestMessageMemoryBoundIsTheDocumentedOne(t *testing.T) {
 		if !strings.Contains(flat, want) {
 			t.Errorf("docs/configuration.md does not state %q", want)
 		}
+	}
+}
+
+func TestTheRefusedCounterSaysARefusedEventIsLost(t *testing.T) {
+	const meaning = "refused to write and left unacknowledged, which loses them"
+	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "configuration.md"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !strings.Contains(string(doc), "| `wawarden_ingest_refused_total` | counter | `reason` | Events the engine "+meaning) {
+		t.Fatal("docs/configuration.md describes wawarden_ingest_refused_total otherwise")
+	}
+	reg := metrics.NewRegistry()
+	newCounters(reg).refused.With("paused").Inc()
+	var b bytes.Buffer
+	if err := reg.WriteText(&b); err != nil {
+		t.Fatalf("WriteText: %v", err)
+	}
+	if want := "# HELP wawarden_ingest_refused_total WhatsApp events the engine " + meaning + ", by reason.\n"; !strings.Contains(b.String(), want) {
+		t.Fatalf("the metrics hold no %q", want)
 	}
 }
 

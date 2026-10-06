@@ -38,7 +38,7 @@ func newCounters(reg *metrics.Registry) *counters {
 	return &counters{
 		ingested:    reg.Counter("wawarden_messages_ingested_total", "Messages, reactions and poll updates stored in the archive, live and from history."),
 		dropped:     reg.CounterVec("wawarden_ingest_dropped_total", "WhatsApp events dropped by an ingest rule, by reason.", "reason"),
-		refused:     reg.CounterVec("wawarden_ingest_refused_total", "WhatsApp events left unacknowledged so that WhatsApp delivers them again, by reason.", "reason"),
+		refused:     reg.CounterVec("wawarden_ingest_refused_total", "WhatsApp events the engine refused to write and left unacknowledged, which loses them, by reason.", "reason"),
 		quarantined: reg.CounterVec("wawarden_ingest_quarantined_total", "Inbox rows and history blobs set aside after three failed attempts, by queue.", "queue"),
 		conflicts:   reg.CounterVec("wawarden_rekey_conflicts_total", "Identity mappings refused because they contradict the archive, by conflict.", "conflict"),
 	}
