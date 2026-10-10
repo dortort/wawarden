@@ -252,7 +252,5 @@ func TestAHistoryBlobTakesEffectThroughTheEngine(t *testing.T) {
 	}))
 	w.send(t, historyNotification(t, owner, "3EB0H9", blob))
 	eventually(t, "the history row is stored", func() bool { _, ok := w.find(t, peer, "3EB0HA", peer); return ok })
-	if !w.metric(t, "wawarden_messages_ingested_total 1") {
-		t.Fatal("the history row was not counted as ingested")
-	}
+	eventually(t, "the history row is counted as ingested", func() bool { return w.metric(t, "wawarden_messages_ingested_total 1") })
 }
