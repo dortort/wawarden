@@ -216,6 +216,42 @@ func TestABackupIsFinishedOnceItsConnectionIsFree(t *testing.T) {
 	}
 }
 
+type overrunningFinish struct {
+	finishes *atomic.Int32
+	wait     time.Duration
+	err      error
+}
+
+func (overrunningFinish) Step(int32) (bool, error) { return false, nil }
+
+func (b overrunningFinish) Finish() error {
+	if b.finishes.Add(1) == 1 {
+		time.Sleep(b.wait)
+	}
+	return b.err
+}
+
+func TestABackupWhoseFinishOverrunsItsDeadlineIsFinishedOnce(t *testing.T) {
+	opts, logs := testOptions(t)
+	d := mustOpen(t, opts)
+	seed(t, d, 10)
+	d.writeTimeout = 100 * time.Millisecond
+	errFinish := errors.New("synthetic finish failure")
+	var finishes atomic.Int32
+	d.newBackup = func(*keptConn, string) (stepper, error) {
+		return overrunningFinish{finishes: &finishes, wait: 300 * time.Millisecond, err: errFinish}, nil
+	}
+	if err := d.Backup(t.Context(), filepath.Join(t.TempDir(), "staging"), into(io.Discard)); !errors.Is(err, errFinish) {
+		t.Fatalf("Backup = %v, want the error that finishing it returned", err)
+	}
+	if len(logs.events("db_deadline")) == 0 {
+		t.Fatal("finishing the backup never ran past the write deadline, so this test proves nothing")
+	}
+	if n := finishes.Load(); n != 1 {
+		t.Fatalf("the backup was finished %d times, want once: a second finish frees its handle twice", n)
+	}
+}
+
 type panickingBackup struct{ inStart, inStep, inFinish bool }
 
 func (b panickingBackup) Step(int32) (bool, error) {

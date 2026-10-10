@@ -62,13 +62,15 @@ func (d *DB) copyTo(ctx context.Context, dst string) error {
 			return nil
 		}
 		for {
+			var ran bool
 			err := d.step(context.WithoutCancel(ctx), func(kc *keptConn) error {
 				if kc != source {
 					return errBackupConnChanged
 				}
+				ran = true
 				return safely(b.Finish)
 			})
-			if !errors.Is(err, context.DeadlineExceeded) {
+			if ran || !errors.Is(err, context.DeadlineExceeded) {
 				return err
 			}
 		}
