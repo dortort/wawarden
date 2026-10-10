@@ -684,6 +684,35 @@ func TestACallThatItsDeadlineEndsIsReportedOnce(t *testing.T) {
 	}
 }
 
+func TestAnErrorFromACallThatOverranItsDeadlineIsADeadlineError(t *testing.T) {
+	opts, _ := testOptions(t)
+	d := mustOpen(t, opts)
+	errDriver := errors.New("interrupted (9)")
+	err := d.within(t.Context(), "test.interrupted", time.Millisecond, func(ctx context.Context) error {
+		<-ctx.Done()
+		return errDriver
+	})
+	if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, errDriver) {
+		t.Fatalf("a call that its deadline interrupted = %v, want a deadline error that keeps the driver's error", err)
+	}
+	caller, cancel := context.WithCancel(t.Context())
+	err = d.within(caller, "test.abandoned", time.Millisecond, func(ctx context.Context) error {
+		<-ctx.Done()
+		cancel()
+		return errDriver
+	})
+	if !errors.Is(err, errDriver) || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a call that its caller gave up on = %v, want the driver's error alone", err)
+	}
+	err = d.within(t.Context(), "test.finished", time.Millisecond, func(ctx context.Context) error {
+		<-ctx.Done()
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("a call that finished after its deadline = %v, want its own success", err)
+	}
+}
+
 func TestRewriteRunsUnderItsOwnDeadline(t *testing.T) {
 	opts, logs := testOptions(t)
 	d := mustOpen(t, opts)

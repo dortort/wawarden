@@ -434,6 +434,9 @@ func (d *DB) within(ctx context.Context, op string, timeout time.Duration, fn fu
 	if overran && !reported {
 		report()
 	}
+	if overran && err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%w: %w", context.DeadlineExceeded, err)
+	}
 	return err
 }
 

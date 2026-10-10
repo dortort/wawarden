@@ -128,6 +128,13 @@ func (r *Reader) Stall(g policy.ReadGrant, ctx context.Context) error {
 	})
 }
 
+func (r *Reader) Interrupt(g policy.ReadGrant, ctx context.Context) error {
+	return r.read(g, ctx, "test.interrupt", func(ctx context.Context, _ querier) error {
+		<-ctx.Done()
+		return errors.New("interrupted (9)")
+	})
+}
+
 func (r *Reader) Exec(ctx context.Context, stmts ...string) error {
 	return r.db.Write(ctx, "test.exec", func(ctx context.Context, q db.Querier) error {
 		for _, stmt := range stmts {

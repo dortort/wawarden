@@ -556,6 +556,20 @@ func TestAReadPastItsDeadlineIsBusy(t *testing.T) {
 	}
 }
 
+func TestAReadThatItsDeadlineInterruptsIsBusy(t *testing.T) {
+	opts := testOptions(t.TempDir())
+	opts.ReadTimeout = 300 * time.Millisecond
+	s := openWith(t, opts)
+	if err := s.Scoped().Interrupt(grantAll(t), t.Context()); !errors.Is(err, scoped.ErrBusy) {
+		t.Fatalf("a read that its deadline interrupted = %v, want ErrBusy", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := s.Scoped().Interrupt(grantAll(t), ctx); err == nil || errors.Is(err, scoped.ErrBusy) {
+		t.Fatalf("a read its caller cancelled = %v, want an error that is not ErrBusy", err)
+	}
+}
+
 func TestAGrantOfMoreChatsThanOneQueryBindsIsRefused(t *testing.T) {
 	s := openStore(t)
 	jids := make([]string, scoped.MaxGrantChats+1)
