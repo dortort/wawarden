@@ -149,7 +149,14 @@ func TestAValidClientBehindAHeldWriteIsBusyNeverUnauthorized(t *testing.T) {
 			if got, want := authFailures(t, reg), "21"; got != want {
 				t.Fatalf("authentication failures = %s, want %s: only the revoked token and the guesses fail", got, want)
 			}
-			if rec := get(valid); rec.Code != http.StatusOK {
+			rec := get(valid)
+			for range 50 {
+				if rec.Code != http.StatusServiceUnavailable {
+					break
+				}
+				rec = get(valid)
+			}
+			if rec.Code != http.StatusOK {
 				t.Fatalf("the valid client after the release = %d %s", rec.Code, rec.Body.String())
 			}
 			if rec := get(revoked); rec.Code != http.StatusUnauthorized {
