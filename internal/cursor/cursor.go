@@ -28,6 +28,7 @@ const (
 	refFields    = 3
 	cursorLabel  = "cursor"
 	refLabel     = "mref"
+	nonceLabel   = "wawarden/mref-nonce/v1"
 )
 
 var (
@@ -39,10 +40,10 @@ var (
 var encoding = base64.RawURLEncoding.Strict()
 
 type Sealer struct {
-	aead  cipher.AEAD
-	fixed cipher.AEAD
-	key   []byte
-	id    [idSize]byte
+	aead     cipher.AEAD
+	fixed    cipher.AEAD
+	nonceKey []byte
+	id       [idSize]byte
 }
 
 type Binding struct {
@@ -77,7 +78,9 @@ func New(key []byte, keyID string) (*Sealer, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Sealer{aead: aead, fixed: fixed, key: bytes.Clone(key)}
+	derive := hmac.New(sha256.New, key)
+	derive.Write([]byte(nonceLabel))
+	s := &Sealer{aead: aead, fixed: fixed, nonceKey: derive.Sum(nil)}
 	copy(s.id[:], id)
 	return s, nil
 }
@@ -111,7 +114,7 @@ func (s *Sealer) SealRef(client string, r Ref) (string, error) {
 		pt = binary.AppendUvarint(pt, uint64(len(f)))
 		pt = append(pt, f...)
 	}
-	mac := hmac.New(sha256.New, s.key)
+	mac := hmac.New(sha256.New, s.nonceKey)
 	mac.Write(additional(nil, []string{client}))
 	mac.Write(pt)
 	nonce := mac.Sum(nil)[:nonceSize]

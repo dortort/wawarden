@@ -2,7 +2,10 @@ package cursor_test
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"strings"
 	"testing"
@@ -257,6 +260,36 @@ func nonceOf(t *testing.T, text string) string {
 		t.Fatalf("reference %q does not decode to a header and a nonce: %v", text, err)
 	}
 	return string(raw[5 : 5+12])
+}
+
+func hmacSHA256(k []byte, parts ...[]byte) []byte {
+	m := hmac.New(sha256.New, k)
+	for _, p := range parts {
+		m.Write(p)
+	}
+	return m.Sum(nil)
+}
+
+func TestARefNonceIsKeyedApartFromTheSealingKey(t *testing.T) {
+	nonce := nonceOf(t, mustSealRef(t, sealer(t, key, keyID), binding.Client, ref))
+	var input []byte
+	for _, f := range []string{binding.Client, ref.Chat, ref.ID, ref.Sender} {
+		input = binary.AppendUvarint(input, uint64(len(f)))
+		input = append(input, f...)
+	}
+	if raw := string(hmacSHA256(key, input)[:12]); nonce == raw {
+		t.Fatalf("the reference nonce %x is an HMAC-SHA256 under the sealing key itself", nonce)
+	}
+	if derived := string(hmacSHA256(hmacSHA256(key, []byte("wawarden/mref-nonce/v1")), input)[:12]); nonce != derived {
+		t.Fatalf("the reference nonce is %x, want %x under the nonce key derived from the sealing key", nonce, derived)
+	}
+}
+
+func TestARefMatchesItsFixedVector(t *testing.T) {
+	const want = "m1_AQobLD01M8YE1B595tpcy9fRF3UouehCjm0ehclfRHvRxOfGcONMcvXsQCjaoD0hCto1Vg_jJSgk-0XHd81AC03tzzCpVN6swCU6MK6lyzbLGboYpB1St0eHGHUxGU26tcFYp5yS9Yh1"
+	if got := mustSealRef(t, sealer(t, key, keyID), binding.Client, ref); got != want {
+		t.Fatalf("SealRef = %q, want the fixed vector %q", got, want)
+	}
 }
 
 func TestRefFieldsCannotShift(t *testing.T) {
