@@ -1,6 +1,7 @@
 package admin_test
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -19,14 +20,36 @@ const (
 func (f *fixture) holdWrite(t *testing.T) (release func()) {
 	t.Helper()
 	held, done, released := make(chan struct{}), make(chan error, 1), make(chan struct{})
-	go func() {
-		done <- f.store.Write(t.Context(), "test.hold", func(*ingest.Tx) error {
+	hold := func() error {
+		return f.store.Write(t.Context(), "test.hold", func(*ingest.Tx) error {
 			close(held)
 			<-released
 			return nil
 		})
+	}
+	busy := func(err error) bool {
+		select {
+		case <-released:
+			return false
+		default:
+			return errors.Is(err, context.DeadlineExceeded)
+		}
+	}
+	go func() {
+		err := hold()
+		for range 50 {
+			if !busy(err) {
+				break
+			}
+			err = hold()
+		}
+		done <- err
 	}()
-	<-held
+	select {
+	case <-held:
+	case err := <-done:
+		t.Fatalf("the hold ended before it held: %v", err)
+	}
 	var once sync.Once
 	release = func() {
 		once.Do(func() {
