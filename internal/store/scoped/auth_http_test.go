@@ -115,9 +115,8 @@ func TestAValidClientBehindAHeldWriteIsBusyNeverUnauthorized(t *testing.T) {
 				h.ServeHTTP(rec, r)
 				return rec
 			}
-			held, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
-			go func() { done <- s.Scoped().HoldWrite(context.Background(), held, release) }()
-			<-held
+			held, release := make(chan struct{}), make(chan struct{})
+			done := holdUntilHeld(t, held, release, func() error { return s.Scoped().HoldWrite(context.Background(), held, release) })
 			tokens := []string{valid, revoked}
 			for range authGuesses {
 				tokens = append(tokens, "ww_not_a_token")

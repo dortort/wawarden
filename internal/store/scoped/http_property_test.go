@@ -141,9 +141,8 @@ func TestHTTPReadsAnswerBusyInsteadOfQueueing(t *testing.T) {
 				h.ServeHTTP(rec, r)
 				return rec
 			}
-			held, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
-			go func() { done <- hold(s, held, release) }()
-			<-held
+			held, release := make(chan struct{}), make(chan struct{})
+			done := holdUntilHeld(t, held, release, func() error { return hold(s, held, release) })
 			start, answered := time.Now(), make(chan *httptest.ResponseRecorder, 1)
 			go func() { answered <- get() }()
 			select {

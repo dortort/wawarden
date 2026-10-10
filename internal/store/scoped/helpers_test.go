@@ -2,6 +2,8 @@ package scoped_test
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"sync"
@@ -42,6 +44,35 @@ func (b *syncBuffer) Write(p []byte) (int, error) {
 }
 
 const testDeadline = 5 * time.Minute
+
+func holdUntilHeld(t *testing.T, held, release <-chan struct{}, hold func() error) <-chan error {
+	t.Helper()
+	busy := func(err error) bool {
+		select {
+		case <-release:
+			return false
+		default:
+			return errors.Is(err, scoped.ErrBusy) || errors.Is(err, context.DeadlineExceeded)
+		}
+	}
+	done := make(chan error, 1)
+	go func() {
+		err := hold()
+		for range 50 {
+			if !busy(err) {
+				break
+			}
+			err = hold()
+		}
+		done <- err
+	}()
+	select {
+	case <-held:
+	case err := <-done:
+		t.Fatalf("the hold ended before it held: %v", err)
+	}
+	return done
+}
 
 func testOptions(dir string) ingest.Options {
 	w := logx.NewWriter(&syncBuffer{})
