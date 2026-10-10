@@ -2,8 +2,12 @@ package archtest
 
 import (
 	"go/ast"
+	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+	"testing"
 )
 
 const (
@@ -13,7 +17,25 @@ const (
 	scopedRead   = "read"
 )
 
-var grantFreeMethods = set("Query.Expression")
+var (
+	grantFreeMethods  = set("Query.Expression")
+	scopedReadMethods = set("Reader.Chat", "Reader.Chats", "Reader.Changes", "Reader.Message", "Reader.Messages", "Reader.Search")
+)
+
+const grantWideningRead = `package scoped
+
+import (
+	"context"
+	"time"
+
+	"github.com/dortort/wawarden/internal/policy"
+)
+
+func (r *Reader) Everything(g policy.ReadGrant, ctx context.Context) (ChatPage, error) {
+	wide, _ := policy.DecideRead(&policy.Client{ID: "x", ReadAll: true, ExpiresAt: time.Now().Add(time.Hour)}, time.Now())
+	return r.Chats(wide, ctx, ChatPosition{}, 10)
+}
+`
 
 var scopedGrantRule = rule{
 	name:  "scoped-grant-first",
@@ -247,6 +269,42 @@ func (r *Reader) helper(g policy.ReadGrant, ctx context.Context) error { return 
 
 var later = func(r *Reader) error { return r.read(kept, nil, "x", nil) }
 `},
+		{name: "a read method that calls a sibling under a grant it decides", rel: scopedDir + "/leak.go", want: 1, src: grantWideningRead},
+		{name: "calls of read methods inside the package", rel: scopedDir + "/x.go", want: 8, src: `package scoped
+
+import (
+	"context"
+
+	"github.com/dortort/wawarden/internal/policy"
+)
+
+var kept policy.ReadGrant
+
+func (r *Reader) Own(g policy.ReadGrant, ctx context.Context) (Chat, bool, error) {
+	return r.Chat(g, ctx, "x")
+}
+
+func (r *Reader) Kept(g policy.ReadGrant, ctx context.Context) error {
+	_, err := (*Reader).Chats(r, kept, ctx, ChatPosition{}, 10)
+	defer r.Search(kept, ctx, Query{}, "", SearchPosition{}, 1)
+	return err
+}
+
+func (r *Reader) Local(g policy.ReadGrant, ctx context.Context) error {
+	other := r
+	return (other.Kept)(kept, ctx)
+}
+
+func (r *Reader) helper(ctx context.Context) {
+	_, _, _ = r.Messages(kept, ctx, "", MessagePosition{}, Older, 1)
+}
+
+var through = func(r interface{ Changes(policy.ReadGrant) }) { r.Changes(kept) }
+
+func message(r *Reader, ctx context.Context) {
+	_, _, _ = r.Message(kept, ctx, policy.CanonicalChat{}, "", policy.CanonicalChat{})
+}
+`},
 		{name: "the reader and the builder", rel: scopedReader, src: `package scoped
 
 import (
@@ -334,6 +392,40 @@ func (r *Reader) Chat(g p.ReadGrant, ctx context.Context, ref string) (bool, err
 }
 
 func (r *Reader) Two(g, h p.ReadGrant, ctx context.Context) error { return r.read(g, ctx, "x", nil) }
+`},
+		{name: "the grant's methods and fields named like read methods", rel: scopedDir + "/x.go", src: `package scoped
+
+import (
+	"context"
+
+	"github.com/dortort/wawarden/internal/policy"
+)
+
+func (r *Reader) Chats(g policy.ReadGrant, ctx context.Context, pos ChatPosition, limit int) (ChatPage, error) {
+	var page ChatPage
+	err := r.read(g, ctx, "x", func(ctx context.Context, q querier) error {
+		page.Chats = append(page.Chats, Chat{})
+		if len(g.Chats()) == 0 {
+			page.Chats = page.Chats[:0]
+		}
+		return nil
+	})
+	return page, err
+}
+
+func count(g policy.ReadGrant) int { return len(g.Chats()) }
+`},
+		{name: "a test calling read methods", rel: scopedDir + "/x_test.go", src: `package scoped
+
+import (
+	"context"
+
+	"github.com/dortort/wawarden/internal/policy"
+)
+
+func everything(r *Reader, g policy.ReadGrant) (ChatPage, error) {
+	return r.Chats(g, context.Background(), ChatPosition{}, 10)
+}
 `},
 		{name: "a test of the scoped package", rel: scopedDir + "/x_test.go", src: `package scoped
 
@@ -424,6 +516,11 @@ func checkScopedReadPath(f *sourceFile) []string {
 		}
 		out = append(out, f.at(n, "%s outside %s reaches the database around the scope that Reader.read takes from the caller's grant and only the IN builder applies", what, strings.Join(where, " or ")))
 	}
+	reads := map[string]bool{}
+	for _, m := range append(slices.Collect(maps.Keys(scopedReadMethods)), scopedReadMethodsOf(f)...) {
+		_, name, _ := strings.Cut(m, ".")
+		reads[name] = true
+	}
 	ast.Inspect(f.file, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.SelectorExpr:
@@ -435,6 +532,9 @@ func checkScopedReadPath(f *sourceFile) []string {
 				guard(x.Sel, "."+x.Sel.Name)
 			}
 		case *ast.CallExpr:
+			if sel, ok := ast.Unparen(x.Fun).(*ast.SelectorExpr); ok && reads[sel.Sel.Name] && len(x.Args) > 0 {
+				out = append(out, f.at(sel.Sel, "this call of %s, a read method of %s, runs its read under a grant that is not the calling method's own, which it may not pass on: build the query inside the calling method instead", sel.Sel.Name, scopedDir))
+			}
 			id, ok := ast.Unparen(x.Fun).(*ast.Ident)
 			switch {
 			case ok && scopedTypes[id.Name]:
@@ -504,6 +604,35 @@ func checkGrantPassed(f *sourceFile, root ast.Node, fn *ast.FuncDecl) []string {
 		return true
 	})
 	return out
+}
+
+func scopedReadMethodsOf(f *sourceFile) []string {
+	var out []string
+	for _, decl := range f.file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if ok && fn.Recv != nil && fn.Name.IsExported() && ast.IsExported(receiverName(fn)) && !grantFreeMethods[receiverName(fn)+"."+fn.Name.Name] {
+			out = append(out, receiverName(fn)+"."+fn.Name.Name)
+		}
+	}
+	return out
+}
+
+func TestScopedReadMethodsListed(t *testing.T) {
+	files, err := moduleFiles(os.DirFS(filepath.Join(moduleRoot(t), scopedDir)))
+	if err != nil {
+		t.Fatalf("walk %s: %v", scopedDir, err)
+	}
+	declared := map[string]bool{}
+	for _, f := range files {
+		if !f.test && f.dir == "." {
+			for _, m := range scopedReadMethodsOf(f) {
+				declared[m] = true
+			}
+		}
+	}
+	if got, want := slices.Sorted(maps.Keys(declared)), slices.Sorted(maps.Keys(scopedReadMethods)); !slices.Equal(got, want) {
+		t.Fatalf("package scoped declares the read methods %q, but the scoped-read-path rule refuses calls of %q: they must match", got, want)
+	}
 }
 
 func receiverName(fn *ast.FuncDecl) string {
