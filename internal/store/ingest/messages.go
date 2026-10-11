@@ -127,6 +127,10 @@ func (m *Message) check() error {
 }
 
 func (tx *Tx) InsertMessage(m Message) (Ref, bool, error) {
+	return tx.insertMessage(m, true)
+}
+
+func (tx *Tx) insertMessage(m Message, ingested bool) (Ref, bool, error) {
 	if err := m.check(); err != nil {
 		return Ref{}, false, err
 	}
@@ -176,6 +180,9 @@ func (tx *Tx) InsertMessage(m Message) (Ref, bool, error) {
 	}
 	if _, err := tx.q.ExecContext(tx.ctx, insertFTS, seq, text); err != nil {
 		return Ref{}, false, err
+	}
+	if !ingested {
+		return Ref{seq: seq, chat: chat}, true, nil
 	}
 	if _, err := tx.q.ExecContext(tx.ctx, setLastIngest, admin.LastIngestKey, formatMS(m.Ingested)); err != nil {
 		return Ref{}, false, err

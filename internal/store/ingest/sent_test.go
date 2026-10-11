@@ -204,6 +204,27 @@ func TestASentReplyQuotesItsTarget(t *testing.T) {
 	}
 }
 
+func TestASentMessageLeavesTheLastIngestTime(t *testing.T) {
+	s := openStore(t)
+	insert(t, s, textMessage(t, alice, "IN1", alice, "synthetic inbound"))
+	g := grantFor(t, writerID, false, alice)
+	in := request(t, "ingest-key-1", alice, "synthetic", epoch.Add(time.Hour))
+	in.MsgID = "S1"
+	reserved(t, s, g, in)
+	if row := acked(t, s, g, in, ownerJID, epoch.Add(time.Hour)); !row.Inserted {
+		t.Fatalf("the sent message was not stored: %+v", row)
+	}
+	var last string
+	read(t, s, func(r *Reader) error {
+		var err error
+		last, _, err = r.SyncValue("last_ingest_at")
+		return err
+	})
+	if last != formatMS(epoch) {
+		t.Fatalf("last_ingest_at = %s after a send, want the inbound message's %s", last, formatMS(epoch))
+	}
+}
+
 func TestRecordSentRefusesWhatTheGrantOrTheShapeDoesNotAllow(t *testing.T) {
 	s := openStore(t)
 	g := grantFor(t, writerID, false, alice)

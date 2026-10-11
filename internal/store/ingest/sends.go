@@ -516,7 +516,7 @@ func (tx *Tx) RecordSent(g policy.WriteGrant, m Message, reply *ReplyTarget) (Se
 			m.Quote = &Quote{Ref: found.Ref, Verified: true}
 		}
 	}
-	ref, inserted, err := tx.InsertMessage(m)
+	ref, inserted, err := tx.insertMessage(m, false)
 	if err != nil {
 		return SentRow{}, err
 	}
