@@ -200,7 +200,7 @@ func TestTheStatusCountsOnlyTheBackfillsRequestedSinceUTCMidnight(t *testing.T) 
 	t.Cleanup(func() { _ = run(t, a)() })
 	group, _ := policy.Normalize("120363000000000001@g.us")
 	member, _ := policy.Normalize("15550100002@s.whatsapp.net")
-	midnight := time.Now().UTC().Truncate(24 * time.Hour)
+	midnight := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
 	if err := a.archive.Write(t.Context(), "test.fill", func(tx *ingest.Tx) error {
 		_, _, err := tx.InsertMessage(ingest.Message{Chat: group, ID: "OLDEST", Sender: member, Origin: ingest.OriginLive, Timestamp: midnight.Add(-48 * time.Hour),
 			Kind: ingest.KindText, Text: "synthetic", Ingested: midnight.Add(-48 * time.Hour)})
@@ -213,7 +213,7 @@ func TestTheStatusCountsOnlyTheBackfillsRequestedSinceUTCMidnight(t *testing.T) 
 			t.Fatalf("requestBackfill at %v: %v", at, err)
 		}
 	}
-	st, err := adminService{engine: a.engine, archive: a.archive}.Status(t.Context())
+	st, err := adminService{engine: a.engine, archive: a.archive, now: func() time.Time { return midnight.Add(time.Hour) }}.Status(t.Context())
 	if err != nil || st.BackfillsToday != 1 {
 		t.Fatalf("Status = %d backfills today, %v; want 1", st.BackfillsToday, err)
 	}

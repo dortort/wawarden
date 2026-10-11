@@ -16,6 +16,7 @@ type adminService struct {
 	engine  *engine.Engine
 	archive *ingest.Store
 	version string
+	now     func() time.Time
 }
 
 func (s adminService) Status(ctx context.Context) (api.AdminStatus, error) {
@@ -30,7 +31,7 @@ func (s adminService) Status(ctx context.Context) (api.AdminStatus, error) {
 	}
 	var backfills int
 	if err := s.archive.Read(ctx, "app.backfills_today", func(r *ingest.Reader) error {
-		backfills, err = r.BackfillsSince(time.Now().UTC().Truncate(24 * time.Hour))
+		backfills, err = r.BackfillsSince(s.now().UTC().Truncate(24 * time.Hour))
 		return err
 	}); err != nil {
 		return api.AdminStatus{}, err
@@ -65,7 +66,7 @@ func (s adminService) Reconnect(context.Context) error {
 }
 
 func (s adminService) Backfill(g policy.AdminGrant, ctx context.Context, chat policy.CanonicalChat, count int) (string, error) {
-	return requestBackfill(g, ctx, s.archive, s.engine, time.Now(), chat, count)
+	return requestBackfill(g, ctx, s.archive, s.engine, s.now(), chat, count)
 }
 
 func (s adminService) CreateClient(ctx context.Context, spec policy.ClientSpec) (api.ClientView, string, error) {

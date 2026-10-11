@@ -216,7 +216,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 			Handler: api.NewAdminHandler(api.AdminDeps{
 				Credential: *cfg.AdminCredential,
 				Metrics:    reg,
-				Service:    adminService{engine: a.engine, archive: archive, version: info.Version},
+				Service:    adminService{engine: a.engine, archive: archive, version: info.Version, now: time.Now},
 				Events:     notifier,
 			}),
 		})
