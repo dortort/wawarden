@@ -1,4 +1,4 @@
-// Package logx is the one path from a logger to its output: fail-closed attribute rendering over a writer that pseudonymises chat identifiers and drops lines carrying XML.
+// Package logx is the one path from a logger to its output: fail-closed attribute rendering over a writer that redacts tokens, pseudonymises chat identifiers and drops lines carrying XML.
 package logx
 
 import (
@@ -25,6 +25,9 @@ const (
 	legacyPhone   = "c.us"
 	reasonXML     = "xml"
 	reasonTooLong = "too_long"
+	adminPrefix   = "wwadm_"
+	clientPrefix  = "ww_"
+	redacted      = "[redacted]"
 )
 
 const (
@@ -37,6 +40,7 @@ var (
 	userPattern = regexp.MustCompile(`[0-9][0-9._:-]*$`)
 	xmlPattern  = regexp.MustCompile(`</` + xmlName + `\s*>|<` + xmlName + `\s*/>|<` + xmlName + xmlSpace + xmlName + `\s*=\s*\\?["']|<` + xmlName + `><[A-Za-z_/!?]|<!--|<!\[CDATA\[|<\?xml`)
 	escapedTag  = regexp.MustCompile(`\\+(u003[cCeE]|")`)
+	tokenShape  = regexp.MustCompile(`ww(?:adm_|_[a-z2-7]{8}_)[A-Za-z0-9_-]{43}_[0-9a-f]{8}`)
 )
 
 type Writer struct {
@@ -97,7 +101,26 @@ func (w *Writer) scrub(line []byte, overlong bool) []byte {
 	case carriesXML(line):
 		return w.dropped(reasonXML)
 	}
-	return append(w.pseudonymise(line), '\n')
+	return append(w.pseudonymise(redactTokens(line)), '\n')
+}
+
+func RedactTokens(s string) string {
+	if !strings.Contains(s, clientPrefix) && !strings.Contains(s, adminPrefix) {
+		return s
+	}
+	return string(redactTokens([]byte(s)))
+}
+
+func redactTokens(line []byte) []byte {
+	if !bytes.Contains(line, []byte(clientPrefix)) && !bytes.Contains(line, []byte(adminPrefix)) {
+		return line
+	}
+	return tokenShape.ReplaceAllFunc(line, func(token []byte) []byte {
+		if bytes.HasPrefix(token, []byte(adminPrefix)) {
+			return []byte(adminPrefix + redacted)
+		}
+		return append(token[:len(clientPrefix)+9:len(clientPrefix)+9], redacted...)
+	})
 }
 
 func (w *Writer) dropped(reason string) []byte {
