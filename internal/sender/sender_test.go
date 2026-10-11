@@ -283,6 +283,27 @@ func TestAClientThatLeavesAfterTheAckStillHasItsSendStored(t *testing.T) {
 	}
 }
 
+func TestTheHourShareDividesTheGlobalBudgetByTheWriteHolders(t *testing.T) {
+	f := newFixture(t, 10, 6)
+	o := f.options(f.store, 10, 6)
+	o.Holders = func(context.Context, time.Time) (int, error) { return 3, nil }
+	svc := sender.New(o)
+	g := grantFor(t, writerID, false, alice)
+	for _, k := range []string{"share-key-001", "share-key-002"} {
+		if _, err := svc.Send(g, t.Context(), request(t, k, alice, "synthetic")); err != nil {
+			t.Fatalf("a send inside the share = %v", err)
+		}
+		f.clock.Advance(sender.PacerBase)
+	}
+	_, err := svc.Send(g, t.Context(), request(t, "share-key-003", alice, "synthetic"))
+	if rl, ok := errors.AsType[*ingest.RateLimitError](err); !ok || rl.Reason != ingest.ReasonHour || rl.RetryAfter != time.Hour-2*sender.PacerBase {
+		t.Fatalf("the third send in the hour with a share of two = %v", err)
+	}
+	if n := len(f.engine.sent()); n != 2 {
+		t.Fatalf("%d engine sends, want 2", n)
+	}
+}
+
 func TestAnAckAfterTheLeaseEndedIsUnknownAndReported(t *testing.T) {
 	f := newFixture(t, 10, 30)
 	g := grantFor(t, writerID, false, alice)
