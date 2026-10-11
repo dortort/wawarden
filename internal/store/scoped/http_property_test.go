@@ -105,7 +105,7 @@ func clientHandler(t tb, reader api.ReadArchive, auth api.Authenticator, audit a
 		Authenticator: auth, Metrics: metrics.NewRegistry(), Now: func() time.Time { return epoch.Add(time.Duration(ticks.Add(1)) * time.Second) },
 		Archive: reader, Audit: audit,
 		Session: func() string { return "connected" }, Cursors: cursors, Refs: refs,
-		Limits: api.ReadLimits{ReadsPerMinute: 1 << 30, SearchesPerMinute: 1 << 30},
+		Limits: api.ReadLimits{ReadsPerMinute: 1 << 30, SearchesPerMinute: 1 << 30}, Sender: refusingSender{}, SendRejected: func(string) {},
 	})
 }
 

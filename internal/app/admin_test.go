@@ -194,6 +194,13 @@ func TestClientsAreCreatedAuthenticatedAuditedAndRevoked(t *testing.T) {
 	if r := mustDo(t, http.MethodGet, client, "/v1/anything", bearer(body.Credential)); r.status != http.StatusNotFound {
 		t.Fatalf("an authenticated client request to an unknown path = %d %s, want the uniform 404", r.status, r.body)
 	}
+	sendHeader := bearer(body.Credential)
+	sendHeader.Set("Idempotency-Key", "synthetic-key-0001")
+	if r := post(t, client, "/v1/chats/"+chats.Chats[0].ID+"/messages", sendHeader, `{"text":"synthetic outbound"}`); r.status != http.StatusServiceUnavailable ||
+		r.body != `{"error":"not_connected"}` || r.header.Get("Retry-After") != "5" {
+		t.Fatalf("a send while the engine is idle = %d %s %v", r.status, r.body, r.header)
+	}
+
 	_, other := token.NewClient()
 	if r := mustDo(t, http.MethodGet, client, "/v1/anything", bearer(other)); r.status != http.StatusUnauthorized {
 		t.Fatalf("an unknown client token = %d, want 401", r.status)
@@ -227,8 +234,8 @@ func TestClientsAreCreatedAuthenticatedAuditedAndRevoked(t *testing.T) {
 			audit = append(audit, rec["action"].(string))
 		}
 	}
-	if got := strings.Join(audit, " "); got != "client_create rest.chats rest.messages rest.unrouted client_revoke" {
-		t.Fatalf("audit lines %q, want the create, the three client requests and the revoke on standard output", got)
+	if got := strings.Join(audit, " "); got != "client_create rest.chats rest.messages rest.unrouted rest.send client_revoke" {
+		t.Fatalf("audit lines %q, want the create, the four client requests and the revoke on standard output", got)
 	}
 	out := logs.buf.String()
 	if strings.Contains(out, body.Credential) || strings.Contains(out, body.Credential[12:55]) || strings.Contains(out, "120363000000000001@g.us") {

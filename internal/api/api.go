@@ -25,11 +25,13 @@ type ClientDeps struct {
 	Cursors       *cursor.Sealer
 	Refs          *cursor.Sealer
 	Limits        ReadLimits
+	Sender        SendService
+	SendRejected  func(reason string)
 }
 
 func NewClientHandler(d ClientDeps) http.Handler {
-	if d.Authenticator == nil || d.Metrics == nil || d.Archive == nil || d.Audit == nil || d.Session == nil {
-		panic("api: NewClientHandler needs an Authenticator, a metrics registry, an archive, an auditor and a session state")
+	if d.Authenticator == nil || d.Metrics == nil || d.Archive == nil || d.Audit == nil || d.Session == nil || d.Sender == nil || d.SendRejected == nil {
+		panic("api: NewClientHandler needs an Authenticator, a metrics registry, an archive, an auditor, a session state, a sender and a rejection counter")
 	}
 	now := clockOrSystem(d.Now)
 	budget, searches := readBudgets(d.Limits, now)
@@ -57,8 +59,10 @@ func NewClientHandler(d ClientDeps) http.Handler {
 		},
 	}
 	s := &reads{archive: d.Archive, cursors: d.Cursors, refs: d.Refs, searches: searches, session: d.Session}
+	w := &writes{reads: s, sender: d.Sender, rejected: d.SendRejected, now: now}
 	registerReads(p.router, s)
-	p.router.mcp(mcpPattern, newMCPEndpoint(s, now, mcpCallDeadline))
+	registerWrites(p.router, w)
+	p.router.mcp(mcpPattern, newMCPEndpoint(s, w, now, mcpCallDeadline))
 	return p
 }
 

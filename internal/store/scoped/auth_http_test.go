@@ -37,8 +37,14 @@ func storeClientHandler(t *testing.T, s *ingest.Store, reg *metrics.Registry) ht
 	return api.NewClientHandler(api.ClientDeps{
 		Authenticator: s.Clients(), Metrics: reg, Archive: s.Scoped(), Audit: storeAudit{s.Audit()},
 		Session: func() string { return "connected" }, Cursors: cursors, Refs: refs,
-		Limits: api.ReadLimits{ReadsPerMinute: 1 << 30, SearchesPerMinute: 1 << 30},
+		Limits: api.ReadLimits{ReadsPerMinute: 1 << 30, SearchesPerMinute: 1 << 30}, Sender: refusingSender{}, SendRejected: func(string) {},
 	})
+}
+
+type refusingSender struct{}
+
+func (refusingSender) Send(policy.WriteGrant, context.Context, api.SendRequest) (api.Sent, error) {
+	return api.Sent{}, errors.New("synthetic: these tests send nothing")
 }
 
 func authFailures(t *testing.T, reg *metrics.Registry) string {

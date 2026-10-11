@@ -42,6 +42,7 @@ var (
 	mcpExpiry    = time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
 	sealedValues = regexp.MustCompile(`m1_[A-Za-z0-9_-]+|"next":"[A-Za-z0-9_-]*"`)
 	toolNames    = []string{toolGetChanges, toolGetChat, toolGetMessages, toolListChats, toolSearchMessages}
+	writeNames   = []string{toolGetChanges, toolGetChat, toolGetMessages, toolListChats, toolSearchMessages, toolSendMessage}
 )
 
 type protocol struct {
@@ -97,6 +98,49 @@ func connectAt(t *testing.T, h http.Handler, endpoint, key string, p protocol) *
 	t.Helper()
 	client := mcp.NewClient(&mcp.Implementation{Name: "wawarden-test", Version: "0"}, nil)
 	transport := &mcp.StreamableClientTransport{Endpoint: endpoint, HTTPClient: &http.Client{Transport: handlerTransport{handler: h, key: key}}, DisableStandaloneSSE: true}
+	cs, err := client.Connect(t.Context(), transport, p.opts)
+	if err != nil {
+		t.Fatalf("connect over %s: %v", p.name, err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+	return cs
+}
+
+type recordingTransport struct {
+	handlerTransport
+	mu     sync.Mutex
+	bodies [][]byte
+}
+
+func (r *recordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := r.handlerTransport.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	r.bodies = append(r.bodies, body)
+	r.mu.Unlock()
+	resp.Body = readCloser{bytes.NewReader(body)}
+	return resp, nil
+}
+
+func (r *recordingTransport) last() []byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.bodies) == 0 {
+		return nil
+	}
+	return r.bodies[len(r.bodies)-1]
+}
+
+func connectThrough(t *testing.T, rt http.RoundTripper, p protocol) *mcp.ClientSession {
+	t.Helper()
+	client := mcp.NewClient(&mcp.Implementation{Name: "wawarden-test", Version: "0"}, nil)
+	transport := &mcp.StreamableClientTransport{Endpoint: mcpEndpointURL, HTTPClient: &http.Client{Transport: rt}, DisableStandaloneSSE: true}
 	cs, err := client.Connect(t.Context(), transport, p.opts)
 	if err != nil {
 		t.Fatalf("connect over %s: %v", p.name, err)
@@ -323,15 +367,19 @@ func probeReads(f *readFixture, archive ReadArchive) *reads {
 	return &reads{archive: archive, cursors: f.cursors, refs: f.refs, searches: ratelimit.New(DefaultSearchesPerMinute, searchBurst, fixedNow), session: func() string { return f.state }}
 }
 
+func probeWrites(f *readFixture, archive ReadArchive) *writes {
+	return &writes{reads: probeReads(f, archive), sender: f.sender, rejected: func(string) {}, now: fixedNow}
+}
+
 func probeEndpoint(t *testing.T, f *readFixture, archive ReadArchive, deadline time.Duration) string {
 	t.Helper()
-	f.handler.(*pipeline).router.mcp("POST /probe/mcp", newMCPEndpoint(probeReads(f, archive), fixedNow, deadline))
+	f.handler.(*pipeline).router.mcp("POST /probe/mcp", newMCPEndpoint(probeReads(f, archive), probeWrites(f, archive), fixedNow, deadline))
 	return "http://wawarden.invalid/probe/mcp"
 }
 
 func TestMCPEndpointRefusesARequestWithoutThePipelinesClient(t *testing.T) {
 	f := newMCPFixture(t)
-	endpoint := newMCPEndpoint(probeReads(f, f.archive), fixedNow, mcpCallDeadline)
+	endpoint := newMCPEndpoint(probeReads(f, f.archive), probeWrites(f, f.archive), fixedNow, mcpCallDeadline)
 	rec := rawMCP(t, endpoint, keyGroup, legacyCall("tools/list", "{}"), legacyHeader)
 	if rec.Code != http.StatusUnauthorized || strings.Contains(rec.Body.String(), toolListChats) {
 		t.Fatalf("an endpoint reached without the pipeline = %d %s, want 401", rec.Code, rec.Body.String())
@@ -394,7 +442,7 @@ func sampleArguments(t *testing.T, tool *mcp.Tool) map[string]any {
 	if err := json.Unmarshal(raw, &schema); err != nil {
 		t.Fatalf("decode the input schema of %s: %v", tool.Name, err)
 	}
-	samples := map[string]any{"chat": groupRef, "query": "synthetic"}
+	samples := map[string]any{"chat": groupRef, "query": "synthetic", "text": "synthetic hello", "idempotency_key": "sample-key-0001"}
 	args := map[string]any{}
 	for _, name := range schema.Required {
 		v, ok := samples[name]
@@ -406,48 +454,67 @@ func sampleArguments(t *testing.T, tool *mcp.Tool) map[string]any {
 	return args
 }
 
-func TestEveryListedToolAnswersThroughReadTool(t *testing.T) {
+func TestEveryListedToolAnswersThroughItsHelper(t *testing.T) {
 	for _, p := range protocols {
-		t.Run(p.name, func(t *testing.T) {
-			f := newMCPFixture(t)
-			f.clients[keyRevoked] = &policy.Client{ID: "client-revoked", ReadAll: true, Revoked: true, ExpiresAt: mcpExpiry}
-			logs := installPanicReporter(t, metrics.NewRegistry())
-			panicking := connectAt(t, f.handler, probeEndpoint(t, f, panickingArchive{}, mcpCallDeadline), keyGroup, p)
-			reader, revoked := connect(t, f.handler, keyGroup, p), connect(t, f.handler, keyRevoked, p)
-			tools, err := reader.ListTools(t.Context(), nil)
-			if err != nil || len(tools.Tools) == 0 {
-				t.Fatalf("list tools = %v, %v", tools, err)
-			}
-			f.archive.mu.Lock()
-			f.archive.err = errors.New("synthetic store failure " + argCanary)
-			f.archive.mu.Unlock()
-			for _, tool := range tools.Tools {
-				if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint || tool.OutputSchema == nil {
-					t.Errorf("%s is listed without the read-only hint and output schema that readTool gives every tool", tool.Name)
-				}
-				args := sampleArguments(t, tool)
-				requireToolError(t, call(t, revoked, tool.Name, args), codeNotFound)
-				requireToolError(t, call(t, panicking, tool.Name, args), codeInternal)
-				res := call(t, reader, tool.Name, args)
-				requireToolError(t, res, codeInternal)
-				if wire, _ := json.Marshal(res); bytes.Contains(wire, []byte(argCanary)) {
-					t.Fatalf("%s put the store error on the wire: %s", tool.Name, wire)
-				}
-			}
-			if strings.Contains(logs.String(), panicCanary) {
-				t.Fatalf("the panic value leaked: %s", logs.String())
-			}
-		})
+		for _, class := range []struct {
+			key   string
+			names []string
+		}{{keyGroup, toolNames}, {keyAlice, writeNames}} {
+			t.Run(p.name+"/"+class.key, func(t *testing.T) {
+				listedToolsAnswerThroughTheirHelper(t, p, class.key, class.names)
+			})
+		}
 	}
 }
 
-func TestOnlyToolsRegisteredThroughReadToolAreCallable(t *testing.T) {
+func listedToolsAnswerThroughTheirHelper(t *testing.T, p protocol, key string, names []string) {
+	f := newMCPFixture(t)
+	f.clients[keyRevoked] = &policy.Client{ID: "client-revoked", ReadAll: true, Revoked: true, ExpiresAt: mcpExpiry}
+	logs := installPanicReporter(t, metrics.NewRegistry())
+	panicking := connectAt(t, f.handler, probeEndpoint(t, f, panickingArchive{}, mcpCallDeadline), key, p)
+	reader, revoked := connect(t, f.handler, key, p), connect(t, f.handler, keyRevoked, p)
+	tools, err := reader.ListTools(t.Context(), nil)
+	if err != nil || len(tools.Tools) != len(names) {
+		t.Fatalf("list tools = %v, %v", tools, err)
+	}
+	f.archive.mu.Lock()
+	f.archive.err = errors.New("synthetic store failure " + argCanary)
+	f.archive.mu.Unlock()
+	for i, tool := range tools.Tools {
+		if tool.Name != names[i] || tool.Annotations == nil || tool.Annotations.ReadOnlyHint != (tool.Name != toolSendMessage) || tool.OutputSchema == nil {
+			t.Errorf("%s is listed without the hint and output schema its helper gives it", tool.Name)
+		}
+		args := sampleArguments(t, tool)
+		if tool.Name == toolSendMessage {
+			if _, err := revoked.CallTool(t.Context(), &mcp.CallToolParams{Name: tool.Name, Arguments: args}); err == nil || !strings.Contains(err.Error(), "unknown tool") {
+				t.Fatalf("a revoked client called %s: %v", tool.Name, err)
+			}
+		} else {
+			requireToolError(t, call(t, revoked, tool.Name, args), codeNotFound)
+		}
+		requireToolError(t, call(t, panicking, tool.Name, args), codeInternal)
+		res := call(t, reader, tool.Name, args)
+		requireToolError(t, res, codeInternal)
+		if wire, _ := json.Marshal(res); bytes.Contains(wire, []byte(argCanary)) {
+			t.Fatalf("%s put the store error on the wire: %s", tool.Name, wire)
+		}
+	}
+	if strings.Contains(logs.String(), panicCanary) {
+		t.Fatalf("the panic value leaked: %s", logs.String())
+	}
+}
+
+func TestOnlyToolsRegisteredThroughTheHelpersAreCallable(t *testing.T) {
 	f := newMCPFixture(t)
 	server := mcp.NewServer(&mcp.Implementation{Name: "wawarden-test", Version: "0"}, nil)
-	k := &toolkit{reads: probeReads(f, f.archive), now: fixedNow, deadline: mcpCallDeadline}
+	k := &toolkit{reads: probeReads(f, f.archive), writes: probeWrites(f, f.archive), now: fixedNow, deadline: mcpCallDeadline}
 	registerTools(server, k)
 	if names := slices.Sorted(slices.Values(k.names)); !slices.Equal(names, toolNames) {
 		t.Fatalf("readTool recorded %q, want %q", names, toolNames)
+	}
+	registerWriteTools(server, k)
+	if names := slices.Sorted(slices.Values(k.names)); !slices.Equal(names, writeNames) {
+		t.Fatalf("readTool and writeTool recorded %q, want %q", names, writeNames)
 	}
 	server.AddTool(&mcp.Tool{Name: "unrecorded", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: argCanary}}}, nil
@@ -468,6 +535,10 @@ func TestOnlyToolsRegisteredThroughReadToolAreCallable(t *testing.T) {
 		t.Fatalf("a tool registered outside readTool answered %+v, %v", res, err)
 	}
 	requireToolError(t, call(t, cs, toolListChats, nil), codeNotFound)
+	requireToolError(t, call(t, cs, toolSendMessage, map[string]any{"chat": aliceRef, "text": "synthetic", "idempotency_key": "no-client-0001"}), codeNotFound)
+	if calls := f.sender.requests(); len(calls) != 0 {
+		t.Fatalf("a call without a write grant reached the sender: %+v", calls)
+	}
 }
 
 func TestMCPToolCallsHaveADeadline(t *testing.T) {
@@ -749,43 +820,64 @@ func TestMCPToolListMatchesTheGoldenFiles(t *testing.T) {
 	}
 	f := newMCPFixture(t)
 	validName := regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
-	for class, key := range map[string]string{"read_chats": keyGroup, "all_chats": keyAll} {
-		rec := rawMCP(t, f.handler, key, legacyCall("tools/list", "{}"), legacyHeader)
-		var reply struct {
-			Result struct {
-				Tools []map[string]any `json:"tools"`
-			} `json:"result"`
+	for _, p := range protocols {
+		for class, c := range map[string]struct {
+			key   string
+			names []string
+		}{"read_chats": {keyGroup, toolNames}, "all_chats": {keyAll, toolNames}, "write_chats": {keyAlice, writeNames}} {
+			t.Run(p.name+"/"+class, func(t *testing.T) {
+				toolListMatchesTheGoldenFile(t, f, p, class, c.key, c.names, validName)
+			})
 		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &reply); err != nil || len(reply.Result.Tools) != len(toolNames) {
-			t.Fatalf("tools/list = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func toolListMatchesTheGoldenFile(t *testing.T, f *readFixture, p protocol, class, key string, names []string, validName *regexp.Regexp) {
+	rec := &recordingTransport{handlerTransport: handlerTransport{handler: f.handler, key: key}}
+	cs := connectThrough(t, rec, p)
+	if _, err := cs.ListTools(t.Context(), nil); err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+	var reply struct {
+		Result struct {
+			Tools []map[string]any `json:"tools"`
+		} `json:"result"`
+	}
+	body := rec.last()
+	if err := json.Unmarshal(body, &reply); err != nil || len(reply.Result.Tools) != len(names) {
+		t.Fatalf("tools/list = %s", body)
+	}
+	for i, tool := range reply.Result.Tools {
+		if tool["name"] != names[i] {
+			t.Fatalf("tool %d is %v, want %s", i, tool["name"], names[i])
 		}
-		for _, tool := range reply.Result.Tools {
-			if name, _ := tool["name"].(string); !validName.MatchString(name) {
-				t.Fatalf("tool name %q is not [a-z0-9_]", name)
-			}
+	}
+	for _, tool := range reply.Result.Tools {
+		if name, _ := tool["name"].(string); !validName.MatchString(name) {
+			t.Fatalf("tool name %q is not [a-z0-9_]", name)
 		}
-		got, err := json.MarshalIndent(reply.Result.Tools, "", "  ")
-		if err != nil {
-			t.Fatalf("encode: %v", err)
+	}
+	got, err := json.MarshalIndent(reply.Result.Tools, "", "  ")
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	got = append(got, '\n')
+	for _, leak := range []string{groupRef, aliceRef, "Synthetic Group", "Alice", "client-"} {
+		if bytes.Contains(got, []byte(leak)) {
+			t.Fatalf("the %s tool list carries %q", class, leak)
 		}
-		got = append(got, '\n')
-		for _, leak := range []string{groupRef, aliceRef, "Synthetic Group", "Alice", "client-"} {
-			if bytes.Contains(got, []byte(leak)) {
-				t.Fatalf("the %s tool list carries %q", class, leak)
-			}
+	}
+	path := filepath.Join("testdata", "mcp", "tools_"+class+".json")
+	if *updateMCPTools {
+		if err := os.WriteFile(path, got, 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
 		}
-		path := filepath.Join("testdata", "mcp", "tools_"+class+".json")
-		if *updateMCPTools {
-			if err := os.WriteFile(path, got, 0o600); err != nil {
-				t.Fatalf("write %s: %v", path, err)
-			}
-		}
-		want, err := fs.ReadFile(os.DirFS(filepath.Dir(path)), filepath.Base(path))
-		if err != nil {
-			t.Fatalf("read %s: %v (regenerate with -update-mcp-tools)", path, err)
-		}
-		if !bytes.Equal(got, want) {
-			t.Fatalf("the %s tool list differs from %s (regenerate with -update-mcp-tools after review):\n%s", class, path, got)
-		}
+	}
+	want, err := fs.ReadFile(os.DirFS(filepath.Dir(path)), filepath.Base(path))
+	if err != nil {
+		t.Fatalf("read %s: %v (regenerate with -update-mcp-tools)", path, err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("the %s tool list differs from %s (regenerate with -update-mcp-tools after review):\n%s", class, path, got)
 	}
 }

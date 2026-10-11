@@ -83,7 +83,11 @@ func decided[G any](decide func(*http.Request) (G, bool), h func(context.Context
 			writeError(w, http.StatusInternalServerError, codeInternal)
 			return
 		}
-		writeResponse(w, http.StatusOK, resp)
+		status := http.StatusOK
+		if s, ok := resp.(interface{ Status() int }); ok {
+			status = s.Status()
+		}
+		writeResponse(w, status, resp)
 	}
 }
 

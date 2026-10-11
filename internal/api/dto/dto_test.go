@@ -41,6 +41,7 @@ func samples() []dto.Response {
 		dto.MessagePage{Messages: []dto.Message{sampleMessage()}, Next: &next, Truncated: true, Session: dto.Session{State: "connected"}},
 		dto.SearchPage{Messages: []dto.Message{sampleMessage()}, Next: &next, More: true, Truncated: true, Session: dto.Session{State: "connected"}},
 		dto.ChangePage{Messages: []dto.Message{sampleMessage()}, Next: &next, More: true, Truncated: true, Session: dto.Session{State: "connected"}},
+		dto.SendResult{Message: new(sampleMessage()), Replayed: true, Session: dto.Session{State: "connected"}, RetryAfterSeconds: new(5)},
 	}
 }
 
@@ -481,4 +482,27 @@ func declaredTypes(t *testing.T) []string {
 		t.Fatal("found no type declarations in package dto")
 	}
 	return names
+}
+
+func TestOnlyTheSendAnswerCarriesItsOwnStatus(t *testing.T) {
+	type statused interface{ Status() int }
+	want := map[string]int{"dto.SendResult": 201}
+	for _, r := range samples() {
+		name := reflect.TypeOf(r).String()
+		s, ok := r.(statused)
+		switch {
+		case ok && s.Status() != want[name]:
+			t.Errorf("%s answers %d, want %d", name, s.Status(), want[name])
+		case !ok && want[name] != 0:
+			t.Errorf("%s has no status of its own", name)
+		}
+		delete(want, name)
+	}
+	if len(want) != 0 {
+		t.Fatalf("no sample of %v", want)
+	}
+	_, body, err := dto.Encode(dto.SendResult{Session: dto.Session{State: "connected"}})
+	if err != nil || string(body) != `{"message":null,"replayed":false,"session":{"state":"connected"}}` {
+		t.Fatalf("an answer without a wait = %s, %v", body, err)
+	}
 }

@@ -10,7 +10,10 @@ import (
 	"github.com/dortort/wawarden/internal/metrics"
 )
 
-const jsonContentType = "application/json; charset=utf-8"
+const (
+	jsonContentType = "application/json; charset=utf-8"
+	statusCreated   = 201
+)
 
 var (
 	errNoResponse      = errors.New("dto: no response to encode")
@@ -237,6 +240,17 @@ type Message struct {
 }
 
 func (m Message) encode() (string, []byte, error) { return encodeJSON(m) }
+
+type SendResult struct {
+	Message           *Message `json:"message"`
+	Replayed          bool     `json:"replayed"`
+	Session           Session  `json:"session"`
+	RetryAfterSeconds *int     `json:"retry_after_seconds,omitempty"`
+}
+
+func (SendResult) Status() int { return statusCreated }
+
+func (r SendResult) encode() (string, []byte, error) { return encodeJSON(r) }
 
 type MessagePage struct {
 	Messages  []Message `json:"messages"`

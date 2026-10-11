@@ -39,14 +39,27 @@ type mcpEndpoint struct {
 	handler http.Handler
 }
 
-func newMCPEndpoint(s *reads, now func() time.Time, deadline time.Duration) *mcpEndpoint {
-	server := mcp.NewServer(&mcp.Implementation{Name: mcpServerName, Version: buildinfo.Version}, &mcp.ServerOptions{
+func newMCPEndpoint(s *reads, w *writes, now func() time.Time, deadline time.Duration) *mcpEndpoint {
+	read := mcp.NewServer(&mcp.Implementation{Name: mcpServerName, Version: buildinfo.Version}, &mcp.ServerOptions{
 		Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{}},
 	})
-	k := &toolkit{reads: s, now: now, deadline: deadline}
-	registerTools(server, k)
-	server.AddReceivingMiddleware(allowedMethods(k.names))
-	sdk := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{
+	readKit := &toolkit{reads: s, writes: w, now: now, deadline: deadline}
+	registerTools(read, readKit)
+	read.AddReceivingMiddleware(allowedMethods(readKit.names))
+	write := mcp.NewServer(&mcp.Implementation{Name: mcpServerName, Version: buildinfo.Version}, &mcp.ServerOptions{
+		Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{}},
+	})
+	writeKit := &toolkit{reads: s, writes: w, now: now, deadline: deadline}
+	registerTools(write, writeKit)
+	registerWriteTools(write, writeKit)
+	write.AddReceivingMiddleware(allowedMethods(writeKit.names))
+	serverFor := func(r *http.Request) *mcp.Server {
+		if _, ok := policy.DecideWrite(clientFrom(r.Context()), now()); ok {
+			return write
+		}
+		return read
+	}
+	sdk := mcp.NewStreamableHTTPHandler(serverFor, &mcp.StreamableHTTPOptions{
 		Stateless:                  true,
 		JSONResponse:               true,
 		MaxRequestBodyBytes:        maxMCPBodyBytes,

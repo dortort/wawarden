@@ -64,6 +64,7 @@ type App struct {
 	backup      *scheduler
 	backupEvery time.Duration
 	starts      int
+	recovered   int
 	serving     listenerSet
 	health      listenerSet
 	grace       time.Duration
@@ -112,6 +113,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 	for _, reason := range sendRejectReasons {
 		sendsRejected.With(reason)
 	}
+	rejected := func(reason string) { sendsRejected.With(reason).Inc() }
 
 	notifier, err := notify.New(notify.Options{
 		Writer: out, Metrics: reg, URL: cfg.Notify.URL, Secret: cfg.Notify.Secret, AllowPrivate: cfg.Notify.AllowPrivate,
@@ -139,7 +141,12 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 		return nil, errors.Join(err, archive.Close())
 	}
 	warnUnsafeRateCaps(cfg, alerts)
+	warnUnsafeSendCaps(cfg, alerts)
 	starts, err := archive.RecordStart(ctx, time.Now())
+	if err != nil {
+		return nil, errors.Join(err, archive.Close())
+	}
+	recovered, err := archive.RecoverSends(ctx, time.Now())
 	if err != nil {
 		return nil, errors.Join(err, archive.Close())
 	}
@@ -150,7 +157,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 		slog.Int("schema_version", archive.SchemaVersion()), slog.String("profile", string(archive.Profile())),
 		slog.Bool("ofd_locking", archive.OFDLocking()), slog.Int("recent_starts", starts))
 
-	a := &App{logger: logger, archive: archive, master: master, notify: notifier, emfEvery: emfInterval, backupEvery: backupInterval, starts: starts, grace: shutdownGrace}
+	a := &App{logger: logger, archive: archive, master: master, notify: notifier, emfEvery: emfInterval, backupEvery: backupInterval, starts: starts, recovered: recovered, grace: shutdownGrace}
 	if cfg.MetricsEMF {
 		a.emf = metrics.NewEMF(reg, out, time.Now)
 	}
@@ -199,6 +206,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 			Authenticator: auth, Metrics: reg, Archive: archive.Scoped(), Audit: readAudit{audit: archive.Audit()},
 			Session: func() string { return string(a.engine.Status().State) }, Cursors: cursors, Refs: refs,
 			Limits: api.ReadLimits{ReadsPerMinute: cfg.ReadPerMinute, SearchesPerMinute: cfg.SearchPerMinute},
+			Sender: sendService{sender: newSender(cfg, archive, a.engine, notifier), rejected: rejected}, SendRejected: rejected,
 		}),
 	}}
 	if cfg.AdminCredential != nil {
@@ -291,6 +299,9 @@ func (a *App) Inventory() []listeners.Bound {
 func (a *App) Run(ctx context.Context) error {
 	a.notify.Start(context.WithoutCancel(ctx))
 	a.announceKeyChange(ctx)
+	for range a.recovered {
+		a.notify.SendOutcomeUnknown(reasonRestart)
+	}
 	a.engine.Start(context.WithoutCancel(ctx), a.starts)
 	emitting, stopEmitting := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopEmitting()

@@ -35,8 +35,39 @@ func testClientDeps(t testing.TB, auth Authenticator, now func() time.Time) Clie
 	cursors, refs := testSealers(t)
 	return ClientDeps{
 		Authenticator: auth, Metrics: metrics.NewRegistry(), Now: now, Archive: &fakeArchive{}, Audit: &fakeAuditor{},
-		Session: func() string { return "connected" }, Cursors: cursors, Refs: refs,
+		Session: func() string { return "connected" }, Cursors: cursors, Refs: refs, Sender: &fakeSender{}, SendRejected: func(string) {},
 	}
+}
+
+type fakeSender struct {
+	mu     sync.Mutex
+	calls  []SendRequest
+	grants []string
+	answer func(ctx context.Context, client string, req SendRequest) (Sent, error)
+}
+
+func (f *fakeSender) Send(g policy.WriteGrant, ctx context.Context, req SendRequest) (Sent, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, req)
+	f.grants = append(f.grants, g.Client())
+	answer := f.answer
+	f.mu.Unlock()
+	if answer == nil {
+		return Sent{}, errors.New("synthetic: no scripted answer")
+	}
+	return answer(ctx, g.Client(), req)
+}
+
+func (f *fakeSender) script(answer func(ctx context.Context, client string, req SendRequest) (Sent, error)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.answer = answer
+}
+
+func (f *fakeSender) requests() []SendRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.calls)
 }
 
 type fakeAuditor struct {

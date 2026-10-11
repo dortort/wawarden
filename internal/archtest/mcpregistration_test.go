@@ -1,26 +1,32 @@
 package archtest
 
-import "go/ast"
+import (
+	"go/ast"
+	"slices"
+)
 
 const (
 	mcpPackage      = mcpModule + "/mcp"
 	mcpToolsFile    = apiDir + "/tools.go"
 	mcpEndpointFile = apiDir + "/mcp.go"
-	mcpToolHelper   = "readTool"
+	mcpReadHelper   = "readTool"
+	mcpWriteHelper  = "writeTool"
 	mcpEndpointFunc = "newMCPEndpoint"
 )
 
+var mcpToolHelpers = []string{mcpReadHelper, mcpWriteHelper}
+
 type mcpSite struct{ file, fn string }
 
-var mcpServerSurface = map[string]mcpSite{
-	"AddTool":                  {mcpToolsFile, mcpToolHelper},
-	"NewServer":                {mcpEndpointFile, mcpEndpointFunc},
-	"AddReceivingMiddleware":   {mcpEndpointFile, mcpEndpointFunc},
-	"AddSendingMiddleware":     {mcpEndpointFile, mcpEndpointFunc},
-	"AddPrompt":                {},
-	"AddResource":              {},
-	"AddResourceTemplate":      {},
-	"AddReceivingCustomMethod": {},
+var mcpServerSurface = map[string][]mcpSite{
+	"AddTool":                  {{mcpToolsFile, mcpReadHelper}, {mcpToolsFile, mcpWriteHelper}},
+	"NewServer":                {{mcpEndpointFile, mcpEndpointFunc}},
+	"AddReceivingMiddleware":   {{mcpEndpointFile, mcpEndpointFunc}},
+	"AddSendingMiddleware":     {{mcpEndpointFile, mcpEndpointFunc}},
+	"AddPrompt":                nil,
+	"AddResource":              nil,
+	"AddResourceTemplate":      nil,
+	"AddReceivingCustomMethod": nil,
 }
 
 var mcpRegistrationRule = rule{
@@ -112,7 +118,7 @@ func f() {
 	sdk.AddTool[struct{}, any](nil, nil, nil)
 }
 `},
-		{name: "the tool helper", rel: mcpToolsFile, src: `package api
+		{name: "the tool helpers", rel: mcpToolsFile, src: `package api
 
 import "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -120,6 +126,14 @@ func readTool(server *mcp.Server, tool *mcp.Tool, h mcp.ToolHandler) {
 	register := func() { server.AddTool(tool, h) }
 	register()
 }
+
+func writeTool(server *mcp.Server, tool *mcp.Tool, h mcp.ToolHandler) { server.AddTool(tool, h) }
+`},
+		{name: "the write helper in another file", rel: "internal/api/sends.go", want: 1, src: `package api
+
+import "github.com/modelcontextprotocol/go-sdk/mcp"
+
+func writeTool(server *mcp.Server, tool *mcp.Tool, h mcp.ToolHandler) { server.AddTool(tool, h) }
 `},
 		{name: "the endpoint constructor", rel: mcpEndpointFile, src: `package api
 
@@ -188,10 +202,10 @@ func checkMCPRegistration(f *sourceFile) []string {
 				return true
 			}
 			switch {
-			case allowed.fn == "":
+			case len(allowed) == 0:
 				out = append(out, f.at(sel.Sel, "%s adds a capability to the MCP server, which serves tools only", sel.Sel.Name))
-			case allowed != site:
-				out = append(out, f.at(sel.Sel, "%s outside %s in %s reaches the MCP server without the helper every tool and middleware goes through", sel.Sel.Name, allowed.fn, allowed.file))
+			case !slices.Contains(allowed, site):
+				out = append(out, f.at(sel.Sel, "%s outside %s in %s reaches the MCP server without the helper every tool and middleware goes through", sel.Sel.Name, allowed[0].fn, allowed[0].file))
 			}
 			return true
 		})

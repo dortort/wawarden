@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,6 +62,8 @@ type readFixture struct {
 	cursors *cursor.Sealer
 	refs    *cursor.Sealer
 	state   string
+	sender  *fakeSender
+	scope   *atomic.Int64
 }
 
 func syntheticMessage(chat policy.CanonicalChat, ref string, seq int64, sender policy.CanonicalChat) scoped.Message {
@@ -95,6 +98,13 @@ func newReadFixture(t *testing.T) *readFixture {
 	deps := testClientDeps(t, f.clients, f.clock.now)
 	deps.Archive, deps.Audit = f.archive, f.audit
 	deps.Session = func() string { return f.state }
+	f.sender, f.scope = &fakeSender{}, &atomic.Int64{}
+	deps.Sender = f.sender
+	deps.SendRejected = func(reason string) {
+		if reason == "scope" {
+			f.scope.Add(1)
+		}
+	}
 	f.cursors, f.refs = deps.Cursors, deps.Refs
 	f.handler = NewClientHandler(deps)
 	return f
