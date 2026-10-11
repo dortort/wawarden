@@ -118,7 +118,8 @@ The admin token never expires. To replace it:
 Log pseudonyms and new message references change; cursors and references
 issued before keep working while their key stays in `keys/retired/`. Nothing
 deletes a retired key, and `audit verify` needs every key its `key ids` line
-lists. An `audit_key_changed` at `WARN`, with `previous_key` `missing`, means
+lists, and so does the audit retention, which removes no row it cannot
+verify. An `audit_key_changed` at `WARN`, with `previous_key` `missing`, means
 the master key was replaced without keeping the old one: restore your copy of
 it into `keys/retired/` under its key id, as `keys rotate` would have.
 
@@ -197,7 +198,14 @@ jq -cR 'fromjson? | select(.event == "audit" and .ts < "2026-10-11T02:59")' \
 | `hmac_mismatch`, `id_gap`, `retired_key`, shipped heads missing from a capture cut at the backup's time | Rows were altered, removed or reordered, or the copy is not what you think: treat it as an incident, keep the files, and compare with older backups. |
 
 Rows older than `WAWARDEN_AUDIT_RETENTION_DAYS` are removed each night after
-the backup, behind a signed anchor, and the service logs `audit_pruned`.
+the backup, behind a signed anchor, and the service logs `audit_pruned`. An
+`audit_prune_refused` with `chain_mismatch` means the anchor or a row due for
+removal did not verify under the master key and the retired keys, so nothing
+was removed: run `audit verify` on a fresh backup as above, with the
+service's `keys/master` and `keys/retired/`. `unknown_key` there means a key
+is missing from `keys/retired/`; restore it as in
+[Rotating the master key](#rotating-the-master-key). Treat any other result as
+the table says.
 
 ## Upgrading
 
