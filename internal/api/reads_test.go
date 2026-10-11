@@ -290,20 +290,24 @@ func TestMessagesCarryTheFixedShape(t *testing.T) {
 	f.archive.messages[2].SavedName = "Saved Alice"
 	f.archive.messages[3].ReplyID, f.archive.messages[3].ReplySender, f.archive.messages[3].QuoteVerified = "SYNTHETIC1", aliceChat, true
 	f.archive.messages[4].Text = ""
-	page := decodeBody[pageView](t, f.get(t, keyGroup, "/v1/chats/"+groupRef+"/messages?limit=5"))
-	if len(page.Messages) != 5 || page.Next == nil || page.Truncated {
+	f.archive.messages[5].FromMe, f.archive.messages[5].SentBy = true, "client07"
+	page := decodeBody[pageView](t, f.get(t, keyGroup, "/v1/chats/"+groupRef+"/messages?limit=6"))
+	if len(page.Messages) != 6 || page.Next == nil || page.Truncated {
 		t.Fatalf("page = %+v", page)
 	}
 	for i, m := range page.Messages {
 		if !m.Untrusted || m.Chat != groupRef || m.Sender.ID != aliceChat.JID() {
 			t.Fatalf("message %d = %+v", i, m)
 		}
-		if want := "peer"; i != 0 && m.Origin != want {
+		if want := "peer"; i != 0 && i != 5 && m.Origin != want {
 			t.Fatalf("message %d origin = %q, want %q", i, m.Origin, want)
 		}
 	}
 	if m := page.Messages[0]; !m.FromMe || m.Origin != "owner" || m.TS != "2026-01-02T03:14:05.000Z" {
 		t.Fatalf("own message = %+v", m)
+	}
+	if m := page.Messages[5]; !m.FromMe || m.Origin != "gateway:client07" {
+		t.Fatalf("gateway send = %+v", m)
 	}
 	if m := page.Messages[1]; !m.Revoked || m.Text != nil || m.TextDisplay != nil {
 		t.Fatalf("revoked message = %+v", m)
@@ -330,7 +334,7 @@ func TestMessagesCarryTheFixedShape(t *testing.T) {
 		t.Fatalf("message by reference = %+v", self)
 	}
 	next := decodeBody[pageView](t, f.get(t, keyGroup, "/v1/chats/"+groupRef+"/messages?limit=5&cursor="+*page.Next))
-	if len(next.Messages) != 5 || *next.Messages[0].Text != "synthetic text 5" || next.Next != nil {
+	if len(next.Messages) != 4 || *next.Messages[0].Text != "synthetic text 4" || next.Next != nil {
 		t.Fatalf("second page = %+v", next)
 	}
 }

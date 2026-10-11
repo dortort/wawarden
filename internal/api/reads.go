@@ -44,8 +44,9 @@ const (
 	envelopeBytes    = 1 << 10
 	maxTextBytes     = 32 << 10
 
-	originOwner = "owner"
-	originPeer  = "peer"
+	originOwner   = "owner"
+	originPeer    = "peer"
+	originGateway = "gateway:"
 
 	stateDisconnected = "disconnected"
 	readTimeLayout    = "2006-01-02T15:04:05.000Z07:00"
@@ -464,7 +465,10 @@ func (s *reads) messageItem(client string, m scoped.Message) (dto.Message, error
 		FromMe: m.FromMe, TS: readTime(m.At), Kind: m.Kind, MediaType: optional(m.MediaType), ReplyTo: reply,
 		QuoteVerified: m.QuoteVerified, EditedAt: optionalReadTime(m.EditedAt), Revoked: m.Revoked, Origin: originPeer, Untrusted: true,
 	}
-	if m.FromMe {
+	switch {
+	case m.SentBy != "":
+		out.Origin = originGateway + m.SentBy
+	case m.FromMe:
 		out.Origin = originOwner
 	}
 	if !m.Revoked {

@@ -195,6 +195,35 @@ func TestMessageRowsCarryTheirState(t *testing.T) {
 	}
 }
 
+func TestAGatewaySendCarriesItsClientAndOtherRowsNone(t *testing.T) {
+	s := openStore(t)
+	insert(t, s, message(t, alice, "A", alice, "inbound", epoch))
+	own := message(t, alice, "B", "15550100009@s.whatsapp.net", "from the phone", epoch.Add(time.Minute))
+	own.FromMe = true
+	insert(t, s, own)
+	g, ok := policy.DecideWrite(&policy.Client{ID: "client07", Write: map[policy.CanonicalChat]struct{}{chat(t, alice): {}}, ExpiresAt: epoch.Add(time.Hour)}, epoch)
+	if !ok {
+		t.Fatal("DecideWrite refused a live write client")
+	}
+	sent := message(t, alice, "C", "15550100009@s.whatsapp.net", "from the gateway", epoch.Add(2*time.Minute))
+	sent.FromMe = true
+	write(t, s, func(tx *ingest.Tx) error {
+		_, err := tx.RecordSent(g, sent, nil)
+		return err
+	})
+	page, _, err := s.Scoped().Messages(grant(t, alice), t.Context(), refOf(t, s, alice), scoped.MessagePosition{}, scoped.Older, 5)
+	if err != nil || len(page.Messages) != 3 {
+		t.Fatalf("Messages = %+v, %v", page, err)
+	}
+	if got := []string{page.Messages[0].SentBy, page.Messages[1].SentBy, page.Messages[2].SentBy}; got[0] != "client07" || got[1] != "" || got[2] != "" {
+		t.Fatalf("sent by = %q, want the client on the gateway send only", got)
+	}
+	m, found, err := s.Scoped().Message(grant(t, alice), t.Context(), chat(t, alice), "C", page.Messages[0].Sender)
+	if err != nil || !found || m.SentBy != "client07" {
+		t.Fatalf("Message = %+v, %v, %v", m, found, err)
+	}
+}
+
 func TestOneMessageResolvesThroughTheLIDMapAndTheGrant(t *testing.T) {
 	s := openStore(t)
 	insert(t, s, message(t, alice, "A", alice, "by phone", epoch))

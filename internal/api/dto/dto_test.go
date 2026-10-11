@@ -16,7 +16,7 @@ import (
 	"github.com/dortort/wawarden/internal/metrics"
 )
 
-var forbiddenKeys = []string{"raw", "media_meta", "sender_alt", "seq", "token"}
+var forbiddenKeys = []string{"raw", "media_meta", "sender_alt", "seq", "token", "sent_by"}
 
 func samples() []dto.Response {
 	last, next := "2026-10-05T12:00:00Z", "AQoLDA0OSYNTHETICCURSOR"

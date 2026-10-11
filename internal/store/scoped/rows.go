@@ -62,6 +62,7 @@ type Message struct {
 	QuoteVerified bool                 `json:"-"`
 	EditedAt      time.Time            `json:"-"`
 	Revoked       bool                 `json:"-"`
+	SentBy        string               `json:"-"`
 	Position      MessagePosition      `json:"-"`
 	Change        ChangePosition       `json:"-"`
 }
@@ -159,11 +160,11 @@ func scanFirst(rs rowScanner) (sql.NullInt64, error) {
 func scanMessage(rs rowScanner) (Message, error) {
 	var m Message
 	var chat, sender string
-	var pushName, savedName, text, display, media, replyID, replySender sql.NullString
+	var pushName, savedName, text, display, media, replyID, replySender, sentBy sql.NullString
 	var verified, edited sql.NullInt64
 	var ts int64
 	if err := rs.Scan(&m.Position.Seq, &ts, &m.Change.ChangeSeq, &chat, &m.ChatRef, &m.ID, &sender, &pushName, &savedName,
-		&m.FromMe, &m.Kind, &text, &display, &media, &replyID, &replySender, &verified, &edited, &m.Revoked); err != nil {
+		&m.FromMe, &m.Kind, &text, &display, &media, &replyID, &replySender, &verified, &edited, &m.Revoked, &sentBy); err != nil {
 		return Message{}, err
 	}
 	var err error
@@ -181,5 +182,6 @@ func scanMessage(rs rowScanner) (Message, error) {
 	}
 	m.Position.TS, m.At, m.EditedAt = ts, time.UnixMilli(ts).UTC(), fromMS(edited)
 	m.PushName, m.SavedName, m.Text, m.TextDisplay, m.MediaType = pushName.String, savedName.String, text.String, display.String, media.String
+	m.SentBy = sentBy.String
 	return m, nil
 }
