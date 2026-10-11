@@ -162,8 +162,11 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 	}
 	a.backup = &scheduler{
 		archive: archive, status: a.engine.Status, unpairs: unpairs.count.Load, logger: logger, now: time.Now,
-		minute: cfg.BackupMinute, keep: cfg.BackupKeep,
+		minute: cfg.BackupMinute, keep: cfg.BackupKeep, retain: time.Duration(cfg.AuditRetention) * 24 * time.Hour,
 		gauge: reg.Gauge("wawarden_backup_last_success_timestamp_seconds", "Unix time at which the newest successful backup began, 0 until one succeeds."),
+	}
+	if master != nil {
+		a.backup.audit = archive.Audit().Prune
 	}
 	switch {
 	case cfg.BackupRecipient == "":

@@ -128,7 +128,7 @@ func testConfig(t *testing.T, adminToken string) config.Config {
 	t.Helper()
 	loopback := netip.MustParseAddrPort("127.0.0.1:0")
 	cfg := config.Config{DataDir: t.TempDir(), UID: os.Geteuid(), Listen: loopback, AdminListen: loopback, HealthListen: loopback, StorageProfile: config.StorageLocal, MinFreeBytes: 1, HistoryMaxBytes: config.DefaultHistoryMaxBytes,
-		BackupMinute: config.DefaultBackupMinute, BackupKeep: config.DefaultBackupKeep}
+		BackupMinute: config.DefaultBackupMinute, BackupKeep: config.DefaultBackupKeep, AuditRetention: config.DefaultAuditRetentionDays}
 	if adminToken != "" {
 		cred, err := policy.ParseAdminCredential(token.Hash(adminToken))
 		if err != nil {

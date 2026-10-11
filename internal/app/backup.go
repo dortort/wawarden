@@ -11,6 +11,7 @@ import (
 
 	"github.com/dortort/wawarden/internal/engine"
 	"github.com/dortort/wawarden/internal/metrics"
+	"github.com/dortort/wawarden/internal/store/admin"
 	"github.com/dortort/wawarden/internal/store/ingest"
 )
 
@@ -36,11 +37,13 @@ type scheduler struct {
 	take    func(context.Context) (string, error)
 	prune   func(ctx context.Context, keep int, protect string) (removed, kept int, err error)
 	changes func(context.Context) ([2]int64, error)
+	audit   func(ctx context.Context, cutoff, now time.Time, batch int) (admin.PruneResult, error)
 	gauge   *metrics.Gauge
 	logger  *slog.Logger
 	now     func() time.Time
 	minute  int
 	keep    int
+	retain  time.Duration
 
 	seen      uint64
 	loaded    bool
@@ -51,6 +54,8 @@ type scheduler struct {
 	lastTaken [2]int64
 	skipped   time.Time
 	blobSlot  time.Time
+	auditSlot time.Time
+	started   time.Time
 }
 
 type unpairCounter struct {
@@ -96,7 +101,7 @@ func (b *scheduler) check(ctx context.Context) error {
 		return err
 	}
 	var errs []error
-	for _, step := range []func(context.Context) error{b.initial, b.nightly, b.pruneBlobs} {
+	for _, step := range []func(context.Context) error{b.initial, b.nightly, b.pruneAudit, b.pruneBlobs} {
 		if errs = append(errs, step(ctx)); ctx.Err() != nil {
 			break
 		}
@@ -264,6 +269,38 @@ func (b *scheduler) pruneBlobs(ctx context.Context) error {
 	b.blobSlot = slot
 	if total > 0 {
 		b.logger.Info("processed history blob rows older than 30 days were deleted", slog.String("event", "history_blobs_pruned"), slog.Int("rows", total))
+	}
+	return nil
+}
+
+func (b *scheduler) pruneAudit(ctx context.Context) error {
+	now := b.now()
+	if b.started.IsZero() {
+		b.started = now
+	}
+	slot := lastSlot(now, b.minute)
+	if b.audit == nil || b.retain <= 0 || slot.Equal(b.auditSlot) || now.Before(b.started.Add(settleAfter)) ||
+		(b.take != nil && owed(now, b.last, b.minute) && !slot.Equal(b.skipped)) {
+		return nil
+	}
+	cutoff, until := now.Add(-b.retain), now.Add(pruneLimit)
+	var pruned admin.PruneResult
+	for {
+		res, err := b.audit(ctx, cutoff, now, ingest.PruneBatch)
+		if err != nil {
+			return err
+		}
+		if res.Rows > 0 {
+			pruned.Rows, pruned.Through, pruned.AnchorHead = pruned.Rows+res.Rows, res.Through, res.AnchorHead
+		}
+		if res.Rows == 0 || !b.now().Before(until) || ctx.Err() != nil {
+			break
+		}
+	}
+	b.auditSlot = slot
+	if pruned.Rows > 0 {
+		b.logger.Info("audit rows older than the retention were removed up to the signed audit anchor", slog.String("event", "audit_pruned"),
+			slog.Int64("through", pruned.Through), slog.Int64("rows", pruned.Rows), slog.String("anchor_head", pruned.AnchorHead))
 	}
 	return nil
 }
