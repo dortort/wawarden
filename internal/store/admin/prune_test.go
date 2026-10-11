@@ -374,7 +374,7 @@ func appendRow(t *testing.T, d *sql.DB, under *keys.Master, id int64, prev []byt
 func TestARetiredKeyCannotStandInForTheCurrentOne(t *testing.T) {
 	f, previous, current, heads := rotatedChain(t)
 	far := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
-	first, forged := storedHMAC(t, f, 1), bytes.Repeat([]byte{0x5a}, 32)
+	first, last, forged := storedHMAC(t, f, 1), storedHMAC(t, f, 6), bytes.Repeat([]byte{0x5a}, 32)
 	unnamed := append([]admin.Head(nil), heads...)
 	for i := range unnamed {
 		unnamed[i].KeyID = ""
@@ -398,6 +398,7 @@ func TestARetiredKeyCannotStandInForTheCurrentOne(t *testing.T) {
 		}, heads: heads, missing: 3},
 		{name: "the current key's rows cut from the end behind an anchor under the retired key", tamper: cutTheEnd, heads: heads, missing: 3},
 		{name: "the same cut against lines that name no key", tamper: cutTheEnd, heads: unnamed, missing: 3},
+		{name: "a row under the retired key appended after the current key's rows", tamper: func(d *sql.DB) { appendRow(t, d, previous, 7, last) }, heads: heads, firstBad: 7, problem: admin.ReasonRetiredKey},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			path := f.copyArchive(t)
@@ -414,6 +415,21 @@ func TestARetiredKeyCannotStandInForTheCurrentOne(t *testing.T) {
 				t.Fatalf("Verify = %+v, want first bad row %d (%q) and the current key's %d heads missing", rep, tt.firstBad, tt.problem, tt.missing)
 			}
 		})
+	}
+
+	fifth := storedHMAC(t, f, 5)
+	if res := prune(t, f, start.Add(62500*time.Millisecond), pruneBatch); res.Through != 5 {
+		t.Fatalf("Prune under the current key = %+v, want the anchor at row 5", res)
+	}
+	path := f.copyArchive(t)
+	d := rawOpen(t, path)
+	exec(t, d, unlock, "DELETE FROM audit WHERE id = 6")
+	appendRow(t, d, previous, 6, fifth)
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if rep := verify(t, f, path, nil); rep.OK() || rep.FirstBad != 6 || rep.Problem != admin.ReasonRetiredKey {
+		t.Fatalf("a row under the retired key after an anchor at the current key's row = %+v, want it refused", rep)
 	}
 }
 

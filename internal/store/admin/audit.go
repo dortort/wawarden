@@ -31,6 +31,7 @@ const (
 	ReasonIDGap        = "id_gap"
 	ReasonHMACMismatch = "hmac_mismatch"
 	ReasonUnknownKey   = "unknown_key"
+	ReasonRetiredKey   = "retired_key"
 )
 
 var (
@@ -270,7 +271,7 @@ func Verify(ctx context.Context, path string, master *keys.Master, heads []Head)
 			return err
 		}
 		prev, prevID := genesis, int64(0)
-		retiredAnchor := false
+		retiredAnchor, afterMaster := false, false
 		if anchored = ok; ok {
 			rep.PrunedThrough, rep.AnchorTS = an.through, an.ts
 			if len(an.rowHMAC) >= headBytes {
@@ -281,6 +282,7 @@ func Verify(ctx context.Context, path string, master *keys.Master, heads []Head)
 			}
 			masterAnchor = rep.Bad == 0 && an.macKeyID == master.ID()
 			retiredAnchor = rep.Bad == 0 && !masterAnchor
+			afterMaster = an.keyID == master.ID()
 			prev, prevID = an.rowHMAC, an.through
 		}
 		rows, err := q.QueryContext(ctx, selectAuditRows)
@@ -307,6 +309,8 @@ func Verify(ctx context.Context, path string, master *keys.Master, heads []Head)
 				problem = ReasonIDGap
 			case key == nil:
 				problem = ReasonUnknownKey
+			case afterMaster && r.keyID != master.ID():
+				problem = ReasonRetiredKey
 			case !hmac.Equal(rowMAC(key, r, prev), stored):
 				problem = ReasonHMACMismatch
 			default:
@@ -326,6 +330,7 @@ func Verify(ctx context.Context, path string, master *keys.Master, heads []Head)
 				rep.Head = head
 			}
 			prev, prevID = stored, r.id
+			afterMaster = afterMaster || r.keyID == master.ID()
 		}
 		if retiredAnchor && rep.Rows == 0 {
 			rep.Bad, rep.FirstBad, rep.Problem = 1, an.through, ReasonAnchorInvalid
