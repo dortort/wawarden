@@ -671,8 +671,8 @@ func TestMigratingKeepsEarlierFactsLive(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	s := openWith(t, opts)
-	if s.SchemaVersion() != 3 {
-		t.Fatalf("schema version %d after migrating, want 3", s.SchemaVersion())
+	if s.SchemaVersion() != 4 {
+		t.Fatalf("schema version %d after migrating, want 4", s.SchemaVersion())
 	}
 	write(t, s, func(tx *Tx) error {
 		if err := tx.ReplaceParticipants(chat(t, groupJID), []Participant{{User: chat(t, alice), Admin: true}}, OriginHistory); err != nil {

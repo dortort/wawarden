@@ -64,7 +64,7 @@ func (tx *Tx) LearnLID(lid, pn policy.CanonicalChat, source MappingSource, at ti
 		return LIDResult{}, invalid("lid")
 	case !pn.Valid() || pn.Kind() != policy.PhoneChat:
 		return LIDResult{}, invalid("phone number")
-	case source != MappingSenderAlt && source != MappingRecipientAlt && source != MappingHistory:
+	case source != MappingSenderAlt && source != MappingRecipientAlt && source != MappingHistory && source != MappingSelf:
 		return LIDResult{}, invalid("mapping source")
 	case at.IsZero():
 		return LIDResult{}, invalid("time")

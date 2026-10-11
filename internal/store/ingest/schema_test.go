@@ -61,8 +61,8 @@ func TestMigratingToVersion3NumbersEveryMessageAndNamesEveryChat(t *testing.T) {
 	openAtVersion(t, opts, []string{schemaV1, schemaV2}, append(seedMessages(alice, 25001),
 		"INSERT INTO chats (jid, kind, name, name_source) VALUES ('"+groupJID+"', 3, 'Subject', 'group_subject')")...)
 	s := openWith(t, opts)
-	if s.SchemaVersion() != 3 {
-		t.Fatalf("schema version %d, want 3", s.SchemaVersion())
+	if s.SchemaVersion() != 4 {
+		t.Fatalf("schema version %d, want 4", s.SchemaVersion())
 	}
 	requireNumbered(t, s, 25001)
 	refs := strings.Fields(scalar[string](t, s, "SELECT group_concat(ref, ' ') FROM chats"))

@@ -10,7 +10,7 @@ import (
 )
 
 func migrate(ctx context.Context, d *db.DB) (int, error) {
-	return d.Migrate(ctx, []string{schemaV1, schemaV2, schemaV3})
+	return d.Migrate(ctx, []string{schemaV1, schemaV2, schemaV3, schemaV4})
 }
 
 const (
@@ -258,4 +258,81 @@ CREATE TRIGGER audit_no_replace BEFORE INSERT ON audit
 WHEN NEW.id IS NOT NULL AND EXISTS (SELECT 1 FROM audit WHERE id = NEW.id) BEGIN
 	SELECT RAISE(ABORT, 'audit rows are append-only');
 END;
+`
+
+const schemaV4 = `
+ALTER TABLE messages ADD COLUMN sent_by TEXT CHECK (sent_by IS NULL OR length(sent_by) = 8);
+
+CREATE INDEX messages_inbound ON messages (chat_jid) WHERE from_me = 0;
+
+CREATE TABLE idempotency (
+	client_id TEXT NOT NULL CHECK (length(client_id) = 8),
+	key TEXT NOT NULL CHECK (length(key) BETWEEN 8 AND 128),
+	state TEXT NOT NULL CHECK (state = 'pending' OR state = 'done' OR state = 'failed'),
+	fingerprint BLOB NOT NULL CHECK (length(fingerprint) = 32),
+	msg_id TEXT NOT NULL,
+	reserved_at INTEGER NOT NULL,
+	next_ok_at INTEGER NOT NULL,
+	counted INTEGER NOT NULL CHECK (counted = 0 OR counted = 1),
+	settled_at INTEGER,
+	result TEXT,
+	expires_at INTEGER NOT NULL,
+	PRIMARY KEY (client_id, key)
+) STRICT, WITHOUT ROWID;
+
+CREATE INDEX idempotency_window ON idempotency (reserved_at) WHERE counted = 1;
+
+CREATE INDEX idempotency_client_window ON idempotency (client_id, reserved_at) WHERE counted = 1;
+
+CREATE INDEX idempotency_expiry ON idempotency (expires_at);
+
+CREATE TABLE backfills (
+	request_id TEXT PRIMARY KEY,
+	chat_jid TEXT NOT NULL,
+	count INTEGER NOT NULL CHECK (count BETWEEN 1 AND 50),
+	requested_at INTEGER NOT NULL,
+	completed_at INTEGER
+) STRICT;
+
+CREATE INDEX backfills_requested ON backfills (requested_at);
+
+CREATE TABLE audit_anchor (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	through INTEGER NOT NULL CHECK (through >= 1),
+	ts INTEGER NOT NULL,
+	key_id TEXT NOT NULL,
+	row_hmac BLOB NOT NULL CHECK (length(row_hmac) = 32),
+	pruned_at INTEGER NOT NULL,
+	mac_key_id TEXT NOT NULL,
+	mac BLOB NOT NULL CHECK (length(mac) = 32)
+) STRICT;
+
+CREATE TRIGGER audit_anchor_forward BEFORE UPDATE ON audit_anchor
+WHEN NEW.through <= OLD.through BEGIN
+	SELECT RAISE(ABORT, 'the audit anchor only moves forward');
+END;
+
+CREATE TRIGGER audit_anchor_keep BEFORE DELETE ON audit_anchor BEGIN
+	SELECT RAISE(ABORT, 'the audit anchor is never removed');
+END;
+
+DROP TRIGGER audit_no_delete;
+
+CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit
+WHEN OLD.id > coalesce((SELECT through FROM audit_anchor), 0) OR OLD.id >= (SELECT max(id) FROM audit) BEGIN
+	SELECT RAISE(ABORT, 'audit rows are append-only');
+END;
+
+CREATE TABLE lid_map_v4 (
+	lid TEXT PRIMARY KEY,
+	pn TEXT NOT NULL UNIQUE,
+	source TEXT NOT NULL CHECK (source = 'sender_alt' OR source = 'recipient_alt' OR source = 'history' OR source = 'self'),
+	learned_ts INTEGER NOT NULL
+) STRICT;
+
+INSERT INTO lid_map_v4 (lid, pn, source, learned_ts) SELECT lid, pn, source, learned_ts FROM lid_map;
+
+DROP TABLE lid_map;
+
+ALTER TABLE lid_map_v4 RENAME TO lid_map;
 `

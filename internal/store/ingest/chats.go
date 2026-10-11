@@ -21,6 +21,7 @@ const (
 	MappingSenderAlt    MappingSource = "sender_alt"
 	MappingRecipientAlt MappingSource = "recipient_alt"
 	MappingHistory      MappingSource = "history"
+	MappingSelf         MappingSource = "self"
 )
 
 type LIDOutcome uint8
