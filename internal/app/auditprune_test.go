@@ -125,6 +125,27 @@ func TestTheAuditPruneWaitsForAnOwedBackup(t *testing.T) {
 	}
 }
 
+func TestTheAuditPruneWaitsForTheFirstBackup(t *testing.T) {
+	tr, stub := auditTrigger(t, triggerArchive(t))
+	tr.at(t, 0)
+	tr.at(t, 2*time.Hour)
+	if tr.takes != 0 || len(stub.calls) != 0 {
+		t.Fatalf("unpaired with a recipient: %d backups, %d audit prunes, want none", tr.takes, len(stub.calls))
+	}
+	tr.status, tr.fail = pairedStatus, true
+	tr.at(t, 3*time.Hour)
+	tr.at(t, 3*time.Hour+settleAfter)
+	tr.on(t, day(1, 3, 0, 0))
+	if tr.takes != 2 || len(stub.calls) != 0 {
+		t.Fatalf("with the first backup failing: %d backups, %d audit prunes, want 2 and none", tr.takes, len(stub.calls))
+	}
+	tr.fail = false
+	tr.on(t, day(1, 3, 30, 0))
+	if tr.takes != 3 || len(stub.calls) != 1 {
+		t.Fatalf("after the first backup succeeded: %d backups, %d audit prunes, want 3 and 1", tr.takes, len(stub.calls))
+	}
+}
+
 func TestTheAuditPruneLoopsToTheEndAndLogsOnce(t *testing.T) {
 	tr, stub := auditTrigger(t, triggerArchive(t))
 	tr.b.take = nil
@@ -147,6 +168,7 @@ func TestTheAuditPruneLoopsToTheEndAndLogsOnce(t *testing.T) {
 
 func TestTheAuditPruneStopsAtItsTimeLimit(t *testing.T) {
 	tr, stub := auditTrigger(t, triggerArchive(t))
+	tr.b.take = nil
 	tr.b.started = backupEpoch.Add(-time.Hour)
 	stub.results = []admin.PruneResult{{Rows: ingest.PruneBatch, Through: ingest.PruneBatch}, {Rows: ingest.PruneBatch, Through: 2 * ingest.PruneBatch}}
 	calls := 0

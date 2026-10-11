@@ -280,7 +280,7 @@ func (b *scheduler) pruneAudit(ctx context.Context) error {
 	}
 	slot := lastSlot(now, b.minute)
 	if b.audit == nil || b.retain <= 0 || slot.Equal(b.auditSlot) || now.Before(b.started.Add(settleAfter)) ||
-		(b.take != nil && owed(now, b.last, b.minute) && !slot.Equal(b.skipped)) {
+		(b.take != nil && (b.last.IsZero() || owed(now, b.last, b.minute)) && !slot.Equal(b.skipped)) {
 		return nil
 	}
 	cutoff, until := now.Add(-b.retain), now.Add(pruneLimit)
