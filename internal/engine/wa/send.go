@@ -43,8 +43,6 @@ type socketState interface {
 
 func usable(s socketState) bool { return s.IsConnected() && s.IsLoggedIn() }
 
-func loggedIn(cli *whatsmeow.Client) bool { return usable(cli) }
-
 func (c *Client) NewMessageID() string { return c.current().GenerateMessageID() }
 
 func (c *Client) Send(ctx context.Context, req engine.SendRequest) (engine.Sent, error) {
@@ -66,7 +64,7 @@ func (c *Client) Send(ctx context.Context, req engine.SendRequest) (engine.Sent,
 	resp, err := c.transmit(sctx, cli, to, msg, whatsmeow.SendRequestExtra{ID: req.ID, Timeout: ackTimeout})
 	switch {
 	case err != nil:
-		return engine.Sent{}, classify(resp, err)
+		return engine.Sent{}, classify(resp, err, to.Server == types.DefaultUserServer)
 	case resp.ID != req.ID:
 		return engine.Sent{}, engine.ErrOutcomeUnknown
 	}
@@ -95,7 +93,7 @@ func (c *Client) Backfill(ctx context.Context, req engine.BackfillRequest) (stri
 	defer cancel()
 	resp, err := c.transmitPeer(sctx, cli, msg)
 	if err != nil {
-		return resp.ID, classify(resp, err)
+		return resp.ID, classify(resp, err, false)
 	}
 	return resp.ID, nil
 }
@@ -168,7 +166,7 @@ func outgoing(req engine.SendRequest) (*waE2E.Message, bool) {
 	return &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{Text: proto.String(req.Text), ContextInfo: info}}, true
 }
 
-func classify(resp whatsmeow.SendResponse, err error) error {
+func classify(resp whatsmeow.SendResponse, err error, phone bool) error {
 	written := resp.DebugTimings.Resp != 0 || resp.DebugTimings.Retry != 0
 	_, disconnected := errors.AsType[*whatsmeow.DisconnectedError](err)
 	switch {
@@ -183,6 +181,8 @@ func classify(resp whatsmeow.SendResponse, err error) error {
 		return engine.ErrRecipientUnavailable
 	case errors.Is(err, whatsmeow.ErrNoSession), errors.Is(err, whatsmeow.ErrUnknownServer), errors.Is(err, whatsmeow.ErrRecipientADJID):
 		return &engine.RejectedError{}
+	case phone && resp.DebugTimings.LIDFetch == 0 && errors.Unwrap(err) == nil:
+		return engine.ErrRecipientUnavailable
 	}
 	return engine.ErrOutcomeUnknown
 }

@@ -79,7 +79,7 @@ type Client struct {
 	download     downloader
 	transmit     transmitter
 	transmitPeer peerTransmitter
-	online       func(*whatsmeow.Client) bool
+	online       func(socketState) bool
 	now          func() time.Time
 
 	mu       sync.Mutex
@@ -121,7 +121,7 @@ func newClient(opts Options, dial dialFunc, download downloader, now func() time
 		download:     download,
 		transmit:     transmitMessage,
 		transmitPeer: transmitPeerMessage,
-		online:       loggedIn,
+		online:       usable,
 		now:          now,
 	}
 	routeSignalLogs(newLibraryLogger(opts.Writer, opts.LogLevel, "libsignal", gate))

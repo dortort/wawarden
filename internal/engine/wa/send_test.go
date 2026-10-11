@@ -76,7 +76,7 @@ func wiredRig(t *testing.T, device *store.Device) (*rig, *fakeWire) {
 	r := newRig(t, device)
 	w := &fakeWire{}
 	r.c.transmit, r.c.transmitPeer = w.transmit, w.peer
-	r.c.online = func(*whatsmeow.Client) bool { return true }
+	r.c.online = func(socketState) bool { return true }
 	r.c.now = func() time.Time { return epoch }
 	return r, w
 }
@@ -314,7 +314,9 @@ func TestSendClassifiesEveryLibraryOutcome(t *testing.T) {
 		{"the deadline inside the frame write", unsent, fmt.Errorf("failed to send message node: %w", context.DeadlineExceeded), unknown, 0},
 		{"a cancellation", unsent, context.Canceled, unknown, 0},
 		{"a failed write", unsent, fmt.Errorf("failed to send message node: %w", errors.New("synthetic broken pipe")), unknown, 0},
-		{"a phone number not on WhatsApp", whatsmeow.SendResponse{ID: "3EB0X"}, errors.New("no LID found for 15550100001@s.whatsapp.net from server"), unknown, 0},
+		{"a phone number not on WhatsApp", whatsmeow.SendResponse{ID: "3EB0X"}, errors.New("no LID found for 15550100001@s.whatsapp.net from server"), unavailable, 0},
+		{"a failed lookup of the number", whatsmeow.SendResponse{ID: "3EB0X"}, fmt.Errorf("failed to get user info for 15550100001@s.whatsapp.net to fill LID cache: %w", errors.New("synthetic")), unknown, 0},
+		{"a plain failure after the number's LID was found", whatsmeow.SendResponse{ID: "3EB0X", DebugTimings: whatsmeow.MessageDebugTimings{LIDFetch: time.Millisecond}}, errors.New("synthetic"), unknown, 0},
 	} {
 		r, w := wiredRig(t, pairedDevice())
 		w.resp, w.err = tt.resp, tt.err
@@ -324,6 +326,13 @@ func TestSendClassifiesEveryLibraryOutcome(t *testing.T) {
 		}
 		if strings.Contains(err.Error(), "15550100001") || strings.Contains(err.Error(), "synthetic") {
 			t.Errorf("%s: the error %q carries the library's text", tt.name, err)
+		}
+	}
+	for _, chat := range []string{peerLIDs, groupChat} {
+		r, w := wiredRig(t, pairedDevice())
+		w.resp, w.err = whatsmeow.SendResponse{ID: "3EB0X"}, errors.New("synthetic")
+		if _, err := r.c.Send(t.Context(), engine.SendRequest{ID: "3EB0X", Chat: chat, Text: "synthetic"}); !errors.Is(err, unknown) {
+			t.Errorf("a plain failure sending to %s = %v, want an unknown outcome", chat, err)
 		}
 	}
 	r, w := wiredRig(t, pairedDevice())
@@ -357,7 +366,7 @@ func TestSendRefusesBeforeTheLibrary(t *testing.T) {
 	}
 
 	plain, plainWire := wiredRig(t, pairedDevice())
-	plain.c.online = loggedIn
+	plain.c.online = usable
 	if _, err := plain.c.Send(t.Context(), engine.SendRequest{ID: "3EB0X", Chat: peerChat, Text: "synthetic"}); !errors.Is(err, engine.ErrNotConnected) {
 		t.Errorf("a send on a client without a socket = %v", err)
 	}
@@ -379,12 +388,13 @@ func (s socketDouble) IsConnected() bool { return s.connected }
 func (s socketDouble) IsLoggedIn() bool  { return s.loggedIn }
 
 func TestThePreCheckNeedsAnOpenSocketThatIsLoggedIn(t *testing.T) {
+	check := newRig(t, pairedDevice()).c.online
 	for _, s := range []socketDouble{{}, {connected: true}, {loggedIn: true}} {
-		if usable(s) {
+		if check(s) {
 			t.Errorf("%+v passed the pre-check", s)
 		}
 	}
-	if s := (socketDouble{connected: true, loggedIn: true}); !usable(s) {
+	if s := (socketDouble{connected: true, loggedIn: true}); !check(s) {
 		t.Errorf("%+v failed the pre-check", s)
 	}
 }
@@ -535,7 +545,7 @@ func TestTheProductionCallsWriteNothingWithoutASocket(t *testing.T) {
 	for _, chat := range []string{peerChat, peerLIDs, groupChat} {
 		to, _ := address(chat, true)
 		resp, err := transmitMessage(t.Context(), cli, to, &waE2E.Message{Conversation: proto.String("synthetic")}, whatsmeow.SendRequestExtra{ID: "3EB0OFFLINE", Timeout: ackTimeout})
-		if !errors.Is(classify(resp, err), engine.ErrNotConnected) || resp.DebugTimings.Resp != 0 || resp.DebugTimings.Retry != 0 {
+		if !errors.Is(classify(resp, err, to.Server == types.DefaultUserServer), engine.ErrNotConnected) || resp.DebugTimings.Resp != 0 || resp.DebugTimings.Retry != 0 {
 			t.Errorf("a send to %s without a socket = %v (%+v), want nothing written", chat, err, resp.DebugTimings)
 		}
 	}
