@@ -110,6 +110,11 @@ func readAnchor(ctx context.Context, q db.Querier) (anchor, bool, error) {
 	return an, true, nil
 }
 
+func (an anchor) valid(key func(string) []byte) bool {
+	k := key(an.macKeyID)
+	return k != nil && hmac.Equal(anchorMAC(k, an), an.mac)
+}
+
 func anchorMAC(key []byte, an anchor) []byte {
 	b := []byte(anchorDomain)
 	b, _ = binary.Append(b, binary.BigEndian, [3]int64{an.through, an.ts, an.prunedAt})

@@ -215,6 +215,54 @@ func field(dst []byte, present bool, s string) []byte {
 	return append(dst, s...)
 }
 
+func chainKeys(master *keys.Master) func(string) []byte {
+	cache := map[string][]byte{}
+	return func(id string) []byte {
+		key, seen := cache[id]
+		if !seen {
+			if k, ok := master.Lookup(id); ok {
+				key = k.AuditChainKey()
+			}
+			cache[id] = key
+		}
+		return key
+	}
+}
+
+type walk struct {
+	key     func(string) []byte
+	current string
+	prev    []byte
+	prevID  int64
+	after   bool
+}
+
+func (w *walk) check(r row, stored []byte) string {
+	key := w.key(r.keyID)
+	var problem string
+	switch {
+	case r.id != w.prevID+1:
+		problem = ReasonIDGap
+	case key == nil:
+		problem = ReasonUnknownKey
+	case w.after && r.keyID != w.current:
+		problem = ReasonRetiredKey
+	case !hmac.Equal(rowMAC(key, r, w.prev), stored):
+		problem = ReasonHMACMismatch
+	}
+	w.prev, w.prevID, w.after = stored, r.id, w.after || r.keyID == w.current
+	return problem
+}
+
+func scanRow(rows *sql.Rows) (row, []byte, error) {
+	var r row
+	var stored []byte
+	var ok int64
+	err := rows.Scan(&r.id, &r.ts, &r.client, &r.action, &r.chat, &r.chatHMAC, &ok, &r.reason, &r.peer, &r.keyID, &stored)
+	r.ok = ok == 1
+	return r, stored, err
+}
+
 type Report struct {
 	Rows          int64
 	Verified      int64
@@ -252,17 +300,7 @@ func Verify(ctx context.Context, path string, master *keys.Master, heads []Head)
 	for _, h := range heads {
 		shipped[h.Hex] = false
 	}
-	chainKeys := map[string][]byte{}
-	chainKey := func(id string) []byte {
-		key, seen := chainKeys[id]
-		if !seen {
-			if k, ok := master.Lookup(id); ok {
-				key = k.AuditChainKey()
-			}
-			chainKeys[id] = key
-		}
-		return key
-	}
+	key := chainKeys(master)
 	rep := Report{KeyIDs: map[string]int64{}}
 	anchored, masterAnchor := false, false
 	err = d.Read(ctx, "admin.audit_verify", func(ctx context.Context, q db.Querier) error {
@@ -270,53 +308,37 @@ func Verify(ctx context.Context, path string, master *keys.Master, heads []Head)
 		if err != nil {
 			return err
 		}
-		prev, prevID := genesis, int64(0)
-		retiredAnchor, afterMaster := false, false
+		w := walk{key: key, current: master.ID(), prev: genesis}
+		retiredAnchor := false
 		if anchored = ok; ok {
 			rep.PrunedThrough, rep.AnchorTS = an.through, an.ts
 			if len(an.rowHMAC) >= headBytes {
 				rep.AnchorHead = hex.EncodeToString(an.rowHMAC[:headBytes])
 			}
-			if key := chainKey(an.macKeyID); key == nil || !hmac.Equal(anchorMAC(key, an), an.mac) {
+			if !an.valid(key) {
 				rep.Bad, rep.FirstBad, rep.Problem = 1, an.through, ReasonAnchorInvalid
 			}
 			masterAnchor = rep.Bad == 0 && an.macKeyID == master.ID()
 			retiredAnchor = rep.Bad == 0 && !masterAnchor
-			afterMaster = an.keyID == master.ID()
-			prev, prevID = an.rowHMAC, an.through
+			w.prev, w.prevID, w.after = an.rowHMAC, an.through, an.keyID == master.ID()
 		}
 		rows, err := q.QueryContext(ctx, selectAuditRows)
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
-			var r row
-			var stored []byte
-			var ok int64
-			if err := rows.Scan(&r.id, &r.ts, &r.client, &r.action, &r.chat, &r.chatHMAC, &ok, &r.reason, &r.peer, &r.keyID, &stored); err != nil {
+			r, stored, err := scanRow(rows)
+			if err != nil {
 				return errors.Join(err, rows.Close())
 			}
-			r.ok = ok == 1
 			rep.Rows++
 			rep.KeyIDs[r.keyID]++
 			if retiredAnchor && rep.Rows == 1 && r.keyID == master.ID() {
 				rep.Bad, rep.FirstBad, rep.Problem = 1, an.through, ReasonAnchorInvalid
 			}
-			key := chainKey(r.keyID)
-			var problem string
-			switch {
-			case r.id != prevID+1:
-				problem = ReasonIDGap
-			case key == nil:
-				problem = ReasonUnknownKey
-			case afterMaster && r.keyID != master.ID():
-				problem = ReasonRetiredKey
-			case !hmac.Equal(rowMAC(key, r, prev), stored):
-				problem = ReasonHMACMismatch
-			default:
+			if problem := w.check(r, stored); problem == "" {
 				rep.Verified++
-			}
-			if problem != "" {
+			} else {
 				rep.Bad++
 				if rep.FirstBad == 0 {
 					rep.FirstBad, rep.Problem = r.id, problem
@@ -329,8 +351,6 @@ func Verify(ctx context.Context, path string, master *keys.Master, heads []Head)
 				}
 				rep.Head = head
 			}
-			prev, prevID = stored, r.id
-			afterMaster = afterMaster || r.keyID == master.ID()
 		}
 		if retiredAnchor && rep.Rows == 0 {
 			rep.Bad, rep.FirstBad, rep.Problem = 1, an.through, ReasonAnchorInvalid
