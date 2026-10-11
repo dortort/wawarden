@@ -51,6 +51,9 @@ const (
 	envSearchPerMinute = "WAWARDEN_SEARCH_PER_CLIENT_PER_MINUTE"
 	envUnsafeRateCaps  = "WAWARDEN_UNSAFE_RATE_CAPS"
 	envAuditRetention  = "WAWARDEN_AUDIT_RETENTION_DAYS"
+	envSendGlobal      = "WAWARDEN_SEND_GLOBAL_PER_HOUR"
+	envSendPerMinute   = "WAWARDEN_SEND_PER_CLIENT_PER_MINUTE"
+	envUnsafeSendCaps  = "WAWARDEN_UNSAFE_SEND_CAPS"
 
 	prefix    = "WAWARDEN_"
 	devPrefix = "WAWARDEN_DEV_"
@@ -70,6 +73,13 @@ const (
 	DefaultReadPerMinute   = 600
 	DefaultSearchPerMinute = 60
 	MaxUnsafeRatePerMinute = 1000000
+
+	DefaultSendGlobalPerHour   = 30
+	MaxSendGlobalPerHour       = 60
+	MaxUnsafeSendGlobalPerHour = 600
+	DefaultSendPerMinute       = 10
+	MaxSendPerMinute           = 10
+	MaxUnsafeSendPerMinute     = 60
 
 	DefaultBackupMinute = 3 * 60
 	DefaultBackupKeep   = 14
@@ -123,11 +133,15 @@ const (
 	reasonReadPerMinuteInvalid     = "read_per_minute_invalid"
 	reasonSearchPerMinuteInvalid   = "search_per_minute_invalid"
 	reasonAuditRetentionInvalid    = "audit_retention_invalid"
+	reasonUnsafeSendCapsInvalid    = "unsafe_send_caps_invalid"
+	reasonSendGlobalInvalid        = "send_global_per_hour_invalid"
+	reasonSendPerMinuteInvalid     = "send_per_client_per_minute_invalid"
 )
 
 var known = []string{envDataDir, envListen, envAdminListen, envHealthListen, envAdminHash, envAdminHashFile, envLogLevel, envStorageProfile, envMinFreeBytes,
 	envOwnerPhone, envHistoryMax, envUnsafeDebug, envMetricsEMF, envNotifyURL, envNotifySecret, envNotifyPrivate, envBackupRecipient,
-	envReadPerMinute, envSearchPerMinute, envUnsafeRateCaps, envBackupTime, envBackupKeep, envAuditRetention}
+	envReadPerMinute, envSearchPerMinute, envUnsafeRateCaps, envBackupTime, envBackupKeep, envAuditRetention, envSendGlobal, envSendPerMinute,
+	envUnsafeSendCaps}
 
 type StorageProfile string
 
@@ -167,6 +181,9 @@ type Config struct {
 	ReadPerMinute   int
 	SearchPerMinute int
 	UnsafeRateCaps  bool
+	SendGlobal      int
+	SendPerMinute   int
+	UnsafeSendCaps  bool
 	Dev             Dev
 }
 
@@ -263,6 +280,15 @@ func Load(environ []string, opts Options) (Config, *Refusal) {
 		return Config{}, r
 	}
 	if cfg.SearchPerMinute, r = perMinute(env, envSearchPerMinute, reasonSearchPerMinuteInvalid, DefaultSearchPerMinute, cfg.UnsafeRateCaps); r != nil {
+		return Config{}, r
+	}
+	if cfg.UnsafeSendCaps, r = unsafeSendCaps(env); r != nil {
+		return Config{}, r
+	}
+	if cfg.SendGlobal, r = sendLimit(env, envSendGlobal, reasonSendGlobalInvalid, "hour", DefaultSendGlobalPerHour, sendCap(MaxSendGlobalPerHour, MaxUnsafeSendGlobalPerHour, cfg.UnsafeSendCaps)); r != nil {
+		return Config{}, r
+	}
+	if cfg.SendPerMinute, r = sendLimit(env, envSendPerMinute, reasonSendPerMinuteInvalid, "minute", DefaultSendPerMinute, sendCap(MaxSendPerMinute, MaxUnsafeSendPerMinute, cfg.UnsafeSendCaps)); r != nil {
 		return Config{}, r
 	}
 	if cfg.Dev, r = devSettings(env); r != nil {
@@ -544,6 +570,33 @@ func perMinute(env map[string]string, name, reason string, limit int, unsafe boo
 	n, err := strconv.Atoi(v)
 	if err != nil || strconv.Itoa(n) != v || n < 1 || n > limit {
 		return 0, &Refusal{Reason: reason, Variable: name, detail: "must be a number of requests per minute written in decimal digits, from 1 to " + strconv.Itoa(limit)}
+	}
+	return n, nil
+}
+
+func unsafeSendCaps(env map[string]string) (bool, *Refusal) {
+	v, ok := env[envUnsafeSendCaps]
+	if ok && v != "0" && v != "1" {
+		return false, &Refusal{Reason: reasonUnsafeSendCapsInvalid, Variable: envUnsafeSendCaps, detail: "must be 0 or 1"}
+	}
+	return v == "1", nil
+}
+
+func sendCap(limit, unsafeLimit int, unsafe bool) int {
+	if unsafe {
+		return unsafeLimit
+	}
+	return limit
+}
+
+func sendLimit(env map[string]string, name, reason, unit string, def, limit int) (int, *Refusal) {
+	v, ok := env[name]
+	if !ok {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || strconv.Itoa(n) != v || n < 1 || n > limit {
+		return 0, &Refusal{Reason: reason, Variable: name, detail: "must be a number of sends per " + unit + " written in decimal digits, from 1 to " + strconv.Itoa(limit)}
 	}
 	return n, nil
 }

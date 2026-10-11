@@ -133,6 +133,8 @@ func TestDefaults(t *testing.T) {
 		AuditRetention:  90,
 		ReadPerMinute:   600,
 		SearchPerMinute: 60,
+		SendGlobal:      30,
+		SendPerMinute:   10,
 	}
 	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("Load = %+v, want %+v", cfg, want)
@@ -279,6 +281,27 @@ func TestRefusals(t *testing.T) {
 		{name: "search rate above its cap", vars: map[string]string{envSearchPerMinute: "61"}, reason: "search_per_minute_invalid", variable: envSearchPerMinute},
 		{name: "search rate with a unit", vars: map[string]string{envSearchPerMinute: "60/m"}, reason: "search_per_minute_invalid", variable: envSearchPerMinute},
 		{name: "negative search rate with the caps lifted", vars: map[string]string{envSearchPerMinute: "-5", envUnsafeRateCaps: "1"}, reason: "search_per_minute_invalid", variable: envSearchPerMinute},
+		{name: "send caps as a word", vars: map[string]string{envUnsafeSendCaps: "yes"}, reason: "unsafe_send_caps_invalid", variable: envUnsafeSendCaps},
+		{name: "empty send caps switch", vars: map[string]string{envUnsafeSendCaps: ""}, reason: "unsafe_send_caps_invalid", variable: envUnsafeSendCaps},
+		{name: "empty global send rate", vars: map[string]string{envSendGlobal: ""}, reason: "send_global_per_hour_invalid", variable: envSendGlobal},
+		{name: "zero global send rate", vars: map[string]string{envSendGlobal: "0"}, reason: "send_global_per_hour_invalid", variable: envSendGlobal},
+		{name: "negative global send rate", vars: map[string]string{envSendGlobal: "-1"}, reason: "send_global_per_hour_invalid", variable: envSendGlobal},
+		{name: "signed global send rate", vars: map[string]string{envSendGlobal: "+30"}, reason: "send_global_per_hour_invalid", variable: envSendGlobal},
+		{name: "global send rate with a leading zero", vars: map[string]string{envSendGlobal: "030"}, reason: "send_global_per_hour_invalid", variable: envSendGlobal},
+		{name: "global send rate with a unit", vars: map[string]string{envSendGlobal: "30/h"}, reason: "send_global_per_hour_invalid", variable: envSendGlobal},
+		{name: "global send rate above its cap", vars: map[string]string{envSendGlobal: "61"}, reason: "send_global_per_hour_invalid", variable: envSendGlobal},
+		{name: "global send rate above its cap with the read caps lifted", vars: map[string]string{envSendGlobal: "61", envUnsafeRateCaps: "1"}, reason: "send_global_per_hour_invalid", variable: envSendGlobal},
+		{name: "global send rate above the lifted cap", vars: map[string]string{envSendGlobal: "601", envUnsafeSendCaps: "1"}, reason: "send_global_per_hour_invalid", variable: envSendGlobal},
+		{name: "zero global send rate with the caps lifted", vars: map[string]string{envSendGlobal: "0", envUnsafeSendCaps: "1"}, reason: "send_global_per_hour_invalid", variable: envSendGlobal},
+		{name: "empty client send rate", vars: map[string]string{envSendPerMinute: ""}, reason: "send_per_client_per_minute_invalid", variable: envSendPerMinute},
+		{name: "zero client send rate", vars: map[string]string{envSendPerMinute: "0"}, reason: "send_per_client_per_minute_invalid", variable: envSendPerMinute},
+		{name: "client send rate above its cap", vars: map[string]string{envSendPerMinute: "11"}, reason: "send_per_client_per_minute_invalid", variable: envSendPerMinute},
+		{name: "client send rate above its cap with the read caps lifted", vars: map[string]string{envSendPerMinute: "11", envUnsafeRateCaps: "1"}, reason: "send_per_client_per_minute_invalid", variable: envSendPerMinute},
+		{name: "client send rate above the lifted cap", vars: map[string]string{envSendPerMinute: "61", envUnsafeSendCaps: "1"}, reason: "send_per_client_per_minute_invalid", variable: envSendPerMinute},
+		{name: "client send rate beyond 64 bits", vars: map[string]string{envSendPerMinute: "18446744073709551616", envUnsafeSendCaps: "1"}, reason: "send_per_client_per_minute_invalid", variable: envSendPerMinute},
+		{name: "send caps switch checked after the search rate", vars: map[string]string{envSearchPerMinute: "0", envUnsafeSendCaps: "2"}, reason: "search_per_minute_invalid", variable: envSearchPerMinute},
+		{name: "global send rate checked before the client send rate", vars: map[string]string{envSendGlobal: "0", envSendPerMinute: "0"}, reason: "send_global_per_hour_invalid", variable: envSendGlobal},
+		{name: "send caps switch checked before the send rates", vars: map[string]string{envSendGlobal: "0", envUnsafeSendCaps: "2"}, reason: "unsafe_send_caps_invalid", variable: envUnsafeSendCaps},
 
 		{name: "plain http webhook", vars: map[string]string{envNotifyURL: "http://hooks.example.test/x", envNotifySecret: secretFile(t, 0o600)}, reason: "notify_url_invalid", variable: envNotifyURL},
 		{name: "webhook with credentials", vars: map[string]string{envNotifyURL: (&url.URL{Scheme: "https", User: url.UserPassword("synthetic", "synthetic"), Host: "hooks.example.test"}).String(), envNotifySecret: secretFile(t, 0o600)}, reason: "notify_url_invalid", variable: envNotifyURL},
@@ -806,6 +829,28 @@ func TestRateLimits(t *testing.T) {
 			cfg, r := Load(environ(withDataDir(t, tt.vars)), testOptions())
 			if r != nil || cfg.ReadPerMinute != tt.read || cfg.SearchPerMinute != tt.search || cfg.UnsafeRateCaps != tt.unsafeRateCaps {
 				t.Fatalf("Load = %d reads, %d searches, unsafe caps %v, %v", cfg.ReadPerMinute, cfg.SearchPerMinute, cfg.UnsafeRateCaps, r)
+			}
+		})
+	}
+}
+
+func TestSendLimits(t *testing.T) {
+	for _, tt := range []struct {
+		name           string
+		vars           map[string]string
+		global, client int
+		unsafeSendCaps bool
+	}{
+		{name: "lowest", vars: map[string]string{envSendGlobal: "1", envSendPerMinute: "1"}, global: 1, client: 1},
+		{name: "caps", vars: map[string]string{envSendGlobal: "60", envSendPerMinute: "10", envUnsafeSendCaps: "0"}, global: 60, client: 10},
+		{name: "caps lifted", vars: map[string]string{envSendGlobal: "600", envSendPerMinute: "60", envUnsafeSendCaps: "1"}, global: 600, client: 60, unsafeSendCaps: true},
+		{name: "caps lifted without a rate", vars: map[string]string{envUnsafeSendCaps: "1"}, global: 30, client: 10, unsafeSendCaps: true},
+		{name: "read caps lifted leave the send caps", vars: map[string]string{envUnsafeRateCaps: "1", envSendGlobal: "60", envSendPerMinute: "10"}, global: 60, client: 10},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, r := Load(environ(withDataDir(t, tt.vars)), testOptions())
+			if r != nil || cfg.SendGlobal != tt.global || cfg.SendPerMinute != tt.client || cfg.UnsafeSendCaps != tt.unsafeSendCaps {
+				t.Fatalf("Load = %d sends an hour, %d a client a minute, unsafe caps %v, %v", cfg.SendGlobal, cfg.SendPerMinute, cfg.UnsafeSendCaps, r)
 			}
 		})
 	}
