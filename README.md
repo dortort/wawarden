@@ -132,8 +132,9 @@ What `main` does:
   change, and each client request, is appended to a hash-chained audit table
   and written on standard output with its chain head, and `wawarden audit
   verify` checks a copy of the archive against the master key and those heads.
-  Each night, after the backup, rows older than `WAWARDEN_AUDIT_RETENTION_DAYS`
-  (90 by default) are removed behind an anchor signed under the master key.
+  Each night, after the backup, and with a backup recipient never before the
+  first backup succeeds, rows older than `WAWARDEN_AUDIT_RETENTION_DAYS` (90 by
+  default) are removed behind an anchor signed under the master key.
   `wawarden keys rotate` replaces the master key of a stopped service and keeps
   the old one, which still opens earlier cursors and references and verifies
   earlier audit rows. See
