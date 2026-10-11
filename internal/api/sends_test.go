@@ -422,8 +422,8 @@ func TestTheSendHasItsOwnDeadline(t *testing.T) {
 		t.Fatalf("%d sends, want 2", len(left))
 	}
 	for _, d := range left {
-		if d <= sendDeadline-5*time.Second || d > sendDeadline {
-			t.Fatalf("the send had %v left, want just under %v", d, sendDeadline)
+		if d <= 24*time.Second || d > 25*time.Second {
+			t.Fatalf("the send had %v left, want just under the documented 25s", d)
 		}
 	}
 }

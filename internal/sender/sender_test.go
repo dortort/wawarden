@@ -270,6 +270,35 @@ func TestASendToAChatWithoutATimerStoresNoExpiry(t *testing.T) {
 	}
 }
 
+type settleDeadline struct {
+	*ingest.Store
+	mu   sync.Mutex
+	left []time.Duration
+}
+
+func (s *settleDeadline) SettleSend(g policy.WriteGrant, ctx context.Context, in ingest.Settlement) (ingest.SentRow, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		s.mu.Lock()
+		s.left = append(s.left, time.Until(deadline))
+		s.mu.Unlock()
+	}
+	return s.Store.SettleSend(g, ctx, in)
+}
+
+func TestTheSettlementHasFiveSecondsOfItsOwn(t *testing.T) {
+	f := newFixture(t, 10, 30)
+	g := grantFor(t, writerID, false, alice)
+	timed := &settleDeadline{Store: f.store}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
+	defer cancel()
+	if _, err := f.service(timed, 10, 30).Send(g, ctx, request(t, "settle-budget", alice, "synthetic")); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if len(timed.left) != 1 || timed.left[0] <= 4*time.Second || timed.left[0] > 5*time.Second {
+		t.Fatalf("the settlement had %v left, want just under 5s", timed.left)
+	}
+}
+
 func TestAFailedSettlementIsRetriedThenReported(t *testing.T) {
 	f := newFixture(t, 10, 30)
 	g := grantFor(t, writerID, false, alice)
