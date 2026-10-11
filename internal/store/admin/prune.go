@@ -15,6 +15,8 @@ import (
 
 const (
 	anchorDomain = "wawarden/audit-anchor/v1\x00"
+	// The longest a row's time can precede its commit: the archive's write timeout.
+	commitLag = 10 * time.Second
 
 	ReasonAnchorInvalid = "anchor_invalid"
 )
@@ -22,7 +24,7 @@ const (
 const (
 	selectAuditBounds  = `SELECT min(id), max(id) FROM audit`
 	selectPruneThrough = `SELECT max(id) FROM audit WHERE id BETWEEN ?1 AND ?2 AND ts < ?3`
-	selectAnchorTarget = `SELECT (SELECT max(ts) FROM (SELECT ts FROM audit WHERE id <= ?1 UNION ALL SELECT ts FROM audit_anchor)), key_id, row_hmac FROM audit WHERE id = ?1`
+	selectAnchorTarget = `SELECT min(?2, (SELECT max(ts) FROM (SELECT ts FROM audit WHERE id <= ?1 UNION ALL SELECT ts FROM audit_anchor))), key_id, row_hmac FROM audit WHERE id = ?1`
 	upsertAnchor       = `INSERT INTO audit_anchor (id, through, ts, key_id, row_hmac, pruned_at, mac_key_id, mac) VALUES (1, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET through = excluded.through, ts = excluded.ts, key_id = excluded.key_id, row_hmac = excluded.row_hmac,
 pruned_at = excluded.pruned_at, mac_key_id = excluded.mac_key_id, mac = excluded.mac`
@@ -69,7 +71,7 @@ func (a *Audit) Prune(ctx context.Context, cutoff, now time.Time, batch int) (Pr
 			return nil
 		}
 		an := anchor{through: through.Int64, prunedAt: now.UnixMilli(), macKeyID: a.keyID}
-		if err := q.QueryRowContext(ctx, selectAnchorTarget, an.through).Scan(&an.ts, &an.keyID, &an.rowHMAC); err != nil {
+		if err := q.QueryRowContext(ctx, selectAnchorTarget, an.through, cutoff.Add(commitLag).UnixMilli()).Scan(&an.ts, &an.keyID, &an.rowHMAC); err != nil {
 			return err
 		}
 		an.mac = anchorMAC([]byte(*a.chain), an)

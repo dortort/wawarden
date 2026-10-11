@@ -17,7 +17,10 @@ import (
 	"github.com/dortort/wawarden/internal/store/admin"
 )
 
-const pruneBatch = 10_000
+const (
+	pruneBatch   = 10_000
+	unlockAnchor = "DROP TRIGGER audit_anchor_forward; DROP TRIGGER audit_anchor_keep"
+)
 
 func prune(t *testing.T, f *fixture, cutoff time.Time, batch int) admin.PruneResult {
 	t.Helper()
@@ -104,6 +107,40 @@ func TestTheAnchorTimeIsTheNewestTimeItCovers(t *testing.T) {
 	}
 }
 
+func TestTheAnchorTimeStaysWithinTheCommitLagOfTheCutoff(t *testing.T) {
+	dir := t.TempDir()
+	f := openWith(t, dir, syntheticMaster(t, 100))
+	for i := range 8 {
+		if err := f.store.Audit().Record(t.Context(), admin.Event{At: start.Add(time.Duration(i) * time.Minute), Client: "aaaaaaaa", Action: "messages.read", Reason: "ok"}); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+	heads := shippedHeads(t, f)
+	if res := prune(t, f, start.Add(90*time.Second), pruneBatch); res.Through != 2 {
+		t.Fatalf("Prune = %+v, want the anchor at row 2", res)
+	}
+	if err := f.store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	far := strconv.FormatInt(time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli(), 10)
+	d := rawOpen(t, filepath.Join(dir, "archive.db"))
+	exec(t, d, unlock, unlockAnchor, "UPDATE audit SET ts = "+far+" WHERE id = 3", "UPDATE audit_anchor SET ts = "+far)
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	g := openWith(t, dir, f.master)
+	cutoff := start.Add(210 * time.Second)
+	if res := prune(t, g, cutoff, pruneBatch); res.Through != 4 {
+		t.Fatalf("Prune after the times moved = %+v, want the anchor at row 4", res)
+	}
+	path := g.copyArchive(t)
+	exec(t, rawOpen(t, path), "DELETE FROM audit WHERE id >= 6")
+	rep := verify(t, g, path, heads)
+	if rep.OK() || rep.AnchorTS != cutoff.Add(10*time.Second).UnixMilli() || rep.HeadsPruned != 3 || rep.HeadsMissing != 3 || rep.FirstMissing != heads[5].Hex {
+		t.Fatalf("Verify after rows were cut from the end = %+v, want the anchor dated 10 seconds after the cutoff and rows 6 to 8 missing", rep)
+	}
+}
+
 func TestPruneNeverRemovesTheNewestRow(t *testing.T) {
 	f, _ := chainFixture(t)
 	var total int64
@@ -162,7 +199,6 @@ func TestVerifyDetectsEveryAnchorTamper(t *testing.T) {
 	f, heads := chainFixture(t)
 	prune(t, f, start.Add(4500*time.Millisecond), pruneBatch)
 	other := syntheticMaster(t, 7)
-	unlockAnchor := "DROP TRIGGER audit_anchor_forward; DROP TRIGGER audit_anchor_keep"
 	forge := func(d *sql.DB, key []byte, keyID string, through int64) {
 		var ts int64
 		var kid string
