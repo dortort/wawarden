@@ -275,6 +275,23 @@ func TestBackupVerifyExitCodes(t *testing.T) {
 	}
 }
 
+func TestBackupVerifyPrintsNoForeignVersionOrControlCharacter(t *testing.T) {
+	plaintext, _ := decryptedBackup(t)
+	stream := withManifest(t, plaintext, func(m map[string]any) { m["version"] = "v1.0.0\x1b]0;synthetic\x07" })
+	code, stdout, stderr := invokeWith(t, []string{"backup", "verify", "--work-dir", privateDir(t), "-"}, nil, bytes.NewReader(stream))
+	if code != 0 || stderr != "" || !strings.Contains(stdout, "written by: unrecognised\n") || strings.ContainsAny(stdout, "\x1b\x07") {
+		t.Fatalf("backup verify of a manifest with a control character in its version = %d\n%q\nstderr %q", code, stdout, stderr)
+	}
+	var out bytes.Buffer
+	failed := inspect.Integrity{Problems: []string{"page 2: \x1b[2Jsynthetic\x07"}}
+	if report(&out, backup.Extracted{}, inspect.Archive{Integrity: failed}, inspect.Device{Integrity: failed}) {
+		t.Fatal("a failed integrity check was reported as verified")
+	}
+	if !strings.Contains(out.String(), "archive integrity problem: page 2: ") || strings.ContainsAny(out.String(), "\x1b\x07") {
+		t.Fatalf("report printed %q", out.String())
+	}
+}
+
 func TestBackupVerifyUsageErrors(t *testing.T) {
 	work := privateDir(t)
 	for _, args := range [][]string{
