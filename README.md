@@ -689,6 +689,23 @@ it in the service's environment, where `serve` refuses it as
 and each request it makes is written on standard output with its chain head
 (see [the audit chain](docs/configuration.md#audit-chain)).
 
+A client that sends needs `--write` for each chat it may send to, and each
+write chat must also be one of its `--read` chats; an all-chats client cannot
+write. Sending to a direct chat that has never written to the account is
+refused unless the client was created with `--allow-first-contact`, which also
+lets a write chat be a direct chat the archive has not seen; leave it off
+unless the agent must start conversations (see
+[the ban-risk notes](docs/ban-risk.md)):
+
+```sh
+./wawarden admin clients create --token-file admin.token \
+  --name claude-code-reply --read <chat> --write <chat>
+```
+
+A client created with write chats by a release that could not send becomes a
+live sender when the service is upgraded: read `admin clients list` before
+upgrading (see [the runbook](docs/runbook.md#upgrading)).
+
 On the agent's host, register the endpoint in Claude Code at the HTTPS address
 of the proxy in front of the client listener:
 
@@ -698,7 +715,8 @@ claude mcp add --transport http whatsapp https://<your-host>/mcp --header "Autho
 
 `claude mcp get whatsapp` shows it as connected, and `/mcp` in a Claude Code
 session lists five tools, `get_changes`, `get_chat`, `get_messages`,
-`list_chats` and `search_messages`, and no `send_message`. This form stores
+`list_chats` and `search_messages`, and, for a client with write chats,
+`send_message` as well. This form stores
 the token itself in `~/.claude.json`;
 [Registering with Claude Code](docs/configuration.md#registering-with-claude-code)
 says what each `--scope` writes and how to keep the token out of files with
@@ -740,11 +758,14 @@ WaWarden (see [trust roots](docs/threat-model.md#trust-roots)).
 
 | Document | Content |
 |---|---|
-| [`docs/configuration.md`](docs/configuration.md) | Every environment variable, flag, subcommand, exit code, startup refusal, listener, route, MCP tool, log event and metric of the current build, the audit chain, and the container contract. |
-| [`docs/agents.md`](docs/agents.md) | How an agent should treat what it reads, page, retry and stop, and how to scope and rotate its token. |
-| [`docs/threat-model.md`](docs/threat-model.md) | Assets, actors, trust boundaries, invariants, the mechanisms that enforce them with their milestones, and residual risks. |
+| [`docs/configuration.md`](docs/configuration.md) | Every environment variable, flag, subcommand, exit code, startup refusal, listener, route, MCP tool, log event and metric, the audit chain, backups, and the container contract. |
+| [`docs/agents.md`](docs/agents.md) | How an agent should treat what it reads, page, send, retry and stop, and how to scope and rotate its token. |
+| [`docs/hardening.md`](docs/hardening.md) | How to deploy the service: network patterns, the admin listener, egress, container and systemd settings, file modes, secrets, tokens, backups and alarms, with a checklist. |
+| [`docs/ban-risk.md`](docs/ban-risk.md) | What WhatsApp's published documents say about unofficial clients and automation, what WaWarden does to lower the risk, what the operator must do, and what happens on a ban. |
+| [`docs/runbook.md`](docs/runbook.md) | The commands for routine operations and incidents: clients, tokens, keys, backups and restores, upgrades, failed sends, disconnects and a suspected ban. |
+| [`docs/threat-model.md`](docs/threat-model.md) | Assets, actors, trust boundaries, invariants, the mechanisms that enforce them with the release that introduced each, and residual risks. |
 | [`SECURITY.md`](SECURITY.md) | How to report a vulnerability, supported versions and scope. |
-| [`RELEASING.md`](RELEASING.md) | How releases are built, what they contain, and how to verify and reproduce one. |
+| [`RELEASING.md`](RELEASING.md) | How releases are built, what they contain, how to verify and reproduce one, and what a version promises. |
 
 ## Running the tests
 
