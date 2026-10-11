@@ -425,6 +425,10 @@ func TestBackfillAsksThePrimaryDeviceForHistoryBeforeTheAnchor(t *testing.T) {
 	if id, err := r.c.Backfill(t.Context(), engine.BackfillRequest{Chat: groupChat, AnchorID: "3EB0OLDEST", AnchorTime: anchor, Count: 1}); id != "3EB0REQUEST" || !errors.Is(err, engine.ErrOutcomeUnknown) {
 		t.Fatalf("an interrupted request = %q, %v, want its id with an unknown outcome", id, err)
 	}
+	w.resp, w.err = whatsmeow.SendResponse{ID: "3EB0REQUEST"}, errors.New("synthetic unwrapped failure")
+	if id, err := r.c.Backfill(t.Context(), engine.BackfillRequest{Chat: peerChat, AnchorID: "3EB0OLDEST", AnchorTime: anchor, Count: 1}); id != "3EB0REQUEST" || !errors.Is(err, engine.ErrOutcomeUnknown) {
+		t.Fatalf("a request for a phone-number chat that failed before anything was written = %q, %v, want its id with an unknown outcome", id, err)
+	}
 
 	for name, req := range map[string]engine.BackfillRequest{
 		"no anchor":           {Chat: peerChat, AnchorTime: anchor, Count: 10},
@@ -439,7 +443,7 @@ func TestBackfillAsksThePrimaryDeviceForHistoryBeforeTheAnchor(t *testing.T) {
 			t.Errorf("%s: Backfill = %v", name, err)
 		}
 	}
-	if len(w.sent()) != 2 {
+	if len(w.sent()) != 3 {
 		t.Fatalf("refused history requests reached the library: %d calls", len(w.sent()))
 	}
 }
