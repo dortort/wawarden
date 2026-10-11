@@ -12,6 +12,7 @@ import (
 	"github.com/dortort/wawarden/internal/engine"
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/sender"
+	"github.com/dortort/wawarden/internal/store/admin"
 	"github.com/dortort/wawarden/internal/store/ingest"
 )
 
@@ -111,7 +112,7 @@ func (s sendService) answer(err error) error {
 		return api.ErrSendRejected
 	case errors.Is(err, sender.ErrOutcomeUnknown):
 		return api.ErrSendOutcomeUnknown
-	case errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, admin.ErrUnavailable):
 		return api.ErrBusy
 	}
 	return err

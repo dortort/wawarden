@@ -15,6 +15,7 @@ import (
 	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/sender"
+	"github.com/dortort/wawarden/internal/store/admin"
 	"github.com/dortort/wawarden/internal/store/ingest"
 	"github.com/dortort/wawarden/internal/token"
 )
@@ -96,6 +97,7 @@ func TestSenderRefusalsBecomeFixedAnswersAndCountReasons(t *testing.T) {
 		{err: &sender.Failure{Err: sender.ErrRejected, Replayed: true}, want: api.ErrSendRejected},
 		{err: &sender.Failure{Err: sender.ErrOutcomeUnknown}, want: api.ErrSendOutcomeUnknown},
 		{err: context.DeadlineExceeded, want: api.ErrBusy},
+		{err: admin.ErrUnavailable, want: api.ErrBusy},
 		{err: sender.ErrUnrecorded, want: sender.ErrUnrecorded},
 	} {
 		var counted []string
