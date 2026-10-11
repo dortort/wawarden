@@ -73,6 +73,8 @@ type deviceStore interface {
 	Close() error
 	Backup(ctx context.Context, staging string, write func(name string, size int64, r io.Reader) error) error
 	SchemaVersion() int
+	Changes(ctx context.Context) (int64, error)
+	Size() (int64, error)
 }
 
 type engineParts struct {
@@ -171,7 +173,10 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 		if err != nil {
 			return nil, errors.Join(err, a.closeStores())
 		}
-		a.backup = &initialBackup{archive: archive, status: a.engine.Status, unpairs: unpairs.count.Load, take: taker.Take, now: time.Now}
+		a.backup = &initialBackup{archive: archive, status: a.engine.Status, unpairs: unpairs.count.Load, take: func(ctx context.Context) error {
+			_, err := taker.Take(ctx)
+			return err
+		}, now: time.Now}
 	}
 	specs := []listeners.Spec{{
 		Name: listenerClient,

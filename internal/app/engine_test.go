@@ -270,6 +270,10 @@ type stubSession struct {
 func (s *stubSession) Healthy() bool      { return s.healthy.Load() }
 func (s *stubSession) Close() error       { s.closed.Add(1); return nil }
 func (s *stubSession) SchemaVersion() int { return 1 }
+func (s *stubSession) Changes(context.Context) (int64, error) {
+	return 0, nil
+}
+func (s *stubSession) Size() (int64, error) { return 0, nil }
 func (s *stubSession) Backup(context.Context, string, func(string, int64, io.Reader) error) error {
 	return errors.New("synthetic: no device store to back up")
 }

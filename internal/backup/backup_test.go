@@ -35,9 +35,11 @@ var epoch = time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
 const backupName = "20261005T120000Z.age"
 
 type recorder struct {
-	mu     sync.Mutex
-	done   [][4]int64
-	failed []string
+	mu          sync.Mutex
+	done        [][4]int64
+	failed      []string
+	pruned      [][2]int
+	pruneFailed []string
 }
 
 func (r *recorder) BackupDone(bytes, archiveBytes, sessionBytes int64, took time.Duration) {
@@ -50,6 +52,18 @@ func (r *recorder) BackupFailed(reason string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.failed = append(r.failed, reason)
+}
+
+func (r *recorder) BackupPruned(removed, kept int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pruned = append(r.pruned, [2]int{removed, kept})
+}
+
+func (r *recorder) BackupPruneFailed(reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pruneFailed = append(r.pruneFailed, reason)
 }
 
 func identity(t *testing.T) *age.X25519Identity {
@@ -226,8 +240,8 @@ func TestARoundTripRestoresBothDatabases(t *testing.T) {
 	}
 	tk, rec := taker(t, dir, id.Recipient().String(), observed{archive, watch}, observed{sess, watch})
 
-	if err := tk.Take(t.Context()); err != nil {
-		t.Fatalf("Take: %v", err)
+	if name, err := tk.Take(t.Context()); err != nil || name != backupName {
+		t.Fatalf("Take = %q, %v, want %s", name, err, backupName)
 	}
 	backups := filepath.Join(dir, Dir)
 	if got := entries(t, backups); !slices.Equal(got, []string{backupName}) {
@@ -340,7 +354,7 @@ func TestABackupTakenWhileIngestWrites(t *testing.T) {
 	}
 	before = written.Load()
 	tk, rec := taker(t, dir, id.Recipient().String(), observed{archive, watch}, sess)
-	err := tk.Take(t.Context())
+	_, err := tk.Take(t.Context())
 	close(stop)
 	if werr := <-failed; werr != nil {
 		t.Fatalf("an ingest write failed during the backup: %v", werr)
@@ -393,6 +407,10 @@ func (f fakeDB) Backup(_ context.Context, staging string, write func(string, int
 }
 
 func (fakeDB) SchemaVersion() int { return 1 }
+
+func (fakeDB) Changes(context.Context) (int64, error) { return 0, nil }
+
+func (f fakeDB) Size() (int64, error) { return f.size, f.fail }
 
 func fakeArchive() fakeDB {
 	body := bytes.Repeat([]byte("archive page "), 20000)
@@ -496,6 +514,12 @@ func TestEveryFailureLeavesNoStagingOrPartialFile(t *testing.T) {
 		{name: "removing the staging directory fails", reason: reasonCleanup, hook: func(tk *Taker) {
 			tk.removeAll = func(path string) error { return errors.Join(os.RemoveAll(path), synthetic) }
 		}},
+		{name: "too little free space", reason: reasonSpace, hook: func(tk *Taker) {
+			tk.space = func() (uint64, uint64, error) { return 1 << 30, 1<<30 - 1, nil }
+		}},
+		{name: "the free space cannot be read", reason: reasonSpace, hook: func(tk *Taker) {
+			tk.space = func() (uint64, uint64, error) { return 0, 0, synthetic }
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -516,8 +540,8 @@ func TestEveryFailureLeavesNoStagingOrPartialFile(t *testing.T) {
 			if tt.hook != nil {
 				tt.hook(tk)
 			}
-			if err := tk.Take(ctx); err == nil {
-				t.Fatal("Take succeeded")
+			if name, err := tk.Take(ctx); err == nil || name != "" {
+				t.Fatalf("Take = %q, %v, want a failure without a name", name, err)
 			}
 			if len(rec.done) != 0 || !slices.Equal(rec.failed, []string{tt.reason}) {
 				t.Fatalf("events done %v failed %v, want one backup_failed %s", rec.done, rec.failed, tt.reason)
@@ -551,7 +575,7 @@ func TestAFailedSizeCheckNeverEncryptsBeyondTheDeclaredSize(t *testing.T) {
 	a := fakeArchive()
 	a.size--
 	tk, rec := taker(t, t.TempDir(), identity(t).Recipient().String(), a, fakeSession())
-	if err := tk.Take(t.Context()); err == nil || !slices.Equal(rec.failed, []string{reasonArchive}) {
+	if _, err := tk.Take(t.Context()); err == nil || !slices.Equal(rec.failed, []string{reasonArchive}) {
 		t.Fatalf("Take = %v with events %v, want the archive failure", err, rec.failed)
 	}
 }
@@ -560,7 +584,7 @@ func TestTruncatedAndAlteredBackupsFailToDecrypt(t *testing.T) {
 	dir := t.TempDir()
 	id := identity(t)
 	tk, _ := taker(t, dir, id.Recipient().String(), fakeArchive(), fakeSession())
-	if err := tk.Take(t.Context()); err != nil {
+	if _, err := tk.Take(t.Context()); err != nil {
 		t.Fatalf("Take: %v", err)
 	}
 	data, err := os.ReadFile(filepath.Clean(filepath.Join(dir, Dir, backupName)))

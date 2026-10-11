@@ -11,6 +11,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -41,6 +43,10 @@ const (
 	reasonRename    = "rename"
 	reasonCleanup   = "cleanup"
 	reasonCancelled = "cancelled"
+	reasonSpace     = "space"
+
+	reasonUnexpected = "unexpected_entry"
+	reasonRemove     = "remove"
 )
 
 var (
@@ -49,16 +55,25 @@ var (
 	errExists        = errors.New("backup: a backup with this name exists")
 	errShortCopy     = errors.New("backup: a database copy ended before its size")
 	errMissingSource = errors.New("backup: both databases and a notifier are required")
+	errSpace         = errors.New("backup: the free space would fall below the floor")
+	errKeep          = errors.New("backup: at least one backup must be kept")
+	errUnexpected    = errors.New("backup: the directory holds an entry that is not a backup")
 )
+
+var namePattern = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}Z\.age$`)
 
 type Database interface {
 	Backup(ctx context.Context, staging string, write func(name string, size int64, r io.Reader) error) error
 	SchemaVersion() int
+	Changes(ctx context.Context) (int64, error)
+	Size() (int64, error)
 }
 
 type Notifier interface {
 	BackupDone(bytes, archiveBytes, sessionBytes int64, took time.Duration)
 	BackupFailed(reason string)
+	BackupPruned(removed, kept int)
+	BackupPruneFailed(reason string)
 }
 
 type Options struct {
@@ -70,6 +85,7 @@ type Options struct {
 	Session   Database
 	Notify    Notifier
 	Now       func() time.Time
+	Space     func() (free, floor uint64, err error)
 }
 
 type Taker struct {
@@ -81,12 +97,14 @@ type Taker struct {
 	session   Database
 	notify    Notifier
 	now       func() time.Time
+	space     func() (free, floor uint64, err error)
 
 	output    func(io.Writer) io.Writer
 	syncFile  func(*os.File) error
 	rename    func(oldpath, newpath string) error
 	syncDir   func(string) error
 	removeAll func(string) error
+	remove    func(string) error
 }
 
 type failure struct {
@@ -141,8 +159,9 @@ func New(opts Options) (*Taker, error) {
 	}
 	return &Taker{
 		dir: filepath.Join(opts.DataDir, Dir), uid: opts.UID, recipient: recipient, version: opts.Version,
-		archive: opts.Archive, session: opts.Session, notify: opts.Notify, now: now,
+		archive: opts.Archive, session: opts.Session, notify: opts.Notify, now: now, space: opts.Space,
 		output: func(w io.Writer) io.Writer { return w }, syncFile: (*os.File).Sync, rename: os.Rename, syncDir: syncDir, removeAll: os.RemoveAll,
+		remove: os.Remove,
 	}, nil
 }
 
@@ -150,9 +169,10 @@ func RemoveStaging(dataDir string) error {
 	return os.RemoveAll(filepath.Join(dataDir, Dir, stagingDir))
 }
 
-func (t *Taker) Take(ctx context.Context) error {
+func (t *Taker) Take(ctx context.Context) (string, error) {
 	began := t.now()
-	written, sizes, err := t.take(ctx, began)
+	name := began.UTC().Format(nameLayout) + fileSuffix
+	written, sizes, err := t.take(ctx, began, name)
 	if err != nil {
 		reason := reasonOutput
 		if f, ok := errors.AsType[*failure](err); ok {
@@ -162,21 +182,23 @@ func (t *Taker) Take(ctx context.Context) error {
 			reason = reasonCancelled
 		}
 		t.notify.BackupFailed(reason)
-		return err
+		return "", err
 	}
 	t.notify.BackupDone(written, sizes[0], sizes[1], t.now().Sub(began))
-	return nil
+	return name, nil
 }
 
-func (t *Taker) take(ctx context.Context, began time.Time) (int64, [2]int64, error) {
+func (t *Taker) take(ctx context.Context, began time.Time, name string) (int64, [2]int64, error) {
 	var sizes [2]int64
+	if err := t.preflight(); err != nil {
+		return 0, sizes, &failure{reasonSpace, err}
+	}
 	staging := filepath.Join(t.dir, stagingDir)
 	for _, dir := range []string{t.dir, staging} {
 		if err := t.prepare(dir); err != nil {
 			return 0, sizes, &failure{reasonDirectory, err}
 		}
 	}
-	name := began.UTC().Format(nameLayout) + fileSuffix
 	written, err := t.write(ctx, began, staging, name, &sizes)
 	if err != nil {
 		return 0, sizes, errors.Join(err, t.removeAll(staging))
@@ -185,6 +207,131 @@ func (t *Taker) take(ctx context.Context, began time.Time) (int64, [2]int64, err
 		return 0, sizes, errors.Join(&failure{reasonCleanup, err}, os.Remove(filepath.Join(t.dir, name)))
 	}
 	return written, sizes, nil
+}
+
+func (t *Taker) preflight() error {
+	if t.space == nil {
+		return nil
+	}
+	free, floor, err := t.space()
+	if err != nil || floor == 0 {
+		return err
+	}
+	a, errA := t.archive.Size()
+	s, errS := t.session.Size()
+	if err := errors.Join(errA, errS); err != nil {
+		return err
+	}
+	if a < 0 || s < 0 {
+		return errSpace
+	}
+	need := []uint64{floor, uint64(max(a, s)), uint64(a), uint64(s)}
+	var sum uint64
+	for _, n := range need {
+		if sum+n < sum {
+			return errSpace
+		}
+		sum += n
+	}
+	if free < sum {
+		return errSpace
+	}
+	return nil
+}
+
+func (t *Taker) Prune(ctx context.Context, keep int, protect string) (removed, kept int, err error) {
+	if keep < 1 {
+		return 0, 0, errKeep
+	}
+	removed, kept, reason, err := t.prune(ctx, keep, protect)
+	switch {
+	case reason != "":
+		t.notify.BackupPruneFailed(reason)
+	case err == nil && removed > 0:
+		t.notify.BackupPruned(removed, kept)
+	}
+	return removed, kept, err
+}
+
+func (t *Taker) prune(ctx context.Context, keep int, protect string) (removed, kept int, reason string, err error) {
+	if _, err := os.Lstat(t.dir); errors.Is(err, fs.ErrNotExist) {
+		return 0, 0, "", nil
+	}
+	if err := t.prepare(t.dir); err != nil {
+		return 0, 0, reasonDirectory, err
+	}
+	entries, err := os.ReadDir(t.dir)
+	if err != nil {
+		return 0, 0, reasonDirectory, err
+	}
+	type backupFile struct {
+		name string
+		at   time.Time
+	}
+	var files []backupFile
+	for _, e := range entries {
+		fi, err := os.Lstat(filepath.Join(t.dir, e.Name()))
+		if err != nil {
+			return 0, 0, reasonDirectory, err
+		}
+		if e.Name() == stagingDir && t.owned(fi, true) {
+			continue
+		}
+		at, ok := parseName(e.Name())
+		if !ok || !t.owned(fi, false) {
+			return 0, 0, reasonUnexpected, errUnexpected
+		}
+		files = append(files, backupFile{e.Name(), at})
+	}
+	slices.SortFunc(files, func(a, b backupFile) int { return b.at.Compare(a.at) })
+	for i, f := range files {
+		if i < keep || f.name == protect {
+			kept++
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return removed, len(files) - removed, "", errors.Join(err, t.syncRemoved(removed))
+		}
+		if err := t.remove(filepath.Join(t.dir, f.name)); err != nil {
+			return removed, len(files) - removed, reasonRemove, errors.Join(err, t.syncRemoved(removed))
+		}
+		removed++
+	}
+	if err := t.syncRemoved(removed); err != nil {
+		return removed, kept, reasonSync, err
+	}
+	return removed, kept, "", nil
+}
+
+func (t *Taker) syncRemoved(removed int) error {
+	if removed == 0 {
+		return nil
+	}
+	return t.syncDir(t.dir)
+}
+
+func (t *Taker) owned(fi fs.FileInfo, dir bool) bool {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok || int(st.Uid) != t.uid {
+		return false
+	}
+	mode := fi.Mode() & (fs.ModeType | fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky)
+	if dir {
+		return mode == fs.ModeDir|0o700
+	}
+	return mode == 0o600
+}
+
+func parseName(name string) (time.Time, bool) {
+	if !namePattern.MatchString(name) {
+		return time.Time{}, false
+	}
+	stem := strings.TrimSuffix(name, fileSuffix)
+	at, err := time.Parse(nameLayout, stem)
+	if err != nil || at.Format(nameLayout) != stem {
+		return time.Time{}, false
+	}
+	return at, true
 }
 
 func (t *Taker) write(ctx context.Context, began time.Time, staging, name string, sizes *[2]int64) (int64, error) {
