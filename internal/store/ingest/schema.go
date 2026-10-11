@@ -269,6 +269,8 @@ ALTER TABLE messages ADD COLUMN sent_by TEXT CHECK (sent_by IS NULL OR length(se
 
 CREATE INDEX messages_inbound ON messages (chat_jid) WHERE from_me = 0;
 
+CREATE INDEX messages_chat_expiring ON messages (chat_jid, ts) WHERE expires_at IS NOT NULL;
+
 CREATE TABLE idempotency (
 	client_id TEXT NOT NULL CHECK (length(client_id) = 8),
 	key TEXT NOT NULL CHECK (length(key) BETWEEN 8 AND 128),

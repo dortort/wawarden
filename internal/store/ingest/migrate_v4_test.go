@@ -133,7 +133,7 @@ func TestMigratingToVersion4KeepsMappingsMessagesAndTheAuditChain(t *testing.T) 
 			t.Errorf("table %s missing", table)
 		}
 	}
-	for _, index := range []string{"messages_inbound", "idempotency_window", "idempotency_client_window", "idempotency_expiry", "backfills_requested"} {
+	for _, index := range []string{"messages_inbound", "messages_chat_expiring", "idempotency_window", "idempotency_client_window", "idempotency_expiry", "backfills_requested"} {
 		if n := scalar[int](t, s, "SELECT count(*) FROM sqlite_schema WHERE type = 'index' AND name = ?", index); n != 1 {
 			t.Errorf("index %s missing", index)
 		}

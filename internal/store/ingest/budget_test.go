@@ -157,6 +157,21 @@ func TestTheBudgetQueriesUseThePartialIndexes(t *testing.T) {
 	}
 }
 
+func TestTheSendPathQueriesUseTheirIndexes(t *testing.T) {
+	s := openStore(t)
+	for name, tt := range map[string]struct {
+		query, want string
+		args        []any
+	}{
+		"the chat timer": {selectChatTimer, "SEARCH messages USING INDEX messages_chat_expiring (chat_jid=?)", []any{alice}},
+	} {
+		plan := queryPlan(t, s, tt.query, tt.args...)
+		if !strings.Contains(plan, tt.want) || strings.Contains(plan, "TEMP B-TREE") || strings.Contains(plan, "SCAN messages") {
+			t.Errorf("%s plans as %q, want %q without a scan or a temporary b-tree", name, plan, tt.want)
+		}
+	}
+}
+
 func TestTheBudgetSurvivesReopening(t *testing.T) {
 	opts := testOptions(t)
 	s := openWith(t, opts)
