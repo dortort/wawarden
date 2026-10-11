@@ -75,7 +75,7 @@ Most sensitive first.
 | `archive.db` and history blobs | Every archived chat, in plaintext. `serve` creates and locks `archive.db` and runs the engine, which, once a device is paired, writes WhatsApp traffic into it and keeps each history blob under `history/` until it is processed or quarantined. Until a device is paired through the admin route that starts pairing, the engine makes no connection and writes no WhatsApp traffic. | M1 |
 | Admin credential | Gates the admin listener: metrics (M0), the engine's status, pairing and reconnection (M1), and minting clients (M2). It does not expire. The service holds only its SHA-256. | M0 |
 | Client tokens | Bearer credentials: whoever holds one and can reach the client listener has its access. The service stores only their SHA-256 digests; a token is shown once, in the answer that creates its client. | M2 |
-| Master key (`keys/master` in the data directory) | The key of the log pseudonyms is derived from it (M1), and so are the audit chain's key and the key of the chat HMACs in audit lines (M2); so are the keys that seal the read API's cursors and message references (M2). Whoever holds it can test a guessed identifier against the pseudonyms in the logs and the chat HMACs in audit lines, can recompute the audit chain and sign its anchor, and can open and forge cursors and message references, which still never widen a client's scope. `wawarden keys rotate` replaces it with a new key and keeps the old one in `keys/retired/`, where the service uses it only to open cursors and references sealed under it, and `audit verify` to check rows and anchors made under it; a retired key gives its holder the same power over what was made under it (M3). | M1 |
+| Master key (`keys/master` in the data directory) | The key of the log pseudonyms is derived from it (M1), and so are the audit chain's key and the key of the chat HMACs in audit lines (M2); so are the keys that seal the read API's cursors and message references (M2). Whoever holds it can test a guessed identifier against the pseudonyms in the logs and the chat HMACs in audit lines, can recompute the audit chain and sign its anchor, and can open and forge cursors and message references, which still never widen a client's scope. `wawarden keys rotate` replaces it with a new key and keeps the old one in `keys/retired/`, where the service uses it only to open cursors and references sealed under it, and `audit verify` to check rows and anchors made under it; a retired key gives its holder the same power over what was made under it and, to whoever can also write `archive.db`, part of that power over the audit rows written after it (see Audit anchoring under [Residual risks](#residual-risks)) (M3). | M1 |
 | Audit chain (the `audit` table, and its chain heads on standard output) | The record of every client change and of every client request the read budget admits, REST and MCP alike (M2). Whoever can write `archive.db` and holds the master key can rewrite it; the heads shipped on standard output are what reveal that. Rows older than `WAWARDEN_AUDIT_RETENTION_DAYS` (90 by default) are removed each night after the backup, behind an anchor signed under the master key (M3). | M2 |
 | Webhook signing secret (`WAWARDEN_NOTIFY_SECRET_FILE`) | Shared with the receiver of notification events. Whoever holds it can forge events that the receiver accepts. The service reads it once, at start, and never writes it out. | M1 |
 | Outbound integrity | Messages sent through WaWarden appear as sent by the account owner. | M3 |
@@ -471,17 +471,23 @@ entropy of the tokens; the counters exist to alert on.
   `WAWARDEN_AUDIT_RETENTION_DAYS` days before (7 to 3650, 90 by default; no
   value keeps rows forever), in transactions of at most 10,000 rows for at
   most 15 minutes, never the newest row, so the chain never restarts from its
-  genesis. Each transaction first moves the audit anchor to the last row it
-  removes: the row's id, time, key id and HMAC and the removal time, with an
-  HMAC over them under the current master key's audit-chain key. `audit
-  verify` checks that MAC with the key whose id the anchor names and starts the
-  walk from it, so an edited anchor is `anchor_invalid`, a removed anchor or a
-  removed first retained row is an `id_gap`, and rows cut from the start
-  behind an anchor copied from the last of them, without the key, are
-  `anchor_invalid`; tests run that matrix. Only `internal/store/admin/prune.go`
-  holds the statement that deletes audit rows, and only `internal/app`, the
-  admin store and the backup taker may name a `Prune` method; both are
-  architecture tests.
+  genesis. With a backup recipient, nothing is removed before the first backup
+  succeeds, so the retention also waits while no device is paired and while
+  the first backup fails; a test runs both. Each transaction first moves the
+  audit anchor to the last row it removes: the row's id, key id and HMAC, the
+  latest time of the rows removed so far and the removal time, with an HMAC
+  over them under the current master key's audit-chain key. `audit verify`
+  checks that MAC with the key whose id the anchor names and starts the walk
+  from it, so an edited anchor is `anchor_invalid`, a removed anchor or a
+  removed first retained row is an `id_gap`, rows cut from the start behind an
+  anchor copied from the last of them, without the key, are `anchor_invalid`,
+  and so are rows cut from the start behind an anchor made under a retired key
+  when no row is left or the first one left was written under the current key,
+  which no removal leaves; tests run that matrix, and one removes rows whose
+  times are out of order and counts every removed head as pruned. Only
+  `internal/store/admin/prune.go` holds the statement that deletes audit rows,
+  and only `internal/app`, the admin store and the backup taker may name a
+  `Prune` method; both are architecture tests.
 - **Anchors.** Triggers refuse an `UPDATE` or a replacing `INSERT` of a row,
   a `DELETE` of a row that the audit anchor does not cover or that is the
   newest row, and moving the anchor back or removing it, but whoever can write
@@ -737,12 +743,14 @@ These remain at v1.0, after every control above is in place.
   continuously at the default read budget adds about 131 MB a day, so the
   table can hold about 12 GB per such client, and the archive file does not
   shrink when rows go. Removed rows can be checked only in a backup taken
-  before the removal, which the retention waits for, until that backup is
-  deleted. `audit verify` counts a shipped head that the copy lacks as pruned
-  when the time on its log line is not after the time of the anchor's row:
-  that time comes from the log, not from the chain, so the head of a retained
-  row whose time is a few seconds out of order next to the anchor's is counted
-  as pruned, not missing, when the row is gone from the copy.
+  before the removal, until that backup is deleted: with a backup recipient
+  the retention waits for the night's backup and for the first one, and
+  without one it removes rows that no backup holds. `audit verify` counts a
+  shipped head that the copy lacks as pruned when the time on its log line is
+  not after the anchor's time, the latest time of the rows removed: that time
+  comes from the log, not from the chain, so the head of a retained row whose
+  time is a few seconds out of order next to the removed rows' is counted as
+  pruned, not missing, when the row is gone from the copy.
 - **Timing of a malformed message reference and of a cursor** (M2). A message
   reference that does not open answers `404` without any query, sooner than a
   reference that opens; the answer is the same, and only references the
@@ -783,7 +791,16 @@ These remain at v1.0, after every control above is in place.
   (M3) is signed under the master key, so without the key the start of the
   chain cannot be cut behind a forged anchor; with it, the anchor can be moved
   forward over any rows, and only their shipped heads, if their log times are
-  after the anchor's, show it.
+  after the anchor's, show it. A retired key signs an anchor that `audit
+  verify` accepts unless no row is left or the first one left was written
+  under the current key, and an audit line does not name its row's key. So
+  whoever holds a retired key and can write `archive.db` can still, across two
+  or more rotations, cut rows of a later retired key from the start of the
+  chain; while the chain still starts with rows of a retired key, for up to
+  `WAWARDEN_AUDIT_RETENTION_DAYS` days after a rotation, remove rows of any
+  later key, the current one included, from its end behind an anchor dated
+  after them, whose shipped heads then count as pruned; and at any time append
+  rows under the retired key after the current key's rows.
 - **Key rotation is offline and manual** (M3). `keys rotate` refuses while
   another process holds the archive's lock, but it does not keep that lock, so
   a service started while it runs can load the old key; an interrupted
