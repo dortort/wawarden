@@ -235,3 +235,79 @@ func checkAuditDelete(f *sourceFile) []string {
 	})
 	return out
 }
+
+var auditPruneCallerRule = rule{
+	name:  "audit-prune-callers",
+	check: checkAuditPruneCallers,
+	cases: []snippet{
+		{name: "a prune called or taken as a value outside the scheduler", rel: "internal/api/x.go", want: 3, src: `package api
+
+import (
+	"context"
+	"time"
+)
+
+type pruner interface {
+	Prune(context.Context, time.Time, time.Time, int) (any, error)
+}
+
+func f(ctx context.Context, p pruner, a struct{ pruner }) {
+	_, _ = p.Prune(ctx, time.Now(), time.Now(), 10000)
+	_, _ = a.pruner.Prune(ctx, time.Now(), time.Now(), 1)
+	_ = p.Prune
+}
+`},
+		{name: "a prune called from the command line", rel: "cmd/wawarden/x.go", want: 1, src: `package main
+
+type store interface{ Prune() }
+
+func f(s store) { s.Prune() }
+`},
+		{name: "the scheduler", rel: appDir + "/x.go", src: `package app
+
+type store interface{ Prune() }
+
+func f(s store) { s.Prune() }
+`},
+		{name: "the admin store", rel: storeDir + "/admin/x.go", src: `package admin
+
+type a struct{}
+
+func (a) Prune() {}
+
+func f(x a) { x.Prune() }
+`},
+		{name: "a test", rel: "internal/api/x_test.go", src: `package api
+
+type store interface{ Prune() }
+
+func f(s store) { s.Prune() }
+`},
+		{name: "other prunes", rel: "internal/api/x.go", src: `package api
+
+type store interface {
+	PruneProcessedBlobs()
+	BackupPruned()
+}
+
+func f(s store) {
+	s.PruneProcessedBlobs()
+	s.BackupPruned()
+}
+`},
+	},
+}
+
+func checkAuditPruneCallers(f *sourceFile) []string {
+	if f.test || within(f.dir, appDir) || within(f.dir, storeDir+"/admin") || within(f.dir, backupDir) {
+		return nil
+	}
+	var out []string
+	ast.Inspect(f.file, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "Prune" {
+			out = append(out, f.at(sel, "Prune is reached outside %s: only the nightly scheduler removes audit rows, behind the signed anchor", appDir))
+		}
+		return true
+	})
+	return out
+}
