@@ -36,7 +36,6 @@ func generateTokens(t *testing.T, n int) []generated {
 }
 
 func TestEveryGeneratedTokenIsRedactedInAnyContext(t *testing.T) {
-	w, out := keyedWriter(t)
 	contexts := []func(a, b string) string{
 		func(a, _ string) string { return a },
 		func(a, _ string) string { return "Authorization: Bearer " + a },
@@ -50,6 +49,7 @@ func TestEveryGeneratedTokenIsRedactedInAnyContext(t *testing.T) {
 	tokens := generateTokens(t, 3000)
 	for i, g := range tokens {
 		other := tokens[(i+1)%len(tokens)]
+		w, out := keyedWriter(t)
 		for c, context := range contexts {
 			got := through(t, w, out, context(g.full, other.full)+"\n")
 			if strings.Contains(got, g.secret) || strings.Contains(got, other.secret[:20]) || !strings.Contains(got, g.kept) {
