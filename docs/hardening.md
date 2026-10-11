@@ -264,15 +264,20 @@ anything it keeps is not private to its user
 ([startup refusals](configuration.md#startup-refusals)):
 
 - the data directory: exactly `0700`, owned by the service's user;
-- `keys/`, `keys/retired/`, `history/`, `backups/` and `backups/tmp/`: `0700`;
-- `keys/master`: `0600` or `0400`; each retired key without any access for
-  group or others;
-- `archive.db`, `session.db` and their journals: no access for group or others;
-- each backup: `0600`.
+- `keys/`, `keys/retired/`, `history/` and `backups/`: `0700`;
+- `keys/master` and each retired key: no access for group or others, such as
+  `0600` or `0400`;
+- `archive.db`, `session.db` and their journals: no access for group or others.
 
-Because each check is a startup refusal, a wrong mode is found at once, not
-months later. Mechanisms that add group bits, such as Kubernetes `fsGroup` or a
-setgid parent directory, fail the checks.
+Because each of these checks is a startup refusal, a wrong mode is found at
+once, not months later. What `backups/` holds is checked when a backup is
+taken or old ones are pruned instead: `serve` removes `backups/tmp/` at start,
+a backup fails unless `backups/tmp/` is a `0700` directory of the service's
+user (`backup_failed` with reason `directory`), and the prune after a backup
+deletes nothing while `backups/` holds a backup that is not a `0600` file of
+that user (`backup_prune_failed` with reason `unexpected_entry`). Mechanisms
+that add group bits, such as Kubernetes `fsGroup` or a setgid parent
+directory, fail the checks.
 
 ## Secrets
 
@@ -357,6 +362,7 @@ webhook post can be late or lost, and a dead process sends nothing.
 | EMF `SendsRejected` | sustained | An agent is pushing against its limits or the first-contact rule; the `reason` dimension says which. |
 | EMF `MessagesIngested` | 0 for longer than the account is normally quiet | Messages are not arriving. |
 | `wawarden_backup_last_success_timestamp_seconds` | older than about a day and a half | Nightly backups have stopped. |
+| Log event `backup_done` | none, nor `backup_skipped`, for about a day and a half while `WAWARDEN_BACKUP_AGE_RECIPIENT` is set | Nightly backups have stopped; the signal to use with EMF alone, which carries no backup metric. |
 | Events `unpaired`, `disconnected` (by `reason`), `pair_rejected`, `logout_failed` | any | The engine needs the operator ([runbook](runbook.md#engine-disconnected)). |
 | Events `quarantine`, `ingest_paused`, `rekey_conflict` | any | Ingest set something aside or stopped. |
 | Events `backup_failed`, `backup_prune_failed` | any | A backup or its retention failed. |
