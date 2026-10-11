@@ -246,6 +246,9 @@ func TestClientsAreCreatedAuthenticatedAuditedAndRevoked(t *testing.T) {
 	if strings.Contains(out, body.Credential) || strings.Contains(out, body.Credential[12:55]) || strings.Contains(out, "120363000000000001@g.us") {
 		t.Fatalf("standard output carries the credential or a chat identifier:\n%s", out)
 	}
+	if strings.Contains(out, "synthetic outbound") || strings.Contains(out, "synthetic-key-0001") {
+		t.Fatalf("standard output carries a send's text or idempotency key:\n%s", out)
+	}
 	if n := strings.Count(created.body, body.Credential); n != 1 {
 		t.Fatalf("the create response holds the credential %d times", n)
 	}

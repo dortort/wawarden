@@ -1,8 +1,11 @@
 package sender_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
@@ -304,4 +307,47 @@ func TestNewRefusesMissingDependencies(t *testing.T) {
 		}
 	}()
 	sender.New(sender.Options{})
+}
+
+func TestARevokedGatewaySendLeavesNoTextOnDisk(t *testing.T) {
+	const textCanary, keyCanary = "canary-text-5e0c1d gateway", "canary-key-4b9a77"
+	f := newFixture(t, 10, 30)
+	g := grantFor(t, writerID, false, alice)
+	res, err := f.svc.Send(g, t.Context(), request(t, keyCanary, alice, textCanary))
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if err := f.store.Write(t.Context(), "test.revoke", func(tx *ingest.Tx) error {
+		found, ok, err := tx.ResolveInChat(res.Sent.Chat, res.Sent.ID, res.Sent.Sender)
+		if err != nil || !ok {
+			return errors.Join(err, errors.New("the sent row is not in the archive"))
+		}
+		return tx.ApplyRevoke(found.Ref)
+	}); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	if err := f.store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	entries, err := os.ReadDir(f.dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	var scanned int
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(f.dir, e.Name()))
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		scanned++
+		if bytes.Contains(b, []byte(textCanary)) || bytes.Contains(b, []byte("5e0c1d")) {
+			t.Fatalf("%s holds the revoked text", e.Name())
+		}
+	}
+	if scanned == 0 {
+		t.Fatal("no database file was scanned")
+	}
 }
