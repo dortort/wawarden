@@ -337,7 +337,8 @@ that is neither the master key's nor a retired key's, `hmac_mismatch` when its
 HMAC is not the one its key gives, `retired_key` when the row was written
 under a retired key after a row written under the master key or after an
 anchor at such a row, since the service never writes under a retired key
-again, and `anchor_invalid` when the anchor names a
+again and the retention signs an anchor only over rows that pass these
+checks, and `anchor_invalid` when the anchor names a
 key that is not given, its MAC is not the one that key gives, or it was made
 under a retired key while no row is left or the first retained row was written
 under the master key; the first failing row is then the anchor's. Without
@@ -791,9 +792,10 @@ older rows as `unknown_key` unless it is given the old key as a retired key:
 keep a copy of every master key the service ran with.
 [`keys rotate`](#keys-rotate) replaces the master key and keeps the old one in
 `keys/retired/`. The service uses a retired key only to open what was sealed
-under it: a cursor or a message reference whose key id is a retired key's
-opens under that key, while everything new is sealed, chained and keyed under
-the master key. To provide your own key, write
+under it, a cursor or a message reference whose key id is a retired key's,
+and to verify the audit rows and the audit anchor made under it before the
+[audit retention](#audit-chain) removes them, while everything new is sealed,
+chained and keyed under the master key. To provide your own key, write
 32 random bytes to `keys/master` with mode `0600` or `0400`, owned by the service's
 user, before the first start. A crash or power loss during the first start can
 leave a `keys/.master-<random>` file behind, with mode `0600`. It holds either an
@@ -2645,6 +2647,7 @@ notices of a [debug window](#protocol-library-logs). Lines in
 | `backup_prune_failed` | `WARN`, at every log level | `reason` | A [notification event](#notifications). |
 | `backup_skipped` | `INFO` | `reason`: `unchanged` | Neither database was written since this process's last [backup](#backups), so the nightly backup of this slot is skipped. Logged once per slot. |
 | `audit_pruned` | `INFO` | `through`, `rows`, `anchor_head` | The nightly [audit retention](#audit-chain) deleted `rows` audit rows; the audit anchor now names row `through`, and `anchor_head` is the first 16 bytes of that row's HMAC, as its line's `chain_head` was. Not logged when it deleted none. |
+| `audit_prune_refused` | `WARN` | `reason`: `chain_mismatch` | The nightly [audit retention](#audit-chain) found that the audit anchor, or a row it was about to remove, does not verify under the master key and the retired keys, so it moved and removed nothing and tries again at the next slot; run [`audit verify`](#audit-verify). Logged once per slot. |
 | `history_blobs_pruned` | `INFO` | `rows` | The nightly prune deleted `rows` [history blob](#history-sync) rows processed more than 30 days before. Not logged when it deleted none. |
 | `ingest_resumed` | `INFO` | `free_bytes`, `floor_bytes` | The free space reached 1.25 times the floor again. |
 | `free_space_unknown` | `WARN` | `error_type` | The free space of the data directory could not be read. |
@@ -2877,9 +2880,14 @@ from its end without leaving a trace in the table. The chain heads on standard
 output are the anchor against both: ship the service's standard output to a
 store the host cannot rewrite, and give a capture of it to `audit verify
 --log`, which reports every shipped head the copy lacks. Rows removed from the
-end of the chain are detectable only this way. The master key and the retired
-keys are not part of a [backup](#backups): keep a copy of them apart from the
-backups to verify them.
+end of the chain are detectable only this way. Rows that whoever holds a
+retired key wrote under it in place of every row under the master key, once
+all of those were older than the retention's cutoff, are detectable this way
+only in a backup taken before the removal that reached them, which signs
+them (Audit anchoring in the
+[threat model's residual risks](threat-model.md#residual-risks)). The master
+key and the retired keys are not part of a [backup](#backups): keep a copy of
+them apart from the backups to verify them.
 
 **Retention.** Each night, once the [backup](#backups) of the night's slot is
 taken (at once when no backup recipient is configured, and never while that
@@ -2904,6 +2912,20 @@ master key and an HMAC-SHA256, under that key's `audit-chain` key, over the
 domain string `wawarden/audit-anchor/v1`, a zero byte, the row's id, the
 anchor's time and the removal time as 8-byte big-endian integers, the key id
 with a presence byte and its length, and the row's HMAC.
+Before it moves the anchor, each transaction checks what it signs with the
+master key and the retired keys, by the rules of
+[`audit verify`](#audit-verify): the MAC of the anchor already there, with
+the key it names; that the first row behind an anchor made under a retired
+key was not written under the master key; and the HMAC of every row it is
+about to remove, from the anchor's HMAC (or from the chain's start), under
+the key the row names, with consecutive ids and no row under a retired key
+once the anchor or an earlier row names the master key. When a check fails,
+the transaction moves and removes nothing, the service logs
+`audit_prune_refused` with reason `chain_mismatch`, and the retention stops
+until the next night, when it checks again; rows under a key that is neither
+the master key nor in `keys/retired/` are never removed. The check reads each
+row once more: about 40 ms for 10,000 rows, and removing 1,000,000 rows took
+23 seconds instead of 19, measured on an SSD.
 Triggers refuse to move the anchor back or to remove it. One `audit_pruned`
 line reports each night's removal. The verification starts from the anchor,
 and a shipped head whose time is not after the anchor's counts as pruned, not
@@ -2915,7 +2937,8 @@ removed, which is why the retention waits for the night's backup.
 rows keep the key id they were written under, and each start with the new
 key emits `audit_key_changed` (see [Notifications](#notifications)) until a
 row is written under it. `audit verify` needs the retired keys to verify the
-older rows and an anchor made under an older key; the next removal makes the
+older rows and an anchor made under an older key, and so does the
+retention, which removes no row it cannot verify; the next removal makes the
 anchor again under the current key. Until then, the head of a removed row on a
 line without `key_id`, as earlier versions wrote them, counts as missing.
 
