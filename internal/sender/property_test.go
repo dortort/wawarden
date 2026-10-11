@@ -27,6 +27,7 @@ var (
 	propKeys   = []string{"prop-key-0001", "prop-key-0002", "prop-key-0003", "prop-key-0004", "prop-key-0005"}
 	propTexts  = []string{"synthetic a", "synthetic b"}
 	propSteps  = []time.Duration{time.Second, 3 * time.Second, 20 * time.Second, 61 * time.Second, 10 * time.Minute, 61 * time.Minute, 25 * time.Hour}
+	propLags   = []time.Duration{0, 2 * time.Second, 8 * time.Second}
 	propWrites = map[string][]string{writerID: {alice, bob, carol, groupJID}, otherID: {alice, groupJID}}
 )
 
@@ -93,10 +94,23 @@ type record struct {
 	first      answer
 }
 
+type laggingStore struct {
+	*ingest.Store
+	clock *clock
+	lag   time.Duration
+}
+
+func (l *laggingStore) ChatTimer(ctx context.Context, chat policy.CanonicalChat) (time.Duration, error) {
+	d, err := l.Store.ChatTimer(ctx, chat)
+	l.clock.Advance(l.lag)
+	return d, err
+}
+
 type sendModel struct {
 	t        *rapid.T
 	dir      string
 	store    *ingest.Store
+	lagging  *laggingStore
 	clock    *clock
 	engine   *engine
 	svc      *sender.Service
@@ -126,7 +140,8 @@ func newSendModel(t *rapid.T, parent string, pacer time.Duration) *sendModel {
 
 func (m *sendModel) open() {
 	m.store = openStore(m.t, m.dir)
-	m.svc = sender.New(sender.Options{Store: m.store, Engine: m.engine, Notifier: &notes{}, PerMinute: propPerMinute, GlobalPerHour: propGlobal,
+	m.lagging = &laggingStore{Store: m.store, clock: m.clock}
+	m.svc = sender.New(sender.Options{Store: m.lagging, Engine: m.engine, Notifier: &notes{}, PerMinute: propPerMinute, GlobalPerHour: propGlobal,
 		Holders: func(context.Context, time.Time) (int, error) { return propHolders, nil }, Now: m.clock.Now, Pacer: func() time.Duration { return m.pacer }})
 }
 
@@ -170,8 +185,11 @@ func (m *sendModel) send(t *rapid.T) {
 	text := rapid.SampledFrom(propTexts).Draw(t, "text")
 	out := rapid.SampledFrom([]outcome{outAck, outNotConnected, outBusy, outRejected, outUnknown}).Draw(t, "outcome")
 	ready := rapid.IntRange(0, 9).Draw(t, "ready") > 0
+	m.lagging.lag = rapid.SampledFrom(propLags).Draw(t, "lag")
 	m.engine.set(func(e *engine) { e.outcome, e.ready = out.err(), ready })
 	before := len(m.engine.sent())
+	res, err := m.svc.Send(m.grants[client], context.Background(), request(t, k, chatJID, text))
+	got := classify(t, res, err)
 	now := m.clock.Now()
 	id := [2]string{client, k}
 	prior, known := m.records[id]
@@ -179,8 +197,6 @@ func (m *sendModel) send(t *rapid.T) {
 		delete(m.records, id)
 		known = false
 	}
-	res, err := m.svc.Send(m.grants[client], context.Background(), request(t, k, chatJID, text))
-	got := classify(t, res, err)
 	calls := m.engine.sent()[before:]
 	if len(calls) > 1 {
 		t.Fatalf("one request made %d engine sends", len(calls))
