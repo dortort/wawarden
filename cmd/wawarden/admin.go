@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/sanitize"
 )
 
@@ -275,7 +276,7 @@ func adminRefusal(command string, status int, answer []byte, stderr io.Writer) i
 	}
 	code := "unknown"
 	if json.Unmarshal(answer, &refusal) == nil && refusal.Error != "" {
-		code = sanitize.Terminal(refusal.Error)
+		code = logx.RedactTokens(sanitize.Terminal(refusal.Error))
 	}
 	_, _ = fmt.Fprintf(stderr, "admin %s: refused with %s (HTTP %d)\n", command, code, status)
 	switch {
