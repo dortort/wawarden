@@ -108,6 +108,8 @@ func TestEveryEventIsOneLineWithAFixedSetOfFields(t *testing.T) {
 		{event: EventAdminAuthFailure, level: "WARN", fire: (*Notifier).AdminAuthFailure, fields: map[string]any{"count": float64(1)}},
 		{event: EventAuditKeyChanged, level: "INFO", fire: func(n *Notifier) { n.AuditKeyChanged("5c7cdf84", "6a53922c", "retired") },
 			fields: map[string]any{"previous_key_id": "5c7cdf84", "key_id": "6a53922c", "previous_key": "retired"}},
+		{event: EventSendOutcomeUnknown, level: "WARN", fire: func(n *Notifier) { n.SendOutcomeUnknown("ack_timeout") }, fields: map[string]any{"reason": "ack_timeout"}},
+		{event: EventSendUnrecorded, level: "WARN", fire: (*Notifier).SendUnrecorded},
 	}
 	seen := map[string]bool{}
 	for _, tt := range tests {
@@ -137,7 +139,7 @@ func TestEveryEventIsOneLineWithAFixedSetOfFields(t *testing.T) {
 	}
 	for _, event := range []string{EventAdminMutation, EventAdminAuthFailure, EventUnpaired, EventDisconnected, EventPairRejected,
 		EventLogoutFailed, EventQuarantine, EventRekeyConflict, EventIngestPaused, EventBackupDone, EventBackupFailed, EventBackupPruned,
-		EventBackupPruneFailed, EventAuditKeyChanged} {
+		EventBackupPruneFailed, EventAuditKeyChanged, EventSendOutcomeUnknown, EventSendUnrecorded} {
 		if !seen[event] {
 			t.Errorf("no case for %s", event)
 		}
@@ -156,6 +158,7 @@ func TestValuesThatAreNotCodesNeverLeave(t *testing.T) {
 		n.LogoutFailed(1, v)
 		n.BackupFailed(v)
 		n.BackupPruneFailed(v)
+		n.SendOutcomeUnknown(v)
 	}
 	if strings.Contains(out.String(), canary) || strings.Contains(out.String(), "Alice") || strings.Contains(out.String(), "Logged_Out") {
 		t.Fatalf("a value that is not a code reached the output:\n%s", out)

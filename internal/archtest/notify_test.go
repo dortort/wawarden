@@ -18,7 +18,8 @@ const (
 )
 
 var notifyEvents = set("admin_mutation", "admin_auth_failure", "unpaired", "disconnected", "pair_rejected", "logout_failed",
-	"quarantine", "rekey_conflict", "ingest_paused", "backup_done", "backup_failed", "backup_pruned", "backup_prune_failed", "audit_key_changed")
+	"quarantine", "rekey_conflict", "ingest_paused", "backup_done", "backup_failed", "backup_pruned", "backup_prune_failed", "audit_key_changed",
+	"send_outcome_unknown", "send_unrecorded")
 
 var notifyEventRule = rule{
 	name:  "notify-events",

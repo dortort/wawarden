@@ -15,20 +15,22 @@ import (
 )
 
 const (
-	EventAdminMutation     = "admin_mutation"
-	EventAdminAuthFailure  = "admin_auth_failure"
-	EventUnpaired          = "unpaired"
-	EventDisconnected      = "disconnected"
-	EventPairRejected      = "pair_rejected"
-	EventLogoutFailed      = "logout_failed"
-	EventQuarantine        = "quarantine"
-	EventRekeyConflict     = "rekey_conflict"
-	EventIngestPaused      = "ingest_paused"
-	EventBackupDone        = "backup_done"
-	EventBackupFailed      = "backup_failed"
-	EventBackupPruned      = "backup_pruned"
-	EventBackupPruneFailed = "backup_prune_failed"
-	EventAuditKeyChanged   = "audit_key_changed"
+	EventAdminMutation      = "admin_mutation"
+	EventAdminAuthFailure   = "admin_auth_failure"
+	EventUnpaired           = "unpaired"
+	EventDisconnected       = "disconnected"
+	EventPairRejected       = "pair_rejected"
+	EventLogoutFailed       = "logout_failed"
+	EventQuarantine         = "quarantine"
+	EventRekeyConflict      = "rekey_conflict"
+	EventIngestPaused       = "ingest_paused"
+	EventBackupDone         = "backup_done"
+	EventBackupFailed       = "backup_failed"
+	EventBackupPruned       = "backup_pruned"
+	EventBackupPruneFailed  = "backup_prune_failed"
+	EventAuditKeyChanged    = "audit_key_changed"
+	EventSendOutcomeUnknown = "send_outcome_unknown"
+	EventSendUnrecorded     = "send_unrecorded"
 )
 
 const (
@@ -190,6 +192,15 @@ func (n *Notifier) AuditKeyChanged(previousKeyID, keyID, previousKey string) {
 	}
 	n.emit(level, "the newest audit row was written under another master key than the one loaded", EventAuditKeyChanged,
 		keyIDAttr("previous_key_id", previousKeyID), keyIDAttr("key_id", keyID), slog.String("previous_key", previousKey))
+}
+
+func (n *Notifier) SendOutcomeUnknown(reason string) {
+	n.emit(slog.LevelWarn, "a send may have reached WhatsApp without an acknowledgement; it is stored as failed and never resent", EventSendOutcomeUnknown,
+		code("reason", reason))
+}
+
+func (n *Notifier) SendUnrecorded() {
+	n.emit(slog.LevelWarn, "a send was acknowledged by WhatsApp but its result could not be stored", EventSendUnrecorded)
 }
 
 func (n *Notifier) AdminMutation(action, outcome string) {
