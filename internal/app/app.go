@@ -38,6 +38,8 @@ var (
 	errHealthNotLoopback = errors.New("app: the unauthenticated health listener must be bound to a loopback address")
 	errBackupNotStopped  = errors.New("app: the backup did not stop in time")
 	errNoMasterKey       = errors.New("app: the service needs the master key")
+
+	sendRejectReasons = []string{"scope", "first_contact", "budget_minute", "budget_hour", "budget_global", "pacer"}
 )
 
 type Refusal = ingest.Refusal
@@ -106,7 +108,10 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 	reg.GaugeVec("wawarden_build_info", "Build metadata of the running binary.", "version", "revision", "dev").
 		With(info.Version, info.Revision, strconv.FormatBool(info.Dev)).Set(1)
 	reg.Counter("wawarden_policy_denials_total", "Client requests that the client's grant did not allow.")
-	reg.Counter("wawarden_sends_rejected_total", "Sends refused by a scope, budget or rate limit.")
+	sendsRejected := reg.CounterVec("wawarden_sends_rejected_total", "Sends refused by a scope, the first-contact rule, a budget or the pacer.", "reason")
+	for _, reason := range sendRejectReasons {
+		sendsRejected.With(reason)
+	}
 
 	notifier, err := notify.New(notify.Options{
 		Writer: out, Metrics: reg, URL: cfg.Notify.URL, Secret: cfg.Notify.Secret, AllowPrivate: cfg.Notify.AllowPrivate,
