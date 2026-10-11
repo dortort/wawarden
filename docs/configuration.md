@@ -2287,7 +2287,9 @@ them, in sliding windows measured with the service's clock.
 | Each client, per hour | the hourly limit divided by the number of clients that may write (active, not all-chats, with a write chat), at least 1 | | |
 | Pacer | one send, then 3 seconds plus a random wait of up to 2 seconds before the next send of any client | | |
 
-A send is counted from the moment it is admitted. A send that wrote nothing
+A send is counted from the moment it is admitted: the time is read once the
+admitting write holds the archive, so a request that waited for the archive
+is counted from the end of its wait, and its next send waits the full gap. A send that wrote nothing
 to WhatsApp (`not_connected`, or `rate_limited` behind a running send) gives
 its place back; a rejected send and one with an unknown outcome stay counted,
 because WhatsApp may have seen them. A refused send answers `429`
