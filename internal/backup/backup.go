@@ -274,11 +274,11 @@ func (t *Taker) prune(ctx context.Context, keep int, protect string) (removed, k
 		if err != nil {
 			return 0, 0, reasonDirectory, err
 		}
-		if e.Name() == stagingDir && t.owned(fi, true) {
+		if e.Name() == stagingDir && owned(fi, t.uid, true) {
 			continue
 		}
 		at, ok := parseName(e.Name())
-		if !ok || !t.owned(fi, false) {
+		if !ok || !owned(fi, t.uid, false) {
 			return 0, 0, reasonUnexpected, errUnexpected
 		}
 		files = append(files, backupFile{e.Name(), at})
@@ -310,9 +310,9 @@ func (t *Taker) syncRemoved(removed int) error {
 	return t.syncDir(t.dir)
 }
 
-func (t *Taker) owned(fi fs.FileInfo, dir bool) bool {
+func owned(fi fs.FileInfo, uid int, dir bool) bool {
 	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok || int(st.Uid) != t.uid {
+	if !ok || int(st.Uid) != uid {
 		return false
 	}
 	mode := fi.Mode() & (fs.ModeType | fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky)
