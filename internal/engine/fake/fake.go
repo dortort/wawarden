@@ -23,6 +23,7 @@ const (
 	pairingCode     = "FAKE-C0DE"
 	defaultInterval = 100 * time.Millisecond
 	wrongAccount    = "15550100029"
+	maxBackfill     = 50
 
 	fakeMarker = "wawarden-fake-engine-not-for-release"
 )
@@ -56,14 +57,20 @@ type Client struct {
 	script   []engine.Event
 	recent   []byte
 	poison   []byte
+	stamp    string
 
-	mu      sync.Mutex
-	handler func(engine.Event) bool
-	paired  bool
-	version engine.Version
-	cancel  context.CancelFunc
-	pair    chan struct{}
-	next    int
+	mu        sync.Mutex
+	handler   func(engine.Event) bool
+	paired    bool
+	connected bool
+	version   engine.Version
+	conn      context.Context
+	cancel    context.CancelFunc
+	pair      chan struct{}
+	next      int
+	ids       int
+	sent      []engine.SendRequest
+	answers   map[string]engine.BackfillRequest
 }
 
 func New(opts Options) (*Client, error) {
@@ -71,14 +78,15 @@ func New(opts Options) (*Client, error) {
 	if opts.OwnerPhone != "" && (!ok || slices.Contains(synthetic, owner)) || opts.HistoryMaxBytes <= 0 || opts.HistoryMaxBytes > engine.MaxHistoryMaxBytes {
 		return nil, errOptions
 	}
-	c := &Client{owner: owner, account: owner, max: opts.HistoryMaxBytes, interval: opts.Interval, version: version}
+	now := time.Now()
+	c := &Client{owner: owner, account: owner, max: opts.HistoryMaxBytes, interval: opts.Interval, version: version,
+		stamp: now.UTC().Format("20060102-150405") + "-" + decimal(now.Nanosecond()), answers: map[string]engine.BackfillRequest{}}
 	if opts.WrongAccount {
 		c.account = wrongAccount
 	}
 	if c.interval <= 0 {
 		c.interval = defaultInterval
 	}
-	now := time.Now()
 	bootstrap, err := compress(bootstrapHistory(owner, now))
 	if err != nil {
 		return nil, err
@@ -121,7 +129,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	pair := make(chan struct{}, 1)
 	c.mu.Lock()
 	c.hangUpLocked()
-	c.cancel, c.pair = cancel, pair
+	c.conn, c.cancel, c.pair = conn, cancel, pair
 	c.mu.Unlock()
 	safego.Go("fake.connection", func() { c.run(conn, pair) })
 	return nil
@@ -137,7 +145,7 @@ func (c *Client) hangUpLocked() {
 	if c.cancel != nil {
 		c.cancel()
 	}
-	c.cancel, c.pair = nil, nil
+	c.conn, c.cancel, c.pair, c.connected = nil, nil, nil, false
 }
 
 func (c *Client) Paired() bool {
@@ -210,7 +218,18 @@ func (c *Client) DownloadHistory(ctx context.Context, ref engine.HistoryRef, dst
 	case oversizedID:
 		return inflatingPast(ctx, dst, c.max)
 	}
-	return errUnknownBlob
+	c.mu.Lock()
+	req, ok := c.answers[ref.ID]
+	c.mu.Unlock()
+	if !ok {
+		return errUnknownBlob
+	}
+	blob, err := compress(olderHistory(ref.ID, req))
+	if err != nil {
+		return err
+	}
+	_, err = dst.Write(blob)
+	return err
 }
 
 func inflatingPast(ctx context.Context, dst io.Writer, limit int64) error {
@@ -277,6 +296,9 @@ func (c *Client) run(ctx context.Context, pair <-chan struct{}) {
 			return
 		}
 	}
+	if c.Account() == c.owner {
+		c.online(ctx)
+	}
 	c.deliver(engine.Connected{})
 	if c.Account() != c.owner {
 		return
@@ -296,6 +318,12 @@ func (c *Client) run(ctx context.Context, pair <-chan struct{}) {
 			c.advance(step)
 		}
 	}
+}
+
+func (c *Client) online(ctx context.Context) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.connected = ctx.Err() == nil
 }
 
 func (c *Client) link(ctx context.Context) bool {
@@ -351,4 +379,90 @@ func stamped(ev engine.Event, now time.Time) engine.Event {
 		return e
 	}
 	return ev
+}
+
+func (c *Client) NewMessageID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ids++
+	return "FAKE-S" + c.stamp + "-" + decimal(c.ids)
+}
+
+func (c *Client) Send(ctx context.Context, req engine.SendRequest) (engine.Sent, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ctx.Err() != nil || !c.connected {
+		return engine.Sent{}, engine.ErrNotConnected
+	}
+	if req.ID == "" || req.Text == "" {
+		return engine.Sent{}, &engine.RejectedError{}
+	}
+	switch req.Chat {
+	case alice, bob, aliceLID, bobLID:
+	case unreachable:
+		c.sent = append(c.sent, req)
+		return engine.Sent{}, engine.ErrOutcomeUnknown
+	default:
+		return engine.Sent{}, engine.ErrRecipientUnavailable
+	}
+	c.sent = append(c.sent, req)
+	sender := c.owner + server
+	if req.Chat == aliceLID || req.Chat == bobLID {
+		sender = ownerLID
+	}
+	return engine.Sent{ID: req.ID, Chat: req.Chat, Sender: sender, Timestamp: time.Now()}, nil
+}
+
+func (c *Client) Sent() []engine.SendRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.sent)
+}
+
+func (c *Client) Backfill(ctx context.Context, req engine.BackfillRequest) (string, error) {
+	c.mu.Lock()
+	if ctx.Err() != nil || !c.connected {
+		c.mu.Unlock()
+		return "", engine.ErrNotConnected
+	}
+	if req.AnchorID == "" || req.AnchorTime.IsZero() || req.Count < 1 || req.Count > maxBackfill || !slices.Contains(chats, req.Chat) {
+		c.mu.Unlock()
+		return "", &engine.RejectedError{}
+	}
+	c.ids++
+	n := c.stamp + "-" + decimal(c.ids)
+	id, blob := "FAKE-BF"+n, onDemandID+n
+	c.answers[blob] = req
+	conn, sender := c.conn, c.owner+server
+	c.mu.Unlock()
+	answer := engine.HistoryNotification{Sender: sender, FromMe: true, Ref: engine.HistoryRef{ID: blob, DirectPath: "/fake/history/ondemand", SyncType: engine.SyncOnDemand, RequestID: id}}
+	safego.Go("fake.backfill", func() {
+		for c.wait(conn) && !c.deliver(answer) {
+		}
+	})
+	return id, nil
+}
+
+func olderHistory(blob string, req engine.BackfillRequest) engine.History {
+	sender := req.Chat
+	if req.Chat == group {
+		sender = alice
+	}
+	messages := make([]engine.Message, 0, req.Count)
+	for i := range req.Count {
+		messages = append(messages, engine.Message{
+			ID: blob + "-" + decimal(i+1), Sender: sender, Timestamp: req.AnchorTime.Add(-time.Duration(i+1) * time.Minute),
+			Kind: engine.KindText, Text: "An older synthetic message, from the on-demand history",
+		})
+	}
+	return engine.History{Conversations: []engine.Conversation{{Chat: req.Chat, Messages: messages}}}
+}
+
+func decimal(n int) string {
+	digits := []byte{"0123456789"[n%10]}
+	for n /= 10; n > 0; n /= 10 {
+		digits = append(digits, "0123456789"[n%10])
+	}
+	slices.Reverse(digits)
+	return string(digits)
 }

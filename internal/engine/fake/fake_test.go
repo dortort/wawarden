@@ -11,6 +11,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -359,5 +360,174 @@ func TestTheScriptCoversEveryKind(t *testing.T) {
 	}
 	if drops != 1 {
 		t.Errorf("the script drops the connection %d times, want once", drops)
+	}
+}
+
+func connected(t *testing.T) (*Client, *recorder) {
+	t.Helper()
+	c, r := newClient(t, false)
+	pair(t, c, r)
+	r.next(t)
+	if _, ok := r.next(t).(engine.Connected); !ok {
+		t.Fatal("pairing was not followed by Connected")
+	}
+	return c, r
+}
+
+func TestTheScriptAnnouncesTheOwnersIdentityFirst(t *testing.T) {
+	c, _ := newClient(t, false)
+	if id, ok := c.script[0].(engine.Identity); !ok || id.PN != "15550100009@s.whatsapp.net" || id.LID != ownerLID {
+		t.Fatalf("first script event %#v", c.script[0])
+	}
+	if ownerLID == aliceLID || ownerLID == bobLID {
+		t.Fatal("the owner's LID is a contact's")
+	}
+}
+
+func TestSendsFollowTheSyntheticChats(t *testing.T) {
+	c, _ := newClient(t, false)
+	if _, err := c.Send(t.Context(), engine.SendRequest{ID: "X", Chat: alice, Text: "synthetic"}); !errors.Is(err, engine.ErrNotConnected) {
+		t.Fatalf("a send before a connection = %v", err)
+	}
+	c, _ = connected(t)
+	for _, tt := range []struct {
+		chat   string
+		want   error
+		sender string
+	}{
+		{alice, nil, "15550100009@s.whatsapp.net"},
+		{bobLID, nil, ownerLID},
+		{carol, engine.ErrOutcomeUnknown, ""},
+		{group, engine.ErrRecipientUnavailable, ""},
+		{"15550100099@s.whatsapp.net", engine.ErrRecipientUnavailable, ""},
+	} {
+		id := c.NewMessageID()
+		sent, err := c.Send(t.Context(), engine.SendRequest{ID: id, Chat: tt.chat, Text: "synthetic"})
+		if !errors.Is(err, tt.want) || tt.want == nil && (sent.ID != id || sent.Chat != tt.chat || sent.Sender != tt.sender || sent.Timestamp.IsZero()) {
+			t.Errorf("a send to %s = %+v, %v, want %v", tt.chat, sent, err, tt.want)
+		}
+	}
+	if _, err := c.Send(t.Context(), engine.SendRequest{ID: "X", Chat: alice}); !errors.Is(err, engine.ErrRejected) {
+		t.Errorf("a send without text = %v", err)
+	}
+	ended, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := c.Send(ended, engine.SendRequest{ID: "X", Chat: alice, Text: "synthetic"}); !errors.Is(err, engine.ErrNotConnected) {
+		t.Errorf("a send with an ended context = %v", err)
+	}
+	sent := c.Sent()
+	if len(sent) != 3 || sent[0].Chat != alice || sent[1].Chat != bobLID || sent[2].Chat != carol {
+		t.Fatalf("Sent() = %+v, want the two delivered sends and the one with an unknown outcome", sent)
+	}
+	sent[0].Chat = bob
+	if c.Sent()[0].Chat != alice {
+		t.Fatal("Sent() hands out the fake's own record")
+	}
+}
+
+func TestMessageIDsAreUniqueAcrossClients(t *testing.T) {
+	a, _ := newClient(t, false)
+	b, _ := newClient(t, false)
+	seen := map[string]bool{}
+	for range 50 {
+		for _, c := range []*Client{a, b} {
+			id := c.NewMessageID()
+			if !strings.HasPrefix(id, "FAKE-S") || len(id) > 128 || seen[id] {
+				t.Fatalf("NewMessageID = %q", id)
+			}
+			seen[id] = true
+		}
+	}
+	if decimal(0) != "0" || decimal(7) != "7" || decimal(1234567890) != "1234567890" {
+		t.Fatal("decimal")
+	}
+}
+
+func TestADropOrALogoutEndsSending(t *testing.T) {
+	c, r := connected(t)
+	c.Disconnect()
+	if _, err := c.Send(t.Context(), engine.SendRequest{ID: "X", Chat: alice, Text: "synthetic"}); !errors.Is(err, engine.ErrNotConnected) {
+		t.Fatalf("a send after Disconnect = %v", err)
+	}
+	if err := c.Connect(t.Context()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	for {
+		if _, ok := r.next(t).(engine.Connected); ok {
+			break
+		}
+	}
+	if _, err := c.Send(t.Context(), engine.SendRequest{ID: "X", Chat: alice, Text: "synthetic"}); err != nil {
+		t.Fatalf("a send after the reconnection = %v", err)
+	}
+	if err := c.Logout(t.Context()); err != nil {
+		t.Fatalf("Logout: %v", err)
+	}
+	if _, err := c.Backfill(t.Context(), engine.BackfillRequest{Chat: alice, AnchorID: "FAKE-H01", AnchorTime: time.Now(), Count: 1}); !errors.Is(err, engine.ErrNotConnected) {
+		t.Fatalf("a backfill after Logout = %v", err)
+	}
+
+	w, wr := newClient(t, true)
+	pair(t, w, wr)
+	wr.next(t)
+	wr.next(t)
+	if _, err := w.Send(t.Context(), engine.SendRequest{ID: "X", Chat: alice, Text: "synthetic"}); !errors.Is(err, engine.ErrNotConnected) {
+		t.Fatalf("a send from the wrong account = %v", err)
+	}
+}
+
+func TestABackfillIsAnsweredOnceWithOlderHistory(t *testing.T) {
+	c, r := connected(t)
+	var mu sync.Mutex
+	offers := 0
+	c.OnEvent(func(ev engine.Event) bool {
+		n, ok := ev.(engine.HistoryNotification)
+		if !ok || n.Ref.SyncType != engine.SyncOnDemand {
+			return true
+		}
+		mu.Lock()
+		offers++
+		first := offers == 1
+		mu.Unlock()
+		r.events <- ev
+		return !first
+	})
+	anchor := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
+	for name, req := range map[string]engine.BackfillRequest{
+		"no anchor":       {Chat: alice, AnchorTime: anchor, Count: 5},
+		"no anchor time":  {Chat: alice, AnchorID: "FAKE-H01", Count: 5},
+		"no messages":     {Chat: alice, AnchorID: "FAKE-H01", AnchorTime: anchor},
+		"more than fifty": {Chat: alice, AnchorID: "FAKE-H01", AnchorTime: anchor, Count: 51},
+		"an unknown chat": {Chat: "15550100099@s.whatsapp.net", AnchorID: "FAKE-H01", AnchorTime: anchor, Count: 5},
+	} {
+		if _, err := c.Backfill(t.Context(), req); !errors.Is(err, engine.ErrRejected) {
+			t.Errorf("%s: Backfill = %v", name, err)
+		}
+	}
+	id, err := c.Backfill(t.Context(), engine.BackfillRequest{Chat: group, AnchorID: "FAKE-H03", AnchorTime: anchor, Count: 5})
+	if err != nil || !strings.HasPrefix(id, "FAKE-BF") {
+		t.Fatalf("Backfill = %q, %v", id, err)
+	}
+	refused, ok := r.next(t).(engine.HistoryNotification)
+	answer, again := r.next(t).(engine.HistoryNotification)
+	r.quiet(t)
+	if !ok || !again || refused.Ref.ID != answer.Ref.ID {
+		t.Fatalf("offers %+v and %+v: a refused answer is offered again until it is accepted, then never", refused, answer)
+	}
+	if answer.Ref.RequestID != id || !answer.FromMe || answer.Sender != "15550100009@s.whatsapp.net" || !strings.HasPrefix(answer.Ref.ID, onDemandID) {
+		t.Fatalf("answer %+v", answer)
+	}
+	var b bytes.Buffer
+	if err := c.DownloadHistory(t.Context(), answer.Ref, &b); err != nil {
+		t.Fatalf("DownloadHistory: %v", err)
+	}
+	h, err := c.Decode(inflated(t, b.Bytes(), historyCap+1))
+	if err != nil || len(h.Conversations) != 1 || h.Conversations[0].Chat != group || len(h.Conversations[0].Messages) != 5 {
+		t.Fatalf("the answer's history %+v, %v", h, err)
+	}
+	for _, m := range h.Conversations[0].Messages {
+		if !m.Timestamp.Before(anchor) || m.Sender != alice {
+			t.Fatalf("message %+v is not an older message of a member", m)
+		}
 	}
 }

@@ -17,6 +17,7 @@ const (
 	carol      = "15550100023" + server
 	aliceLID   = "100000000000021@lid"
 	bobLID     = "100000000000022@lid"
+	ownerLID   = "100000000000020@lid"
 	group      = "120363000000000021@g.us"
 	broadcast  = "status@broadcast"
 	newsletter = "120363000000000023@newsletter"
@@ -26,12 +27,17 @@ const (
 	device5ID   = "FAKE-HISTORY-DEVICE-5"
 	oversizedID = "FAKE-HISTORY-OVERSIZED"
 	poisonID    = "FAKE-HISTORY-POISON"
+	onDemandID  = "FAKE-HISTORY-ONDEMAND-"
+
+	unreachable = carol
 
 	groupText = "Bob writes to the synthetic group"
 	week      = 7 * 24 * time.Hour
 )
 
 var synthetic = []string{"15550100021", "15550100022", "15550100023", wrongAccount}
+
+var chats = []string{alice, bob, carol, aliceLID, bobLID, group}
 
 func members(owner string) []engine.Participant {
 	return []engine.Participant{{User: owner + server, Admin: true}, {User: alice, Admin: true}, {User: bob}}
@@ -97,6 +103,7 @@ func script(owner string, bootstrap []byte) []engine.Event {
 	disappearing.Expiration = week
 	media := engine.Message{Chat: alice, ID: "FAKE-L18", Sender: alice, Kind: engine.KindMedia, MediaType: "image/jpeg", Text: "A synthetic photo caption"}
 	return []engine.Event{
+		engine.Identity{PN: owner + server, LID: ownerLID},
 		history(owner+server, bootstrapID, engine.HistoryRef{Inline: bootstrap}),
 		engine.Group{Chat: group, Subject: "Synthetic group", Members: members(owner)},
 		first,
