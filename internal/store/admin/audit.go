@@ -98,6 +98,7 @@ const (
 	selectAuditTail = `SELECT id, row_hmac FROM audit ORDER BY id DESC LIMIT 1`
 	insertAudit     = `INSERT INTO audit (id, ts, client_id, action, chat, chat_hmac, ok, reason, peer, key_id, row_hmac) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	selectAuditRows = `SELECT id, ts, client_id, action, chat, chat_hmac, ok, reason, peer, key_id, row_hmac FROM audit ORDER BY id`
+	selectNewestKey = `SELECT key_id FROM audit ORDER BY id DESC LIMIT 1`
 )
 
 func (a *Audit) Append(ctx context.Context, q db.Querier, e Event) (Line, error) {
@@ -136,6 +137,23 @@ func (a *Audit) Append(ctx context.Context, q db.Querier, e Event) (Line, error)
 		return Line{}, err
 	}
 	return Line{text: append(text, '\n')}, nil
+}
+
+func (a *Audit) NewestKeyID(ctx context.Context) (string, bool, error) {
+	if a == nil || a.db == nil {
+		return "", false, errAuditUnkeyed
+	}
+	var id string
+	err := a.db.Read(ctx, "admin.audit_newest_key", func(ctx context.Context, q db.Querier) error {
+		return q.QueryRowContext(ctx, selectNewestKey).Scan(&id)
+	})
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, err
+	}
+	return id, true, nil
 }
 
 func (a *Audit) Ship(l Line) {

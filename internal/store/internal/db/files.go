@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -83,4 +84,12 @@ func cause(err error) string {
 		return errno.Error()
 	}
 	return "unexpected error"
+}
+
+func (d *DB) Size() (int64, error) {
+	fi, err := os.Lstat(d.path)
+	if err != nil {
+		return 0, fmt.Errorf("db: inspect the database file: %s", cause(err))
+	}
+	return fi.Size(), nil
 }

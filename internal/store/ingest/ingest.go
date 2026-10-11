@@ -108,6 +108,14 @@ func (s *Store) Backup(ctx context.Context, staging string, write func(name stri
 	return s.db.Backup(ctx, staging, write)
 }
 
+func (s *Store) Changes(ctx context.Context) (int64, error) { return s.db.Changes(ctx) }
+
+func (s *Store) Size() (int64, error) { return s.db.Size() }
+
+func (s *Store) NewestAuditKeyID(ctx context.Context) (string, bool, error) {
+	return s.audit.NewestKeyID(ctx)
+}
+
 type Reader struct {
 	ctx context.Context
 	q   db.Querier

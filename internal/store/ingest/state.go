@@ -117,6 +117,13 @@ func (s *Store) CheckSpace() (Space, error) {
 	return Space{Free: free, Floor: floor, Paused: s.paused, Changed: s.paused != was}, nil
 }
 
+func (s *Store) Space() (free, floor uint64, err error) {
+	if free, err = s.db.FreeBytes(); err != nil {
+		return 0, 0, err
+	}
+	return free, floorFor(s.db.Profile(), s.floor), nil
+}
+
 func floorFor(profile Profile, floor uint64) uint64 {
 	if profile != ProfileLocal {
 		return 0

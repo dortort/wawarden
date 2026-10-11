@@ -461,6 +461,16 @@ func goroutineDump() string {
 	return dump + "[truncated]\n"
 }
 
+const selectTotalChanges = "SELECT total_changes()"
+
+func (d *DB) Changes(ctx context.Context) (int64, error) {
+	var n int64
+	err := d.Read(ctx, "db.changes", func(ctx context.Context, q Querier) error {
+		return q.QueryRowContext(ctx, selectTotalChanges).Scan(&n)
+	})
+	return n, err
+}
+
 func (d *DB) FreeBytes() (uint64, error) {
 	var st syscall.Statfs_t
 	if err := d.statfs(d.dir, &st); err != nil {

@@ -7,7 +7,10 @@ import (
 	"time"
 )
 
-const MaxInboxBacklog = 5000
+const (
+	MaxInboxBacklog = 5000
+	PruneBatch      = 10000
+)
 
 var (
 	ErrInboxFull = errors.New("ingest: the inbox backlog is full")
@@ -43,6 +46,9 @@ const (
 	dropBlobAttempt   = "UPDATE history_blobs SET attempts = attempts - 1 WHERE id = ? AND attempts > 0 AND processed_at IS NULL AND quarantined = 0"
 	markBlobProcessed = "UPDATE history_blobs SET processed_at = ?, ref = NULL WHERE id = ? AND processed_at IS NULL AND quarantined = 0"
 	quarantineBlob    = "UPDATE history_blobs SET quarantined = 1, ref = NULL WHERE id = ? AND processed_at IS NULL"
+	pruneBlobs        = `DELETE FROM history_blobs WHERE processed_at IS NOT NULL AND quarantined = 0 AND processed_at < ?1
+		AND rowid <= (SELECT max(rowid) FROM (SELECT rowid FROM history_blobs
+			WHERE processed_at IS NOT NULL AND quarantined = 0 AND processed_at < ?1 ORDER BY rowid LIMIT ?2))`
 )
 
 func (tx *Tx) AppendInbox(payload []byte, at time.Time) (int64, error) {
@@ -163,6 +169,18 @@ func (tx *Tx) MarkBlobProcessed(id string, at time.Time) error {
 
 func (tx *Tx) QuarantineBlob(id string) error {
 	return oneRow(tx.q.ExecContext(tx.ctx, quarantineBlob, id))
+}
+
+func (tx *Tx) PruneProcessedBlobs(cutoff time.Time) (int, error) {
+	if cutoff.IsZero() {
+		return 0, invalid("time")
+	}
+	res, err := tx.q.ExecContext(tx.ctx, pruneBlobs, ms(cutoff), PruneBatch)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
 }
 
 func oneRow(res sql.Result, err error) error {
