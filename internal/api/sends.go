@@ -187,7 +187,7 @@ func (w *writes) sendText(ctx context.Context, g policy.WriteGrant, ref, text st
 		}
 		return dto.SendResult{Replayed: sent.Replayed}, c.Chat, err
 	}
-	m, found, err := w.reads.archive.Message(rg, ctx, sent.Chat, sent.ID, sent.Sender)
+	m, found, err := w.reads.archive.Message(rg, context.WithoutCancel(ctx), sent.Chat, sent.ID, sent.Sender)
 	switch {
 	case err != nil:
 		return dto.SendResult{Replayed: sent.Replayed}, c.Chat, err

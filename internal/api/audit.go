@@ -67,7 +67,7 @@ func audited(w http.ResponseWriter, r *http.Request, audit Auditor, now func() t
 		if reason == "" {
 			reason = statusReason(status)
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), auditWait)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), auditWait)
 		defer cancel()
 		err := audit.Record(ctx, ReadEvent{
 			At: now(), Client: client.ID, Action: note.action, Chat: note.chat, OK: reason == outcomeOK, Reason: reason, Peer: peer(r.RemoteAddr),

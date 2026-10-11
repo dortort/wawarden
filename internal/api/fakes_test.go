@@ -76,11 +76,14 @@ type fakeAuditor struct {
 	fail   bool
 }
 
-func (a *fakeAuditor) Record(_ context.Context, e ReadEvent) error {
+func (a *fakeAuditor) Record(ctx context.Context, e ReadEvent) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.fail {
 		return errors.New("synthetic audit failure")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	a.events = append(a.events, e)
 	return nil
@@ -180,8 +183,11 @@ func (f *fakeArchive) Messages(g policy.ReadGrant, _ context.Context, ref string
 	return page, true, nil
 }
 
-func (f *fakeArchive) Message(g policy.ReadGrant, _ context.Context, chat policy.CanonicalChat, id string, sender policy.CanonicalChat) (scoped.Message, bool, error) {
+func (f *fakeArchive) Message(g policy.ReadGrant, ctx context.Context, chat policy.CanonicalChat, id string, sender policy.CanonicalChat) (scoped.Message, bool, error) {
 	if err := f.call("Message"); err != nil {
+		return scoped.Message{}, false, err
+	}
+	if err := ctx.Err(); err != nil {
 		return scoped.Message{}, false, err
 	}
 	if !g.Allows(chat) {

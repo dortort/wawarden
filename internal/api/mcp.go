@@ -85,9 +85,15 @@ func (m *mcpEndpoint) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	x := &exchange{action: actionMCP, reason: codeBadRequest}
 	out := &mcpWriter{ResponseWriter: w, x: x, note: note}
 	m.handler.ServeHTTP(out, r.WithContext(context.WithValue(r.Context(), exchangeKey{}, x)))
-	if !out.started {
-		writeError(out, http.StatusInternalServerError, codeInternal)
+	switch {
+	case out.started:
+		return
+	case r.Context().Err() != nil:
+		// The client has left, so the header only commits the audit row of the call's outcome.
+		out.WriteHeader(http.StatusOK)
+		return
 	}
+	writeError(out, http.StatusInternalServerError, codeInternal)
 }
 
 func mcpBody(w http.ResponseWriter, r *http.Request) ([]byte, *codedError) {

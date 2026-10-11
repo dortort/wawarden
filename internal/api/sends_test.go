@@ -284,6 +284,46 @@ func TestAnEscapedTextWithinThePolicyIsSentOverRESTAndMCP(t *testing.T) {
 	}
 }
 
+func TestASendWhoseClientLeftIsAuditedWithItsOutcome(t *testing.T) {
+	for _, tt := range []struct {
+		name, action, target, body string
+		header                     http.Header
+	}{
+		{"rest", actionSend, sendTarget, sendBodyText, idempotency(sendKey)},
+		{"mcp", sendAction, "/mcp", legacyCall("tools/call", `{"name":"send_message","arguments":{"chat":"`+aliceRef+`","text":"synthetic","idempotency_key":"`+sendKey+`"}}`), legacyHeader},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newMCPFixture(t)
+			f.acceptSends()
+			f.sender.mu.Lock()
+			accept := f.sender.answer
+			f.sender.mu.Unlock()
+			ctx, leave := context.WithCancel(t.Context())
+			defer leave()
+			f.sender.script(func(ctx context.Context, client string, req SendRequest) (Sent, error) {
+				leave()
+				time.Sleep(50 * time.Millisecond)
+				return accept(ctx, client, req)
+			})
+			r := httptest.NewRequestWithContext(ctx, http.MethodPost, tt.target, strings.NewReader(tt.body))
+			r.Header.Set("Content-Type", "application/json")
+			r.Header.Set("Accept", "application/json, text/event-stream")
+			r.Header.Set("Authorization", "Bearer "+keyAlice)
+			for name, values := range tt.header {
+				r.Header[name] = values
+			}
+			serve(f.handler, r)
+			if calls := f.sender.requests(); len(calls) != 1 {
+				t.Fatalf("%d sends, want 1", len(calls))
+			}
+			events := f.audit.recorded()
+			if len(events) != 1 || events[0].Action != tt.action || events[0].Chat != aliceChat || !events[0].OK || events[0].Reason != outcomeOK {
+				t.Fatalf("audit rows %+v, want one %s row for the delivered send", events, tt.action)
+			}
+		})
+	}
+}
+
 func TestAWriteRouteAnswersAReadOnlyClientLikeAnUnknownRoute(t *testing.T) {
 	f := newMCPFixture(t)
 	f.acceptSends()
