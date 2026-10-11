@@ -2148,9 +2148,9 @@ request that ended with `400`, `403`, `404`, `429` or `503` stored nothing, so
 the same request can be made again under its key once the cause is gone; after
 a `409` the first request's answer follows, and after a `422` the key stays
 bound to its first request. After a `500` from an acknowledged send whose
-result could not be stored, the key answers `409` until its lease ends and
-`504` afterwards, and the service reports
-[`send_unrecorded`](#notifications). The same key reaches the same send from
+result could not be stored, or from a send that never left whose key could not
+be freed, the key answers `409` until its lease ends and `504` afterwards, and
+the service reports [`send_unrecorded`](#notifications). The same key reaches the same send from
 REST and from the MCP tool.
 
 A send is at most once: when the outcome is unknown, the service never sends
@@ -2953,7 +2953,7 @@ the [webhook](#webhook).
 | `backup_prune_failed` | `WARN` | `reason`: `directory`, `unexpected_entry`, `remove`, `sync` | Deleting old backups failed or was refused; see [Retention](#backups). |
 | `audit_key_changed` | `INFO` when `previous_key` is `retired`, `WARN` otherwise | `previous_key_id`, `key_id`, `previous_key`: `retired`, `missing` | At start, the newest [audit row](#audit-chain) carries the key id `previous_key_id`, not the master key's `key_id`, as after [`keys rotate`](#keys-rotate) or a replaced master key. `previous_key` is `retired` when that key is in `keys/retired/`, and `missing` when it is not, so `audit verify` will report the rows written under it as `unknown_key` unless it is given a copy. Reported at each start until a row is written under the master key. |
 | `send_outcome_unknown` | `WARN` | `reason`: `ack_timeout`, `lease_expired`, `restart` | A [send](#sending) may have reached WhatsApp without an acknowledgement: the engine call ended without one (`ack_timeout`, which covers a timeout, a drop after the message was written and any error the engine cannot place), a request found its key still reserved past the 60-second lease (`lease_expired`), or the start found a send left running by the previous process (`restart`, one event per send). The send is stored as failed and never resent. |
-| `send_unrecorded` | `WARN` | | The outcome of a [send](#sending) could not be stored after three retries, or arrived after its lease had been settled: the key answers `send_outcome_unknown` once its lease has ended, although the message may have been delivered. |
+| `send_unrecorded` | `WARN` | | The outcome of a [send](#sending) could not be stored after three retries, or arrived after its lease had been settled, or the key of a send that never left could not be freed after three retries: the key answers `send_outcome_unknown` once its lease has ended, although the message may have been delivered. |
 | `admin_auth_failure` | `WARN` | `count` | Authentication failed on the admin listener. The first failure is reported at once with `count` `1`; further failures within the next minute are held back, and reported together once the minute has passed, within ten seconds, or at shutdown. `count` is the number of failures since the previous `admin_auth_failure`. |
 
 No event carries an identifier, a name, message text, a token, a key or a
