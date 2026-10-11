@@ -86,6 +86,12 @@ func TestTheLongestWaitIsReported(t *testing.T) {
 	refused(t, s, g, budgeted(t, "longest-02", epoch.Add(time.Second), SendLimits{PerMinute: 1, GlobalPerHour: 2, Holders: 2}, 0), ReasonHour, time.Hour-time.Second)
 	refused(t, s, g, budgeted(t, "longest-02", epoch.Add(time.Second), SendLimits{PerMinute: 10, GlobalPerHour: 1, Holders: 1}, 0), ReasonHour, time.Hour-time.Second)
 	refused(t, s, g, budgeted(t, "longest-02", epoch.Add(time.Second), SendLimits{PerMinute: 10, GlobalPerHour: 60, Holders: 1}, 0), ReasonPacer, 4*time.Second)
+
+	s = inboundStore(t)
+	two := SendLimits{PerMinute: 2, GlobalPerHour: 60, Holders: 1}
+	reserved(t, s, g, budgeted(t, "longest-03", epoch, two, 0))
+	reserved(t, s, g, budgeted(t, "longest-04", epoch.Add(58*time.Second), two, 5*time.Second))
+	refused(t, s, g, budgeted(t, "longest-05", epoch.Add(59*time.Second), two, 0), ReasonPacer, 4*time.Second)
 }
 
 func TestThePacerSpacesEverySend(t *testing.T) {
