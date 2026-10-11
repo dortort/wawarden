@@ -186,8 +186,8 @@ func (s *Service) Send(g policy.WriteGrant, ctx context.Context, req Request) (R
 	case err == nil:
 		return s.recordAck(g, ctx, req, res.MsgID, ack, timer, target)
 	case errors.Is(err, ErrNotConnected), errors.Is(err, ErrEngineBusy):
-		if rerr := s.o.Store.ReleaseSend(g, ctx, req.Key); rerr != nil {
-			return Result{}, rerr
+		if rerr := s.retry(ctx, ingest.ErrNotPending, func() error { return s.o.Store.ReleaseSend(g, ctx, req.Key) }); rerr != nil && !errors.Is(rerr, ingest.ErrNotPending) {
+			return Result{}, ErrUnrecorded
 		}
 		return Result{}, err
 	case errors.Is(err, ErrRejected):
@@ -223,25 +223,36 @@ func (s *Service) recordAck(g policy.WriteGrant, ctx context.Context, req Reques
 
 func (s *Service) settle(g policy.WriteGrant, ctx context.Context, in ingest.Settlement) (ingest.SentRow, error) {
 	var row ingest.SentRow
+	err := s.retry(ctx, ingest.ErrRewritePending, func() error {
+		in.Now = s.o.Now()
+		var err error
+		row, err = s.o.Store.SettleSend(g, ctx, in)
+		return err
+	})
+	if err != nil && !errors.Is(err, ingest.ErrRewritePending) {
+		return ingest.SentRow{}, err
+	}
+	return row, err
+}
+
+func (s *Service) retry(ctx context.Context, done error, write func() error) error {
 	var err error
 	for attempt := range settleRetries + 1 {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
 				s.o.Notifier.SendUnrecorded()
-				return ingest.SentRow{}, err
+				return err
 			case <-time.After(settleBackoff << (attempt - 1)):
 			}
 		}
-		in.Now = s.o.Now()
-		row, err = s.o.Store.SettleSend(g, ctx, in)
-		if err == nil || errors.Is(err, ingest.ErrRewritePending) {
-			return row, err
+		if err = write(); err == nil || errors.Is(err, done) {
+			return err
 		}
 		if errors.Is(err, ingest.ErrNotPending) || errors.Is(err, ingest.ErrInvalid) || errors.Is(err, ingest.ErrNotAllowed) {
 			break
 		}
 	}
 	s.o.Notifier.SendUnrecorded()
-	return ingest.SentRow{}, err
+	return err
 }

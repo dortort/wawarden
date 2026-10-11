@@ -237,6 +237,32 @@ func (f *settleFault) SettleSend(g policy.WriteGrant, ctx context.Context, in in
 	return f.Store.SettleSend(g, ctx, in)
 }
 
+type releaseFault struct {
+	*ingest.Store
+	mu        sync.Mutex
+	fails     int
+	committed bool
+	err       error
+}
+
+func (f *releaseFault) ReleaseSend(g policy.WriteGrant, ctx context.Context, key ingest.Key) error {
+	f.mu.Lock()
+	fail := f.fails > 0
+	if fail {
+		f.fails--
+	}
+	f.mu.Unlock()
+	if !fail {
+		return f.Store.ReleaseSend(g, ctx, key)
+	}
+	if f.committed {
+		if err := f.Store.ReleaseSend(g, ctx, key); err != nil {
+			return err
+		}
+	}
+	return f.err
+}
+
 type leavingClient struct {
 	*engine
 	leave context.CancelFunc

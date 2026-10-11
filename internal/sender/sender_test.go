@@ -262,6 +262,45 @@ func TestAFailedSettlementIsRetriedThenReported(t *testing.T) {
 	}
 }
 
+func TestAFailedReleaseIsRetriedSoTheKeyCanSendAgain(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		fails     int
+		committed bool
+		want      error
+		reported  int
+	}{
+		{name: "one failed release", fails: 1, want: sender.ErrNotConnected},
+		{name: "a release that committed but failed", fails: 1, committed: true, want: sender.ErrNotConnected},
+		{name: "four failed releases", fails: 4, want: sender.ErrUnrecorded, reported: 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t, 1, 30)
+			g := grantFor(t, writerID, false, alice)
+			req := request(t, "release-retry", alice, "synthetic retry")
+			flaky := &releaseFault{Store: f.store, fails: tt.fails, committed: tt.committed, err: context.DeadlineExceeded}
+			f.engine.set(func(e *engine) { e.outcome = sender.ErrNotConnected })
+			if _, err := f.service(flaky, 1, 30).Send(g, t.Context(), req); !errors.Is(err, tt.want) {
+				t.Fatalf("Send = %v, want %v", err, tt.want)
+			}
+			if _, unrecorded := f.notes.counts(); unrecorded != tt.reported {
+				t.Fatalf("%d send_unrecorded events, want %d", unrecorded, tt.reported)
+			}
+			if tt.reported > 0 {
+				return
+			}
+			f.engine.set(func(e *engine) { e.outcome = nil })
+			res, err := f.svc.Send(g, t.Context(), req)
+			if err != nil || res.Replayed {
+				t.Fatalf("the retry = %+v, %v, want a fresh send inside a budget of one", res, err)
+			}
+			if n := len(f.engine.sent()); n != 2 {
+				t.Fatalf("%d engine sends, want 2", n)
+			}
+		})
+	}
+}
+
 func TestAClientThatLeavesAfterTheAckStillHasItsSendStored(t *testing.T) {
 	f := newFixture(t, 10, 30)
 	g := grantFor(t, writerID, false, alice)
