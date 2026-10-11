@@ -88,6 +88,11 @@ func WritableChat(chat CanonicalChat, known, allowFirstContact bool) bool {
 	return chat.Valid() && (known || allowFirstContact && direct)
 }
 
+func MayContact(chat CanonicalChat, inbound, allowFirstContact bool) bool {
+	direct := chat.Kind() == PhoneChat || chat.Kind() == LIDChat
+	return chat.Valid() && (!direct || inbound || allowFirstContact)
+}
+
 func validClientName(name string) bool {
 	if name == "" || !utf8.ValidString(name) || utf8.RuneCountInString(name) > maxClientName {
 		return false

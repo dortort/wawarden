@@ -29,6 +29,10 @@ func DecideWrite(c *Client, now time.Time) (WriteGrant, bool) {
 	return seal.NewWriteGrant(c.ID, chats, c.AllowFirstContact), true
 }
 
+func WriteHolder(c *Client, now time.Time) bool {
+	return live(c, now) && !c.ReadAll && len(validChats(c.Write)) > 0
+}
+
 func DecideAdmin(cred AdminCredential, presented string) (AdminGrant, bool) {
 	if !WellFormedAdminToken(presented) || !seal.MatchAdminCredential(cred, sha256.Sum256([]byte(presented))) {
 		return AdminGrant{}, false
