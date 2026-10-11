@@ -129,8 +129,9 @@ func TestRejectedAndUnknownSendsAreStoredAndNeverResent(t *testing.T) {
 		outcome error
 		want    error
 		events  []string
+		code    int
 	}{
-		{name: "rejected with a code", outcome: &sender.Rejection{Code: 463}, want: sender.ErrRejected},
+		{name: "rejected with a code", outcome: &sender.Rejection{Code: 463}, want: sender.ErrRejected, code: 463},
 		{name: "recipient unavailable", outcome: &sender.Rejection{}, want: sender.ErrRejected},
 		{name: "unknown", outcome: sender.ErrOutcomeUnknown, want: sender.ErrOutcomeUnknown, events: []string{"ack_timeout"}},
 		{name: "unclassified", outcome: errors.New("synthetic unclassified failure"), want: sender.ErrOutcomeUnknown, events: []string{"ack_timeout"}},
@@ -153,6 +154,11 @@ func TestRejectedAndUnknownSendsAreStoredAndNeverResent(t *testing.T) {
 			}
 			if n := len(f.engine.sent()); n != 1 {
 				t.Fatalf("%d engine sends, want 1", n)
+			}
+			stored, err := f.store.ReserveSend(g, t.Context(), ingest.SendReservation{Key: req.Key, Chat: req.Chat, Fingerprint: ingest.Fingerprint(req.ChatRef, req.Text, nil),
+				MsgID: "3EB0LEDGER", Clock: f.clock.Now, Limits: ingest.SendLimits{PerMinute: 10, GlobalPerHour: 30, Holders: 1}, Ready: func() bool { return true }})
+			if err != nil || stored.Kind != ingest.ReplayedFailed || stored.WACode != tt.code {
+				t.Fatalf("the ledger = %+v, %v, want the failure with server code %d", stored, err, tt.code)
 			}
 			if unknown, unrecorded := f.notes.counts(); !slices.Equal(unknown, tt.events) || unrecorded != 0 {
 				t.Fatalf("events %q and %d unrecorded, want %q", unknown, unrecorded, tt.events)
