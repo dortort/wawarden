@@ -237,6 +237,17 @@ func (f *settleFault) SettleSend(g policy.WriteGrant, ctx context.Context, in in
 	return f.Store.SettleSend(g, ctx, in)
 }
 
+type leavingClient struct {
+	*engine
+	leave context.CancelFunc
+}
+
+func (c leavingClient) Send(ctx context.Context, m sender.Message) (sender.Ack, error) {
+	ack, err := c.engine.Send(ctx, m)
+	c.leave()
+	return ack, err
+}
+
 type fixture struct {
 	dir    string
 	store  *ingest.Store
@@ -258,8 +269,12 @@ func newFixture(t testing.TB, perMinute, globalPerHour int) *fixture {
 }
 
 func (f *fixture) service(st sender.Store, perMinute, globalPerHour int) *sender.Service {
-	return sender.New(sender.Options{Store: st, Engine: f.engine, Notifier: f.notes, PerMinute: perMinute, GlobalPerHour: globalPerHour,
-		Holders: func(context.Context, time.Time) (int, error) { return 1, nil }, Now: f.clock.Now, Pacer: func() time.Duration { return sender.PacerBase }})
+	return sender.New(f.options(st, perMinute, globalPerHour))
+}
+
+func (f *fixture) options(st sender.Store, perMinute, globalPerHour int) sender.Options {
+	return sender.Options{Store: st, Engine: f.engine, Notifier: f.notes, PerMinute: perMinute, GlobalPerHour: globalPerHour,
+		Holders: func(context.Context, time.Time) (int, error) { return 1, nil }, Now: f.clock.Now, Pacer: func() time.Duration { return sender.PacerBase }}
 }
 
 func request(t tb, k, jid, text string) sender.Request {

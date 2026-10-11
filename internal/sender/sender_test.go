@@ -262,6 +262,27 @@ func TestAFailedSettlementIsRetriedThenReported(t *testing.T) {
 	}
 }
 
+func TestAClientThatLeavesAfterTheAckStillHasItsSendStored(t *testing.T) {
+	f := newFixture(t, 10, 30)
+	g := grantFor(t, writerID, false, alice)
+	ctx, leave := context.WithCancel(t.Context())
+	defer leave()
+	o := f.options(f.store, 10, 30)
+	o.Engine = leavingClient{engine: f.engine, leave: leave}
+	req := request(t, "leaving-key-1", alice, "synthetic")
+	res, err := sender.New(o).Send(g, ctx, req)
+	if err != nil || res.Replayed || res.Sent.ID == "" {
+		t.Fatalf("Send with the client gone after the ack = %+v, %v, want the stored row", res, err)
+	}
+	if _, unrecorded := f.notes.counts(); unrecorded != 0 {
+		t.Fatalf("%d send_unrecorded events, want 0", unrecorded)
+	}
+	again, err := f.svc.Send(g, t.Context(), req)
+	if err != nil || !again.Replayed || again.Sent.ID != res.Sent.ID {
+		t.Fatalf("the retry = %+v, %v, want the stored send replayed", again, err)
+	}
+}
+
 func TestAnAckAfterTheLeaseEndedIsUnknownAndReported(t *testing.T) {
 	f := newFixture(t, 10, 30)
 	g := grantFor(t, writerID, false, alice)
