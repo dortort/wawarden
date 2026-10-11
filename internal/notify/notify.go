@@ -28,17 +28,21 @@ const (
 	EventBackupFailed      = "backup_failed"
 	EventBackupPruned      = "backup_pruned"
 	EventBackupPruneFailed = "backup_prune_failed"
+	EventAuditKeyChanged   = "audit_key_changed"
 )
 
 const (
 	authFailureWindow = time.Minute
 	flushInterval     = 10 * time.Second
 	invalidValue      = "invalid"
+	keyRetired        = "retired"
+	keyMissing        = "missing"
 	maxGoTypeBytes    = 128
 )
 
 var (
 	codeShape     = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+	keyIDShape    = regexp.MustCompile(`^[0-9a-f]{8}$`)
 	goTypeShape   = regexp.MustCompile(`^\**[a-z][a-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*(\[[A-Za-z0-9_./*,\[\]]+\])?$`)
 	errNoWriter   = errors.New("notify: a log writer is required")
 	errNotStarted = errors.New("notify: Stop before Start")
@@ -175,6 +179,19 @@ func (n *Notifier) BackupPruneFailed(reason string) {
 	n.emit(slog.LevelWarn, "old backups were not deleted", EventBackupPruneFailed, code("reason", reason))
 }
 
+func (n *Notifier) AuditKeyChanged(previousKeyID, keyID, previousKey string) {
+	level := slog.LevelWarn
+	switch previousKey {
+	case keyRetired:
+		level = slog.LevelInfo
+	case keyMissing:
+	default:
+		previousKey = invalidValue
+	}
+	n.emit(level, "the newest audit row was written under another master key than the one loaded", EventAuditKeyChanged,
+		keyIDAttr("previous_key_id", previousKeyID), keyIDAttr("key_id", keyID), slog.String("previous_key", previousKey))
+}
+
 func (n *Notifier) AdminMutation(action, outcome string) {
 	n.emit(slog.LevelInfo, "an admin route that changes the service's state was called", EventAdminMutation,
 		code("action", action), code("outcome", outcome))
@@ -223,6 +240,13 @@ func (n *Notifier) emit(level slog.Level, msg, event string, fields ...slog.Attr
 
 func code(key, value string) slog.Attr {
 	if !codeShape.MatchString(value) {
+		value = invalidValue
+	}
+	return slog.String(key, value)
+}
+
+func keyIDAttr(key, value string) slog.Attr {
+	if !keyIDShape.MatchString(value) {
 		value = invalidValue
 	}
 	return slog.String(key, value)

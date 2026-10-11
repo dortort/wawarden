@@ -106,6 +106,8 @@ func TestEveryEventIsOneLineWithAFixedSetOfFields(t *testing.T) {
 		{event: EventBackupPruneFailed, level: "WARN", fire: func(n *Notifier) { n.BackupPruneFailed("unexpected_entry") }, fields: map[string]any{"reason": "unexpected_entry"}},
 		{event: EventAdminMutation, level: "INFO", fire: func(n *Notifier) { n.AdminMutation("pair", "already_paired") }, fields: map[string]any{"action": "pair", "outcome": "already_paired"}},
 		{event: EventAdminAuthFailure, level: "WARN", fire: (*Notifier).AdminAuthFailure, fields: map[string]any{"count": float64(1)}},
+		{event: EventAuditKeyChanged, level: "INFO", fire: func(n *Notifier) { n.AuditKeyChanged("5c7cdf84", "6a53922c", "retired") },
+			fields: map[string]any{"previous_key_id": "5c7cdf84", "key_id": "6a53922c", "previous_key": "retired"}},
 	}
 	seen := map[string]bool{}
 	for _, tt := range tests {
@@ -135,7 +137,7 @@ func TestEveryEventIsOneLineWithAFixedSetOfFields(t *testing.T) {
 	}
 	for _, event := range []string{EventAdminMutation, EventAdminAuthFailure, EventUnpaired, EventDisconnected, EventPairRejected,
 		EventLogoutFailed, EventQuarantine, EventRekeyConflict, EventIngestPaused, EventBackupDone, EventBackupFailed, EventBackupPruned,
-		EventBackupPruneFailed} {
+		EventBackupPruneFailed, EventAuditKeyChanged} {
 		if !seen[event] {
 			t.Errorf("no case for %s", event)
 		}
@@ -164,6 +166,32 @@ func TestValuesThatAreNotCodesNeverLeave(t *testing.T) {
 				t.Fatalf("%s = %q, want %q", key, v, invalidValue)
 			}
 		}
+	}
+}
+
+func TestAuditKeyChangedCarriesOnlyKeyIDsAndItsLevelFollowsThePreviousKey(t *testing.T) {
+	n, out, _ := newNotifier(t)
+	n.AuditKeyChanged("5c7cdf84", "6a53922c", "missing")
+	n.AuditKeyChanged("5C7CDF84", "6a53922", "lost")
+	n.AuditKeyChanged("15550100042@s.whatsapp.net", "6a53922c0", "retired")
+	recs := out.records(t)
+	want := []map[string]any{
+		{"level": "WARN", "previous_key_id": "5c7cdf84", "key_id": "6a53922c", "previous_key": "missing"},
+		{"level": "WARN", "previous_key_id": invalidValue, "key_id": invalidValue, "previous_key": invalidValue},
+		{"level": "INFO", "previous_key_id": invalidValue, "key_id": invalidValue, "previous_key": "retired"},
+	}
+	if len(recs) != len(want) {
+		t.Fatalf("%d lines, want %d", len(recs), len(want))
+	}
+	for i, w := range want {
+		for k, v := range w {
+			if recs[i][k] != v {
+				t.Fatalf("line %d: %s = %v, want %v", i, k, recs[i][k], v)
+			}
+		}
+	}
+	if strings.Contains(out.String(), "15550100042") {
+		t.Fatal("a value that is not a key id reached the output")
 	}
 }
 
