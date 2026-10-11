@@ -168,7 +168,7 @@ func TestAReplyCarriesTheQuotedRowFromTheSameChat(t *testing.T) {
 		t.Fatalf("a reply = %d %s", rec.Code, rec.Body.String())
 	}
 	calls := f.sender.requests()
-	if len(calls) != 1 || calls[0].Reply == nil || *calls[0].Reply != (SendReply{ID: "SYNTHETIC10", Sender: aliceChat, Text: "synthetic text 10"}) || calls[0].ChatRef != groupRef {
+	if len(calls) != 1 || calls[0].Reply == nil || *calls[0].Reply != (SendReply{ID: "SYNTHETIC10", Sender: aliceChat, Seq: 10, Text: "synthetic text 10"}) || calls[0].ChatRef != groupRef {
 		t.Fatalf("sender calls = %+v", calls)
 	}
 	if got := decodeSend(t, rec); got.Message.ReplyTo == nil || !got.Message.QuoteVerified {

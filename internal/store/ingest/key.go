@@ -12,7 +12,7 @@ const (
 	minKey          = 8
 	maxKey          = 128
 	redactedKey     = "[idempotency key]"
-	fingerprintTag  = "wawarden/idempotency/v1\x00"
+	fingerprintTag  = "wawarden/idempotency/v2\x00"
 	fingerprintSize = sha256.Size
 )
 
@@ -43,6 +43,7 @@ func (Key) LogValue() slog.Value { return slog.StringValue(redactedKey) }
 type ReplyTarget struct {
 	ID     string
 	Sender policy.CanonicalChat
+	Seq    int64
 }
 
 func Fingerprint(chatRef, text string, reply *ReplyTarget) [fingerprintSize]byte {
@@ -52,7 +53,8 @@ func Fingerprint(chatRef, text string, reply *ReplyTarget) [fingerprintSize]byte
 	if reply != nil {
 		b = append(b, 1)
 		b = lengthPrefixed(b, reply.ID)
-		b = lengthPrefixed(b, reply.Sender.JID())
+		// The target's archive row, never its sender, which a re-key rewrites while the key lives.
+		b = binary.AppendVarint(b, reply.Seq)
 	} else {
 		b = append(b, 0)
 	}

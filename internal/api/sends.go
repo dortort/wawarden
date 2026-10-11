@@ -66,6 +66,7 @@ type SendRequest struct {
 type SendReply struct {
 	ID     string
 	Sender policy.CanonicalChat
+	Seq    int64
 	Text   string
 }
 
@@ -216,7 +217,7 @@ func (w *writes) replyTarget(ctx context.Context, rg policy.ReadGrant, chat poli
 	if m.Chat != chat || m.Revoked || m.Text == "" {
 		return nil, errNotFound
 	}
-	return &SendReply{ID: m.ID, Sender: m.Sender, Text: m.Text}, nil
+	return &SendReply{ID: m.ID, Sender: m.Sender, Seq: m.Position.Seq, Text: m.Text}, nil
 }
 
 func replayed(err error) bool {

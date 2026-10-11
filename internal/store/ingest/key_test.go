@@ -68,12 +68,12 @@ func TestKeysNeverPrint(t *testing.T) {
 
 func TestFingerprintIsPinned(t *testing.T) {
 	const ref = "0123456789abcdef0123456789abcdef"
-	reply := &ReplyTarget{ID: "3EB0AABBCCDD", Sender: chat(t, alice)}
+	reply := &ReplyTarget{ID: "3EB0AABBCCDD", Sender: chat(t, alice), Seq: 42}
 	plain, replied := Fingerprint(ref, "synthetic text", nil), Fingerprint(ref, "synthetic text", reply)
-	if got := hex.EncodeToString(plain[:]); got != "286c6355bc531d7d103abb53fcf58f6570c2d845acb4daeb011992cab069c55f" {
+	if got := hex.EncodeToString(plain[:]); got != "168c0b88b885f1995b1957d4a90203be3a5657be41ec8ce220a5b400b50a9b0e" {
 		t.Fatalf("Fingerprint without a reply = %s", got)
 	}
-	if got := hex.EncodeToString(replied[:]); got != "8c42b7016fe8f42ee044e30053639af4db6f7b669fd0ab2742eb5fb897c32c50" {
+	if got := hex.EncodeToString(replied[:]); got != "2f92d361994b28253c5fa174c2aca98503bc60764a65aa9eae701084a0770879" {
 		t.Fatalf("Fingerprint with a reply = %s", got)
 	}
 	distinct := map[[fingerprintSize]byte]string{}
@@ -83,8 +83,8 @@ func TestFingerprintIsPinned(t *testing.T) {
 		"another chat":             Fingerprint(ref[:31]+"0", "synthetic text", nil),
 		"another text":             Fingerprint(ref, "synthetic text.", nil),
 		"the boundary moved":       Fingerprint(ref+"s", "ynthetic text", nil),
-		"another reply id":         Fingerprint(ref, "synthetic text", &ReplyTarget{ID: "3EB0AABBCCDE", Sender: chat(t, alice)}),
-		"another reply sender":     Fingerprint(ref, "synthetic text", &ReplyTarget{ID: "3EB0AABBCCDD", Sender: chat(t, bob)}),
+		"another reply id":         Fingerprint(ref, "synthetic text", &ReplyTarget{ID: "3EB0AABBCCDE", Sender: chat(t, alice), Seq: 42}),
+		"another reply row":        Fingerprint(ref, "synthetic text", &ReplyTarget{ID: "3EB0AABBCCDD", Sender: chat(t, alice), Seq: 43}),
 		"an empty reply":           Fingerprint(ref, "synthetic text", &ReplyTarget{}),
 		"reply id moved into text": Fingerprint(ref, "synthetic text\x013EB0AABBCCDD", nil),
 	} {
@@ -134,4 +134,12 @@ func FuzzParseKey(f *testing.F) {
 			t.Fatalf("the key %+q reads back as %+q", raw, got)
 		}
 	})
+}
+
+func TestAReKeyedReplySenderKeepsTheFingerprint(t *testing.T) {
+	const ref = "0123456789abcdef0123456789abcdef"
+	before := Fingerprint(ref, "synthetic text", &ReplyTarget{ID: "3EB0AABBCCDD", Sender: chat(t, bob), Seq: 42})
+	if after := Fingerprint(ref, "synthetic text", &ReplyTarget{ID: "3EB0AABBCCDD", Sender: chat(t, bobLID), Seq: 42}); after != before {
+		t.Fatal("the fingerprint changed when the reply target's sender was re-keyed")
+	}
 }

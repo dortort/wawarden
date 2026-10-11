@@ -76,7 +76,7 @@ func (s sendService) Send(g policy.WriteGrant, ctx context.Context, req api.Send
 	}
 	in := sender.Request{Key: key, Chat: req.Chat, ChatRef: req.ChatRef, Text: req.Text}
 	if req.Reply != nil {
-		in.Reply = &sender.Reply{ID: req.Reply.ID, Sender: req.Reply.Sender, Text: req.Reply.Text}
+		in.Reply = &sender.Reply{ID: req.Reply.ID, Sender: req.Reply.Sender, Seq: req.Reply.Seq, Text: req.Reply.Text}
 	}
 	res, err := s.sender.Send(g, ctx, in)
 	if err != nil {

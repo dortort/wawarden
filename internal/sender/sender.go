@@ -102,6 +102,7 @@ type Service struct{ o Options }
 type Reply struct {
 	ID     string
 	Sender policy.CanonicalChat
+	Seq    int64
 	Text   string
 }
 
@@ -151,7 +152,7 @@ func (s *Service) Send(g policy.WriteGrant, ctx context.Context, req Request) (R
 	var target *ingest.ReplyTarget
 	var quote *Quote
 	if req.Reply != nil {
-		target = &ingest.ReplyTarget{ID: req.Reply.ID, Sender: req.Reply.Sender}
+		target = &ingest.ReplyTarget{ID: req.Reply.ID, Sender: req.Reply.Sender, Seq: req.Reply.Seq}
 		quote = &Quote{ID: req.Reply.ID, Participant: req.Reply.Sender, Text: req.Reply.Text}
 	}
 	res, err := s.o.Store.ReserveSend(g, ctx, ingest.SendReservation{
