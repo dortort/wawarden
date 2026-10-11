@@ -81,10 +81,22 @@ client's chats and state.
 
 The admin token never expires. To replace it:
 
-1. `./wawarden admin init > admin.txt` prints a new token and its SHA-256.
-2. Put the new hash in `WAWARDEN_ADMIN_TOKEN_SHA256` or the file
-   `WAWARDEN_ADMIN_TOKEN_SHA256_FILE` names, and the new token in the file the
-   CLI reads.
+1. Generate a new token and its SHA-256 into files of mode `0600`, and delete
+   the full output. The shell creates the files, so set the `umask` first:
+
+   ```sh
+   (
+     umask 077
+     ./wawarden admin init > admin.txt
+     sed -n 's/^sha256: //p' admin.txt > new.sha256
+     sed -n 's/^token: //p' admin.txt > new.token
+     rm admin.txt
+   )
+   ```
+
+2. Put the new hash from `new.sha256` in `WAWARDEN_ADMIN_TOKEN_SHA256` or the
+   file `WAWARDEN_ADMIN_TOKEN_SHA256_FILE` names, and the new token from
+   `new.token` in the file the CLI reads.
 3. Restart the service; the hash is read only at start.
 
 ## Rotating the master key
