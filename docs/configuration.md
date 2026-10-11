@@ -665,7 +665,7 @@ When the data directory is missing, it is created only after checks 1 to 31 and
 `backups/` are checked only when they exist; `serve` creates neither at start (see
 [Data directory](#data-directory)). `keys/` and the master key are created, when
 missing, only after checks 32 to 43 pass, an empty `archive.db` only after
-checks 32 to 54 pass, and an empty `session.db` only once the archive is open.
+checks 32 to 54 and 77 to 89 pass, and an empty `session.db` only once the archive is open.
 Checks 65 to 72 run on `session.db` after the archive is open, and not at all
 when the [fake engine](#fake-engine) runs; the
 [storage profile](#storage-profiles) is checked again for it, which passes once it
