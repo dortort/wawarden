@@ -30,6 +30,7 @@ const usage = `usage:
   wawarden admin clients list ADMIN
   wawarden admin clients show|revoke --id ID ADMIN
   wawarden admin chats list [--match TEXT] ADMIN
+  wawarden admin backfill --chat CHAT [--count N] ADMIN
                                    call the admin listener; ADMIN is [--addr URL] and one of
                                    --token-file PATH, --token-stdin or --token-command COMMAND
                                    (default --addr http://127.0.0.1:8082)
@@ -185,6 +186,8 @@ func admin(ctx context.Context, args, environ []string, stdin io.Reader, stdout,
 		return adminClients(ctx, args[1:], environ, stdin, stdout, stderr)
 	case "chats":
 		return adminChats(ctx, args[1:], environ, stdin, stdout, stderr)
+	case "backfill":
+		return adminBackfill(ctx, args[1:], environ, stdin, stdout, stderr)
 	}
 	return usageError(stderr)
 }

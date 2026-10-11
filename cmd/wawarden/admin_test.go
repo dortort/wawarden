@@ -72,7 +72,7 @@ func tokenFile(t *testing.T, content string) string {
 }
 
 const statusBody = `{"state":"connected","reason":"","paired":true,"counts":{"chats":3,"messages":120,"history_blobs_pending":1,` +
-	`"history_blobs_quarantined":0,"inbox_backlog":2,"inbox_quarantined":0},"clients":{"active":2,"expired":1,"revoked":0,"all_chats_active":0},` +
+	`"history_blobs_quarantined":0,"inbox_backlog":2,"inbox_quarantined":0,"backfills_today":4},"clients":{"active":2,"expired":1,"revoked":0,"all_chats_active":0},` +
 	`"warnings":[],"last_ingest_at":"2026-10-05T08:00:00Z","version":"v0.2.0"}`
 
 func TestAdminStatusPrintsTheAnswer(t *testing.T) {
@@ -80,7 +80,7 @@ func TestAdminStatusPrintsTheAnswer(t *testing.T) {
 	f, addr := newFakeListener(t, http.StatusOK, statusBody)
 	code, stdout, stderr := invokeWith(t, []string{"admin", "status", "--addr", addr, "--token-file", tokenFile(t, secret+"\n")}, nil, nil)
 	want := "state: connected\nreason: none\npaired: true\nchats: 3\nmessages: 120\nhistory blobs pending: 1\nhistory blobs quarantined: 0\n" +
-		"inbox backlog: 2\ninbox quarantined: 0\nclients active: 2\nclients expired: 1\nclients revoked: 0\nall-chats clients active: 0\n" +
+		"inbox backlog: 2\ninbox quarantined: 0\nbackfills today: 4\nclients active: 2\nclients expired: 1\nclients revoked: 0\nall-chats clients active: 0\n" +
 		"last ingest: 2026-10-05T08:00:00Z\nversion: v0.2.0\n"
 	if code != 0 || stdout != want || stderr != "" {
 		t.Fatalf("admin status = %d %q %q, want 0 %q", code, stdout, stderr, want)

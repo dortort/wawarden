@@ -122,7 +122,7 @@ func clientCreate(ctx context.Context, flags *flag.FlagSet, src adminSource, arg
 		values []string
 	}{{"read", read}, {"write", write}} {
 		for i, v := range set.values {
-			chat, code := session.chatIdentifier(ctx, stderr, v)
+			chat, code := session.chatIdentifier(ctx, stderr, "clients create", v)
 			if code != 0 {
 				if code == exitUsage {
 					_, _ = fmt.Fprintf(stderr, "admin: --%s value %d is not a chat identifier, a +E.164 number or a chat reference\n", set.flag, i+1)
@@ -158,7 +158,7 @@ func nonNil(s []string) []string {
 	return s
 }
 
-func (s *adminSession) chatIdentifier(ctx context.Context, stderr io.Writer, v string) (string, int) {
+func (s *adminSession) chatIdentifier(ctx context.Context, stderr io.Writer, label, v string) (string, int) {
 	if digits, ok := policy.OwnerDigits(v); ok {
 		return digits + "@s.whatsapp.net", 0
 	}
@@ -168,13 +168,13 @@ func (s *adminSession) chatIdentifier(ctx context.Context, stderr io.Writer, v s
 	if !chatReference.MatchString(v) {
 		return "", exitUsage
 	}
-	answer, code := s.exchange(ctx, stderr, adminRequest{label: "clients create", method: http.MethodGet, path: []string{"chats"}, query: url.Values{"match": {v}}})
+	answer, code := s.exchange(ctx, stderr, adminRequest{label: label, method: http.MethodGet, path: []string{"chats"}, query: url.Values{"match": {v}}})
 	if code != 0 {
 		return "", code
 	}
 	var a chatsAnswer
 	if json.Unmarshal(answer, &a) != nil || a.Chats == nil {
-		_, _ = fmt.Fprintf(stderr, "admin clients create: %v\n", errBadAnswer)
+		_, _ = fmt.Fprintf(stderr, "admin %s: %v\n", label, errBadAnswer)
 		return "", exitFailed
 	}
 	for _, c := range *a.Chats {
@@ -184,7 +184,7 @@ func (s *adminSession) chatIdentifier(ctx context.Context, stderr io.Writer, v s
 			}
 		}
 	}
-	_, _ = fmt.Fprintln(stderr, "admin clients create: no chat of the archive has that reference")
+	_, _ = fmt.Fprintf(stderr, "admin %s: no chat of the archive has that reference\n", label)
 	return "", exitRefused
 }
 

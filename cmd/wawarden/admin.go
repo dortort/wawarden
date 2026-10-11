@@ -176,7 +176,7 @@ func (s *adminSession) exchange(ctx context.Context, stderr io.Writer, req admin
 		_, _ = fmt.Fprintf(stderr, "admin %s: the request failed: %s\n", req.label, failure(err))
 		return nil, exitFailed
 	}
-	if status != http.StatusOK {
+	if status != http.StatusOK && status != http.StatusAccepted {
 		return nil, adminRefusal(req.label, status, answer, stderr)
 	}
 	return answer, 0
@@ -293,12 +293,13 @@ type statusAnswer struct {
 	Reason *string `json:"reason"`
 	Paired *bool   `json:"paired"`
 	Counts *struct {
-		Chats            int64 `json:"chats"`
-		Messages         int64 `json:"messages"`
-		BlobsPending     int64 `json:"history_blobs_pending"`
-		BlobsQuarantined int64 `json:"history_blobs_quarantined"`
-		InboxBacklog     int64 `json:"inbox_backlog"`
-		InboxQuarantined int64 `json:"inbox_quarantined"`
+		Chats            int64  `json:"chats"`
+		Messages         int64  `json:"messages"`
+		BlobsPending     int64  `json:"history_blobs_pending"`
+		BlobsQuarantined int64  `json:"history_blobs_quarantined"`
+		InboxBacklog     int64  `json:"inbox_backlog"`
+		InboxQuarantined int64  `json:"inbox_quarantined"`
+		BackfillsToday   *int64 `json:"backfills_today"`
 	} `json:"counts"`
 	Clients *struct {
 		Active         int64 `json:"active"`
@@ -318,7 +319,7 @@ func printAnswer(command string, answer []byte, stdout, stderr io.Writer) error 
 	switch command {
 	case commandStatus:
 		var s statusAnswer
-		if json.Unmarshal(answer, &s) != nil || s.State == nil || s.Reason == nil || s.Paired == nil || s.Counts == nil || s.Clients == nil || s.Warnings == nil || s.Version == nil {
+		if json.Unmarshal(answer, &s) != nil || s.State == nil || s.Reason == nil || s.Paired == nil || s.Counts == nil || s.Counts.BackfillsToday == nil || s.Clients == nil || s.Warnings == nil || s.Version == nil {
 			return errBadAnswer
 		}
 		last := "never"
@@ -335,6 +336,7 @@ func printAnswer(command string, answer []byte, stdout, stderr io.Writer) error 
 			{"history blobs quarantined", strconv.FormatInt(s.Counts.BlobsQuarantined, 10)},
 			{"inbox backlog", strconv.FormatInt(s.Counts.InboxBacklog, 10)},
 			{"inbox quarantined", strconv.FormatInt(s.Counts.InboxQuarantined, 10)},
+			{"backfills today", strconv.FormatInt(*s.Counts.BackfillsToday, 10)},
 			{"clients active", strconv.FormatInt(s.Clients.Active, 10)},
 			{"clients expired", strconv.FormatInt(s.Clients.Expired, 10)},
 			{"clients revoked", strconv.FormatInt(s.Clients.Revoked, 10)},

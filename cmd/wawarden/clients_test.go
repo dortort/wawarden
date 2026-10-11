@@ -41,6 +41,12 @@ func newRoutedListener(t *testing.T, answers map[string][2]string) (*routedListe
 			status = http.StatusConflict
 		case "422":
 			status = http.StatusUnprocessableEntity
+		case "202":
+			status = http.StatusAccepted
+		case "429":
+			status = http.StatusTooManyRequests
+		case "503":
+			status = http.StatusServiceUnavailable
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(status)
