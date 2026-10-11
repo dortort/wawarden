@@ -49,7 +49,7 @@ func shippedHeads(t *testing.T, f *fixture) []admin.Head {
 		if err != nil {
 			t.Fatalf("audit line time %v: %v", line["ts"], err)
 		}
-		heads = append(heads, admin.Head{Hex: line["chain_head"].(string), TS: at.UnixMilli()})
+		heads = append(heads, admin.Head{Hex: line["chain_head"].(string), TS: at.UnixMilli(), KeyID: line["key_id"].(string)})
 	}
 	return heads
 }
@@ -79,8 +79,8 @@ func TestAuditLinesCarryTheShapeAndTheHead(t *testing.T) {
 			keys = append(keys, k)
 		}
 		slices.Sort(keys)
-		if got := strings.Join(keys, " "); got != "action chain_head chat_hmac client event ok reason ts" || line["event"] != "audit" {
-			t.Fatalf("audit line %d has the keys %s and the event %v, want the audit event", i, got, line["event"])
+		if got := strings.Join(keys, " "); got != "action chain_head chat_hmac client event key_id ok reason ts" || line["event"] != "audit" || line["key_id"] != f.master.ID() {
+			t.Fatalf("audit line %d has the keys %s, the event %v and the key id %v, want the audit event under the master key", i, got, line["event"], line["key_id"])
 		}
 		if heads[i].Hex != hex.EncodeToString(stored[i][:16]) {
 			t.Fatalf("line %d ships the head %s, the row's HMAC starts %x", i, heads[i].Hex, stored[i][:16])

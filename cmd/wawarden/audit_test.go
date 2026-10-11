@@ -246,6 +246,14 @@ func TestAuditVerifyAcrossARotationAndAPrune(t *testing.T) {
 		!regexp.MustCompile(`\nchain head: [0-9a-f]{32}\npruned through: 2\nanchor head: [0-9a-f]{32}\nkey ids: `+ids+`\nshipped heads pruned: 1\nshipped heads: 7\nshipped heads missing: 0\n`).MatchString(stdout) {
 		t.Fatalf("audit verify with the retired keys beside the master = %d\n%s\nstderr %q", code, stdout, stderr)
 	}
+	misnamed := filepath.Join(t.TempDir(), "misnamed.log")
+	if err := os.WriteFile(misnamed, bytes.ReplaceAll(lines.Bytes(), []byte(`"key_id":"`+previous.ID()+`"`), []byte(`"key_id":"`+previous.ID()+`0"`)), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	code, stdout, _ = invokeWith(t, []string{"audit", "verify", "--db", archive, "--master-key-file", key, "--log", misnamed}, nil, nil)
+	if code != exitUnverified || !strings.Contains(stdout, "shipped heads pruned: 0\nshipped heads: 7\nshipped heads missing: 1\n") {
+		t.Fatalf("audit verify of lines whose key id is malformed = %d\n%s, want the head behind the retired key's anchor missing", code, stdout)
+	}
 	empty := t.TempDir()
 	code, stdout, _ = invokeWith(t, []string{"audit", "verify", "--db", archive, "--master-key-file", key, "--retired-keys-dir", empty, "--log", log}, nil, nil)
 	if code != exitUnverified || !strings.Contains(stdout, "rows failing: 3\nfirst failing row: 2\nproblem: anchor_invalid\n") {

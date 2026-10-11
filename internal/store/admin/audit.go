@@ -78,6 +78,7 @@ type auditLine struct {
 	ChatHMAC  *string `json:"chat_hmac"`
 	OK        bool    `json:"ok"`
 	Reason    string  `json:"reason"`
+	KeyID     string  `json:"key_id"`
 	ChainHead string  `json:"chain_head"`
 }
 
@@ -131,7 +132,7 @@ func (a *Audit) Append(ctx context.Context, q db.Querier, e Event) (Line, error)
 	}
 	text, err := json.Marshal(auditLine{
 		Event: auditEvent, TS: e.At.UTC().Format("2006-01-02T15:04:05.000Z07:00"), Client: r.client, Action: r.action, ChatHMAC: chatHMAC,
-		OK: r.ok, Reason: r.reason, ChainHead: hex.EncodeToString(mac[:headBytes]),
+		OK: r.ok, Reason: r.reason, KeyID: r.keyID, ChainHead: hex.EncodeToString(mac[:headBytes]),
 	})
 	if err != nil {
 		return Line{}, err
@@ -233,8 +234,9 @@ type Report struct {
 func (r Report) OK() bool { return r.Bad == 0 && r.HeadsMissing == 0 }
 
 type Head struct {
-	Hex string
-	TS  int64
+	Hex   string
+	TS    int64
+	KeyID string
 }
 
 func Verify(ctx context.Context, path string, master *keys.Master, heads []Head) (Report, error) {
@@ -261,7 +263,7 @@ func Verify(ctx context.Context, path string, master *keys.Master, heads []Head)
 		return key
 	}
 	rep := Report{KeyIDs: map[string]int64{}}
-	anchored := false
+	anchored, masterAnchor := false, false
 	err = d.Read(ctx, "admin.audit_verify", func(ctx context.Context, q db.Querier) error {
 		an, ok, err := readAnchor(ctx, q)
 		if err != nil {
@@ -277,7 +279,8 @@ func Verify(ctx context.Context, path string, master *keys.Master, heads []Head)
 			if key := chainKey(an.macKeyID); key == nil || !hmac.Equal(anchorMAC(key, an), an.mac) {
 				rep.Bad, rep.FirstBad, rep.Problem = 1, an.through, ReasonAnchorInvalid
 			}
-			retiredAnchor = rep.Bad == 0 && an.macKeyID != master.ID()
+			masterAnchor = rep.Bad == 0 && an.macKeyID == master.ID()
+			retiredAnchor = rep.Bad == 0 && !masterAnchor
 			prev, prevID = an.rowHMAC, an.through
 		}
 		rows, err := q.QueryContext(ctx, selectAuditRows)
@@ -342,7 +345,7 @@ func Verify(ctx context.Context, path string, master *keys.Master, heads []Head)
 	for _, h := range heads {
 		switch {
 		case shipped[h.Hex]:
-		case anchored && h.TS > 0 && h.TS <= rep.AnchorTS:
+		case anchored && h.TS > 0 && h.TS <= rep.AnchorTS && (masterAnchor || (h.KeyID != "" && h.KeyID != master.ID())):
 			rep.HeadsPruned++
 		default:
 			rep.HeadsMissing++

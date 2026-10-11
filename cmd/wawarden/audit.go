@@ -30,6 +30,7 @@ const (
 
 var (
 	chainHead     = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	keyIDShape    = regexp.MustCompile(`^[0-9a-f]{8}$`)
 	errLogNotFile = errors.New("the log is not a regular file")
 )
 
@@ -146,9 +147,13 @@ func shippedHeads(path string) ([]adminstore.Head, error) {
 		var line struct {
 			ChainHead *string         `json:"chain_head"`
 			TS        json.RawMessage `json:"ts"`
+			KeyID     json.RawMessage `json:"key_id"`
 		}
 		if json.Unmarshal(lines.Bytes(), &line) == nil && line.ChainHead != nil && chainHead.MatchString(*line.ChainHead) {
 			h := adminstore.Head{Hex: *line.ChainHead}
+			if json.Unmarshal(line.KeyID, &h.KeyID) != nil || !keyIDShape.MatchString(h.KeyID) {
+				h.KeyID = ""
+			}
 			var ts string
 			if json.Unmarshal(line.TS, &ts) == nil {
 				if at, err := time.Parse(time.RFC3339Nano, ts); err == nil {

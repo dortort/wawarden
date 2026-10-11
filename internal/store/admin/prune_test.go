@@ -330,6 +330,93 @@ func TestShippedHeadsAreClassifiedByTheirTime(t *testing.T) {
 	}
 }
 
+func rotatedChain(t *testing.T) (f *fixture, previous, current *keys.Master, heads []admin.Head) {
+	t.Helper()
+	previous, current, _ = rotated(t)
+	dir := t.TempDir()
+	record := func(f *fixture) {
+		for range 3 {
+			f.clock.advance(time.Second)
+			if err := f.store.Audit().Record(t.Context(), admin.Event{At: f.clock.Now(), Client: "aaaaaaaa", Action: "messages.read", Reason: "ok"}); err != nil {
+				t.Fatalf("Record: %v", err)
+			}
+		}
+	}
+	before := openWith(t, dir, previous)
+	record(before)
+	if err := before.store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	f = openWith(t, dir, current)
+	f.clock.advance(time.Minute)
+	record(f)
+	return f, previous, current, append(shippedHeads(t, before), shippedHeads(t, f)...)
+}
+
+func installAnchor(t *testing.T, d *sql.DB, under *keys.Master, through, ts int64, keyID string, rowHMAC []byte) {
+	t.Helper()
+	exec(t, d, unlockAnchor, "DELETE FROM audit_anchor")
+	if _, err := d.ExecContext(t.Context(), "INSERT INTO audit_anchor (id, through, ts, key_id, row_hmac, pruned_at, mac_key_id, mac) VALUES (1, ?, ?, ?, ?, ?, ?, ?)",
+		through, ts, keyID, rowHMAC, start.UnixMilli(), under.ID(), admin.AnchorMAC(under.AuditChainKey(), through, ts, start.UnixMilli(), keyID, rowHMAC)); err != nil {
+		t.Fatalf("INSERT audit_anchor: %v", err)
+	}
+}
+
+func appendRow(t *testing.T, d *sql.DB, under *keys.Master, id int64, prev []byte) {
+	t.Helper()
+	r := admin.AuditRow{ID: id, TS: start.Add(2 * time.Hour).UnixMilli(), Client: "aaaaaaaa", Action: "messages.read", Reason: "ok", OK: true, Key: under.ID()}
+	if _, err := d.ExecContext(t.Context(), "INSERT INTO audit (id, ts, client_id, action, ok, reason, key_id, row_hmac) VALUES (?, ?, ?, ?, 1, ?, ?, ?)",
+		r.ID, r.TS, r.Client, r.Action, r.Reason, r.Key, admin.RowMAC(under.AuditChainKey(), r, prev)); err != nil {
+		t.Fatalf("INSERT audit: %v", err)
+	}
+}
+
+func TestARetiredKeyCannotStandInForTheCurrentOne(t *testing.T) {
+	f, previous, current, heads := rotatedChain(t)
+	far := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	first, forged := storedHMAC(t, f, 1), bytes.Repeat([]byte{0x5a}, 32)
+	unnamed := append([]admin.Head(nil), heads...)
+	for i := range unnamed {
+		unnamed[i].KeyID = ""
+	}
+	cutTheEnd := func(d *sql.DB) {
+		exec(t, d, unlock, "DELETE FROM audit WHERE id = 1 OR id >= 4")
+		installAnchor(t, d, previous, 1, far, previous.ID(), first)
+	}
+	for _, tt := range []struct {
+		name     string
+		tamper   func(*sql.DB)
+		heads    []admin.Head
+		firstBad int64
+		problem  string
+		missing  int
+	}{
+		{name: "every row replaced by one under the retired key behind an anchor under it", tamper: func(d *sql.DB) {
+			exec(t, d, unlock, "DELETE FROM audit")
+			installAnchor(t, d, previous, 6, far, previous.ID(), forged)
+			appendRow(t, d, previous, 7, forged)
+		}, heads: heads, missing: 3},
+		{name: "the current key's rows cut from the end behind an anchor under the retired key", tamper: cutTheEnd, heads: heads, missing: 3},
+		{name: "the same cut against lines that name no key", tamper: cutTheEnd, heads: unnamed, missing: 3},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := f.copyArchive(t)
+			d := rawOpen(t, path)
+			tt.tamper(d)
+			if err := d.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+			rep, err := admin.Verify(t.Context(), path, current, tt.heads)
+			if err != nil {
+				t.Fatalf("Verify: %v", err)
+			}
+			if rep.OK() || rep.FirstBad != tt.firstBad || rep.Problem != tt.problem || rep.HeadsMissing != tt.missing || (tt.missing > 0 && rep.FirstMissing != heads[3].Hex) {
+				t.Fatalf("Verify = %+v, want first bad row %d (%q) and the current key's %d heads missing", rep, tt.firstBad, tt.problem, tt.missing)
+			}
+		})
+	}
+}
+
 func TestVerifyReadsACopyWithoutAnAnchorTable(t *testing.T) {
 	f, heads := chainFixture(t)
 	path := f.copyArchive(t)
