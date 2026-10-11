@@ -80,6 +80,9 @@ type Client interface {
 	DownloadHistory(ctx context.Context, ref HistoryRef, dst io.Writer) error
 	AckHistory(ctx context.Context, ref HistoryRef) error
 	OnEvent(handler func(Event) bool) (cancel func())
+	NewMessageID() string
+	Send(ctx context.Context, req SendRequest) (Sent, error)
+	Backfill(ctx context.Context, req BackfillRequest) (requestID string, err error)
 }
 
 type VersionSource interface {

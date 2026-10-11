@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dortort/wawarden/internal/safego"
@@ -20,6 +21,7 @@ type Engine struct {
 	done     chan struct{}
 	started  bool
 	stopping sync.Once
+	sending  atomic.Bool
 }
 
 var (
@@ -85,6 +87,12 @@ func (e *Engine) dispatch(ev Event) bool {
 			return e.hist.accept(n)
 		}
 		return e.pipe.accept(v)
+	case Identity:
+		if !e.sup.accepting() {
+			e.pipe.counts.dropped.With(dropNotPaired).Inc()
+			return true
+		}
+		return e.pipe.identity(v)
 	case Connected:
 		e.sup.handle(v)
 		e.pipe.wake()

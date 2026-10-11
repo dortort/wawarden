@@ -1,9 +1,13 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"time"
+
+	"github.com/dortort/wawarden/internal/policy"
+	"github.com/dortort/wawarden/internal/store/ingest"
 )
 
 var (
@@ -59,4 +63,75 @@ type BackfillRequest struct {
 	AnchorFromMe bool
 	AnchorTime   time.Time
 	Count        int
+}
+
+func (e *Engine) Ready() bool {
+	st := e.sup.status()
+	return st.State == StateConnected && st.Paired && e.sup.accepting()
+}
+
+func (e *Engine) NewMessageID() string { return e.sup.client.NewMessageID() }
+
+func (e *Engine) Send(ctx context.Context, req SendRequest) (Sent, error) {
+	var sent Sent
+	err := e.exclusive("engine.send", func() error {
+		var err error
+		sent, err = e.sup.client.Send(ctx, req)
+		return err
+	})
+	if err != nil {
+		return Sent{}, err
+	}
+	return sent, nil
+}
+
+func (e *Engine) Backfill(ctx context.Context, req BackfillRequest) (string, error) {
+	var id string
+	err := e.exclusive("engine.backfill", func() error {
+		var err error
+		id, err = e.sup.client.Backfill(ctx, req)
+		return err
+	})
+	return id, err
+}
+
+func (e *Engine) exclusive(name string, fn func() error) error {
+	if !e.Ready() {
+		return ErrNotConnected
+	}
+	if !e.sending.CompareAndSwap(false, true) {
+		return ErrSendBusy
+	}
+	defer e.sending.Store(false)
+	err := guarded(name, fn)
+	switch {
+	case err == nil, errors.Is(err, ErrNotConnected), errors.Is(err, ErrRecipientUnavailable), errors.Is(err, ErrRejected), errors.Is(err, ErrOutcomeUnknown):
+		return err
+	}
+	return ErrOutcomeUnknown
+}
+
+func (p *pipeline) identity(id Identity) bool {
+	pn, okPN := policy.Normalize(id.PN)
+	lid, okLID := policy.Normalize(id.LID)
+	if !okPN || !okLID || pn.Kind() != policy.PhoneChat || lid.Kind() != policy.LIDChat {
+		p.counts.dropped.With(dropInvalid).Inc()
+		return true
+	}
+	if !p.owner.Valid() || pn != p.owner {
+		p.counts.dropped.With(dropOwnerUnknown).Inc()
+		return true
+	}
+	var out outcome
+	if err := p.write(p.ctx, "engine.identity", func(tx *ingest.Tx) error {
+		a := &applier{tx: tx, owner: p.owner, now: p.clock.Now()}
+		err := a.mapping(lid, pn, ingest.MappingSelf)
+		out = a.out
+		return err
+	}); err != nil {
+		p.counts.refused.With(refusedStore).Inc()
+		return false
+	}
+	p.record(out)
+	return true
 }

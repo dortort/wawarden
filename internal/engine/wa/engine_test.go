@@ -22,6 +22,7 @@ import (
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/store/ingest"
 	"github.com/dortort/wawarden/internal/store/scoped"
+	"github.com/dortort/wawarden/internal/token"
 )
 
 type noVersions struct{ t *testing.T }
@@ -253,4 +254,67 @@ func TestAHistoryBlobTakesEffectThroughTheEngine(t *testing.T) {
 	w.send(t, historyNotification(t, owner, "3EB0H9", blob))
 	eventually(t, "the history row is stored", func() bool { _, ok := w.find(t, peer, "3EB0HA", peer); return ok })
 	eventually(t, "the history row is counted as ingested", func() bool { return w.metric(t, "wawarden_messages_ingested_total 1") })
+}
+
+func TestAnOnDemandAnswerCompletesItsBackfillThroughTheEngine(t *testing.T) {
+	w := wireEngine(t)
+	w.send(t, textMessage(t, peer, peer, "3EB0ANCHOR", "synthetic anchor"))
+	eventually(t, "the anchor is stored", func() bool { _, ok := w.find(t, peer, "3EB0ANCHOR", peer); return ok })
+	secret := token.NewAdmin()
+	cred, err := policy.ParseAdminCredential(token.Hash(secret))
+	if err != nil {
+		t.Fatalf("ParseAdminCredential: %v", err)
+	}
+	grant, _ := policy.DecideAdmin(cred, secret)
+	ticket, err := w.archive.ReserveBackfill(grant, t.Context(), ingest.BackfillRequest{ID: "PROVISIONAL", Chat: canonical(t, peer), Count: 50, Now: time.Now()})
+	if err != nil || ticket.Anchor.ID != "3EB0ANCHOR" {
+		t.Fatalf("ReserveBackfill = %+v, %v", ticket, err)
+	}
+	if err := w.archive.BindBackfill(t.Context(), "PROVISIONAL", "3EB0REQUEST"); err != nil {
+		t.Fatalf("BindBackfill: %v", err)
+	}
+	blob := compress(t, historyBlob(t, &waHistorySync.HistorySync{
+		SyncType:      waHistorySync.HistorySync_ON_DEMAND.Enum(),
+		Conversations: []*waHistorySync.Conversation{conv(peer.String(), webMessage(peer, false, "3EB0OLDER", &waE2E.Message{Conversation: proto.String("synthetic older text")}, nil))},
+	}))
+	w.send(t, onDemandNotification(t, owner, "3EB0H7", "3EB0REQUEST", blob))
+	eventually(t, "the answer is processed", func() bool {
+		var pending bool
+		if err := w.archive.Read(t.Context(), "test.blob", func(r *ingest.Reader) error {
+			var err error
+			pending, err = r.BlobPending("3EB0H7")
+			return err
+		}); err != nil {
+			t.Fatalf("Read: %v", err)
+		}
+		return !pending
+	})
+	if _, ok := w.find(t, peer, "3EB0OLDER", peer); !ok {
+		t.Fatal("the older message was not stored")
+	}
+	if err := w.archive.Write(t.Context(), "test.complete", func(tx *ingest.Tx) error {
+		again, err := tx.CompleteBackfill("3EB0REQUEST", time.Now())
+		if again {
+			t.Error("the answered backfill was still open")
+		}
+		return err
+	}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+}
+
+func TestTheOwnersIdentityIsLearnedThroughTheEngine(t *testing.T) {
+	w := wireEngine(t)
+	w.send(t, &events.Connected{})
+	eventually(t, "the owner's phone number maps to the LID", func() bool {
+		var got policy.CanonicalChat
+		if err := w.archive.Read(t.Context(), "test.canonical", func(r *ingest.Reader) error {
+			var err error
+			got, err = r.Canonical(canonical(t, owner))
+			return err
+		}); err != nil {
+			t.Fatalf("Read: %v", err)
+		}
+		return got.JID() == ownerLID.String()
+	})
 }

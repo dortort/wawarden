@@ -202,7 +202,12 @@ func (h *historian) ingest(ctx context.Context, b ingest.Blob) error {
 		return err
 	}
 	if err := h.p.write(context.WithoutCancel(ctx), "engine.history_processed", func(tx *ingest.Tx) error {
-		return tx.MarkBlobProcessed(b.ID, h.p.clock.Now())
+		now := h.p.clock.Now()
+		if err := tx.MarkBlobProcessed(b.ID, now); err != nil || ref.SyncType != SyncOnDemand || ref.RequestID == "" {
+			return err
+		}
+		_, err := tx.CompleteBackfill(ref.RequestID, now)
+		return err
 	}); err != nil {
 		return err
 	}

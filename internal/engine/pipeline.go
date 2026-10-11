@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -35,6 +36,7 @@ type pipeline struct {
 
 	nextSpace time.Time
 	nextSweep time.Time
+	alertMu   sync.Mutex
 	alerted   map[conflict]bool
 
 	beforeApply func(seq int64)
@@ -75,6 +77,8 @@ func (p *pipeline) record(out outcome) {
 	for _, reason := range out.dropped {
 		p.counts.dropped.With(reason).Inc()
 	}
+	p.alertMu.Lock()
+	defer p.alertMu.Unlock()
 	for _, c := range out.conflicts {
 		p.counts.conflicts.With(string(c.kind)).Inc()
 		if p.alerted[c] {
