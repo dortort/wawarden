@@ -2,6 +2,7 @@ package scoped_test
 
 import (
 	"cmp"
+	"context"
 	"maps"
 	"os"
 	"slices"
@@ -19,6 +20,11 @@ import (
 )
 
 const ownerJID = "15550100099@s.whatsapp.net"
+
+type contextTB interface {
+	tb
+	Context() context.Context
+}
 
 type sentMessage struct {
 	chat, id, sender string
@@ -86,7 +92,7 @@ func checkSavedNames(t *rapid.T, a *archive, id string, set scopeSet, saved []st
 	}
 }
 
-func scopeOfClient(t *rapid.T, s *ingest.Store, c propClient) scopeSet {
+func scopeOfClient(t contextTB, s *ingest.Store, c propClient) scopeSet {
 	if c.revoked {
 		return scopeSet{}
 	}
@@ -113,7 +119,7 @@ func grantOf(t *rapid.T, c propClient, set scopeSet) policy.ReadGrant {
 	return g
 }
 
-func dump(t *rapid.T, s *ingest.Store) ([]scoped.DumpChat, []scoped.DumpMessage) {
+func dump(t contextTB, s *ingest.Store) ([]scoped.DumpChat, []scoped.DumpMessage) {
 	chats, messages, err := s.Scoped().Dump(t.Context())
 	if err != nil {
 		t.Fatalf("Dump: %v", err)
@@ -277,7 +283,7 @@ func buildArchive(t *rapid.T, dir string) *archive {
 	return a
 }
 
-func addClient(t *rapid.T, s *ingest.Store, c propClient, read []string) {
+func addClient(t contextTB, s *ingest.Store, c propClient, read []string) {
 	revoked := "NULL"
 	if c.revoked {
 		revoked = "2"
@@ -295,7 +301,7 @@ func addClient(t *rapid.T, s *ingest.Store, c propClient, read []string) {
 	}
 }
 
-func (a *archive) learn(t *rapid.T, lid, pn string) {
+func (a *archive) learn(t contextTB, lid, pn string) {
 	_, before := dump(t, a.store)
 	all := visibleSeqs(scopeSet{all: true}, before)
 	scopes := make([]scopeSet, len(a.clients))
@@ -326,6 +332,37 @@ func (a *archive) learn(t *rapid.T, lid, pn string) {
 				t.Fatalf("learning %s for %s (%+v) let %s see message %d, which it could not see before", lid, pn, res, c.id, seq)
 			}
 		}
+	}
+}
+
+func TestRekeyRefusedForAScopeGivesNoClientANewMessage(t *testing.T) {
+	for _, tt := range []struct {
+		name                  string
+		withMessages, emptied []string
+		read                  []string
+	}{
+		{"a grant on the LID while the phone chat has messages", []string{alice}, nil, []string{aliceLID}},
+		{"a grant on the number while the LID chat has messages", []string{aliceLID}, nil, []string{alice}},
+		{"a grant on an empty LID chat that would absorb the phone chat", []string{alice}, []string{aliceLID}, []string{aliceLID}},
+		{"a grant on both identities while the empty phone chat would be merged away", []string{aliceLID}, []string{alice}, []string{alice, aliceLID}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := openStore(t)
+			a := &archive{store: s, clients: []propClient{{id: "client01"}}, seen: map[string]bool{}}
+			addClient(t, s, a.clients[0], tt.read)
+			for i, c := range tt.withMessages {
+				insert(t, s, message(t, c, "m"+strconv.Itoa(i), c, "text "+canary(i)+" end", epoch))
+			}
+			for _, c := range tt.emptied {
+				write(t, s, func(tx *ingest.Tx) error {
+					return tx.SetChatName(chat(t, c), "Synthetic", ingest.NamePushName, ingest.OriginLive)
+				})
+			}
+			a.learn(t, aliceLID, alice)
+			if !a.seen["re-key refused for a scope"] {
+				t.Fatalf("LearnLID(%s, %s) with the grant %v was not refused for a scope: %v", aliceLID, alice, tt.read, a.seen)
+			}
+		})
 	}
 }
 
@@ -380,7 +417,7 @@ func TestPropertyScopedReadsMatchTheOracle(t *testing.T) {
 		checkReplay(t, a, chats, messages)
 		cov.add(a.seen)
 	})
-	cov.require(t, "re-key moved a scope", "re-key refused for a scope", "a client sees some messages and not others", "revoke", "edit", "dead canary",
+	cov.require(t, "re-key moved a scope", "a client sees some messages and not others", "revoke", "edit", "dead canary",
 		"changes from a time skipped a change", "changes from a time kept a later change dated before it", "saved name shown", "saved name hidden",
 		"a position replayed under another grant")
 }
