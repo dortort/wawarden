@@ -378,3 +378,18 @@ func TestTheLedgerHoldsNoTextAndNoChat(t *testing.T) {
 		}
 	}
 }
+
+func TestTheSendAndBackfillLimitsAreTheDocumentedOnes(t *testing.T) {
+	for name, c := range map[string]struct{ got, want time.Duration }{
+		"send lease":         {SendLease, 60 * time.Second},
+		"send record expiry": {SendTTL, 24 * time.Hour},
+		"backfill interval":  {BackfillInterval, 5 * time.Minute},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %v, want %v", name, c.got, c.want)
+		}
+	}
+	if BackfillPerDay != 20 || MaxBackfillCount != 50 {
+		t.Errorf("backfills per day = %d and most messages per backfill = %d, want 20 and 50", BackfillPerDay, MaxBackfillCount)
+	}
+}
