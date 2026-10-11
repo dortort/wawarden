@@ -490,13 +490,15 @@ func decimal(b []byte) string {
 }
 
 func TestMasterPrintsNoKey(t *testing.T) {
-	data := keysDir(t, 0o700)
-	writeMaster(t, data, vectorMaster(), 0o600)
+	data, _ := withRetired(t, secretOf(80))
 	m := mustLoad(t, data)
+	retired := m.Retired()[0]
 	var out strings.Builder
 	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%X", "%d"} {
 		fmt.Fprintf(&out, verb+"\n", m)
 		fmt.Fprintf(&out, verb+"\n", *m)
+		fmt.Fprintf(&out, verb+"\n", m.Retired())
+		fmt.Fprintf(&out, verb+"\n", *retired)
 	}
 	encoded, err := json.Marshal([]any{m, *m})
 	if err != nil {
@@ -506,7 +508,10 @@ func TestMasterPrintsNoKey(t *testing.T) {
 	slog.New(slog.NewJSONHandler(&out, nil)).Info("master", "m", m, "v", *m)
 	slog.New(slog.NewTextHandler(&out, nil)).Info("master", "m", m, "v", *m)
 	text := strings.ToLower(out.String())
-	for _, secret := range [][]byte{vectorMaster(), m.LogRedactKey(), m.ChatHMACKey(), m.CursorSealKey(), m.MessageRefKey(), m.AuditChainKey()} {
+	for _, secret := range [][]byte{
+		vectorMaster(), m.LogRedactKey(), m.ChatHMACKey(), m.CursorSealKey(), m.MessageRefKey(), m.AuditChainKey(),
+		secretOf(80), retired.LogRedactKey(), retired.ChatHMACKey(), retired.CursorSealKey(), retired.MessageRefKey(), retired.AuditChainKey(),
+	} {
 		for _, form := range []string{hex.EncodeToString(secret), hex.EncodeToString(secret[:8]), string(secret[8:16]), decimal(secret[:8])} {
 			if strings.Contains(text, strings.ToLower(form)) {
 				t.Fatalf("printing a Master revealed key material %q:\n%s", form, out.String())
