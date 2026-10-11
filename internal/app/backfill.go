@@ -40,6 +40,15 @@ func requestBackfill(g policy.AdminGrant, ctx context.Context, store backfillSto
 		AnchorTime: ticket.Anchor.Timestamp, Count: ticket.Count})
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), backfillBookkeeping)
 	defer cancel()
+	if errors.Is(err, engine.ErrNotConnected) || errors.Is(err, engine.ErrSendBusy) {
+		if cerr := store.CancelBackfill(ctx, ticket.ID); cerr != nil {
+			return "", cerr
+		}
+		if errors.Is(err, engine.ErrSendBusy) {
+			return "", api.RateLimited(engineBusyWait)
+		}
+		return "", api.ErrNotConnected
+	}
 	if id != "" {
 		if berr := store.BindBackfill(ctx, ticket.ID, id); berr != nil {
 			return "", berr
@@ -48,14 +57,6 @@ func requestBackfill(g policy.AdminGrant, ctx context.Context, store backfillSto
 	switch {
 	case err == nil:
 		return id, nil
-	case errors.Is(err, engine.ErrNotConnected), errors.Is(err, engine.ErrSendBusy):
-		if cerr := store.CancelBackfill(ctx, ticket.ID); cerr != nil {
-			return "", cerr
-		}
-		if errors.Is(err, engine.ErrSendBusy) {
-			return "", api.RateLimited(engineBusyWait)
-		}
-		return "", api.ErrNotConnected
 	case errors.Is(err, engine.ErrRecipientUnavailable), errors.Is(err, engine.ErrRejected):
 		return "", api.ErrSendRejected
 	}

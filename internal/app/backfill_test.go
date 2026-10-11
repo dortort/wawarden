@@ -122,16 +122,19 @@ func TestABackfillAsksForTheMessagesBeforeTheOldestRow(t *testing.T) {
 
 func TestABackfillThatSentNothingIsRefunded(t *testing.T) {
 	for _, tt := range []struct {
+		id   string
 		err  error
 		want error
 	}{
 		{err: engine.ErrNotConnected, want: api.ErrNotConnected},
 		{err: engine.ErrSendBusy, want: api.RateLimited(time.Second)},
+		{id: "3EB0NOTSENT", err: engine.ErrNotConnected, want: api.ErrNotConnected},
+		{id: "3EB0NOTSENT", err: engine.ErrSendBusy, want: api.RateLimited(time.Second)},
 	} {
 		s, group, _ := backfillArchive(t)
 		g := adminGrant(t)
 		now := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
-		e := &scriptedBackfiller{err: tt.err}
+		e := &scriptedBackfiller{id: tt.id, err: tt.err}
 		if _, err := requestBackfill(g, t.Context(), s, e, now, group, 50); !reflect.DeepEqual(err, tt.want) {
 			t.Fatalf("requestBackfill with %v = %v, want %v", tt.err, err, tt.want)
 		}
