@@ -268,10 +268,10 @@ func (m *sendModel) checkWindows(t *rapid.T) {
 	}
 }
 
-func runSendModel(t *testing.T, pacer time.Duration) {
+func TestSendsFollowTheLedger(t *testing.T) {
 	parent := t.TempDir()
 	rapid.Check(t, func(t *rapid.T) {
-		m := newSendModel(t, parent, pacer)
+		m := newSendModel(t, parent, rapid.SampledFrom([]time.Duration{0, sender.PacerBase}).Draw(t, "pacer"))
 		defer m.close()
 		t.Repeat(map[string]func(*rapid.T){
 			"send": m.send,
@@ -289,7 +289,3 @@ func runSendModel(t *testing.T, pacer time.Duration) {
 		})
 	})
 }
-
-func TestSendsFollowTheLedgerWithoutAPacer(t *testing.T) { runSendModel(t, 0) }
-
-func TestSendsFollowTheLedgerUnderThePacer(t *testing.T) { runSendModel(t, sender.PacerBase) }
