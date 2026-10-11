@@ -9,9 +9,13 @@ import (
 	"github.com/dortort/wawarden/internal/store/internal/db"
 )
 
+const latestSchemaVersion = 4
+
 func migrate(ctx context.Context, d *db.DB) (int, error) {
 	return d.Migrate(ctx, []string{schemaV1, schemaV2, schemaV3, schemaV4})
 }
+
+func LatestSchemaVersion() int { return latestSchemaVersion }
 
 const (
 	changeBackfillBatch = 10000

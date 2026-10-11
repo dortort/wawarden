@@ -15,8 +15,8 @@ import (
 func TestOpenCreatesTheSchemaOnce(t *testing.T) {
 	opts := testOptions(t)
 	s := openWith(t, opts)
-	if s.SchemaVersion() != 4 {
-		t.Fatalf("schema version %d, want 4", s.SchemaVersion())
+	if s.SchemaVersion() != 4 || LatestSchemaVersion() != s.SchemaVersion() {
+		t.Fatalf("schema version %d, latest %d, want 4", s.SchemaVersion(), LatestSchemaVersion())
 	}
 	for _, table := range []string{"chats", "chat_aliases", "lid_map", "contacts", "group_participants", "messages", "messages_fts", "history_blobs", "inbox", "sync_state",
 		"contact_names", "clients", "client_read_chats", "client_write_chats", "audit"} {

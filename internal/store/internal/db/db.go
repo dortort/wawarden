@@ -44,6 +44,8 @@ func (n Name) label() string {
 
 func (n Name) file() string { return n.label() + ".db" }
 
+func (n Name) File() string { return n.file() }
+
 type Profile string
 
 const (
@@ -472,9 +474,17 @@ func (d *DB) Changes(ctx context.Context) (int64, error) {
 }
 
 func (d *DB) FreeBytes() (uint64, error) {
+	return freeBytes(d.dir, d.statfs)
+}
+
+func FreeBytesOf(dir string) (uint64, error) {
+	return freeBytes(dir, syscall.Statfs)
+}
+
+func freeBytes(dir string, statfs func(string, *syscall.Statfs_t) error) (uint64, error) {
 	var st syscall.Statfs_t
-	if err := d.statfs(d.dir, &st); err != nil {
-		return 0, fmt.Errorf("db: inspect the data directory's filesystem: %s", cause(err))
+	if err := statfs(dir, &st); err != nil {
+		return 0, fmt.Errorf("db: inspect the directory's filesystem: %s", cause(err))
 	}
 	return availableBytes(&st), nil
 }
