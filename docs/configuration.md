@@ -85,8 +85,10 @@ wawarden admin chats list [--match TEXT] ADMIN
                                  call the admin listener; ADMIN is [--addr URL] and one of
                                  --token-file PATH, --token-stdin or --token-command COMMAND
                                  (default --addr http://127.0.0.1:8082)
-wawarden audit verify --db PATH --master-key-file PATH [--log PATH]
+wawarden audit verify --db PATH --master-key-file PATH [--retired-keys-dir PATH] [--log PATH]
                                  verify the audit chain of a copy of the archive, offline
+wawarden keys rotate --data-dir DIR
+                                 retire the master key and create a new one, service stopped
 wawarden backup verify --work-dir DIR [--extract-to NEW] -
                                  check a decrypted backup read from standard input, offline
 ```
@@ -211,7 +213,9 @@ character and every invalid byte with U+FFFD, so an answer cannot move the
 cursor, rewrite the screen, set a link or write the clipboard.
 
 A refusal prints `admin <command>: refused with <code> (HTTP <status>)` on
-standard error; see the [exit codes](#exit-codes).
+standard error, with any client or admin token in the answer's code redacted as
+the [log writer](#pseudonyms-and-dropped-lines) does; see the
+[exit codes](#exit-codes).
 
 `admin status` also writes `admin status: warning: <code>` on standard error
 for each code in the answer's `warnings`.
@@ -273,6 +277,7 @@ never changes its inputs.
 |---|---|
 | `--db PATH` | The copy of the archive to check, for example the `archive.db` of a decrypted [backup](#backups). It is opened read-only, without a lock: never point it at the archive of a running service. |
 | `--master-key-file PATH` | A copy of the master key the rows were written with: any regular file of exactly 32 bytes. Nothing is created when it is missing. |
+| `--retired-keys-dir PATH` | Optional: a directory of retired master keys, as [`keys rotate`](#keys-rotate) leaves them in `keys/retired/`: files of exactly 32 bytes, each named by its key id; names starting with `.` are skipped. Without the flag, the directory `retired` beside the master key file is read when it exists. Its owner and modes are not checked; a missing directory given with the flag, a misnamed or malformed key, a key under another key id than its name or a copy of the master key is refused. |
 | `--log PATH` | Optional: a capture of the service's standard output, one JSON object per line. Each line with a `chain_head` of 32 hexadecimal digits is one shipped head; every other line is skipped. |
 
 It prints:
@@ -284,14 +289,32 @@ rows failing: 0
 first failing row: none
 problem: none
 chain head: 3fa8c2d14be0917a5c6e2b8f0d4a7c19
-shipped heads: 1180
+pruned through: 5820
+anchor head: 9d01c4e7a2b35f68e0c7d1a4b9e2f305
+key ids: 5c7cdf84=310 6a53922c=894
+shipped heads pruned: 5789
+shipped heads: 6970
 shipped heads missing: 0
 first missing head: none
 ```
 
-`problem` is `id_gap` when a row's id is not one more than the previous row's,
-`unknown_key` when the row was written under another key id than the master
-key's, and `hmac_mismatch` when its HMAC is not the one the key gives. Without
+When the [audit retention](#audit-chain) removed rows, the walk starts from
+the audit anchor: `pruned through` is the id of the last row removed and
+`anchor head` the first 16 bytes of its HMAC, both `none` while nothing was
+removed. The anchor's MAC is checked with the key whose id it names, and the
+first retained row must follow it. `key ids` counts the retained rows by the
+key id they were written under, in order of key id. A shipped head that the
+copy lacks counts under `shipped heads pruned` when the `ts` of its line is not
+after the time of the anchor's row, so the retention removed it, and under
+`shipped heads missing` otherwise, also when its line has no readable `ts`;
+the anchor's own head counts as found.
+
+`problem` is `id_gap` when a row's id is not one more than the previous row's
+(or than the anchor's), `unknown_key` when the row was written under a key id
+that is neither the master key's nor a retired key's, `hmac_mismatch` when its
+HMAC is not the one its key gives, and `anchor_invalid` when the anchor names a
+key that is not given or its MAC is not the one that key gives; the first
+failing row is then the anchor's. Without
 `--log` it warns on standard error that rows removed from the end of the chain
 go unnoticed. A `--log` that holds no chain head, such as a capture whose
 lines a log pipeline wrapped in an envelope, compares nothing: it prints the
@@ -369,17 +392,70 @@ so they can be compared with the live service, whose counts are never lower
 than a backup's unless messages expired or were deleted since. Problems with
 the stream are explained on standard error, with a fixed text.
 
+### `keys rotate`
+
+`wawarden keys rotate --data-dir DIR` replaces the [master key](#master-key)
+with a new one and keeps the old one as a retired key. `DIR` is the service's
+data directory; there is no default. Run it as the service's user while the
+service is stopped. It:
+
+1. opens `archive.db` in `DIR` read-only, without waiting, and reads it once:
+   when another process holds its lock, as a running service does, it refuses
+   with `service_running` before changing anything. A data directory without
+   `archive.db` passes;
+2. checks `keys/` and `keys/master` as `serve` does (refusals 44 to 47 and 48
+   to 52; it creates neither), creates `keys/retired/` with mode `0700` when it
+   does not exist, and checks it and every key in it as `serve` does (refusals
+   77 to 88). It refuses with `retired_keys_too_many` when `keys/retired/`
+   already holds 32 keys besides the current one;
+3. draws 32 bytes from the operating system's cryptographic random source and
+   refuses with `rotate_key_collision`, before changing anything else, when
+   their key id is the current key's or a retired key's;
+4. writes the current key to a temporary file `keys/retired/.<key id>-<random>`
+   with mode `0600`, flushes it, hard-links it as `keys/retired/<key id>`,
+   removes the temporary name and flushes the directory. When that name exists,
+   from an interrupted rotation, it must hold the same key, or the rotation is
+   refused with `retired_key_conflict`;
+5. writes the new key to a temporary file `keys/.master-<random>` with mode
+   `0600`, flushes it, renames it over `keys/master` and flushes `keys/`.
+
+It prints both key ids, never a key, and exits `0`:
+
+```text
+previous key id: 5c7cdf84
+new key id: 6a53922c
+```
+
+A refusal is one line on standard error, `keys rotate: keys:` and a fixed
+explanation that names neither the data directory nor a key, and exits `1`.
+Step 1 does not keep the archive locked, so start the service only once the
+command has returned. A rotation interrupted between steps 4 and 5 leaves the
+current key in `keys/retired/` too, which `serve` refuses with
+`retired_key_current`: run `keys rotate` again to finish it.
+
+After a rotation, the next start loads the retired key (see
+[Master key](#master-key)) and logs `audit_key_changed` until the first audit
+row under the new key. Log pseudonyms, the `chat_hmac` of new audit lines and
+the text of a new message reference for the same message change; cursors and
+references issued before still open while their key stays in
+`keys/retired/`. Keep `keys/retired/`, and a copy of it with the copy of
+`keys/master`: `audit verify` needs every key the retained rows and the anchor
+name. Nothing deletes a retired key; delete one only when no cursor or
+reference sealed under it is still wanted and no audit row of the archive or
+of a backup you may verify carries its key id (`audit verify` lists them under
+`key ids`).
+
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
-| `0` | `serve` stopped cleanly after `SIGTERM` or `SIGINT`; `healthcheck` got `200`; `version` and `admin init` printed their output; an admin command got `200` and printed the answer; `audit verify` verified every row and found every shipped head; `backup verify` read a complete backup and every check passed. |
-| `1` | `serve` failed after its configuration was accepted: the [archive](#message-archive) or the [device store](#device-store) could not be opened or its lock was not acquired within five minutes, the device store could not be brought up to date, or a listener could not be opened (`startup_failed`), a listener failed while running (`listener_failed`), or shutdown ended with errors, for example when the grace period ran out. `healthcheck` failed for any reason, including extra arguments. `version` or `admin init` could not write to standard output. An admin command's request failed: no connection, no answer within 40 seconds, an answer over 64 KiB or not in the expected shape, a redirect, or any status other than those of codes `0`, `4` and `5`, such as `engine_unavailable` (`503`), `pair_failed` (`502`), `invalid_query` (`400`) or `internal_error` (`500`). `audit verify` could not open the copy, the master key file or the log. `backup verify` was given a `--work-dir` that is not a private directory of its user or an `--extract-to` that exists, could not read standard input to the end, found it ended early (as after a failed or wrong-key decryption), could not write a database into the work directory or had too little space for it, or could not move the verified databases to `--extract-to`. |
-| `2` | `serve` refused to start (`startup_refused`, see [Startup refusals](#startup-refusals)). Or a usage error: an unknown subcommand, or an unknown flag or extra argument given to `serve`, `version`, `admin`, `audit` or `backup`, an admin command without exactly one token source or with an empty `--token-file` or `--token-command`, an invalid `--addr`, a `clients create` without `--name` or with a chat value it cannot use, a `--id` that is not a client id, an `audit verify` without `--db` or `--master-key-file`, or a `backup verify` without `--work-dir` or without `-` as its only argument; the usage text goes to standard error. |
+| `0` | `serve` stopped cleanly after `SIGTERM` or `SIGINT`; `healthcheck` got `200`; `version` and `admin init` printed their output; an admin command got `200` and printed the answer; `audit verify` verified every row and found every shipped head; `keys rotate` replaced the master key and printed both key ids; `backup verify` read a complete backup and every check passed. |
+| `1` | `serve` failed after its configuration was accepted: the [archive](#message-archive) or the [device store](#device-store) could not be opened or its lock was not acquired within five minutes, the device store could not be brought up to date, or a listener could not be opened (`startup_failed`), a listener failed while running (`listener_failed`), or shutdown ended with errors, for example when the grace period ran out. `healthcheck` failed for any reason, including extra arguments. `version` or `admin init` could not write to standard output. An admin command's request failed: no connection, no answer within 40 seconds, an answer over 64 KiB or not in the expected shape, a redirect, or any status other than those of codes `0`, `4` and `5`, such as `engine_unavailable` (`503`), `pair_failed` (`502`), `invalid_query` (`400`) or `internal_error` (`500`). `audit verify` could not open the copy, the master key file, the retired keys or the log. `keys rotate` was refused, because another process holds the archive's lock or a check of `keys/` failed, or could not write a key. `backup verify` was given a `--work-dir` that is not a private directory of its user or an `--extract-to` that exists, could not read standard input to the end, found it ended early (as after a failed or wrong-key decryption), could not write a database into the work directory or had too little space for it, or could not move the verified databases to `--extract-to`. |
+| `2` | `serve` refused to start (`startup_refused`, see [Startup refusals](#startup-refusals)). Or a usage error: an unknown subcommand, or an unknown flag or extra argument given to `serve`, `version`, `admin`, `audit`, `keys` or `backup`, an admin command without exactly one token source or with an empty `--token-file` or `--token-command`, an invalid `--addr`, a `clients create` without `--name` or with a chat value it cannot use, a `--id` that is not a client id, an `audit verify` without `--db` or `--master-key-file`, a `keys rotate` without `--data-dir`, or a `backup verify` without `--work-dir` or without `-` as its only argument; the usage text goes to standard error. |
 | `3` | An admin command could not use its token: the file or standard input could not be read, held more than 4096 bytes or was a terminal; the token command could not start, failed, timed out, left a process holding its output or printed more than 4096 bytes; or what it read is not an admin token. Nothing was sent. |
 | `4` | The admin listener refused the token: `401` (`unauthorized`), or `429` with `too_many_requests` (the failure budget is spent, see [Failed authentication](#failed-authentication)). |
 | `5` | The service refused the operation: `409` (`already_paired`, `already_connected`, `not_paired`, `owner_phone_missing`, `owner_mismatch` or `name_taken`), `422` (a [client refusal](#admin-routes)), `404` (`not_found`, such as an unknown client id) or `429` with `rate_limited`; see [Admin routes](#admin-routes). `clients create` also exits `5` when no chat has a reference it was given. |
-| `6` | `audit verify` read everything but found a row that does not verify or a shipped head that the copy lacks, or was given a `--log` that holds no chain head. `backup verify` read the stream but it is not a complete backup (a missing, extra, misnamed, oversized or non-regular member, an inconsistent manifest or data after the archive), or a database failed its integrity check, could not be counted, or has a schema version other than the manifest's or newer than this build reads. |
+| `6` | `audit verify` read everything but found a row or an audit anchor that does not verify or a shipped head that the copy lacks and the retention did not remove, or was given a `--log` that holds no chain head. `backup verify` read the stream but it is not a complete backup (a missing, extra, misnamed, oversized or non-regular member, an inconsistent manifest or data after the archive), or a database failed its integrity check, could not be counted, or has a schema version other than the manifest's or newer than this build reads. |
 
 `healthcheck` never exits `2`, because container runtimes reserve that code in
 health checks. A process stopped by a second signal during shutdown ends with
@@ -410,6 +486,7 @@ These are all the variables this build reads.
 | `WAWARDEN_BACKUP_AGE_RECIPIENT` | unset | The one [age](https://age-encryption.org) recipient that [backups](#backups) are encrypted to: an X25519 recipient (`age1` followed by 58 characters, as `age-keygen` prints it) or a post-quantum hybrid one (`age1pq1...`), with no white space, comment or second recipient. An SSH key, a plugin recipient or an age secret key is refused, and the refusal never repeats the value. Unset, no backup is ever taken and `backup_disabled` is logged at start. | `backup_recipient_invalid` |
 | `WAWARDEN_BACKUP_TIME` | `03:00` | The time of day, in UTC and written `HH:MM`, of the nightly [backup](#backups) slot. Only with `WAWARDEN_BACKUP_AGE_RECIPIENT`. | `backup_time_invalid`, `backup_option_without_recipient` |
 | `WAWARDEN_BACKUP_KEEP` | `14` | How many [backups](#backups) `backups/` keeps: after each successful backup, the oldest beyond this count, by the time in their names, are deleted. A whole number from 1 to 365. Only with `WAWARDEN_BACKUP_AGE_RECIPIENT`. | `backup_keep_invalid`, `backup_option_without_recipient` |
+| `WAWARDEN_AUDIT_RETENTION_DAYS` | `90` | How many days the [audit chain](#audit-chain) keeps its rows: each night, after the backup, rows written more than this many days before are removed behind a signed anchor. A whole number from 7 to 3650 in decimal digits; no value keeps rows forever. | `audit_retention_invalid` |
 | `WAWARDEN_READ_PER_CLIENT_PER_MINUTE` | `600` | Each client's [read budget](#read-rate-limits): requests per minute, from 1 to 600, refilled evenly with a burst of at most 60. Every authenticated client request, whatever its route or answer, costs one. | `read_per_minute_invalid` |
 | `WAWARDEN_SEARCH_PER_CLIENT_PER_MINUTE` | `60` | Each client's [search budget](#read-rate-limits): searches per minute, from 1 to 60, refilled evenly with a burst of at most 6. A search costs one from both budgets. | `search_per_minute_invalid` |
 | `WAWARDEN_UNSAFE_RATE_CAPS` | unset | `1` lifts the upper caps of the two read budgets to 1000000 per minute and logs `unsafe_rate_caps` at start; `0` or unset keeps them. Zero or a negative budget stays refused. | `unsafe_rate_caps_invalid` |
@@ -564,11 +641,27 @@ The checks run in this order:
 | 73 | `backup_time_invalid` | `WAWARDEN_BACKUP_TIME` | The value is not a time of day written `HH:MM` with two digits each, from `00:00` to `23:59`: it is empty, has one digit for the hour, seconds, a zone or another separator. |
 | 74 | `backup_keep_invalid` | `WAWARDEN_BACKUP_KEEP` | The value is not a whole number from 1 to 365 written in decimal digits: it is empty, `0`, above `365`, signed, has a leading zero or a unit. |
 | 75 | `backup_option_without_recipient` | `WAWARDEN_BACKUP_TIME`, or `WAWARDEN_BACKUP_KEEP` when only it is set | `WAWARDEN_BACKUP_TIME` or `WAWARDEN_BACKUP_KEEP` is set while `WAWARDEN_BACKUP_AGE_RECIPIENT` is not. |
+| 76 | `audit_retention_invalid` | `WAWARDEN_AUDIT_RETENTION_DAYS` | The value is not a whole number from 7 to 3650 written in decimal digits: it is empty, `0`, below 7, above 3650, signed, or has a leading zero, white space or a unit. |
+| 77 | `retired_keys_dir_unusable` | none; the error names `keys/retired/` | `keys/retired` exists but cannot be inspected or listed. |
+| 78 | `retired_keys_dir_not_directory` | none; the error names `keys/retired/` | `keys/retired` is not a directory, or is a symbolic link. |
+| 79 | `retired_keys_dir_foreign_owner` | none; the error names `keys/retired/` | `keys/retired` is not owned by the process's effective user ID. |
+| 80 | `retired_keys_dir_permissions` | none; the error names `keys/retired/` | The mode of `keys/retired` is not exactly `0700`. |
+| 81 | `retired_key_name` | none; the error names `keys/retired/` | An entry of `keys/retired` whose name does not start with `.` is not named by a key id: 8 lower-case hexadecimal digits. |
+| 82 | `retired_keys_too_many` | none; the error names `keys/retired/` | `keys/retired` holds more than 32 keys. |
+| 83 | `retired_key_unusable` | none; the error names the retired key | A retired key cannot be inspected, opened or read. |
+| 84 | `retired_key_not_regular` | none; the error names the retired key | A retired key is not a regular file: a symbolic link (even to a valid key) or a directory, for example. |
+| 85 | `retired_key_foreign_owner` | none; the error names the retired key | A retired key is not owned by the process's effective user ID. |
+| 86 | `retired_key_permissions` | none; the error names the retired key | A retired key grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 87 | `retired_key_size` | none; the error names the retired key | A retired key does not hold exactly 32 bytes. |
+| 88 | `retired_key_id_mismatch` | none; the error names the retired key | The key id derived from a retired key is not its name. |
+| 89 | `retired_key_current` | none; the error names the retired key | A retired key is the current master key, as a [`keys rotate`](#keys-rotate) interrupted before it replaced `keys/master` leaves it; run `keys rotate` again. |
 
-Checks 73 to 75 are appended to the table but run right after check 26, in that
-order, so a malformed value is refused before a missing recipient.
+Checks 73 to 76 are appended to the table but run right after check 26, in that
+order, so a malformed value is refused before a missing recipient. Checks 77 to
+89 run right after check 52, in that order, and only when `keys/retired` exists;
+checks 83 to 89 run for each retired key in turn, in order of name.
 When the data directory is missing, it is created only after checks 1 to 31 and
-73 to 75 pass, so a start refused by any of them leaves nothing behind. `history/` and
+73 to 76 pass, so a start refused by any of them leaves nothing behind. `history/` and
 `backups/` are checked only when they exist; `serve` creates neither at start (see
 [Data directory](#data-directory)). `keys/` and the master key are created, when
 missing, only after checks 32 to 43 pass, an empty `archive.db` only after
@@ -627,20 +720,25 @@ bytes. Right after the data directory checks, `serve`:
    cryptographic random source to a new temporary file `keys/.master-<random>`
    with mode `0600`, flushes it to disk, hard-links it as `keys/master`, removes
    the temporary name and flushes the directory. When two processes start at once,
-   the second link fails, and both use the key that was linked first. An existing
-   key is never replaced;
+   the second link fails, and both use the key that was linked first. `serve`
+   never replaces an existing key; only [`keys rotate`](#keys-rotate) does;
 4. checks `keys/master` (refusals 48 to 52): a regular file, not a symbolic link,
    owned by the effective user ID, without any permission for group or others and
    without the setuid, setgid or sticky bit, holding exactly 32 bytes. Mode `0600`
-   and mode `0400` are both accepted.
+   and mode `0400` are both accepted;
+5. when `keys/retired` exists, checks it and the retired keys in it (refusals 77
+   to 89): a directory, not a symbolic link, owned by the effective user ID, with
+   mode exactly `0700`, holding at most 32 keys besides names that start with
+   `.`, each named by its key id and checked as `keys/master` is, none of them
+   the current master key. `keys rotate` puts each master key it replaces there.
 
 The service derives every key it uses from the master key with HKDF-SHA256 (no
 salt, the information string `wawarden/v1/` followed by the purpose) and keeps
-only the derived keys:
+only the derived keys, of the master key and of each retired key:
 
 | Purpose | Length | Use in this build |
 |---|---|---|
-| `key-id` | 4 bytes | The key id: logged as 8 hexadecimal digits in the `keys_loaded` event, so that log lines can be grouped by the key their pseudonyms were made with. |
+| `key-id` | 4 bytes | The key id: logged as 8 hexadecimal digits in the `keys_loaded` event, so that log lines can be grouped by the key their pseudonyms were made with. It names a retired key's file, and the key of each audit row, of the audit anchor, and of each cursor and message reference. |
 | `log-redact` | 32 bytes | The key of the [log pseudonyms](#pseudonyms-and-dropped-lines). |
 | `chat-hmac` | 32 bytes | The `chat_hmac` of [audit lines](#audit-chain): the first 16 bytes of HMAC-SHA256 under this key over the chat's canonical identifier. No [notification event](#notifications) names a chat. |
 | `cursor-seal` | 32 bytes | Seals the `next` cursors of the [read API](#cursors-and-message-references). |
@@ -650,12 +748,19 @@ only the derived keys:
 Apart from the log pseudonyms, the chat HMACs and the chain heads of audit
 lines, the key id is the only value derived from the master key that the
 service writes out. No key reaches a log, an event, a
-metric or a response; the service writes the master key only to `keys/master`,
-through the temporary name in step 3, and never writes a derived key. Replacing or
+metric or a response; `serve` writes the master key only to `keys/master`,
+through the temporary name in step 3, [`keys rotate`](#keys-rotate) writes keys
+only to `keys/master` and `keys/retired/`, through temporary names, and neither
+writes a derived key. Replacing or
 deleting the master key changes the key id and every log pseudonym, and audit
 rows written afterwards carry the new key id, so `audit verify` reports the
-older rows as `unknown_key` unless it is given the old key: keep a copy of every
-master key the service ran with. This build has no command to rotate it. To provide your own key, write
+older rows as `unknown_key` unless it is given the old key as a retired key:
+keep a copy of every master key the service ran with.
+[`keys rotate`](#keys-rotate) replaces the master key and keeps the old one in
+`keys/retired/`. The service uses a retired key only to open what was sealed
+under it: a cursor or a message reference whose key id is a retired key's
+opens under that key, while everything new is sealed, chained and keyed under
+the master key. To provide your own key, write
 32 random bytes to `keys/master` with mode `0600` or `0400`, owned by the service's
 user, before the first start. A crash or power loss during the first start can
 leave a `keys/.master-<random>` file behind, with mode `0600`. It holds either an
@@ -773,7 +878,8 @@ queue, it holds:
   moves them from the phone number to the LID (see [Ingest](#ingest));
 - the audit table, whose rows triggers refuse to update or replace, and to
   delete unless the audit anchor covers the row and it is not the newest row.
-  No release writes the anchor yet, so every delete is refused.
+  Only the nightly [audit retention](#audit-chain) moves the anchor and
+  deletes rows.
 
 The [admin routes](#admin-routes) create and revoke clients, and each change
 appends a row to the [audit chain](#audit-chain). The engine writes saved
@@ -957,7 +1063,8 @@ and `manifest.json`. The manifest holds `format` (`1`), the build `version`, the
 `created` time in UTC and, for each database, its `name`, `schema_version` and
 size in `bytes`; it holds no identifier. The two databases hold everything the
 archive and the device store hold, the linked device's keys included. The
-[master key](#master-key) `keys/master` is not in a backup.
+[master key](#master-key) `keys/master` and the retired keys of `keys/retired/`
+are not in a backup.
 
 **Retention.** After each successful backup, and only then, the service keeps
 the newest `WAWARDEN_BACKUP_KEEP` backups (default `14`), ordered by the time in
@@ -1039,10 +1146,12 @@ into a stopped service:
    `0600`, keep the data directory at `0700`, and delete any
    `archive.db-journal` and `session.db-journal`. Never restore `backups/`
    itself.
-4. Restore the operator's own copy of `keys/master`, which no backup holds.
-   Without it the service creates a new master key: pseudonyms, cursors and
-   message references change, and audit rows written under the old key verify
-   as `unknown_key` (see [Master key](#master-key)).
+4. Restore the operator's own copy of `keys/master`, and of `keys/retired/`
+   when [`keys rotate`](#keys-rotate) ran, which no backup holds. Without the
+   master key the service creates a new one: pseudonyms, cursors and message
+   references change, and audit rows written under the old key verify as
+   `unknown_key` (see [Master key](#master-key)). `audit verify` of the
+   restored archive needs every key whose id its `key ids` line lists.
 5. Start the service.
 
 A restore takes the service back to the time of the backup:
@@ -2294,7 +2403,7 @@ notices of a [debug window](#protocol-library-logs). Lines in
 | Event | Level | Other keys | Written when |
 |---|---|---|---|
 | `startup_refused` | `ERROR` | `reason`, `error` | The configuration or the [master key](#master-key) is refused; exit `2`. |
-| `keys_loaded` | `INFO` | `key_id` | The master key is loaded and the log pseudonyms are keyed with it; `key_id` is the 8-digit key id, never a key. |
+| `keys_loaded` | `INFO` | `key_id`, `retired` | The master key is loaded and the log pseudonyms are keyed with it; `key_id` is the 8-digit key id, never a key, and `retired` the number of [retired keys](#master-key) loaded. |
 | `db_lock_wait` | `WARN` | `database` (`archive` or `session`), `within` | Another process holds the lock of the archive or the device store; `serve` retries until `within` (`5m0s`) has passed. Logged once per database and start. |
 | `archive_opened` | `INFO` | `schema_version`, `profile`, `ofd_locking`, `recent_starts` | The [archive](#message-archive) is open and locked. `ofd_locking` is `true` when open-file-description locks are in use, and `recent_starts` counts the starts of the last ten minutes, this one included, at most 64. |
 | `session_opened` | `INFO` | `paired` | The [device store](#device-store) is open, locked and up to date; `paired` is `true` when it holds a linked device. |
@@ -2332,6 +2441,7 @@ notices of a [debug window](#protocol-library-logs). Lines in
 | `backup_pruned` | `INFO`, at every log level | `removed`, `kept` | A [notification event](#notifications). |
 | `backup_prune_failed` | `WARN`, at every log level | `reason` | A [notification event](#notifications). |
 | `backup_skipped` | `INFO` | `reason`: `unchanged` | Neither database was written since this process's last [backup](#backups), so the nightly backup of this slot is skipped. Logged once per slot. |
+| `audit_pruned` | `INFO` | `through`, `rows`, `anchor_head` | The nightly [audit retention](#audit-chain) deleted `rows` audit rows; the audit anchor now names row `through`, and `anchor_head` is the first 16 bytes of that row's HMAC, as its line's `chain_head` was. Not logged when it deleted none. |
 | `history_blobs_pruned` | `INFO` | `rows` | The nightly prune deleted `rows` [history blob](#history-sync) rows processed more than 30 days before. Not logged when it deleted none. |
 | `ingest_resumed` | `INFO` | `free_bytes`, `floor_bytes` | The free space reached 1.25 times the floor again. |
 | `free_space_unknown` | `WARN` | `error_type` | The free space of the data directory could not be read. |
@@ -2343,13 +2453,15 @@ notices of a [debug window](#protocol-library-logs). Lines in
 | `unsafe_debug` | `WARN`, at every log level | `minutes`, `until` | `WAWARDEN_UNSAFE_DEBUG` opened a debug window at the start. |
 | `unsafe_rate_caps` | `WARN`, at every log level | `read_per_minute`, `search_per_minute` | `WAWARDEN_UNSAFE_RATE_CAPS=1` lifted the upper caps of the [read budgets](#read-rate-limits). Logged once per start. |
 | `unsafe_debug_ended` | `WARN`, at every log level | | The debug window has passed, and the protocol library's debug output is discarded again. Logged at the first debug line after the window. |
+| `audit_key_changed` | `INFO` or `WARN`, at every log level | `previous_key_id`, `key_id`, `previous_key` | A [notification event](#notifications). |
+| `audit_key_unread` | `WARN` | `error_type` | At start, the key id of the newest audit row could not be read, so `audit_key_changed` was not checked. |
 | `admin_mutation` | `INFO`, at every log level | `action`, `outcome` | A [notification event](#notifications). |
 | `admin_auth_failure` | `WARN`, at every log level | `count` | A [notification event](#notifications). |
 | `notify_failed` | `WARN`, at every log level | `attempts`, `reason`, `status` | The [webhook](#webhook) did not take an event, which is dropped. |
 | `notify_dropped` | `WARN`, at every log level | `count` | At shutdown, the [webhook](#webhook) dropped `count` events it had not delivered, and `serve` exits `1`. |
 | `emf_failed` | `WARN` | `error_type` | Writing the [embedded-metric-format](#embedded-metric-format) lines failed. |
 | `backup_disabled` | `WARN`, at every log level | | `WAWARDEN_BACKUP_AGE_RECIPIENT` is not set, or the [fake engine](#fake-engine) runs and opens no device store, so no [backup](#backups) is ever taken. Logged once per start. |
-| `backup_check_failed` | `WARN` | `error_type` | A step of the [backup](#backups) scheduler failed: reading or recording whether a backup is due, the prune of old backups (also reported as `backup_prune_failed`) or the prune of history blob rows; the scheduler runs again 30 seconds later. |
+| `backup_check_failed` | `WARN` | `error_type` | A step of the [backup](#backups) scheduler failed: reading or recording whether a backup is due, the prune of old backups (also reported as `backup_prune_failed`), the [audit retention](#audit-chain) or the prune of history blob rows; the scheduler runs again 30 seconds later. |
 | `audit` | none, written at every log level | `ts`, `client`, `action`, `chat_hmac`, `ok`, `reason`, `chain_head` | An [audit row](#audit-chain) was committed; the line has no `time`, `level` or `msg`. |
 
 What is never logged: requests (there is no access log), request bodies, header
@@ -2381,8 +2493,11 @@ code. The Go runtime writes crash output to standard error.
 
 The protocol library logs through an adapter into the same writer as every other
 line, as `whatsmeow_log` events: `module` names the library's component, such as
-`whatsmeow/Client/Socket`, and `detail` holds its formatted text after three
-changes. Every run of six or more digits, with `.` and `:` between them, that is
+`whatsmeow/Client/Socket`, and `detail` holds its formatted text after four
+changes. First every client or admin token in it is redacted as the writer
+does (see [Pseudonyms and dropped lines](#pseudonyms-and-dropped-lines)), so
+that masking its digits cannot leave the rest of its secret unrecognised. Then
+every run of six or more digits, with `.` and `:` between them, that is
 not directly followed by `@` becomes `[number]`, so that a phone number or a
 user-and-device address outside the `user@server` form does not pass; a run
 followed by `@` is an identifier, which the writer turns into a pseudonym. Then
@@ -2419,10 +2534,21 @@ changes described above apply to them like any other text.
 ### Pseudonyms and dropped lines
 
 Every line `serve` writes to standard output passes through one writer, which
-changes it in the three ways below before it is written. The writer writes a line
+changes it in the four ways below before it is written. The writer writes a line
 only when its newline arrives, so a line written in several pieces is checked as
 a whole, and a last line without a newline is never written. The loggers that
 feed the writer also write values fail-closed, as the last paragraph describes.
+
+**Tokens are redacted.** Every part of a line with the exact shape of a client
+token, `ww_`, the 8-character client id, `_`, 43 characters of `A` to `Z`, `a` to
+`z`, `0` to `9`, `_` and `-`, `_` and 8 lower-case hexadecimal digits, becomes
+`ww_<client id>_[redacted]`, and every part with the shape of an admin token,
+`wwadm_` and the same 43 characters, `_` and 8 hexadecimal digits, becomes
+`wwadm_[redacted]`. This runs before identifiers become pseudonyms, wherever
+the token stands in the line, also glued to other text, and the
+[protocol library's lines](#protocol-library-logs) get it before their numbers
+are masked. A token cut short, or otherwise not of that exact shape, is written
+as it is: nothing guesses at partial tokens.
 
 **Identifiers become pseudonyms.** Every part of a line shaped like a WhatsApp
 identifier is replaced by `jid:` and 8 lower-case hexadecimal digits. The shape is
@@ -2516,8 +2642,7 @@ answered `503` (`busy`) when that wait ran out and `500` (`internal_error`)
 otherwise. Triggers refuse
 to update a row, to delete one that the audit anchor does not cover or that is
 the newest row, or to insert one with the id of an existing row,
-which an `INSERT OR REPLACE` or a `REPLACE` would otherwise overwrite. No
-release writes the anchor yet, so every delete is refused.
+which an `INSERT OR REPLACE` or a `REPLACE` would otherwise overwrite.
 
 After the transaction commits, the service writes one line on standard output,
 through the same scrubbing writer as every log line:
@@ -2532,24 +2657,59 @@ is the first 16 bytes of the row's HMAC. The line names no chat, person or
 message, and the peer address stays in the archive.
 
 **What verification proves.** [`audit verify`](#audit-verify) recomputes every
-row's HMAC from a copy of the archive and the master key, and reports a row
-whose content, HMAC or id sequence was changed, a row removed from the middle
-(as an `id_gap` on the next row) and a row written under another key. The
+row's HMAC from a copy of the archive, the master key and the retired keys,
+each row under the key its key id names, and reports a row whose content, HMAC
+or id sequence was changed, a row removed from the middle (as an `id_gap` on
+the next row), a row written under a key it was not given, and an audit anchor
+that was changed, forged without a key, or removed with the rows after it
+(as an `id_gap` on the first retained row). The
 triggers do not stop someone who holds the database file, and whoever holds
 `keys/master` can recompute the whole chain after changing it, or remove rows
 from its end without leaving a trace in the table. The chain heads on standard
 output are the anchor against both: ship the service's standard output to a
 store the host cannot rewrite, and give a capture of it to `audit verify
 --log`, which reports every shipped head the copy lacks. Rows removed from the
-end of the chain are detectable only this way. The master key is not part of a
-[backup](#backups): keep a copy of it apart from the backups to verify them.
+end of the chain are detectable only this way. The master key and the retired
+keys are not part of a [backup](#backups): keep a copy of them apart from the
+backups to verify them.
 
-**Growth.** A row takes about 200 bytes. Client changes add a handful of rows;
-a client that reads continuously at the default read budget of 600 requests a
-minute adds about 170 MB a day, and each further client as much again. A
-request refused by the read budget adds no row. Nothing
-removes audit rows yet: retention and checkpoints are decided in a later
-release, and until then the table grows with the archive and its backups.
+**Retention.** Each night, once the [backup](#backups) of the night's slot is
+taken (at once when no backup recipient is configured, and never while that
+backup is still owed, though a slot skipped because nothing changed counts as
+taken), and first ten minutes after the backup scheduler's first check after
+a start, the service removes the rows written more than
+`WAWARDEN_AUDIT_RETENTION_DAYS` days before (90 by default, at least 7). It
+works from the oldest row, in transactions of at most 10,000 rows, each of
+which first moves the audit anchor to the last row it removes and then deletes
+the rows up to it, never the newest row; it stops when no older row is left or
+after 15 minutes, and goes on the next night. Rows are taken in id order, so a
+row whose time is a few seconds out of order goes with its neighbours. The
+anchor keeps the removed row's id, time, key id and HMAC, the time of the
+removal, the id of the current master key and an HMAC-SHA256, under that key's
+`audit-chain` key, over the domain string `wawarden/audit-anchor/v1`, a zero
+byte, the row's id, its time and the removal time as 8-byte big-endian
+integers, the key id with a presence byte and its length, and the row's HMAC.
+Triggers refuse to move the anchor back or to remove it. One `audit_pruned`
+line reports each night's removal. The verification starts from the anchor,
+and a shipped head older than the anchor counts as pruned, not missing; those
+rows can be checked only in a backup taken before they were removed, which is
+why the retention waits for the night's backup.
+
+**Key changes.** After [`keys rotate`](#keys-rotate) or a replaced master key,
+rows keep the key id they were written under, and the first start with the
+new key emits `audit_key_changed` (see [Notifications](#notifications)) until
+a row is written under it. `audit verify` needs the retired keys to verify the
+older rows and an anchor made under an older key; the next removal makes the
+anchor again under the current key.
+
+**Growth.** A row takes about 150 bytes of the archive, measured over ten
+million rows. Client changes add a handful of rows; a client that reads
+continuously at the default read budget of 600 requests a minute adds 864,000
+rows, about 131 MB, a day, and each further client as much again, so the
+default retention of 90 days holds up to about 12 GB per such client; at 6
+requests a minute it is about 118 MB. A request refused by the read budget
+adds no row. The archive file does not shrink when rows are removed: later
+rows reuse the freed pages.
 
 ## Notifications
 
@@ -2573,12 +2733,15 @@ the [webhook](#webhook).
 | `backup_failed` | `WARN` | `reason` | A [backup](#backups) failed and what it had written was removed; `reason` as in the table under [Backups](#backups). It is reported on every failure, retries included. |
 | `backup_pruned` | `INFO` | `removed`, `kept` | After a successful [backup](#backups), backups beyond `WAWARDEN_BACKUP_KEEP` were deleted: `removed` files, `kept` remain. Not reported when nothing was deleted. |
 | `backup_prune_failed` | `WARN` | `reason`: `directory`, `unexpected_entry`, `remove`, `sync` | Deleting old backups failed or was refused; see [Retention](#backups). |
+| `audit_key_changed` | `INFO` when `previous_key` is `retired`, `WARN` otherwise | `previous_key_id`, `key_id`, `previous_key`: `retired`, `missing` | At start, the newest [audit row](#audit-chain) carries the key id `previous_key_id`, not the master key's `key_id`, as after [`keys rotate`](#keys-rotate) or a replaced master key. `previous_key` is `retired` when that key is in `keys/retired/`, and `missing` when it is not, so `audit verify` will report the rows written under it as `unknown_key` unless it is given a copy. Reported at each start until a row is written under the master key. |
 | `admin_auth_failure` | `WARN` | `count` | Authentication failed on the admin listener. The first failure is reported at once with `count` `1`; further failures within the next minute are held back, and reported together once the minute has passed, within ten seconds, or at shutdown. `count` is the number of failures since the previous `admin_auth_failure`. |
 
 No event carries an identifier, a name, message text, a token, a key or a
 pairing code. Every value is a number or a fixed code: a value that is not a
-lower-case code of at most 64 characters (or, for `error_type`, a Go type name)
-is written as `invalid`. For example:
+lower-case code of at most 64 characters (or, for `error_type`, a Go type name,
+and for `previous_key_id` and `key_id`, 8 lower-case hexadecimal digits) is
+written as `invalid`. A key id is the 4-byte `key-id` value derived from a
+master key, already logged by `keys_loaded`; it is not a key. For example:
 
 ```json
 {"time":"2026-10-05T08:12:40.002931604Z","level":"WARN","msg":"the engine is disconnected from WhatsApp","event":"disconnected","reason":"replaced"}
