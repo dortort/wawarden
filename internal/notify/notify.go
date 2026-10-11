@@ -15,17 +15,19 @@ import (
 )
 
 const (
-	EventAdminMutation    = "admin_mutation"
-	EventAdminAuthFailure = "admin_auth_failure"
-	EventUnpaired         = "unpaired"
-	EventDisconnected     = "disconnected"
-	EventPairRejected     = "pair_rejected"
-	EventLogoutFailed     = "logout_failed"
-	EventQuarantine       = "quarantine"
-	EventRekeyConflict    = "rekey_conflict"
-	EventIngestPaused     = "ingest_paused"
-	EventBackupDone       = "backup_done"
-	EventBackupFailed     = "backup_failed"
+	EventAdminMutation     = "admin_mutation"
+	EventAdminAuthFailure  = "admin_auth_failure"
+	EventUnpaired          = "unpaired"
+	EventDisconnected      = "disconnected"
+	EventPairRejected      = "pair_rejected"
+	EventLogoutFailed      = "logout_failed"
+	EventQuarantine        = "quarantine"
+	EventRekeyConflict     = "rekey_conflict"
+	EventIngestPaused      = "ingest_paused"
+	EventBackupDone        = "backup_done"
+	EventBackupFailed      = "backup_failed"
+	EventBackupPruned      = "backup_pruned"
+	EventBackupPruneFailed = "backup_prune_failed"
 )
 
 const (
@@ -162,6 +164,15 @@ func (n *Notifier) BackupDone(bytes, archiveBytes, sessionBytes int64, took time
 
 func (n *Notifier) BackupFailed(reason string) {
 	n.emit(slog.LevelWarn, "a backup failed and its partial output was removed", EventBackupFailed, code("reason", reason))
+}
+
+func (n *Notifier) BackupPruned(removed, kept int) {
+	n.emit(slog.LevelInfo, "backups beyond the retained count were deleted", EventBackupPruned,
+		slog.Int("removed", removed), slog.Int("kept", kept))
+}
+
+func (n *Notifier) BackupPruneFailed(reason string) {
+	n.emit(slog.LevelWarn, "old backups were not deleted", EventBackupPruneFailed, code("reason", reason))
 }
 
 func (n *Notifier) AdminMutation(action, outcome string) {

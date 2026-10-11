@@ -102,6 +102,8 @@ func TestEveryEventIsOneLineWithAFixedSetOfFields(t *testing.T) {
 		{event: EventBackupDone, level: "INFO", fire: func(n *Notifier) { n.BackupDone(4096, 8192, 2048, 1500*time.Millisecond) },
 			fields: map[string]any{"bytes": float64(4096), "archive_bytes": float64(8192), "session_bytes": float64(2048), "duration_ms": float64(1500)}},
 		{event: EventBackupFailed, level: "WARN", fire: func(n *Notifier) { n.BackupFailed("archive") }, fields: map[string]any{"reason": "archive"}},
+		{event: EventBackupPruned, level: "INFO", fire: func(n *Notifier) { n.BackupPruned(3, 14) }, fields: map[string]any{"removed": float64(3), "kept": float64(14)}},
+		{event: EventBackupPruneFailed, level: "WARN", fire: func(n *Notifier) { n.BackupPruneFailed("unexpected_entry") }, fields: map[string]any{"reason": "unexpected_entry"}},
 		{event: EventAdminMutation, level: "INFO", fire: func(n *Notifier) { n.AdminMutation("pair", "already_paired") }, fields: map[string]any{"action": "pair", "outcome": "already_paired"}},
 		{event: EventAdminAuthFailure, level: "WARN", fire: (*Notifier).AdminAuthFailure, fields: map[string]any{"count": float64(1)}},
 	}
@@ -132,7 +134,8 @@ func TestEveryEventIsOneLineWithAFixedSetOfFields(t *testing.T) {
 		})
 	}
 	for _, event := range []string{EventAdminMutation, EventAdminAuthFailure, EventUnpaired, EventDisconnected, EventPairRejected,
-		EventLogoutFailed, EventQuarantine, EventRekeyConflict, EventIngestPaused, EventBackupDone, EventBackupFailed} {
+		EventLogoutFailed, EventQuarantine, EventRekeyConflict, EventIngestPaused, EventBackupDone, EventBackupFailed, EventBackupPruned,
+		EventBackupPruneFailed} {
 		if !seen[event] {
 			t.Errorf("no case for %s", event)
 		}
@@ -150,6 +153,7 @@ func TestValuesThatAreNotCodesNeverLeave(t *testing.T) {
 		n.AdminMutation(v, v)
 		n.LogoutFailed(1, v)
 		n.BackupFailed(v)
+		n.BackupPruneFailed(v)
 	}
 	if strings.Contains(out.String(), canary) || strings.Contains(out.String(), "Alice") || strings.Contains(out.String(), "Logged_Out") {
 		t.Fatalf("a value that is not a code reached the output:\n%s", out)
