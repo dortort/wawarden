@@ -53,6 +53,7 @@ type App struct {
 	logger      *slog.Logger
 	ready       atomic.Bool
 	archive     *ingest.Store
+	master      *keys.Master
 	session     deviceStore
 	engine      *engine.Engine
 	notify      *notify.Notifier
@@ -144,7 +145,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 		slog.Int("schema_version", archive.SchemaVersion()), slog.String("profile", string(archive.Profile())),
 		slog.Bool("ofd_locking", archive.OFDLocking()), slog.Int("recent_starts", starts))
 
-	a := &App{logger: logger, archive: archive, notify: notifier, emfEvery: emfInterval, backupEvery: backupInterval, starts: starts, grace: shutdownGrace}
+	a := &App{logger: logger, archive: archive, master: master, notify: notifier, emfEvery: emfInterval, backupEvery: backupInterval, starts: starts, grace: shutdownGrace}
 	if cfg.MetricsEMF {
 		a.emf = metrics.NewEMF(reg, out, time.Now)
 	}
@@ -252,6 +253,24 @@ func (a *App) healthy() bool {
 	return a.ready.Load() && a.archive.Healthy() && (a.session == nil || a.session.Healthy())
 }
 
+func (a *App) announceKeyChange(ctx context.Context) {
+	if a.master == nil {
+		return
+	}
+	id, ok, err := a.archive.NewestAuditKeyID(ctx)
+	switch {
+	case err != nil:
+		a.logger.Warn("the key id of the newest audit row cannot be read", slog.String("event", "audit_key_unread"), slog.String("error_type", fmt.Sprintf("%T", err)))
+	case !ok || id == a.master.ID():
+	default:
+		previous := "missing"
+		if _, retired := a.master.Lookup(id); retired {
+			previous = "retired"
+		}
+		a.notify.AuditKeyChanged(id, a.master.ID(), previous)
+	}
+}
+
 func (a *App) closeStores() error {
 	err := a.archive.Close()
 	if a.session != nil {
@@ -266,6 +285,7 @@ func (a *App) Inventory() []listeners.Bound {
 
 func (a *App) Run(ctx context.Context) error {
 	a.notify.Start(context.WithoutCancel(ctx))
+	a.announceKeyChange(ctx)
 	a.engine.Start(context.WithoutCancel(ctx), a.starts)
 	emitting, stopEmitting := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopEmitting()
