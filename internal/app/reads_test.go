@@ -2,9 +2,11 @@ package app
 
 import (
 	"net/http"
+	"os"
 	"testing"
 
 	"github.com/dortort/wawarden/internal/cursor"
+	"github.com/dortort/wawarden/internal/keys"
 	"github.com/dortort/wawarden/internal/token"
 )
 
@@ -44,6 +46,63 @@ func TestSealersUseTheCursorAndMessageReferenceKeys(t *testing.T) {
 		if _, err := s.OpenRef("aaaaaaaa", sealedRef); (err == nil) != (name == "message ref") {
 			t.Errorf("the %s key opens the message reference: %v", name, err == nil)
 		}
+	}
+}
+
+func rotatedMasters(t *testing.T) (previous, current *keys.Master) {
+	t.Helper()
+	dir := t.TempDir()
+	previous, r := keys.Load(dir, os.Geteuid())
+	if r != nil {
+		t.Fatalf("Load: %v", r)
+	}
+	if _, _, r := keys.Rotate(dir, os.Geteuid(), func() error { return nil }); r != nil {
+		t.Fatalf("Rotate: %v", r)
+	}
+	if current, r = keys.Load(dir, os.Geteuid()); r != nil {
+		t.Fatalf("Load: %v", r)
+	}
+	return previous, current
+}
+
+func TestSealersOpenWhatTheRetiredKeysSealed(t *testing.T) {
+	previous, current := rotatedMasters(t)
+	oldCursors, oldRefs, err := sealers(previous)
+	if err != nil {
+		t.Fatalf("sealers: %v", err)
+	}
+	binding := cursor.Binding{Client: "aaaaaaaa", Endpoint: "chats"}
+	r := cursor.Ref{Chat: "120363000000000001@g.us", ID: "SYNTHETIC", Sender: "15550100001@s.whatsapp.net"}
+	sealedCursor, err := oldCursors.Cursor(binding, cursor.Position{1, 2, 3})
+	if err != nil {
+		t.Fatalf("Cursor: %v", err)
+	}
+	sealedRef, err := oldRefs.SealRef("aaaaaaaa", r)
+	if err != nil {
+		t.Fatalf("SealRef: %v", err)
+	}
+	cursors, refs, err := sealers(current)
+	if err != nil {
+		t.Fatalf("sealers: %v", err)
+	}
+	if p, err := cursors.OpenCursor(binding, sealedCursor); err != nil || p != (cursor.Position{1, 2, 3}) {
+		t.Fatalf("a cursor from before the rotation opened to %v, %v", p, err)
+	}
+	if got, err := refs.OpenRef("aaaaaaaa", sealedRef); err != nil || got != r {
+		t.Fatalf("a message reference from before the rotation opened to %+v, %v", got, err)
+	}
+	if _, err := refs.OpenCursor(binding, sealedCursor); err == nil {
+		t.Fatal("the reference sealer opened a cursor sealed under the retired cursor key")
+	}
+	if _, err := cursors.OpenRef("aaaaaaaa", sealedRef); err == nil {
+		t.Fatal("the cursor sealer opened a reference sealed under the retired reference key")
+	}
+	again, err := refs.SealRef("aaaaaaaa", r)
+	if err != nil || again == sealedRef {
+		t.Fatalf("the reference sealer sealed %q, %v; want new text under the current key", again, err)
+	}
+	if _, err := oldRefs.OpenRef("aaaaaaaa", again); err == nil {
+		t.Fatal("a reference sealed after the rotation opens under the retired key")
 	}
 }
 

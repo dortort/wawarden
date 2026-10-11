@@ -21,10 +21,15 @@ func sealers(master *keys.Master) (cursors, refs *cursor.Sealer, err error) {
 	if master == nil {
 		return nil, nil, nil
 	}
-	if cursors, err = cursor.New(master.CursorSealKey(), master.ID()); err != nil {
+	var retiredCursors, retiredRefs []cursor.Retired
+	for _, k := range master.Retired() {
+		retiredCursors = append(retiredCursors, cursor.Retired{Key: k.CursorSealKey(), ID: k.ID()})
+		retiredRefs = append(retiredRefs, cursor.Retired{Key: k.MessageRefKey(), ID: k.ID()})
+	}
+	if cursors, err = cursor.New(master.CursorSealKey(), master.ID(), retiredCursors...); err != nil {
 		return nil, nil, err
 	}
-	if refs, err = cursor.NewRef(master.MessageRefKey(), master.ID()); err != nil {
+	if refs, err = cursor.NewRef(master.MessageRefKey(), master.ID(), retiredRefs...); err != nil {
 		return nil, nil, err
 	}
 	return cursors, refs, nil
