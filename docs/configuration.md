@@ -2698,9 +2698,9 @@ rows can be checked only in a backup taken before they were removed, which is
 why the retention waits for the night's backup.
 
 **Key changes.** After [`keys rotate`](#keys-rotate) or a replaced master key,
-rows keep the key id they were written under, and the first start with the
-new key emits `audit_key_changed` (see [Notifications](#notifications)) until
-a row is written under it. `audit verify` needs the retired keys to verify the
+rows keep the key id they were written under, and each start with the new
+key emits `audit_key_changed` (see [Notifications](#notifications)) until a
+row is written under it. `audit verify` needs the retired keys to verify the
 older rows and an anchor made under an older key; the next removal makes the
 anchor again under the current key.
 
