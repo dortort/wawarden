@@ -79,10 +79,16 @@ func usageError(stderr io.Writer) int {
 
 func serve(ctx context.Context, args, environ []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
-	flags.SetOutput(stderr)
+	flags.SetOutput(io.Discard)
 	flags.Usage = func() {}
 	allowRoot := flags.Bool("allow-root", false, "permit running as UID 0")
-	if err := flags.Parse(args); err != nil || flags.NArg() > 0 {
+	if err := flags.Parse(args); err != nil {
+		if !errors.Is(err, flag.ErrHelp) {
+			_, _ = fmt.Fprintln(stderr, "serve:", flagProblem(flags, err))
+		}
+		return usageError(stderr)
+	}
+	if flags.NArg() > 0 {
 		return usageError(stderr)
 	}
 

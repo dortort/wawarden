@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -68,7 +69,7 @@ func audit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if *logPath != "" {
 		var err error
 		if heads, err = shippedHeads(*logPath); err != nil {
-			_, _ = fmt.Fprintln(stderr, "audit verify: the log cannot be read:", err)
+			_, _ = fmt.Fprintln(stderr, "audit verify: the log cannot be read:", withoutPath(err))
 			return exitFailed
 		}
 	}
@@ -129,6 +130,13 @@ func audit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return exitUnverified
 	}
 	return 0
+}
+
+func withoutPath(err error) error {
+	if pe, ok := errors.AsType[*fs.PathError](err); ok {
+		return pe.Err
+	}
+	return err
 }
 
 func shippedHeads(path string) ([]adminstore.Head, error) {
