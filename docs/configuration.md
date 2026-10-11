@@ -885,6 +885,8 @@ original still runs: both would act as the same linked device.
 
 The engine links the service to WhatsApp as a companion device, keeps the
 connection, and writes what arrives into the [message archive](#message-archive).
+It can also send a text message and ask the owner's phone for older history,
+as [What a send does on the wire](#what-a-send-does-on-the-wire) describes.
 It talks to WhatsApp through an adapter over the WhatsApp protocol library,
 `go.mau.fi/whatsmeow`, which keeps the linked device in the
 [device store](#device-store).
@@ -905,7 +907,7 @@ engine: an unpaired or disconnected engine still answers `200`.
 |---|---|
 | `unpaired` | No device is linked; the engine waits for pairing. |
 | `connecting` | The engine is fetching the protocol version, connecting, or waiting before it reconnects. |
-| `connected` | The engine is connected and receiving. |
+| `connected` | The engine is connected and receiving. Only in this state, with a paired device and a connection that the protocol library reports as logged in, does it send a message or a history request. |
 | `disconnected` | The engine is not connected and does not reconnect on its own. The reason is one of `outdated`, `replaced`, `logged_out`, `temporary_ban`, `cat_refresh`, `connect_failure`, `restart_budget`, `owner_mismatch` or `shutdown`. |
 
 Every change is logged as `engine_state`; entering `disconnected` for any reason
@@ -1185,6 +1187,14 @@ decompressed when it is larger than `WAWARDEN_HISTORY_MAX_BYTES`, and gets its
 receipt when the engine takes it up. After a restart, the receipt of a blob that is still waiting
 is sent again.
 
+The owner's phone answers a [history request](#what-a-send-does-on-the-wire)
+with a notification of the same kind, which the engine accepts only from the
+primary device and takes up the same way. The archive's record of every
+notification keeps its sync type and the request id it names, if any. When the
+engine marks an on-demand blob processed, it marks the history request with
+that id complete in the same transaction; a blob of another sync type, or one
+that names no request, completes none.
+
 The download goes through the protocol library, which asks WhatsApp for the
 media hosts, fetches the encrypted blob over an HTTP client of the adapter's,
 with timeouts, no proxy, no redirect and a response cap of
@@ -1252,9 +1262,78 @@ without a setting to stop it:
   the owner's phone says it changed;
 - session telemetry once, after pairing.
 
+Around a send it also sends, by itself:
+
+- before the message, queries for the recipient's devices or the group's
+  members, a query for the account behind a phone number whose LID it does not
+  know, and fetches of pre-keys for the devices it has no session with;
+- with a direct message, the contact's stored privacy token or a token it
+  derives, and after it, when a new seven-day period has begun since its last
+  update for that contact, a privacy-token update naming the contact;
+- answers to retry receipts from a recipient's device that cannot decrypt a
+  sent message: it encrypts the message again from a memory cache of the last
+  256 sent messages, whose text stays in the process's memory until it leaves
+  the cache; a message older than that, or sent before a restart, is not sent
+  again.
+
 It never sends read receipts, presence, typing indicators or status updates on
 its own, and WaWarden never asks it to: an architecture test refuses those
 calls.
+
+### What a send does on the wire
+
+A send carries one text message. The adapter builds the recipient from the
+chat's canonical identifier, a phone number (`<digits>@s.whatsapp.net`), a LID
+(`<digits>@lid`) or a group (`<id>@g.us`) without a device part, and refuses
+any other form before the protocol library sees it. The library may still
+address a phone number by the LID it knows for it, from its own store or by
+asking WhatsApp; the adapter reports the sent message under the requested
+chat whatever the library chose. Plain text goes out as a plain message. A
+reply, or a message to a chat with a disappearing timer, goes out as an
+extended text message whose context names the quoted message's id and sender
+and carries the quoted text only, never media, and the timer in whole seconds;
+it never names another chat.
+A direct message is also encrypted for the owner's other devices.
+
+The library waits at most 12 seconds for WhatsApp's acknowledgement, and the
+adapter gives the whole call a deadline of 20 seconds. The caller's
+cancellation never reaches the library, so a client that goes away cannot cut
+a send short. When the connection drops before the acknowledgement and comes
+back within 5 seconds, the library writes the message again under the same id;
+the engine itself never sends a message twice.
+
+Apart from the busy refusal below, a send ends in one of five outcomes:
+
+| Outcome | When |
+|---|---|
+| sent | WhatsApp acknowledged the message; its time is the server's, or the service's clock when the server named none. |
+| not connected | Nothing was written: the engine was not connected or not paired, the connection was not logged in, or it was gone before the message was written. |
+| recipient unavailable | The account is not a member of the group, or the group does not exist; nothing was written. |
+| rejected | WhatsApp answered with an error, whose number is kept, or the request could not be built: a malformed chat, quote or timer, an empty id or text, or no encryption session with a device. |
+| unknown | The message was written and no acknowledgement came: a timeout, a drop, the deadline, or a panic; and any error the adapter cannot place. |
+
+The protocol library's own error text never leaves the adapter, so no outcome
+carries a chat identifier. The adapter reports the owner's LID as the sender
+of a message to a chat keyed by LID and the owner's phone number otherwise,
+never with a device part and never the sender the library names: the forms
+the protocol library gives the owner's messages when it reads them from
+history. When a connection opens with both known, the engine records the
+owner's phone number and LID as a pair, with source `self`, so that the owner's
+messages in either form belong to one sender; a pair that contradicts the
+archive is refused with the `rekey_conflict` event like any other. An identity
+that is not the configured owner's is dropped and counted as `owner_unknown`,
+a malformed one as `invalid`.
+
+The engine sends one message at a time and queues none: while a send or a
+history request runs, another is refused at once as busy. A running call holds
+its place for at most the 20-second deadline.
+
+A history request asks the owner's primary device for up to 50 messages of a
+chat that come before a given message, through a message to the owner's
+primary device, under the same deadline and the same outcomes. WhatsApp's
+acknowledgement means only that the request was accepted for delivery: the
+phone answers when it processes the request, with a
+[history notification](#history-sync).
 
 ### Fake engine
 
@@ -1295,13 +1374,26 @@ whether it pairs the wrong account.
   primary device), a blob that inflates past `WAWARDEN_HISTORY_MAX_BYTES`, and
   a poison blob that the fake's decoder refuses. The last two fail three times
   and are quarantined, each with a `quarantine` event.
+- **Identity.** The script opens with the owner's identity: the owner's number
+  paired with the synthetic LID `100000000000020@lid`.
+- **Sends and history requests.** While connected for the owner, a send to
+  `+15550100021` or `+15550100022`, by phone number or by their synthetic LIDs,
+  is acknowledged with the owner's identity as sender; a send to `+15550100023`
+  ends with an unknown outcome; a send to the synthetic group or to any other
+  chat ends with recipient unavailable; and while not connected, nothing is
+  sent. A history request for a synthetic chat returns a request id, and a
+  tenth of a second later the fake delivers an on-demand history notification
+  naming it, whose blob holds as many older synthetic messages as requested,
+  offered again until the engine accepts it. The fake keeps the sends that
+  reached its wire in memory, for tests of development builds.
 
 When the script has played, within about 15 seconds of pairing, the fake stays
 connected and sends nothing more: `wawarden admin status` reports `connected`,
 3 chats, 17 messages and 2 history blobs quarantined. Every identity the fake
 uses is synthetic: its contacts are `+15550100021`, `+15550100022` and
-`+15550100023`, and an owner number among them, or `+15550100029`, stops the
-start with `startup_failed`.
+`+15550100023`, its LIDs are `100000000000020` to `100000000000022`, and an
+owner number among the contacts, or `+15550100029`, stops the start with
+`startup_failed`.
 
 Release builds do not contain the fake: its package compiles only with the
 `dev` tag; the dev-only-fake-engine architecture rule refuses any file of the
