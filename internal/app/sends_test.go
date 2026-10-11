@@ -203,7 +203,7 @@ func TestPendingSendsFailAtStartAndAreReported(t *testing.T) {
 	g, _ := policy.DecideWrite(&policy.Client{ID: "aaaaaaaa", Write: map[policy.CanonicalChat]struct{}{alice: {}}, ExpiresAt: time.Now().Add(time.Hour)}, time.Now())
 	for _, k := range []string{"pending-key-01", "pending-key-02"} {
 		key, _ := ingest.ParseKey(k)
-		if _, err := a.archive.ReserveSend(g, t.Context(), ingest.SendReservation{Key: key, Chat: alice, MsgID: "3EB0" + k, Now: time.Now(),
+		if _, err := a.archive.ReserveSend(g, t.Context(), ingest.SendReservation{Key: key, Chat: alice, MsgID: "3EB0" + k, Clock: time.Now,
 			Limits: ingest.SendLimits{PerMinute: 10, GlobalPerHour: 30, Holders: 1}, Ready: func() bool { return true }}); err != nil {
 			t.Fatalf("ReserveSend: %v", err)
 		}
@@ -224,7 +224,7 @@ func TestPendingSendsFailAtStartAndAreReported(t *testing.T) {
 	key, _ := ingest.ParseKey("pending-key-01")
 	reopened, _ := open(t, cfg, noClients{})
 	defer func() { _ = reopened.closeStores() }()
-	res, err := reopened.archive.ReserveSend(g, t.Context(), ingest.SendReservation{Key: key, Chat: alice, MsgID: "3EB0X", Now: time.Now(),
+	res, err := reopened.archive.ReserveSend(g, t.Context(), ingest.SendReservation{Key: key, Chat: alice, MsgID: "3EB0X", Clock: time.Now,
 		Limits: ingest.SendLimits{PerMinute: 10, GlobalPerHour: 30, Holders: 1}, Ready: func() bool { return true }})
 	if err != nil || res.Kind != ingest.ReplayedFailed || res.Code != ingest.CodeUnknown {
 		t.Fatalf("the recovered key replays %+v, %v, want the outcome unknown", res, err)

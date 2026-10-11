@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -43,10 +44,12 @@ func key(t *testing.T, s string) Key {
 	return k
 }
 
+func clockAt(at time.Time) func() time.Time { return func() time.Time { return at } }
+
 func request(t *testing.T, k, chatJID, text string, at time.Time) SendReservation {
 	t.Helper()
 	return SendReservation{Key: key(t, k), Chat: chat(t, chatJID), Fingerprint: Fingerprint("ref:"+chatJID, text, nil), MsgID: "MSG-" + k,
-		Now: at, Limits: defaultLimits, Ready: func() bool { return true }}
+		Clock: clockAt(at), Limits: defaultLimits, Ready: func() bool { return true }}
 }
 
 func reserved(t *testing.T, s *Store, g policy.WriteGrant, in SendReservation) {
@@ -132,6 +135,34 @@ func TestEightReservationsOfOneKeyProceedOnce(t *testing.T) {
 	}
 }
 
+func TestTheReservationReadsItsClockOnceItHoldsTheArchive(t *testing.T) {
+	s := inboundStore(t)
+	g := grantFor(t, writerID, false, alice)
+	var holding atomic.Bool
+	held, release := make(chan struct{}), make(chan struct{})
+	go func() {
+		_ = s.Write(t.Context(), "test.hold", func(*Tx) error {
+			holding.Store(true)
+			close(held)
+			<-release
+			holding.Store(false)
+			return nil
+		})
+	}()
+	<-held
+	time.AfterFunc(100*time.Millisecond, func() { close(release) })
+	in := request(t, "held-key-01", alice, "synthetic", epoch)
+	var early atomic.Bool
+	in.Clock = func() time.Time {
+		early.Store(early.Load() || holding.Load())
+		return epoch
+	}
+	reserved(t, s, g, in)
+	if early.Load() {
+		t.Fatal("the reservation read its clock while another write held the archive")
+	}
+}
+
 func TestReplaysFollowTheLedger(t *testing.T) {
 	s := inboundStore(t)
 	g := grantFor(t, writerID, false, alice)
@@ -143,7 +174,7 @@ func TestReplaysFollowTheLedger(t *testing.T) {
 	if row.Chat != chat(t, alice) || row.ID != done.MsgID || row.Sender != chat(t, ownerJID) || !row.Inserted {
 		t.Fatalf("SettleSend = %+v", row)
 	}
-	done.Now = epoch.Add(time.Minute)
+	done.Clock = clockAt(epoch.Add(time.Minute))
 	if res := replay(t, s, g, done); res.Kind != ReplayedDone || res.MsgID != done.MsgID || res.Status != 201 || !res.AckedAt.Equal(at) ||
 		res.Sent != (SentRow{Chat: row.Chat, ID: row.ID, Sender: row.Sender}) {
 		t.Fatalf("replay of a done send = %+v", res)
@@ -168,7 +199,7 @@ func TestReplaysFollowTheLedger(t *testing.T) {
 		{rejected, 502, 403, CodeRejected, `failed {"status":502,"code":"send_rejected","wa":403} 1`},
 		{unknown, 504, 0, CodeUnknown, `failed {"status":504,"code":"send_outcome_unknown"} 1`},
 	} {
-		tt.in.Now = epoch.Add(time.Hour)
+		tt.in.Clock = clockAt(epoch.Add(time.Hour))
 		if res := replay(t, s, g, tt.in); res.Kind != ReplayedFailed || res.Status != tt.status || res.Code != tt.code || res.WACode != tt.wa || res.MsgID != tt.in.MsgID {
 			t.Fatalf("replay of a failed send = %+v, want %d %s", res, tt.status, tt.code)
 		}
@@ -202,23 +233,23 @@ func TestAPendingKeyAnswersInProgressUntilItsLeaseEnds(t *testing.T) {
 		{30 * time.Second, time.Second},
 		{SendLease - time.Millisecond, time.Second},
 	} {
-		in.Now = epoch.Add(tt.age)
+		in.Clock = clockAt(epoch.Add(tt.age))
 		if res := replay(t, s, g, in); res.Kind != InProgress || res.RetryAfter != tt.want || res.MsgID != in.MsgID {
 			t.Fatalf("replay at %v = %+v, want in progress, retry after %v", tt.age, res, tt.want)
 		}
 	}
-	in.Now = epoch.Add(SendLease)
+	in.Clock = clockAt(epoch.Add(SendLease))
 	if res := replay(t, s, g, in); res.Kind != LeaseExpired || res.Status != 504 || res.Code != CodeUnknown || res.MsgID != in.MsgID {
 		t.Fatalf("replay at the lease = %+v, want the outcome unknown", res)
 	}
 	if got := ledger(t, s, writerID, "lease-key-1"); got != `failed {"status":504,"code":"send_outcome_unknown"} 1` {
 		t.Fatalf("ledger after the lease = %q", got)
 	}
-	in.Now = epoch.Add(SendLease + time.Second)
+	in.Clock = clockAt(epoch.Add(SendLease + time.Second))
 	if res := replay(t, s, g, in); res.Kind != ReplayedFailed || res.Status != 504 || res.Code != CodeUnknown {
 		t.Fatalf("replay after the lease = %+v", res)
 	}
-	if _, err := s.SettleSend(g, t.Context(), Settlement{Key: in.Key, Outcome: SendAcked, Now: in.Now, AckedAt: in.Now, Sent: sentText(t, alice, in.MsgID, ownerJID, in.Now)}); !errors.Is(err, ErrNotPending) {
+	if _, err := s.SettleSend(g, t.Context(), Settlement{Key: in.Key, Outcome: SendAcked, Now: in.Clock(), AckedAt: in.Clock(), Sent: sentText(t, alice, in.MsgID, ownerJID, in.Clock())}); !errors.Is(err, ErrNotPending) {
 		t.Fatalf("a late ack = %v, want ErrNotPending", err)
 	}
 	if n := scalar[int](t, s, "SELECT count(*) FROM messages WHERE id = ?", in.MsgID); n != 0 {
@@ -283,7 +314,7 @@ func TestSendRecordsExpireAfterADay(t *testing.T) {
 	if swept != 0 {
 		t.Fatalf("SweepSends before expiry removed %d rows", swept)
 	}
-	reused.Now = epoch.Add(SendTTL)
+	reused.Clock = clockAt(epoch.Add(SendTTL))
 	reserved(t, s, g, reused)
 	write(t, s, func(tx *Tx) error {
 		if _, err := tx.SweepSends(time.Time{}); !errors.Is(err, ErrInvalid) {
@@ -367,7 +398,7 @@ func TestTheLedgerHoldsNoTextAndNoChat(t *testing.T) {
 	for i, outcome := range []SendOutcome{SendAcked, SendRejected, SendUnknown} {
 		in := request(t, "content-0"+string(rune('1'+i)), alice, text, epoch.Add(time.Duration(i)*time.Minute))
 		reserved(t, s, g, in)
-		st := Settlement{Key: in.Key, Outcome: outcome, Now: in.Now, AckedAt: in.Now, WACode: 479, Sent: sentText(t, alice, in.MsgID, ownerJID, in.Now)}
+		st := Settlement{Key: in.Key, Outcome: outcome, Now: in.Clock(), AckedAt: in.Clock(), WACode: 479, Sent: sentText(t, alice, in.MsgID, ownerJID, in.Clock())}
 		st.Sent.Text = text
 		settle(t, s, g, st)
 	}

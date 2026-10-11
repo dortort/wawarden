@@ -379,7 +379,7 @@ func TestSweepDeletesSendRecordsPastTheirDay(t *testing.T) {
 	reserve := func(k string) ingest.Reservation {
 		t.Helper()
 		key, _ := ingest.ParseKey(k)
-		res, err := r.archive.ReserveSend(g, t.Context(), ingest.SendReservation{Key: key, Chat: chat, MsgID: "3EB0SWEEP", Now: r.clock.Now(),
+		res, err := r.archive.ReserveSend(g, t.Context(), ingest.SendReservation{Key: key, Chat: chat, MsgID: "3EB0SWEEP", Clock: r.clock.Now,
 			Limits: ingest.SendLimits{PerMinute: 10, GlobalPerHour: 30, Holders: 1}, Ready: func() bool { return true }})
 		if err != nil {
 			t.Fatalf("ReserveSend: %v", err)

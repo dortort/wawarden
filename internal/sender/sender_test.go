@@ -343,6 +343,55 @@ func TestTheHourShareDividesTheGlobalBudgetByTheWriteHolders(t *testing.T) {
 	}
 }
 
+func TestTheLimitsCountFromWhenTheReservationHoldsTheArchive(t *testing.T) {
+	f := newFixture(t, 2, 30)
+	g := grantFor(t, writerID, false, alice)
+	held, release := make(chan struct{}), make(chan struct{})
+	go func() {
+		_ = f.store.Write(context.Background(), "test.hold", func(*ingest.Tx) error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+	started := make(chan struct{})
+	o := f.options(f.store, 2, 30)
+	o.Holders = func(context.Context, time.Time) (int, error) {
+		close(started)
+		return 1, nil
+	}
+	sent := make(chan error, 1)
+	go func() {
+		_, err := sender.New(o).Send(g, t.Context(), request(t, "held-key-0001", alice, "synthetic held"))
+		sent <- err
+	}()
+	<-started
+	f.clock.Advance(8 * time.Second)
+	close(release)
+	if err := <-sent; err != nil {
+		t.Fatalf("the send that waited for the archive = %v", err)
+	}
+	f.clock.Advance(500 * time.Millisecond)
+	_, err := f.svc.Send(g, t.Context(), request(t, "held-key-0002", alice, "synthetic paced"))
+	if rl, ok := errors.AsType[*ingest.RateLimitError](err); !ok || rl.Reason != ingest.ReasonPacer || rl.RetryAfter != 3*time.Second {
+		t.Fatalf("a send half a second after the waiting one = %v, want refused by the pacer", err)
+	}
+	f.clock.Advance(2500 * time.Millisecond)
+	if _, err := f.svc.Send(g, t.Context(), request(t, "held-key-0003", alice, "synthetic second")); err != nil {
+		t.Fatalf("a send once the pacer allows it = %v", err)
+	}
+	f.clock.Advance(50 * time.Second)
+	_, err = f.svc.Send(g, t.Context(), request(t, "held-key-0004", alice, "synthetic third"))
+	if rl, ok := errors.AsType[*ingest.RateLimitError](err); !ok || rl.Reason != ingest.ReasonMinute || rl.RetryAfter != 7*time.Second {
+		t.Fatalf("a third send 53 seconds after the first engine send = %v, want refused by the minute budget", err)
+	}
+	calls := f.engine.sent()
+	if len(calls) != 2 || calls[1].at.Sub(calls[0].at) < sender.PacerBase {
+		t.Fatalf("engine sends %+v, want two at least the pacer apart", calls)
+	}
+}
+
 func TestAnAckAfterTheLeaseEndedIsUnknownAndReported(t *testing.T) {
 	f := newFixture(t, 10, 30)
 	g := grantFor(t, writerID, false, alice)

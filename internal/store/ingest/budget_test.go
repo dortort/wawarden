@@ -21,7 +21,7 @@ func refused(t *testing.T, s *Store, g policy.WriteGrant, in SendReservation, re
 	_, err := s.ReserveSend(g, t.Context(), in)
 	var rl *RateLimitError
 	if !errors.As(err, &rl) || rl.Reason != reason || rl.RetryAfter != retry {
-		t.Fatalf("ReserveSend at %v = %v, want refused by %v, retry after %v", in.Now.Sub(epoch), err, reason, retry)
+		t.Fatalf("ReserveSend at %v = %v, want refused by %v, retry after %v", in.Clock().Sub(epoch), err, reason, retry)
 	}
 	if got := ledger(t, s, g.Client(), in.Key.Value()); got != "none" {
 		t.Fatalf("a refused send left a ledger row: %q", got)
@@ -222,7 +222,8 @@ func TestInvalidReservationsAreRefused(t *testing.T) {
 		"the zero key":                 {g, func(in *SendReservation) { in.Key = Key{} }, ErrInvalid},
 		"no message id":                {g, func(in *SendReservation) { in.MsgID = "" }, ErrInvalid},
 		"a message id with a space":    {g, func(in *SendReservation) { in.MsgID = "MSG 1" }, ErrInvalid},
-		"no time":                      {g, func(in *SendReservation) { in.Now = time.Time{} }, ErrInvalid},
+		"no clock":                     {g, func(in *SendReservation) { in.Clock = nil }, ErrInvalid},
+		"a clock at the zero time":     {g, func(in *SendReservation) { in.Clock = clockAt(time.Time{}) }, ErrInvalid},
 		"no minute budget":             {g, func(in *SendReservation) { in.Limits.PerMinute = 0 }, ErrInvalid},
 		"no global budget":             {g, func(in *SendReservation) { in.Limits.GlobalPerHour = 0 }, ErrInvalid},
 		"a negative global budget":     {g, func(in *SendReservation) { in.Limits.GlobalPerHour = -1 }, ErrInvalid},

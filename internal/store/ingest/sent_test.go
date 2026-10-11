@@ -55,7 +55,7 @@ func TestTheFirstContactRule(t *testing.T) {
 	allowed := grantFor(t, otherID, true, "15550100004@s.whatsapp.net")
 	fresh := request(t, "first-allow1", "15550100004@s.whatsapp.net", "synthetic", epoch.Add(30*time.Hour))
 	reserved(t, s, allowed, fresh)
-	fresh.Now = fresh.Now.Add(time.Second)
+	fresh.Clock = clockAt(fresh.Clock().Add(time.Second))
 	if res := replay(t, s, grantFor(t, otherID, false, "15550100004@s.whatsapp.net"), fresh); res.Kind != InProgress {
 		t.Fatalf("a replay under a grant without first contact = %+v, want it answered from the ledger", res)
 	}
@@ -139,11 +139,11 @@ func TestASecondClientNeverTakesOverASentMark(t *testing.T) {
 	if got := sentBy(t, s, "S1"); got != alice+" "+ownerJID+" live "+writerID {
 		t.Fatalf("message S1 = %q, want it still marked as sent by the first client", got)
 	}
-	theirs.Now = epoch.Add(2 * time.Minute)
+	theirs.Clock = clockAt(epoch.Add(2 * time.Minute))
 	if res, err := s.ReserveSend(second, t.Context(), theirs); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("the second client's replay = %+v, %v, want ErrNotFound rather than the first client's row", res, err)
 	}
-	mine.Now = epoch.Add(2 * time.Minute)
+	mine.Clock = clockAt(epoch.Add(2 * time.Minute))
 	if res := replay(t, s, first, mine); res.Kind != ReplayedDone || res.Sent.ID != "S1" || res.Sent.Sender != chat(t, ownerJID) {
 		t.Fatalf("the first client's replay = %+v", res)
 	}
@@ -173,7 +173,7 @@ func TestTheOwnPairMapsOwnSendersAlike(t *testing.T) {
 	if got := sentBy(t, s, "S1"); got != alice+" "+ownLID+" history "+writerID {
 		t.Fatalf("message S1 = %q", got)
 	}
-	in.Now = epoch.Add(time.Minute)
+	in.Clock = clockAt(epoch.Add(time.Minute))
 	if res := replay(t, s, g, in); res.Kind != ReplayedDone || res.Sent.Sender != chat(t, ownLID) || res.Sent.ID != "S1" {
 		t.Fatalf("replay = %+v", res)
 	}
@@ -196,7 +196,7 @@ func TestASentReplyQuotesItsTarget(t *testing.T) {
 	gone := request(t, "reply-key-2", alice, "synthetic", epoch.Add(time.Minute))
 	gone.MsgID = "S2"
 	reserved(t, s, g, gone)
-	if _, err := s.SettleSend(g, t.Context(), Settlement{Key: gone.Key, Outcome: SendAcked, Now: gone.Now, AckedAt: gone.Now, Sent: sentText(t, alice, "S2", ownerJID, gone.Now), Reply: &ReplyTarget{ID: "MISSING", Sender: chat(t, alice)}}); err != nil {
+	if _, err := s.SettleSend(g, t.Context(), Settlement{Key: gone.Key, Outcome: SendAcked, Now: gone.Clock(), AckedAt: gone.Clock(), Sent: sentText(t, alice, "S2", ownerJID, gone.Clock()), Reply: &ReplyTarget{ID: "MISSING", Sender: chat(t, alice)}}); err != nil {
 		t.Fatalf("SettleSend: %v", err)
 	}
 	if got := scalar[string](t, s, "SELECT coalesce(quoted_ref, '-') || coalesce(quote_verified, '-') FROM messages WHERE id = 'S2'"); got != "--" {

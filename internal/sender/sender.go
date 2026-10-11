@@ -140,8 +140,7 @@ func (s *Service) Send(g policy.WriteGrant, ctx context.Context, req Request) (R
 	if !g.Valid() || !g.Allows(req.Chat) {
 		return Result{}, ingest.ErrNotAllowed
 	}
-	now := s.o.Now()
-	holders, err := s.o.Holders(ctx, now)
+	holders, err := s.o.Holders(ctx, s.o.Now())
 	if err != nil {
 		return Result{}, err
 	}
@@ -156,7 +155,7 @@ func (s *Service) Send(g policy.WriteGrant, ctx context.Context, req Request) (R
 		quote = &Quote{ID: req.Reply.ID, Participant: req.Reply.Sender, Text: req.Reply.Text}
 	}
 	res, err := s.o.Store.ReserveSend(g, ctx, ingest.SendReservation{
-		Key: req.Key, Chat: req.Chat, Fingerprint: ingest.Fingerprint(req.ChatRef, req.Text, target), MsgID: s.o.Engine.NewMessageID(), Now: now,
+		Key: req.Key, Chat: req.Chat, Fingerprint: ingest.Fingerprint(req.ChatRef, req.Text, target), MsgID: s.o.Engine.NewMessageID(), Clock: s.o.Now,
 		Limits:   ingest.SendLimits{PerMinute: s.o.PerMinute, GlobalPerHour: s.o.GlobalPerHour, Holders: holders},
 		PacerGap: s.o.Pacer(), Ready: s.o.Engine.Ready,
 	})

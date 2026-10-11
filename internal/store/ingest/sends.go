@@ -81,7 +81,7 @@ type SendReservation struct {
 	Chat        policy.CanonicalChat
 	Fingerprint [fingerprintSize]byte
 	MsgID       string
-	Now         time.Time
+	Clock       func() time.Time
 	Limits      SendLimits
 	PacerGap    time.Duration
 	Ready       func() bool
@@ -175,8 +175,8 @@ func (in SendReservation) check(g policy.WriteGrant) error {
 		return invalid("idempotency key")
 	case !messageID.MatchString(in.MsgID):
 		return invalid("message id")
-	case in.Now.IsZero():
-		return invalid("time")
+	case in.Clock == nil:
+		return invalid("clock")
 	case in.Limits.PerMinute <= 0 || in.Limits.GlobalPerHour <= 0 || in.Limits.Holders < 0:
 		return invalid("send limits")
 	case in.PacerGap < 0:
@@ -193,8 +193,12 @@ func (s *Store) ReserveSend(g policy.WriteGrant, ctx context.Context, in SendRes
 	}
 	var res Reservation
 	err := s.Write(ctx, "ingest.send_reserve", func(tx *Tx) error {
+		now := in.Clock()
+		if now.IsZero() {
+			return invalid("time")
+		}
 		var err error
-		res, err = tx.reserveSend(g, in)
+		res, err = tx.reserveSend(g, in, now)
 		return err
 	})
 	if err != nil {
@@ -203,17 +207,17 @@ func (s *Store) ReserveSend(g policy.WriteGrant, ctx context.Context, in SendRes
 	return res, nil
 }
 
-func (tx *Tx) reserveSend(g policy.WriteGrant, in SendReservation) (Reservation, error) {
-	client, now := g.Client(), ms(in.Now)
-	if _, err := tx.q.ExecContext(tx.ctx, sweepSendKey, client, in.Key.s, now); err != nil {
+func (tx *Tx) reserveSend(g policy.WriteGrant, in SendReservation, now time.Time) (Reservation, error) {
+	client, at := g.Client(), ms(now)
+	if _, err := tx.q.ExecContext(tx.ctx, sweepSendKey, client, in.Key.s, at); err != nil {
 		return Reservation{}, err
 	}
 	var one int
-	err := tx.q.QueryRowContext(tx.ctx, insertSend, client, in.Key.s, in.Fingerprint[:], in.MsgID, now,
-		ms(in.Now.Add(in.PacerGap)), ms(in.Now.Add(SendTTL))).Scan(&one)
+	err := tx.q.QueryRowContext(tx.ctx, insertSend, client, in.Key.s, in.Fingerprint[:], in.MsgID, at,
+		ms(now.Add(in.PacerGap)), ms(now.Add(SendTTL))).Scan(&one)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return tx.replaySend(client, in)
+		return tx.replaySend(client, in, now)
 	case err != nil:
 		return Reservation{}, err
 	}
@@ -233,13 +237,13 @@ func (tx *Tx) reserveSend(g policy.WriteGrant, in SendReservation) (Reservation,
 	if !in.Ready() {
 		return Reservation{}, ErrNotReady
 	}
-	if err := tx.admit(client, in); err != nil {
+	if err := tx.admit(client, in, now); err != nil {
 		return Reservation{}, err
 	}
 	return Reservation{Kind: Reserved, MsgID: in.MsgID}, nil
 }
 
-func (tx *Tx) replaySend(client string, in SendReservation) (Reservation, error) {
+func (tx *Tx) replaySend(client string, in SendReservation, now time.Time) (Reservation, error) {
 	var state, msgID string
 	var fingerprint []byte
 	var result sql.NullString
@@ -252,7 +256,7 @@ func (tx *Tx) replaySend(client string, in SendReservation) (Reservation, error)
 	}
 	switch state {
 	case statePending:
-		age := in.Now.Sub(fromMS(reserved))
+		age := now.Sub(fromMS(reserved))
 		if age < SendLease {
 			return Reservation{Kind: InProgress, MsgID: msgID, RetryAfter: inProgressWait(age)}, nil
 		}
@@ -260,7 +264,7 @@ func (tx *Tx) replaySend(client string, in SendReservation) (Reservation, error)
 		if err != nil {
 			return Reservation{}, err
 		}
-		if _, err := tx.q.ExecContext(tx.ctx, expireSendLease, client, in.Key.s, ms(in.Now), stored); err != nil {
+		if _, err := tx.q.ExecContext(tx.ctx, expireSendLease, client, in.Key.s, ms(now), stored); err != nil {
 			return Reservation{}, err
 		}
 		return Reservation{Kind: LeaseExpired, MsgID: msgID, Status: statusUnknown, Code: CodeUnknown}, nil
@@ -322,8 +326,8 @@ type sendLimit struct {
 	window time.Duration
 }
 
-func (tx *Tx) admit(client string, in SendReservation) error {
-	now := ms(in.Now)
+func (tx *Tx) admit(client string, in SendReservation, at time.Time) error {
+	now := ms(at)
 	minuteStart, hourStart := now-sendMinute.Milliseconds(), now-sendHour.Milliseconds()
 	var perMinute, perHour, global, nextOK int64
 	if err := tx.q.QueryRowContext(tx.ctx, selectSendWindows, client, minuteStart, hourStart, in.Key.s).Scan(&perMinute, &perHour, &global, &nextOK); err != nil {

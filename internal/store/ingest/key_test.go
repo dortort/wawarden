@@ -125,7 +125,7 @@ func FuzzParseKey(f *testing.F) {
 		}
 		i := n.Add(1)
 		id := fmt.Sprintf("%08x", i)
-		in := SendReservation{Key: k, Chat: chat(t, alice), MsgID: "3EB0FUZZ", Now: epoch.Add(time.Duration(i) * 2 * time.Hour),
+		in := SendReservation{Key: k, Chat: chat(t, alice), MsgID: "3EB0FUZZ", Clock: clockAt(epoch.Add(time.Duration(i) * 2 * time.Hour)),
 			Limits: defaultLimits, Ready: func() bool { return true }}
 		if res, err := s.ReserveSend(grantFor(t, id, true, alice), t.Context(), in); err != nil || res.Kind != Reserved {
 			t.Fatalf("ReserveSend(%+q) = %+v, %v", raw, res, err)
