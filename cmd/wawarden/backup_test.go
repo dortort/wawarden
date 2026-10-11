@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +25,7 @@ import (
 	"github.com/dortort/wawarden/internal/policy"
 	adminstore "github.com/dortort/wawarden/internal/store/admin"
 	"github.com/dortort/wawarden/internal/store/ingest"
+	"github.com/dortort/wawarden/internal/store/inspect"
 	"github.com/dortort/wawarden/internal/store/session"
 )
 
@@ -166,6 +169,19 @@ func withManifest(t *testing.T, plaintext []byte, change func(m map[string]any))
 	return out.Bytes()
 }
 
+func withArchiveVersion(t *testing.T, plaintext []byte, version int) []byte {
+	t.Helper()
+	patched := slices.Clone(plaintext)
+	at := bytes.Index(patched, []byte("SQLite format 3\x00"))
+	if at < 0 {
+		t.Fatal("the backup holds no database")
+	}
+	binary.BigEndian.PutUint32(patched[at+60:], uint32(version)) //nolint:gosec // G115: a small schema version
+	return withManifest(t, patched, func(m map[string]any) {
+		m["databases"].([]any)[0].(map[string]any)["schema_version"] = version
+	})
+}
+
 func TestBackupVerify(t *testing.T) {
 	plaintext, key := decryptedBackup(t)
 	work := privateDir(t)
@@ -236,6 +252,8 @@ func TestBackupVerifyExitCodes(t *testing.T) {
 		{name: "a manifest with another device store version", stream: withManifest(t, plaintext, func(m map[string]any) {
 			m["databases"].([]any)[1].(map[string]any)["schema_version"] = 1
 		}), code: exitUnverified, verdict: "device store schema: differs from the manifest's 1\n"},
+		{name: "an archive newer than this build", stream: withArchiveVersion(t, plaintext, inspect.LatestArchiveVersion()+1),
+			code: exitUnverified, verdict: "archive schema: newer than this build, which reads up to " + strconv.Itoa(inspect.LatestArchiveVersion()) + "\n"},
 		{name: "a work directory open to others", stream: plaintext, work: open, code: exitFailed, stderr: "--work-dir"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
