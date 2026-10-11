@@ -42,6 +42,7 @@ func samples() []dto.Response {
 		dto.SearchPage{Messages: []dto.Message{sampleMessage()}, Next: &next, More: true, Truncated: true, Session: dto.Session{State: "connected"}},
 		dto.ChangePage{Messages: []dto.Message{sampleMessage()}, Next: &next, More: true, Truncated: true, Session: dto.Session{State: "connected"}},
 		dto.SendResult{Message: new(sampleMessage()), Replayed: true, Session: dto.Session{State: "connected"}, RetryAfterSeconds: new(5)},
+		dto.BackfillRequested{RequestID: "3EB0SYNTHETIC"},
 	}
 }
 
@@ -123,9 +124,9 @@ func TestEncode(t *testing.T) {
 		},
 		{
 			name:            "status",
-			response:        dto.Status{State: "disconnected", Reason: "replaced", Paired: true, Counts: dto.StatusCounts{Chats: 2, Messages: 3, BlobsPending: 4, BlobsQuarantined: 5, InboxBacklog: 6, InboxQuarantined: 7}, Clients: dto.StatusClients{Active: 8, Expired: 9, Revoked: 10, AllChatsActive: 1}, Warnings: []string{"all_chats_client"}, Version: "v0.2.0"},
+			response:        dto.Status{State: "disconnected", Reason: "replaced", Paired: true, Counts: dto.StatusCounts{Chats: 2, Messages: 3, BlobsPending: 4, BlobsQuarantined: 5, InboxBacklog: 6, InboxQuarantined: 7, BackfillsToday: 11}, Clients: dto.StatusClients{Active: 8, Expired: 9, Revoked: 10, AllChatsActive: 1}, Warnings: []string{"all_chats_client"}, Version: "v0.2.0"},
 			wantContentType: "application/json; charset=utf-8",
-			wantBody:        `{"state":"disconnected","reason":"replaced","paired":true,"counts":{"chats":2,"messages":3,"history_blobs_pending":4,"history_blobs_quarantined":5,"inbox_backlog":6,"inbox_quarantined":7},"clients":{"active":8,"expired":9,"revoked":10,"all_chats_active":1},"warnings":["all_chats_client"],"last_ingest_at":null,"version":"v0.2.0"}`,
+			wantBody:        `{"state":"disconnected","reason":"replaced","paired":true,"counts":{"chats":2,"messages":3,"history_blobs_pending":4,"history_blobs_quarantined":5,"inbox_backlog":6,"inbox_quarantined":7,"backfills_today":11},"clients":{"active":8,"expired":9,"revoked":10,"all_chats_active":1},"warnings":["all_chats_client"],"last_ingest_at":null,"version":"v0.2.0"}`,
 		},
 		{
 			name:            "pairing",
@@ -484,9 +485,9 @@ func declaredTypes(t *testing.T) []string {
 	return names
 }
 
-func TestOnlyTheSendAnswerCarriesItsOwnStatus(t *testing.T) {
+func TestOnlyTheSendAndBackfillAnswersCarryTheirOwnStatus(t *testing.T) {
 	type statused interface{ Status() int }
-	want := map[string]int{"dto.SendResult": 201}
+	want := map[string]int{"dto.SendResult": 201, "dto.BackfillRequested": 202}
 	for _, r := range samples() {
 		name := reflect.TypeOf(r).String()
 		s, ok := r.(statused)

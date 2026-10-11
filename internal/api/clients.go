@@ -87,7 +87,7 @@ type clientRequest struct {
 }
 
 func registerClients(rt *router, svc ClientService, events AdminEvents) {
-	rt.admin("POST /admin/v1/clients", decodedMutation(events, actionClientCreate, maxClientBodyBytes, func(ctx context.Context, _ *Request, body clientRequest) (dto.Response, error) {
+	rt.admin("POST /admin/v1/clients", decodedMutation(events, actionClientCreate, maxClientBodyBytes, func(ctx context.Context, _ policy.AdminGrant, _ *Request, body clientRequest) (dto.Response, error) {
 		view, credential, err := svc.CreateClient(ctx, policy.ClientSpec{
 			Name: body.Name, Read: body.ReadChats, Write: body.WriteChats,
 			AllChats: body.AllChats, AllowFirstContact: body.AllowFirstContact, ExpiresInDays: body.ExpiresInDays,
@@ -119,7 +119,7 @@ func registerClients(rt *router, svc ClientService, events AdminEvents) {
 		}
 		return clientResponse(view), nil
 	})
-	rt.admin("POST /admin/v1/clients/{id}/revoke", decodedMutation(events, actionClientRevoke, maxBodyBytes, func(ctx context.Context, r *Request, _ struct{}) (dto.Response, error) {
+	rt.admin("POST /admin/v1/clients/{id}/revoke", decodedMutation(events, actionClientRevoke, maxBodyBytes, func(ctx context.Context, _ policy.AdminGrant, r *Request, _ struct{}) (dto.Response, error) {
 		view, err := svc.RevokeClient(ctx, r.req.PathValue("id"))
 		if err != nil {
 			return nil, err

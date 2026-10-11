@@ -37,6 +37,24 @@ type fakeAdmin struct {
 	truncated  bool
 	match      string
 	limit      int
+
+	backfillID     string
+	backfillErr    error
+	backfillChat   policy.CanonicalChat
+	backfillCount  int
+	backfillGrant  bool
+	backfillBudget time.Duration
+}
+
+func (f *fakeAdmin) Backfill(g policy.AdminGrant, ctx context.Context, chat policy.CanonicalChat, count int) (string, error) {
+	f.record("backfill")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.backfillChat, f.backfillCount, f.backfillGrant = chat, count, g.Valid()
+	if deadline, ok := ctx.Deadline(); ok {
+		f.backfillBudget = time.Until(deadline)
+	}
+	return f.backfillID, f.backfillErr
 }
 
 func (f *fakeAdmin) record(call string) {
@@ -167,12 +185,12 @@ func TestStatusAnswersAFixedShape(t *testing.T) {
 	f := newAdminFixture(t)
 	f.service.status = AdminStatus{
 		State: "disconnected", Reason: "replaced", Paired: true,
-		Chats: 3, Messages: 120, BlobsPending: 1, BlobsQuarantined: 2, InboxBacklog: 4, InboxQuarantined: 5,
+		Chats: 3, Messages: 120, BlobsPending: 1, BlobsQuarantined: 2, InboxBacklog: 4, InboxQuarantined: 5, BackfillsToday: 6,
 		LastIngest: time.Date(2026, 10, 5, 9, 30, 15, 123456789, time.FixedZone("synthetic", 3600)), Version: "v0.2.0",
 	}
 	rec := adminRequest(t, f, http.MethodGet, "/admin/v1/status", "", "")
 	want := `{"state":"disconnected","reason":"replaced","paired":true,"counts":{"chats":3,"messages":120,"history_blobs_pending":1,` +
-		`"history_blobs_quarantined":2,"inbox_backlog":4,"inbox_quarantined":5},"clients":{"active":0,"expired":0,"revoked":0,"all_chats_active":0},` +
+		`"history_blobs_quarantined":2,"inbox_backlog":4,"inbox_quarantined":5,"backfills_today":6},"clients":{"active":0,"expired":0,"revoked":0,"all_chats_active":0},` +
 		`"warnings":[],"last_ingest_at":"2026-10-05T08:30:15Z","version":"v0.2.0"}`
 	if rec.Code != http.StatusOK || rec.Body.String() != want {
 		t.Fatalf("status = %d %s, want 200 %s", rec.Code, rec.Body, want)

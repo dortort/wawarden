@@ -13,6 +13,7 @@ import (
 const (
 	jsonContentType = "application/json; charset=utf-8"
 	statusCreated   = 201
+	statusAccepted  = 202
 )
 
 var (
@@ -78,6 +79,7 @@ type StatusCounts struct {
 	BlobsQuarantined int64 `json:"history_blobs_quarantined"`
 	InboxBacklog     int64 `json:"inbox_backlog"`
 	InboxQuarantined int64 `json:"inbox_quarantined"`
+	BackfillsToday   int64 `json:"backfills_today"`
 }
 
 func (s Status) encode() (string, []byte, error) { return encodeJSON(s) }
@@ -93,6 +95,14 @@ type Accepted struct {
 }
 
 func (a Accepted) encode() (string, []byte, error) { return encodeJSON(a) }
+
+type BackfillRequested struct {
+	RequestID string `json:"request_id"`
+}
+
+func (BackfillRequested) Status() int { return statusAccepted }
+
+func (b BackfillRequested) encode() (string, []byte, error) { return encodeJSON(b) }
 
 type ClientChat struct {
 	ID    string  `json:"id"`

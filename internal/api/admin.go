@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/dortort/wawarden/internal/api/dto"
@@ -11,10 +12,13 @@ import (
 )
 
 const (
-	actionPair      = "pair"
-	actionReconnect = "reconnect"
-	outcomeOK       = "ok"
-	warningAllChats = "all_chats_client"
+	actionPair       = "pair"
+	actionReconnect  = "reconnect"
+	actionBackfill   = "backfill"
+	chatRefChars     = 32
+	maxBackfillCount = 50
+	outcomeOK        = "ok"
+	warningAllChats  = "all_chats_client"
 
 	// The listeners' 30-second write timeout would cut off a slower answer and lose the code.
 	pairTimeout = 25 * time.Second
@@ -29,7 +33,12 @@ var (
 	ErrRateLimited       error = &codedError{status: http.StatusTooManyRequests, code: codeRateLimited}
 	ErrPairFailed        error = &codedError{status: http.StatusBadGateway, code: "pair_failed"}
 	ErrEngineUnavailable error = &codedError{status: http.StatusServiceUnavailable, code: "engine_unavailable"}
+	ErrBackfillNoAnchor  error = &codedError{status: http.StatusUnprocessableEntity, code: codeBackfillNoAnchor}
 )
+
+func BackfillQuota(wait time.Duration) error {
+	return &codedError{status: http.StatusTooManyRequests, code: codeBackfillQuota, retryAfter: wait}
+}
 
 type AdminStatus struct {
 	State            string
@@ -41,6 +50,7 @@ type AdminStatus struct {
 	BlobsQuarantined int64
 	InboxBacklog     int64
 	InboxQuarantined int64
+	BackfillsToday   int64
 	Clients          ClientCounts
 	LastIngest       time.Time
 	Version          string
@@ -57,7 +67,13 @@ type AdminService interface {
 	Status(ctx context.Context) (AdminStatus, error)
 	Pair(ctx context.Context) (code string, err error)
 	Reconnect(ctx context.Context) error
+	Backfill(g policy.AdminGrant, ctx context.Context, chat policy.CanonicalChat, count int) (requestID string, err error)
 	ClientService
+}
+
+type backfillRequest struct {
+	Chat  string `json:"chat"`
+	Count *int   `json:"count"`
 }
 
 type AdminEvents interface {
@@ -88,22 +104,61 @@ func registerAdmin(rt *router, svc AdminService, events AdminEvents) {
 		}
 		return dto.Accepted{Status: "accepted"}, nil
 	}))
+	rt.admin("POST /admin/v1/backfill", decodedMutation(events, actionBackfill, maxBodyBytes, func(ctx context.Context, g policy.AdminGrant, _ *Request, body backfillRequest) (dto.Response, error) {
+		count := maxBackfillCount
+		if body.Count != nil {
+			count = *body.Count
+		}
+		if count < 1 || count > maxBackfillCount {
+			return nil, errBadBody
+		}
+		chat, err := backfillChat(ctx, svc, body.Chat)
+		if err != nil {
+			return nil, err
+		}
+		ctx, cancel := context.WithTimeout(ctx, sendDeadline)
+		defer cancel()
+		id, err := svc.Backfill(g, ctx, chat, count)
+		if err != nil {
+			return nil, err
+		}
+		return dto.BackfillRequested{RequestID: id}, nil
+	}))
 	registerClients(rt, svc, events)
 }
 
+func backfillChat(ctx context.Context, svc ClientService, v string) (policy.CanonicalChat, error) {
+	if chat, ok := policy.Normalize(v); ok {
+		return chat, nil
+	}
+	if len(v) != chatRefChars || strings.Trim(v, "0123456789abcdef") != "" {
+		return policy.CanonicalChat{}, errBadBody
+	}
+	chats, _, err := svc.Chats(ctx, v, chatListLimit)
+	if err != nil {
+		return policy.CanonicalChat{}, err
+	}
+	for _, c := range chats {
+		if c.Ref == v {
+			return c.Chat, nil
+		}
+	}
+	return policy.CanonicalChat{}, errNotFound
+}
+
 func mutation(events AdminEvents, action string, run func(context.Context) (dto.Response, error)) func(context.Context, policy.AdminGrant, *Request) (dto.Response, error) {
-	return decodedMutation(events, action, maxBodyBytes, func(ctx context.Context, _ *Request, _ struct{}) (dto.Response, error) {
+	return decodedMutation(events, action, maxBodyBytes, func(ctx context.Context, _ policy.AdminGrant, _ *Request, _ struct{}) (dto.Response, error) {
 		return run(ctx)
 	})
 }
 
-func decodedMutation[T any](events AdminEvents, action string, limit int64, run func(context.Context, *Request, T) (dto.Response, error)) func(context.Context, policy.AdminGrant, *Request) (dto.Response, error) {
-	return func(ctx context.Context, _ policy.AdminGrant, r *Request) (resp dto.Response, err error) {
+func decodedMutation[T any](events AdminEvents, action string, limit int64, run func(context.Context, policy.AdminGrant, *Request, T) (dto.Response, error)) func(context.Context, policy.AdminGrant, *Request) (dto.Response, error) {
+	return func(ctx context.Context, g policy.AdminGrant, r *Request) (resp dto.Response, err error) {
 		result := codeInternal
 		defer func() { events.AdminMutation(action, result) }()
 		var body T
 		if err = r.decodeJSON(&body, limit); err == nil {
-			resp, err = run(ctx, r, body)
+			resp, err = run(ctx, g, r, body)
 		}
 		result = outcome(err)
 		return resp, err
@@ -141,6 +196,7 @@ func statusResponse(s AdminStatus) dto.Status {
 			BlobsQuarantined: s.BlobsQuarantined,
 			InboxBacklog:     s.InboxBacklog,
 			InboxQuarantined: s.InboxQuarantined,
+			BackfillsToday:   s.BackfillsToday,
 		},
 		Clients: dto.StatusClients{
 			Active:         s.Clients.Active,

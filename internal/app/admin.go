@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/dortort/wawarden/internal/api"
 	"github.com/dortort/wawarden/internal/engine"
@@ -27,6 +28,13 @@ func (s adminService) Status(ctx context.Context) (api.AdminStatus, error) {
 	if err != nil {
 		return api.AdminStatus{}, err
 	}
+	var backfills int
+	if err := s.archive.Read(ctx, "app.backfills_today", func(r *ingest.Reader) error {
+		backfills, err = r.BackfillsSince(time.Now().UTC().Truncate(24 * time.Hour))
+		return err
+	}); err != nil {
+		return api.AdminStatus{}, err
+	}
 	return api.AdminStatus{
 		State:            string(st.State),
 		Reason:           string(st.Reason),
@@ -37,6 +45,7 @@ func (s adminService) Status(ctx context.Context) (api.AdminStatus, error) {
 		BlobsQuarantined: c.BlobsQuarantined,
 		InboxBacklog:     c.InboxBacklog,
 		InboxQuarantined: c.InboxQuarantined,
+		BackfillsToday:   int64(backfills),
 		Clients:          api.ClientCounts{Active: n.Active, Expired: n.Expired, Revoked: n.Revoked, AllChatsActive: n.AllChatsActive},
 		LastIngest:       c.LastIngest,
 		Version:          s.version,
@@ -53,6 +62,10 @@ func (s adminService) Pair(ctx context.Context) (string, error) {
 
 func (s adminService) Reconnect(context.Context) error {
 	return adminError(s.engine.Reconnect())
+}
+
+func (s adminService) Backfill(g policy.AdminGrant, ctx context.Context, chat policy.CanonicalChat, count int) (string, error) {
+	return requestBackfill(g, ctx, s.archive, s.engine, time.Now(), chat, count)
 }
 
 func (s adminService) CreateClient(ctx context.Context, spec policy.ClientSpec) (api.ClientView, string, error) {

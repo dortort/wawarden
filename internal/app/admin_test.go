@@ -91,7 +91,7 @@ func TestAdminRoutesDriveTheEngine(t *testing.T) {
 
 	r := mustDo(t, http.MethodGet, admin, "/admin/v1/status", bearer(adminToken))
 	want := `{"state":"unpaired","reason":"","paired":false,"counts":{"chats":1,"messages":1,"history_blobs_pending":0,` +
-		`"history_blobs_quarantined":0,"inbox_backlog":0,"inbox_quarantined":0},"clients":{"active":0,"expired":0,"revoked":0,"all_chats_active":0},` +
+		`"history_blobs_quarantined":0,"inbox_backlog":0,"inbox_quarantined":0,"backfills_today":0},"clients":{"active":0,"expired":0,"revoked":0,"all_chats_active":0},` +
 		`"warnings":[],"last_ingest_at":"2026-10-05T08:00:00Z","version":"` + buildinfo.Read().Version + `"}`
 	if r.status != http.StatusOK || r.body != want {
 		t.Fatalf("status = %d %s, want %s", r.status, r.body, want)
@@ -200,7 +200,12 @@ func TestClientsAreCreatedAuthenticatedAuditedAndRevoked(t *testing.T) {
 		r.body != `{"error":"not_connected"}` || r.header.Get("Retry-After") != "5" {
 		t.Fatalf("a send while the engine is idle = %d %s %v", r.status, r.body, r.header)
 	}
-
+	if r := post(t, admin, "/admin/v1/backfill", bearer(adminToken), `{"chat":"`+chats.Chats[0].ID+`","count":10}`); r.status != http.StatusServiceUnavailable || r.body != `{"error":"not_connected"}` {
+		t.Fatalf("a backfill while the engine is idle = %d %s", r.status, r.body)
+	}
+	if r := mustDo(t, http.MethodGet, admin, "/admin/v1/status", bearer(adminToken)); !strings.Contains(r.body, `"backfills_today":0`) {
+		t.Fatalf("status after a refunded backfill = %s", r.body)
+	}
 	_, other := token.NewClient()
 	if r := mustDo(t, http.MethodGet, client, "/v1/anything", bearer(other)); r.status != http.StatusUnauthorized {
 		t.Fatalf("an unknown client token = %d, want 401", r.status)
@@ -225,7 +230,7 @@ func TestClientsAreCreatedAuthenticatedAuditedAndRevoked(t *testing.T) {
 	for _, rec := range logs.find("admin_mutation") {
 		mutations = append(mutations, rec["action"].(string)+":"+rec["outcome"].(string))
 	}
-	if got := strings.Join(mutations, " "); got != "client_create:ok client_create:name_taken client_revoke:ok" {
+	if got := strings.Join(mutations, " "); got != "client_create:ok client_create:name_taken backfill:not_connected client_revoke:ok" {
 		t.Fatalf("admin_mutation events %q", got)
 	}
 	var audit []string

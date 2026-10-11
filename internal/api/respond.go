@@ -23,6 +23,8 @@ const (
 	codeNotConnected         = "not_connected"
 	codeSendRejected         = "send_rejected"
 	codeSendOutcomeUnknown   = "send_outcome_unknown"
+	codeBackfillQuota        = "backfill_quota"
+	codeBackfillNoAnchor     = "backfill_no_anchor"
 	codeMethodNotAllowed     = "method_not_allowed"
 	codeNotFound             = "not_found"
 	codeRateLimited          = "rate_limited"
