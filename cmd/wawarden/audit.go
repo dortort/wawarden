@@ -9,10 +9,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -40,6 +43,7 @@ func audit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	copyPath := flags.String("db", "", "a copy of the archive to verify")
 	keyPath := flags.String("master-key-file", "", "the master key the service ran with")
 	logPath := flags.String("log", "", "a capture of the service's standard output")
+	retiredPath := flags.String("retired-keys-dir", "", "the retired keys kept beside the master key")
 	if err := flags.Parse(args[1:]); err != nil {
 		if !errors.Is(err, flag.ErrHelp) {
 			_, _ = fmt.Fprintln(stderr, "audit verify:", flagProblem(flags, err))
@@ -50,7 +54,11 @@ func audit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "audit verify: give --db and --master-key-file, each with a value, and no other argument")
 		return usageError(stderr)
 	}
-	master, refusal := keys.LoadFile(*keyPath)
+	retired := *retiredPath
+	if _, err := os.Stat(keys.RetiredDirOf(*keyPath)); retired == "" && err == nil {
+		retired = keys.RetiredDirOf(*keyPath)
+	}
+	master, refusal := keys.LoadFiles(*keyPath, retired)
 	if refusal != nil {
 		_, _ = fmt.Fprintln(stderr, "audit verify:", refusal.Error())
 		return exitFailed
@@ -69,7 +77,7 @@ func audit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return exitFailed
 	}
 	var out bytes.Buffer
-	first, problem, head, missing := "none", "none", "none", "none"
+	first, problem, head, missing, pruned, anchor, ids := "none", "none", "none", "none", "none", "none", "none"
 	if rep.FirstBad != 0 {
 		first, problem = strconv.FormatInt(rep.FirstBad, 10), rep.Problem
 	}
@@ -79,6 +87,16 @@ func audit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if rep.FirstMissing != "" {
 		missing = rep.FirstMissing
 	}
+	if rep.PrunedThrough != 0 {
+		pruned, anchor = strconv.FormatInt(rep.PrunedThrough, 10), rep.AnchorHead
+	}
+	if len(rep.KeyIDs) > 0 {
+		var counts []string
+		for _, id := range slices.Sorted(maps.Keys(rep.KeyIDs)) {
+			counts = append(counts, id+"="+strconv.FormatInt(rep.KeyIDs[id], 10))
+		}
+		ids = strings.Join(counts, " ")
+	}
 	for _, line := range [][2]string{
 		{"rows", strconv.FormatInt(rep.Rows, 10)},
 		{"verified", strconv.FormatInt(rep.Verified, 10)},
@@ -86,6 +104,10 @@ func audit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		{"first failing row", first},
 		{"problem", problem},
 		{"chain head", head},
+		{"pruned through", pruned},
+		{"anchor head", anchor},
+		{"key ids", ids},
+		{"shipped heads pruned", strconv.Itoa(rep.HeadsPruned)},
 		{"shipped heads", strconv.Itoa(rep.Heads)},
 		{"shipped heads missing", strconv.Itoa(rep.HeadsMissing)},
 		{"first missing head", missing},

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -188,5 +189,78 @@ func TestAuditVerifyMisuse(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(archive), "absent")); err == nil {
 		t.Fatal("verify created a missing copy")
+	}
+}
+
+func TestAuditVerifyAcrossARotationAndAPrune(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	if err := os.Mkdir(data, 0o700); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	var lines bytes.Buffer
+	at := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	record := func(n int, prune bool) *keys.Master {
+		master, r := keys.Load(data, os.Geteuid())
+		if r != nil {
+			t.Fatalf("Load: %v", r)
+		}
+		out := logx.NewWriter(&lines)
+		out.SetKey(make([]byte, 32))
+		s, err := ingest.Open(t.Context(), ingest.Options{DataDir: data, UID: os.Geteuid(), Profile: ingest.ProfileLocal,
+			Logger: logx.New(logx.NewWriter(io.Discard), slog.LevelInfo), Master: master, AuditOut: out})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		for range n {
+			at = at.Add(time.Second)
+			if err := s.Audit().Record(t.Context(), adminstore.Event{At: at, Client: "aaaaaaaa", Action: "messages.read", OK: true, Reason: "ok"}); err != nil {
+				t.Fatalf("Record: %v", err)
+			}
+		}
+		if prune {
+			if res, err := s.Audit().Prune(t.Context(), at.Add(-1500*time.Millisecond), at, 10_000); err != nil || res.Through != 2 {
+				t.Fatalf("Prune = %+v, %v", res, err)
+			}
+		}
+		if err := s.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		return master
+	}
+	previous := record(4, true)
+	if _, _, r := keys.Rotate(data, os.Geteuid(), func() error { return nil }); r != nil {
+		t.Fatalf("Rotate: %v", r)
+	}
+	current := record(3, false)
+	log := filepath.Join(t.TempDir(), "stdout.log")
+	if err := os.WriteFile(log, lines.Bytes(), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	archive, key := filepath.Join(data, "archive.db"), filepath.Join(data, "keys", "master")
+	ids := previous.ID() + "=2 " + current.ID() + "=3"
+	if previous.ID() > current.ID() {
+		ids = current.ID() + "=3 " + previous.ID() + "=2"
+	}
+	code, stdout, stderr := invokeWith(t, []string{"audit", "verify", "--db", archive, "--master-key-file", key, "--log", log}, nil, nil)
+	if code != 0 || stderr != "" || !strings.HasPrefix(stdout, "rows: 5\nverified: 5\nrows failing: 0\n") ||
+		!regexp.MustCompile(`\nchain head: [0-9a-f]{32}\npruned through: 2\nanchor head: [0-9a-f]{32}\nkey ids: `+ids+`\nshipped heads pruned: 1\nshipped heads: 7\nshipped heads missing: 0\n`).MatchString(stdout) {
+		t.Fatalf("audit verify with the retired keys beside the master = %d\n%s\nstderr %q", code, stdout, stderr)
+	}
+	empty := t.TempDir()
+	code, stdout, _ = invokeWith(t, []string{"audit", "verify", "--db", archive, "--master-key-file", key, "--retired-keys-dir", empty, "--log", log}, nil, nil)
+	if code != exitUnverified || !strings.Contains(stdout, "rows failing: 3\nfirst failing row: 2\nproblem: anchor_invalid\n") {
+		t.Fatalf("audit verify without the retired key = %d\n%s", code, stdout)
+	}
+	code, stdout, stderr = invokeWith(t, []string{"audit", "verify", "--db", archive, "--master-key-file", key, "--retired-keys-dir", filepath.Join(empty, "absent")}, nil, nil)
+	if code != exitFailed || stdout != "" || !strings.Contains(stderr, "audit verify: keys: retired/ cannot be inspected") {
+		t.Fatalf("audit verify with a missing retired keys directory = %d %q %q", code, stdout, stderr)
+	}
+	alone := filepath.Join(t.TempDir(), "master")
+	if err := os.WriteFile(alone, secretOf(t, data), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	code, stdout, _ = invokeWith(t, []string{"audit", "verify", "--db", archive, "--master-key-file", alone, "--log", log}, nil, nil)
+	if code != exitUnverified || !strings.Contains(stdout, "problem: anchor_invalid\n") || !strings.Contains(stdout, "key ids: "+ids+"\n") {
+		t.Fatalf("audit verify of a master key copied alone = %d\n%s", code, stdout)
 	}
 }
