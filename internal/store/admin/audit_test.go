@@ -12,6 +12,7 @@ import (
 
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/store/admin"
+	"github.com/dortort/wawarden/internal/token"
 )
 
 func chainFixture(t *testing.T) (*fixture, []admin.Head) {
@@ -265,5 +266,25 @@ func TestVerifyRefusesWithoutAKeyOrACopy(t *testing.T) {
 	}
 	if _, err := admin.Verify(t.Context(), t.TempDir(), f.master, nil); err == nil {
 		t.Fatal("Verify of a directory succeeded")
+	}
+}
+
+func TestAuditEventsCarryingATokenAreRefused(t *testing.T) {
+	f := open(t)
+	admin1 := token.NewAdmin()
+	id, client := token.NewClient()
+	for _, tok := range []string{admin1, client} {
+		for name, e := range map[string]admin.Event{
+			"client": {At: start, Client: tok, Action: "messages.read", Reason: "ok"},
+			"action": {At: start, Client: id, Action: tok, Reason: "ok"},
+			"reason": {At: start, Client: id, Action: "messages.read", Reason: tok},
+		} {
+			if err := f.store.Audit().Record(t.Context(), e); err == nil {
+				t.Fatalf("a token as the %s was recorded", name)
+			}
+		}
+	}
+	if f.audit.String() != "" || len(auditRows(t, f)) != 0 {
+		t.Fatal("a refused event left a row or a line")
 	}
 }

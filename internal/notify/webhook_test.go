@@ -25,6 +25,7 @@ import (
 
 	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/metrics"
+	"github.com/dortort/wawarden/internal/token"
 )
 
 var testSecret = []byte(strings.Repeat("synthetic-secret-", 3))
@@ -613,5 +614,39 @@ func TestAtMost4KiBOfTheAnswerIsRead(t *testing.T) {
 	}
 	if got := read.Load(); got != maxReplyBytes {
 		t.Fatalf("read %d bytes of a 1 MiB answer, want exactly %d", got, maxReplyBytes)
+	}
+}
+
+func TestNoEventCarriesAToken(t *testing.T) {
+	admin := token.NewAdmin()
+	id, client := token.NewClient()
+	recv := newReceiver(t)
+	r := newHookRig(t, recv.srv.URL, true, roots(recv.srv))
+	r.n.Start(t.Context())
+	for _, v := range []string{admin, client, "Bearer " + client, id} {
+		r.n.Disconnected(v)
+		r.n.PairRejected(v)
+		r.n.LogoutFailed(1, v)
+		r.n.Quarantine(v, 3)
+		r.n.RekeyConflict(v)
+		r.n.AdminMutation(v, v)
+		r.n.BackupFailed(v)
+		r.n.BackupPruneFailed(v)
+		r.n.AuditKeyChanged(v, v, v)
+	}
+	r.stop(t)
+	got := recv.requests()
+	if len(got) != 36 {
+		t.Fatalf("%d posts, want 36", len(got))
+	}
+	for _, secret := range []string{admin[len("wwadm_"):], client[len("ww_")+9:]} {
+		for _, req := range got {
+			if strings.Contains(string(req.body), secret) || strings.Contains(fmt.Sprint(req.header), secret) {
+				t.Fatalf("a posted event carries a token: %s", req.body)
+			}
+		}
+		if strings.Contains(r.out.String(), secret) {
+			t.Fatal("a line carries a token")
+		}
 	}
 }
