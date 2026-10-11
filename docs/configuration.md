@@ -613,7 +613,10 @@ Right after the master key, `serve`:
    a large archive (about 8 seconds for 500,000 messages on a laptop). Moving
    to version 3 then numbers the changes of the messages already stored, in
    transactions of 10,000 messages that each run under the 5-minute rewrite
-   deadline, and a stop in between leaves the rest to the next start. Then
+   deadline, and a stop in between leaves the rest to the next start. Version 4
+   follows version 3 and only adds a column, tables, indexes and triggers and
+   rebuilds the identity-mapping table, which takes well under a second per
+   500,000 messages. Then
    `serve` completes a rewrite of the full-text index that a stop or a failed
    rewrite left due (see below) and logs `archive_opened`.
 
@@ -644,7 +647,7 @@ interrupted and runs until that wait or the commit ends; a write whose commit
 ends succeeds. A deadline that passes just as a statement starts can be lost in
 the database driver: that statement then runs to its end before the call fails.
 
-The schema is at version 3. Besides chats, messages and their full-text index,
+The schema is at version 4. Besides chats, messages and their full-text index,
 identity mappings, push names, group members, the inbox and the history-sync
 queue, it holds:
 
@@ -657,6 +660,24 @@ queue, it holds:
   of the same person removes the merged chat and its reference with it;
 - names that the owner saved for a contact, keyed by the contact's canonical
   identifier (see [Ingest](#ingest));
+- on each message, `sent_by`: the 8-character id of the client that sent it
+  through the gateway, empty on every other message; only the send path writes
+  it;
+- `self` as the source of an identity mapping, for the pair of the owner's own
+  phone number and LID;
+- the idempotency ledger: per client and idempotency key, the send's state
+  (`pending`, `done` or `failed`), a 32-byte SHA-256 fingerprint of the request,
+  the message id, when it was reserved, the earliest time the next send may
+  follow it, when it was settled, whether it counts against the send budget, a
+  result that holds a status, a code and an ack time only, never message text
+  or a chat identifier, and an expiry 24 hours after the reservation. The rows that count are
+  also the send budget's ledger, so the budget survives a restart; its windows
+  are measured with the service's clock, never SQLite's;
+- backfill requests: a request id, the chat, a count of 1 to 50, when the
+  request was made and when it completed;
+- the audit anchor, at most one row: the id, time, key id and HMAC of the last
+  audit row removed, when it was removed, and an HMAC over them with the id of
+  its key. Triggers refuse to move it back or to remove it;
 - read clients and the chats each one may read and write. A client row has
   room for a 32-byte digest of its token, not for the token; its expiry must be
   at most 366 days after its creation, and triggers refuse a write chat for a
@@ -664,7 +685,9 @@ queue, it holds:
   would swap a client row under its chats. A client's chats are canonical identifiers, not references to stored
   chats, so they may name a chat the archive has not seen yet, and a re-key
   moves them from the phone number to the LID (see [Ingest](#ingest));
-- the audit table, whose rows triggers refuse to update, delete or replace.
+- the audit table, whose rows triggers refuse to update or replace, and to
+  delete unless the audit anchor covers the row and it is not the newest row.
+  No release writes the anchor yet, so every delete is refused.
 
 The [admin routes](#admin-routes) create and revoke clients, and each change
 appends a row to the [audit chain](#audit-chain). The engine writes saved
@@ -1454,7 +1477,9 @@ A chat identifier is `<digits>@s.whatsapp.net`, `<digits>@lid` or
 or agent suffix (`:<device>`) is dropped. A phone number that the archive has
 already mapped to a LID is stored as the LID. A read chat the archive has not
 seen yet is allowed and answered with `known` `false`: the client reads it once
-messages arrive. A write chat must be readable, because a client that could
+messages arrive. For a client with `allow_first_contact`, the create also stores
+each unseen direct write chat as an empty chat, so it has a reference; the
+create answers it with `known` `false`, and later answers say `true`. A write chat must be readable, because a client that could
 write to a chat it cannot read could learn from the answer to a reply whether a
 message exists.
 
@@ -2190,8 +2215,10 @@ write transaction of its own before the answer is sent, waiting at most 2
 seconds for the connection, and a request whose row cannot be written is
 answered `503` (`busy`) when that wait ran out and `500` (`internal_error`)
 otherwise. Triggers refuse
-to update or delete a row, or to insert one with the id of an existing row,
-which an `INSERT OR REPLACE` or a `REPLACE` would otherwise overwrite.
+to update a row, to delete one that the audit anchor does not cover or that is
+the newest row, or to insert one with the id of an existing row,
+which an `INSERT OR REPLACE` or a `REPLACE` would otherwise overwrite. No
+release writes the anchor yet, so every delete is refused.
 
 After the transaction commits, the service writes one line on standard output,
 through the same scrubbing writer as every log line:
