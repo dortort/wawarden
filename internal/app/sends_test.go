@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/dortort/wawarden/internal/api"
 	"github.com/dortort/wawarden/internal/engine"
+	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/sender"
 	"github.com/dortort/wawarden/internal/store/ingest"
@@ -115,6 +117,54 @@ func TestEveryRefusalReasonIsCreatedAtStart(t *testing.T) {
 		if !slices.Contains(sendRejectReasons, reason) {
 			t.Fatalf("%s is counted but not created at start", reason)
 		}
+	}
+}
+
+func TestTheSendShareCountsTheArchivesWriteHolders(t *testing.T) {
+	cfg := testConfig(t, token.NewAdmin())
+	cfg.OwnerPhone, cfg.SendGlobal = "+15550100009", 2
+	client := newStubClient()
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(&syncBuffer{}), testMaster(t), noClients{},
+		fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
+	if err != nil {
+		t.Fatalf("newAppWith: %v", err)
+	}
+	alice, _ := policy.Normalize("15550100001@s.whatsapp.net")
+	if err := a.archive.Write(t.Context(), "test.inbound", func(tx *ingest.Tx) error {
+		_, _, err := tx.InsertMessage(ingest.Message{Chat: alice, ID: "M1", Sender: alice, Origin: ingest.OriginLive, Timestamp: time.Now().Add(-time.Minute),
+			Kind: ingest.KindText, Text: "synthetic", Ingested: time.Now()})
+		return err
+	}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	var writer string
+	for _, name := range []string{"synthetic writer one", "synthetic writer two"} {
+		c, _, err := a.archive.Clients().Create(t.Context(), policy.ClientSpec{Name: name, Read: []string{alice.JID()}, Write: []string{alice.JID()}})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		writer = cmp.Or(writer, c.ID)
+	}
+	stop := run(t, a)
+	<-client.connected
+	if !client.emit(engine.Connected{}) {
+		t.Fatal("the engine did not register its event handler")
+	}
+	waitUntil(t, "the engine is ready to send", a.engine.Ready)
+	g, ok := policy.DecideWrite(&policy.Client{ID: writer, Write: map[policy.CanonicalChat]struct{}{alice: {}}, ExpiresAt: time.Now().Add(time.Hour)}, time.Now())
+	if !ok {
+		t.Fatal("DecideWrite refused the test client")
+	}
+	var counted []string
+	s := sendService{sender: newSender(cfg, a.archive, a.engine, a.notify), rejected: func(reason string) { counted = append(counted, reason) }}
+	if _, err := s.Send(g, t.Context(), api.SendRequest{Key: "share-key-001", Chat: alice, ChatRef: "synthetic-ref", Text: "synthetic"}); err != nil {
+		t.Fatalf("the first send = %v", err)
+	}
+	if _, err := s.Send(g, t.Context(), api.SendRequest{Key: "share-key-002", Chat: alice, ChatRef: "synthetic-ref", Text: "synthetic"}); err == nil || !slices.Equal(counted, []string{"budget_hour"}) {
+		t.Fatalf("the second send of one of two writers under a global budget of two = %v counting %q, want budget_hour", err, counted)
+	}
+	if err := stop(); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
 }
 
