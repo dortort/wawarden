@@ -6,9 +6,8 @@ archive. It exposes that archive to your own AI agents and applications, over
 REST and MCP, with access scoped per client and per chat: each client gets a
 token that may read only the chats on its allowlist, and, once sending is
 built, write only to the chats allowed for it. The link and the archive
-(milestone M1) are released as `v0.2.0`; the read API over REST and MCP
-(M2) is on `main` and not released yet; sending is planned for M3 (see
-[Status](#status)).
+(milestone M1) and the read API over REST and MCP (milestone M2) are released
+as `v0.3.0`; sending is planned for M3 (see [Status](#status)).
 
 It is not:
 
@@ -76,23 +75,23 @@ It is not:
 
 ## Status
 
-The latest release, `v0.2.0`, is milestone **M1**: WaWarden links to the
-owner's WhatsApp account and archives its messages, but serves no client API.
-`main` holds milestone **M2**, which is not released yet: clients with
+The latest release, `v0.3.0`, is milestone **M2**. WaWarden links to the
+owner's WhatsApp account and archives its messages (M1), and M2 adds: clients with
 per-chat read scopes and expiring tokens, which the admin creates and revokes;
 the REST read API (chats, messages, search and a change feed) with sealed
 cursors and per-client read and search budgets; the same reads as five MCP
 tools at `POST /mcp`; the names the owner saved for contacts, shown only to a
 client that may read the contact's direct chat and not yet verified against a
 live account; and the audit chain of client changes and of every client
-request the read budget admits.
+request the read budget admits. `main` may be ahead of the release; what is
+ahead is not released.
 
 | Milestone | State | Scope |
 |---|---|---|
 | M0 | Released as `v0.1.0` | Configuration checks and startup refusals; the client, admin and health listeners; the admin token; Prometheus metrics; `healthcheck` and `version`; the policy core; the container image and verifiable releases. |
 | M1 | Released as `v0.2.0` | The WhatsApp engine: pairing guarded by an account check, history sync, the session and the message archive in SQLite; `admin status`, `pair` and `reconnect`; notification events and a signed webhook; metrics on standard output; one encrypted backup per paired device. |
-| M2 | Implemented on `main`, not released | Clients with per-chat read scopes and expiring tokens; the read API over REST (chats, messages, search, change feed) and MCP; owner-saved contact names; the audit chain and `audit verify`; the [guide for agents](docs/agents.md). |
-| M3 | Planned | Sending over REST and MCP, with idempotency, pacing, per-client budgets and a first-contact rule; nightly encrypted backups with retention; the v1.0 documentation. |
+| M2 | Released as `v0.3.0` | Clients with per-chat read scopes and expiring tokens; the read API over REST (chats, messages, search, change feed) and MCP; owner-saved contact names; the audit chain and `audit verify`; the [guide for agents](docs/agents.md). |
+| M3 | Planned, not released | Sending over REST and MCP, with idempotency, pacing, per-client budgets and a first-contact rule; nightly encrypted backups with retention; the v1.0 documentation. |
 
 What `main` does:
 
@@ -170,7 +169,7 @@ What `main` does:
   sanitisers for display text and terminal output; a strict JSON decoder for
   request bodies; and the architecture tests and lint rules that enforce them.
 
-Not in this build: no client can send a message, and no route or tool
+Not in `v0.3.0`: no client can send a message, and no route or tool
 writes to WhatsApp (M3); backups have no schedule or retention (M3) and no
 restore tool.
 
@@ -383,10 +382,9 @@ holds the fake's code (see [the fake engine](docs/configuration.md#fake-engine))
 Images are published to `ghcr.io/dortort/wawarden` by the release workflow only.
 Take the image index digest from a release's notes, and verify the image as
 [`RELEASING.md`](RELEASING.md#verifying-a-release) describes. The latest
-release, `v0.2.0`, is M1: its image links the account and archives it, but has
-no clients, read API, MCP endpoint or audit chain, so until M2 is released,
-use the steps from source to read through a client. The example below works
-with either.
+release, `v0.3.0`, is M2: its image has the engine, the clients, the read API,
+the MCP endpoint and the audit chain, and cannot send. The example below works
+with it.
 
 ```sh
 image=ghcr.io/dortort/wawarden@sha256:<digest>
@@ -452,8 +450,12 @@ The container contract, in full in
 
 Read the [residual risks](docs/threat-model.md#residual-risks) before linking an
 account: WhatsApp can restrict, log out or ban an account that links an
-unofficial client. These steps link the owner's account to a build of `main`,
-made [from source](#from-source). In a container, start from
+unofficial client. These steps link the owner's account with `./wawarden`: the
+binary of the latest release, `v0.3.0` (the release asset
+`wawarden_<version>_linux_amd64` or `wawarden_<version>_linux_arm64`, verified
+as [Verifying a release](#verifying-a-release) describes and saved as an
+executable `wawarden`), or one built [from source](#from-source). In a
+container, start from
 [the container example](#from-the-container-image): leave `WAWARDEN_DATA_DIR`
 unset, so that the data stays in the `/data` volume, pass the hash itself as
 `WAWARDEN_ADMIN_TOKEN_SHA256` and the other variables with `-e`. Mount the
@@ -591,7 +593,7 @@ latest blob's arrival. It writes `backups/<UTC time>.age`, such as
 `backups/20261005T120000Z.age`, and reports `backup_done` with `bytes`,
 `archive_bytes`, `session_bytes` and `duration_ms`, or `backup_failed` with a
 reason, which is tried again only at the next start. It is the only backup for
-this pairing: there is no schedule or retention yet (M3). Copy it off the host
+this pairing: `v0.3.0` has no schedule or retention (M3). Copy it off the host
 and check that it decrypts with the identity file, as
 [backups](docs/configuration.md#backups) describes.
 
