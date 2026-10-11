@@ -6,11 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"syscall"
 	"testing"
 
@@ -84,6 +86,40 @@ func tarOf(t *testing.T, members ...tarMember) []byte {
 		t.Fatalf("Close: %v", err)
 	}
 	return b.Bytes()
+}
+
+func sparseMember(t *testing.T, name string, realSize int64) []byte {
+	t.Helper()
+	var records string
+	for _, kv := range [][2]string{{"GNU.sparse.major", "1"}, {"GNU.sparse.minor", "0"}, {"GNU.sparse.name", name}, {"GNU.sparse.realsize", strconv.FormatInt(realSize, 10)}} {
+		n := len(kv[0]) + len(kv[1]) + 3
+		n += len(strconv.Itoa(n + len(strconv.Itoa(n))))
+		records += strconv.Itoa(n) + " " + kv[0] + "=" + kv[1] + "\n"
+	}
+	holesOnly := make([]byte, 512)
+	copy(holesOnly, "0\n")
+	var b bytes.Buffer
+	tw := tar.NewWriter(&b)
+	for _, m := range []tarMember{{name: "PaxHeaders/" + name, body: []byte(records)}, {name: name, body: holesOnly}} {
+		if err := tw.WriteHeader(header(m.name, int64(len(m.body)), epoch)); err != nil {
+			t.Fatalf("WriteHeader: %v", err)
+		}
+		if _, err := tw.Write(m.body); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	}
+	if err := tw.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	raw := b.Bytes()
+	raw[156] = tar.TypeXHeader
+	copy(raw[148:156], "        ")
+	sum := 0
+	for _, c := range raw[:512] {
+		sum += int(c)
+	}
+	copy(raw[148:156], fmt.Sprintf("%06o\x00 ", sum))
+	return raw
 }
 
 func manifestOf(t *testing.T, m manifest) []byte {
@@ -183,6 +219,7 @@ func TestExtractRefusesAnythingButACompleteBackup(t *testing.T) {
 		{name: "the members swapped", stream: tarOf(t, s, a, man), want: ErrRejected},
 		{name: "a symbolic link", stream: tarOf(t, tarMember{name: "archive.db", typeflag: tar.TypeSymlink}, s, emptyArchive), want: ErrRejected},
 		{name: "a directory", stream: tarOf(t, tarMember{name: "archive.db", typeflag: tar.TypeDir}, s, emptyArchive), want: ErrRejected},
+		{name: "a sparse member", stream: append(sparseMember(t, "archive.db", int64(len(archive))), tarOf(t, s, man)...), want: ErrRejected},
 		{name: "a header beyond any backup", stream: tarOf(t, tarMember{name: "archive.db", size: maxMemberBytes + 1}), want: ErrRejected},
 		{name: "a manifest beyond its limit", stream: tarOf(t, a, s, tarMember{name: manifestName, body: bytes.Repeat([]byte(" "), maxManifestBytes+1)}), want: ErrRejected},
 		{name: "a member after the manifest", stream: tarOf(t, a, s, man, a), want: ErrRejected},

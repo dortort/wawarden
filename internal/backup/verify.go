@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -129,12 +130,23 @@ func next(ctx context.Context, tr *tar.Reader, name string, limit int64) (*tar.H
 		return nil, cut(ctx, "the stream ended inside a tar header")
 	case h.Typeflag != tar.TypeReg:
 		return nil, rejected("a member is not a regular file")
+	case sparse(h):
+		return nil, rejected("a member is sparse")
 	case h.Name != name:
 		return nil, rejected("a member is missing, repeated, out of order or wrongly named")
 	case h.Size < 0 || h.Size > limit:
 		return nil, rejected("a member is larger than a backup holds")
 	}
 	return h, nil
+}
+
+func sparse(h *tar.Header) bool {
+	for k := range h.PAXRecords {
+		if strings.HasPrefix(k, "GNU.sparse.") {
+			return true
+		}
+	}
+	return false
 }
 
 func writeMember(ctx context.Context, path string, r io.Reader, size int64) error {
