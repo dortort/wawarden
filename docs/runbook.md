@@ -149,8 +149,10 @@ identity kept off the service's host:
    leaves `restore/archive.db` and `restore/session.db`.
 2. Check the audit chain of the extracted archive with your copies of the keys:
    `wawarden audit verify --db restore/archive.db --master-key-file master
-   --retired-keys-dir retired --log <captured output>`. Heads shipped after the
-   backup are missing from it, as expected.
+   --retired-keys-dir retired --log heads.log`, where `heads.log` is the
+   captured output cut at the backup's time as in [Audit chain](#audit-chain).
+   An uncut capture also holds the heads shipped after the backup, which the
+   copy lacks, so they would count as missing.
 3. To start `serve` on it, use a scratch data directory of mode `0700` that
    holds only the restored `archive.db`: the missing `session.db` is created
    empty, so the engine stays unpaired and makes no connection. Never start a
@@ -175,14 +177,24 @@ sends rolls back with the archive, so a retried send can go out again.
 Each request's audit line on standard output carries the chain head. Capture
 standard output, and from time to time run `audit verify` on the archive of a
 fresh backup, as in step 2 of the [restore drill](#restore-drill), with
-`--log` pointing at the capture ([`audit verify`](configuration.md#audit-verify)).
+`--log` pointing at the capture cut at the backup's time
+([`audit verify`](configuration.md#audit-verify)). Every head shipped after the
+backup is missing from its copy, so keep only the audit lines whose `ts` is at
+least a minute earlier than the UTC time in the backup's file name: a
+request's row can be written a few seconds after its `ts`. With `jq`, for
+`20261011T030000Z.age`:
+
+```sh
+jq -cR 'fromjson? | select(.event == "audit" and .ts < "2026-10-11T02:59")' \
+  captured.log > heads.log
+```
 
 | Result | What to do |
 |---|---|
 | `none` | Nothing. |
 | `unknown_key` | A row was written under a key you did not pass: find the copy of that master key, or of the retired keys, and pass it. |
 | `anchor_invalid` | The anchor's key is missing, or the anchor was altered: pass every key; if it still fails, treat it as tampering. |
-| `hmac_mismatch`, `id_gap`, `retired_key`, shipped heads missing | Rows were altered, removed or reordered, or the copy is not what you think: treat it as an incident, keep the files, and compare with older backups. |
+| `hmac_mismatch`, `id_gap`, `retired_key`, shipped heads missing from a capture cut at the backup's time | Rows were altered, removed or reordered, or the copy is not what you think: treat it as an incident, keep the files, and compare with older backups. |
 
 Rows older than `WAWARDEN_AUDIT_RETENTION_DAYS` are removed each night after
 the backup, behind a signed anchor, and the service logs `audit_pruned`.
