@@ -304,6 +304,7 @@ const (
 	insertClient    = `INSERT INTO clients (id, name, token_hash, read_all, allow_first_contact, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
 	insertReadChat  = `INSERT INTO client_read_chats (client_id, chat_jid) VALUES (?, ?)`
 	insertWriteChat = `INSERT INTO client_write_chats (client_id, chat_jid) VALUES (?, ?)`
+	insertUnseen    = `INSERT INTO chats (jid, kind) VALUES (?, ?) ON CONFLICT (jid) DO NOTHING`
 	revokeClient    = `UPDATE clients SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`
 )
 
@@ -333,6 +334,7 @@ func (c *Clients) Create(ctx context.Context, spec policy.ClientSpec) (Client, s
 		if err != nil {
 			return err
 		}
+		var unseen []policy.CanonicalChat
 		for chat := range write {
 			var known bool
 			if err := q.QueryRowContext(ctx, selectKnown, chat.JID()).Scan(&known); err != nil {
@@ -340,6 +342,9 @@ func (c *Clients) Create(ctx context.Context, spec policy.ClientSpec) (Client, s
 			}
 			if !policy.WritableChat(chat, known, want.AllowFirstContact) {
 				return policy.ErrWriteChatUnknown
+			}
+			if !known {
+				unseen = append(unseen, chat)
 			}
 		}
 		var id string
@@ -365,6 +370,11 @@ func (c *Clients) Create(ctx context.Context, spec policy.ClientSpec) (Client, s
 		if view, err = clientView(ctx, q, id, now); err != nil {
 			return err
 		}
+		for _, chat := range unseen {
+			if _, err := q.ExecContext(ctx, insertUnseen, chat.JID(), kindCode(chat.Kind())); err != nil {
+				return err
+			}
+		}
 		settle = c.Stage(ctx, q)
 		return nil
 	})
@@ -376,6 +386,18 @@ func (c *Clients) Create(ctx context.Context, spec policy.ClientSpec) (Client, s
 	}
 	c.audit.Ship(line)
 	return view, full, nil
+}
+
+func kindCode(k policy.ChatKind) int64 {
+	switch k {
+	case policy.PhoneChat:
+		return 1
+	case policy.LIDChat:
+		return 2
+	case policy.GroupChat:
+		return 3
+	}
+	return 0
 }
 
 func freshToken(ctx context.Context, q db.Querier) (id, full string, err error) {
@@ -508,6 +530,20 @@ func (c *Clients) List(ctx context.Context) ([]Client, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+func (c *Clients) WriteHolders(ctx context.Context, now time.Time) (int, error) {
+	s, err := c.current(ctx)
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	for _, cred := range s.clients {
+		if policy.WriteHolder(cred.client, now) {
+			n++
+		}
+	}
+	return n, nil
 }
 
 func (c *Clients) Counts(ctx context.Context) (ClientCounts, error) {
