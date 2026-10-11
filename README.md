@@ -4,10 +4,11 @@ WaWarden is a self-hosted WhatsApp gateway. It links to one personal WhatsApp
 account as a companion device and keeps that account's messages in a local
 archive. It exposes that archive to your own AI agents and applications, over
 REST and MCP, with access scoped per client and per chat: each client gets a
-token that may read only the chats on its allowlist, and, once sending is
-built, write only to the chats allowed for it. The link and the archive
-(milestone M1) and the read API over REST and MCP (milestone M2) are released
-as `v0.3.0`; sending is planned for M3 (see [Status](#status)).
+token that may read only the chats on its allowlist and write only to the
+chats allowed for it. This document describes the code at the commit or tag
+you are reading; [Status](#status) names the release that introduced each
+part, and the [Releases](https://github.com/dortort/wawarden/releases) page
+lists the releases.
 
 It is not:
 
@@ -19,9 +20,9 @@ It is not:
   owner;
 - **a network security layer**: it terminates no TLS, keeps no IP allowlist and
   has no user accounts;
-- **a bulk messaging tool**: sending will be limited to the chats a client may
-  write to, paced and budgeted, and with no first contact unless a client is
-  explicitly allowed it (M3).
+- **a bulk messaging tool**: sending is limited to the chats a client may
+  write to, paced and budgeted, and makes no first contact unless a client is
+  explicitly allowed it (see [the ban-risk notes](docs/ban-risk.md)).
 
 ## Security posture
 
@@ -75,25 +76,20 @@ It is not:
 
 ## Status
 
-The latest release, `v0.3.0`, is milestone **M2**. WaWarden links to the
-owner's WhatsApp account and archives its messages (M1), and M2 adds: clients with
-per-chat read scopes and expiring tokens, which the admin creates and revokes;
-the REST read API (chats, messages, search and a change feed) with sealed
-cursors and per-client read and search budgets; the same reads as five MCP
-tools at `POST /mcp`; the names the owner saved for contacts, shown only to a
-client that may read the contact's direct chat and not yet verified against a
-live account; and the audit chain of client changes and of every client
-request the read budget admits. `main` may be ahead of the release; what is
-ahead is not released.
+Each release builds on the one before it. The table names the release
+that introduced each part; `wawarden version` prints the version of a binary,
+and the [Releases](https://github.com/dortort/wawarden/releases) page lists
+the releases. The rest of this document describes the code at the commit or
+tag you are reading.
 
-| Milestone | State | Scope |
-|---|---|---|
-| M0 | Released as `v0.1.0` | Configuration checks and startup refusals; the client, admin and health listeners; the admin token; Prometheus metrics; `healthcheck` and `version`; the policy core; the container image and verifiable releases. |
-| M1 | Released as `v0.2.0` | The WhatsApp engine: pairing guarded by an account check, history sync, the session and the message archive in SQLite; `admin status`, `pair` and `reconnect`; notification events and a signed webhook; metrics on standard output; one encrypted backup per paired device. |
-| M2 | Released as `v0.3.0` | Clients with per-chat read scopes and expiring tokens; the read API over REST (chats, messages, search, change feed) and MCP; owner-saved contact names; the audit chain and `audit verify`; the [guide for agents](docs/agents.md). |
-| M3 | Planned, not released | Sending over REST and MCP, with idempotency, pacing, per-client budgets and a first-contact rule; nightly encrypted backups with retention; audit retention and master key rotation; the v1.0 documentation. |
+| Version | Introduced |
+|---|---|
+| `v0.1.0` | Configuration checks and startup refusals; the client, admin and health listeners; the admin token; Prometheus metrics; `healthcheck` and `version`; the policy core; the container image and verifiable releases. |
+| `v0.2.0` | The WhatsApp engine: pairing guarded by an account check, history sync, the session and the message archive in SQLite; `admin status`, `pair` and `reconnect`; notification events and a signed webhook; metrics on standard output; one encrypted backup per paired device. |
+| `v0.3.0` | Clients with per-chat read scopes and expiring tokens; the read API over REST (chats, messages, search, change feed) and MCP; owner-saved contact names; the audit chain and `audit verify`; the [guide for agents](docs/agents.md). |
+| `v1.0.0` | Sending over REST and MCP, with idempotency, pacing, per-client budgets and a first-contact rule; `admin backfill` with quotas; nightly encrypted backups with retention and `backup verify`; audit retention; master key rotation with `keys rotate`; client and admin tokens redacted from logs, events and command errors; the [compatibility promise](RELEASING.md#versioning); the [hardening guide](docs/hardening.md), the [ban-risk notes](docs/ban-risk.md) and the [runbook](docs/runbook.md). |
 
-What `main` does:
+### What it does
 
 - **Start.** `wawarden serve` validates its configuration and refuses to start
   on anything it does not implement. It creates a master key in the data
@@ -121,14 +117,18 @@ What `main` does:
   a command, never from an argument or the environment. See
   [admin routes](docs/configuration.md#admin-routes).
 - **Clients.** `wawarden admin clients create` makes a client that may read
-  chosen chats, or every chat, for 90 days by default and 365 at most, and
-  prints its token once; `list`, `show` and `revoke` manage it, and `admin
-  chats list` finds the chats to name. With the token, the client reads its
-  chats through the [read API](docs/configuration.md#client-api): `/v1/me`,
-  `/v1/chats`, a chat's messages, search and a change feed, in pages with
-  sealed cursors, within per-client read and search budgets, or through five
+  chosen chats, or every chat, and write to chosen chats it reads, for 90 days
+  by default and 365 at most, and prints its token once; `list`, `show` and
+  `revoke` manage it, and `admin chats list` finds the chats to name. With the
+  token, the client reads its chats through the
+  [client API](docs/configuration.md#client-api): `/v1/me`, `/v1/chats`, a
+  chat's messages, search and a change feed, in pages with sealed cursors,
+  within per-client read and search budgets, or through the
   [MCP tools](docs/configuration.md#mcp) at `POST /mcp` that an MCP client such
-  as Claude Code calls with the same token and budgets. Each client
+  as Claude Code calls with the same token and budgets: five for a client that
+  only reads, and `send_message` as a sixth for a client with write chats. The
+  names the owner saved for contacts are shown only to a client that may read
+  the contact's direct chat. Each client
   change, and each client request, is appended to a hash-chained audit table
   and written on standard output with its chain head, and `wawarden audit
   verify` checks a copy of the archive against the master key and those heads.
@@ -141,7 +141,7 @@ What `main` does:
   [admin clients](docs/configuration.md#admin-clients-and-admin-chats),
   [the audit chain](docs/configuration.md#audit-chain) and
   [the guide for agents](docs/agents.md).
-- **Sending (unreleased, toward M3).** A client created with `--write` chats
+- **Sending.** A client created with `--write` chats
   sends text to them with `POST /v1/chats/{ref}/messages` or the MCP tool
   `send_message`, at most once per idempotency key, within per-client and
   global send limits behind a pacer, and never to a direct chat that has not
@@ -188,9 +188,9 @@ What `main` does:
   sanitisers for display text and terminal output; a strict JSON decoder for
   request bodies; and the architecture tests and lint rules that enforce them.
 
-Not in `v0.3.0`: no client can send a message, and no route or tool
-writes to WhatsApp (M3); backups have no schedule or retention (M3) and no
-restore tool.
+Not built: sending anything but text, optionally as a reply in the same chat
+(no media, reactions, edits or deletions); a restore command, since a backup
+is restored by hand (see [the runbook](docs/runbook.md#restore-drill)).
 
 ## Quick start
 
@@ -340,8 +340,8 @@ claude mcp add --transport http whatsapp http://127.0.0.1:8080/mcp --header "Aut
 ```
 
 `claude mcp list` shows `whatsapp` as connected, and `/mcp` in a Claude Code
-session lists five tools: `get_changes`, `get_chat`, `get_messages`,
-`list_chats` and `search_messages`. Claude Code keeps the header, token
+session lists the five tools of a client that only reads: `get_changes`,
+`get_chat`, `get_messages`, `list_chats` and `search_messages`. Claude Code keeps the header, token
 included, in its own configuration; `claude mcp remove whatsapp` deletes it.
 The tools, arguments and codes are in
 [docs/configuration.md](docs/configuration.md#mcp).
@@ -408,10 +408,7 @@ holds the fake's code (see [the fake engine](docs/configuration.md#fake-engine))
 
 Images are published to `ghcr.io/dortort/wawarden` by the release workflow only.
 Take the image index digest from a release's notes, and verify the image as
-[`RELEASING.md`](RELEASING.md#verifying-a-release) describes. The latest
-release, `v0.3.0`, is M2: its image has the engine, the clients, the read API,
-the MCP endpoint and the audit chain, and cannot send. The example below works
-with it.
+[`RELEASING.md`](RELEASING.md#verifying-a-release) describes.
 
 ```sh
 image=ghcr.io/dortort/wawarden@sha256:<digest>
@@ -468,7 +465,7 @@ The container contract, in full in
   while a device is paired or pairing was requested, and the webhook when one
   is set. Nothing needs to reach the container from outside but the clients and
   the operator, and never from the public internet.
-- **Licence.** From M1 on, WaWarden is `GPL-3.0-or-later`, as the image's
+- **Licence.** From `v0.2.0` on, WaWarden is `GPL-3.0-or-later`, as the image's
   `org.opencontainers.image.licenses` label says; the licence texts of
   WaWarden, the Go standard library and every linked module are under
   `/licenses` in the image (see [Licence](#licence)).
@@ -478,7 +475,7 @@ The container contract, in full in
 Read the [residual risks](docs/threat-model.md#residual-risks) before linking an
 account: WhatsApp can restrict, log out or ban an account that links an
 unofficial client. These steps link the owner's account with `./wawarden`: the
-binary of the latest release, `v0.3.0` (the release asset
+binary of a release (the release asset
 `wawarden_<version>_linux_amd64` or `wawarden_<version>_linux_arm64`, verified
 as [Verifying a release](#verifying-a-release) describes and saved as an
 executable `wawarden`), or one built [from source](#from-source). In a
@@ -623,9 +620,8 @@ reason; a failed backup is tried again after 15 minutes, then after waits
 that double up to 4 hours. From then on it takes one backup each night at
 `WAWARDEN_BACKUP_TIME`, `03:00` UTC by default, at once after a start that
 missed one, and keeps the newest `WAWARDEN_BACKUP_KEEP`, 14 by default,
-reporting `backup_pruned` when it deletes older ones. `v0.3.0` takes only the
-first backup. Copy a backup off the host and check it where the age identity
-is kept:
+reporting `backup_pruned` when it deletes older ones. Copy a backup off the
+host and check it where the age identity is kept:
 
 ```sh
 set -o pipefail
@@ -772,7 +768,7 @@ image, the binaries and their SBOMs, and to reproduce a release from source.
 
 Copyright (C) 2026 Francis Eytan Dortort.
 
-From milestone M1 on, WaWarden is licensed under the GNU General Public License,
+From `v0.2.0` on, WaWarden is licensed under the GNU General Public License,
 version 3 or (at your option) any later version (`GPL-3.0-or-later`); the
 licence text is in [`LICENSE`](LICENSE). `v0.1.0` was released under the MIT
 licence, which still applies to that release. The licence changed because
