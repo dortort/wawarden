@@ -121,6 +121,34 @@ func TestTheSentRowDedupsAgainstItsHistoryCopy(t *testing.T) {
 	}
 }
 
+func TestASecondClientNeverTakesOverASentMark(t *testing.T) {
+	s := inboundStore(t)
+	first, second := grantFor(t, writerID, false, alice), grantFor(t, otherID, false, alice)
+	mine := request(t, "mark-key-01", alice, "synthetic", epoch)
+	mine.MsgID = "S1"
+	reserved(t, s, first, mine)
+	if row := acked(t, s, first, mine, ownerJID, epoch); !row.Inserted {
+		t.Fatalf("SettleSend of a new message = %+v, want it inserted", row)
+	}
+	theirs := request(t, "mark-key-02", alice, "synthetic", epoch.Add(time.Minute))
+	theirs.MsgID = "S1"
+	reserved(t, s, second, theirs)
+	if row := acked(t, s, second, theirs, ownerJID, epoch.Add(time.Minute)); row.Inserted {
+		t.Fatalf("SettleSend of a stored message id = %+v, want the stored row kept", row)
+	}
+	if got := sentBy(t, s, "S1"); got != alice+" "+ownerJID+" live "+writerID {
+		t.Fatalf("message S1 = %q, want it still marked as sent by the first client", got)
+	}
+	theirs.Now = epoch.Add(2 * time.Minute)
+	if res, err := s.ReserveSend(second, t.Context(), theirs); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the second client's replay = %+v, %v, want ErrNotFound rather than the first client's row", res, err)
+	}
+	mine.Now = epoch.Add(2 * time.Minute)
+	if res := replay(t, s, first, mine); res.Kind != ReplayedDone || res.Sent.ID != "S1" || res.Sent.Sender != chat(t, ownerJID) {
+		t.Fatalf("the first client's replay = %+v", res)
+	}
+}
+
 func TestTheOwnPairMapsOwnSendersAlike(t *testing.T) {
 	s := openStore(t)
 	insert(t, s, textMessage(t, alice, "IN1", alice, "synthetic inbound"))
