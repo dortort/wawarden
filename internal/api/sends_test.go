@@ -566,3 +566,17 @@ func FuzzDecodeSend(f *testing.F) {
 		}
 	})
 }
+
+func TestOtherMethodsOnTheSendRouteAnswer405ForEveryClient(t *testing.T) {
+	f := newMCPFixture(t)
+	for _, key := range []string{keyGroup, keyAlice} {
+		rec := serve(f.handler, newRequest(t, http.MethodPut, "/v1/chats/"+aliceRef+"/messages", bearer(key)))
+		requireError(t, rec, http.StatusMethodNotAllowed, codeMethodNotAllowed)
+		if got := rec.Header().Get("Allow"); got != "GET, HEAD, POST" {
+			t.Fatalf("%s: Allow = %q", key, got)
+		}
+	}
+	if calls := f.sender.requests(); len(calls) != 0 {
+		t.Fatalf("a refused method reached the sender: %+v", calls)
+	}
+}
