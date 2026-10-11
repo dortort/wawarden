@@ -80,7 +80,7 @@ func message(e *events.Message) (engine.Event, bool) {
 }
 
 func historyRef(id string, n *waE2E.HistorySyncNotification) engine.HistoryRef {
-	return engine.HistoryRef{
+	ref := engine.HistoryRef{
 		ID:            id,
 		DirectPath:    n.GetDirectPath(),
 		MediaKey:      n.GetMediaKey(),
@@ -88,7 +88,12 @@ func historyRef(id string, n *waE2E.HistorySyncNotification) engine.HistoryRef {
 		FileEncSHA256: n.GetFileEncSHA256(),
 		FileLength:    n.GetFileLength(),
 		Inline:        n.GetInitialHistBootstrapInlinePayload(),
+		RequestID:     n.GetPeerDataRequestSessionID(),
 	}
+	if n.SyncType != nil {
+		ref.SyncType = n.GetSyncType().String()
+	}
+	return ref
 }
 
 func pushName(name string) string {

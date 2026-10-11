@@ -130,3 +130,11 @@ func historyNotification(t testing.TB, sender types.JID, id string, inline []byt
 	evt.Info.IsFromMe = true
 	return evt
 }
+
+func onDemandNotification(t testing.TB, sender types.JID, id, request string, inline []byte) *events.Message {
+	evt := historyNotification(t, sender, id, inline)
+	n := evt.Message.GetProtocolMessage().GetHistorySyncNotification()
+	n.SyncType = waE2E.HistorySyncType_ON_DEMAND.Enum()
+	n.PeerDataRequestSessionID = proto.String(request)
+	return evt
+}

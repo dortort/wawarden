@@ -71,12 +71,16 @@ func downloadToFile(ctx context.Context, cli *whatsmeow.Client, notif *waE2E.His
 }
 
 type Client struct {
-	devices  Devices
-	owner    string
-	max      int64
-	log      logger
-	http     httpClients
-	download downloader
+	devices      Devices
+	owner        string
+	max          int64
+	log          logger
+	http         httpClients
+	download     downloader
+	transmit     transmitter
+	transmitPeer peerTransmitter
+	online       func(*whatsmeow.Client) bool
+	now          func() time.Time
 
 	mu       sync.Mutex
 	cli      *whatsmeow.Client
@@ -109,12 +113,16 @@ func newClient(opts Options, dial dialFunc, download downloader, now func() time
 	owner, _ := policy.OwnerDigits(opts.OwnerPhone)
 	gate := newDebugGate(opts.UnsafeDebug, now, opts.Alerts)
 	c := &Client{
-		devices:  opts.Devices,
-		owner:    owner,
-		max:      opts.HistoryMaxBytes,
-		log:      newLibraryLogger(opts.Writer, opts.LogLevel, "whatsmeow", gate),
-		http:     newHTTPClients(dial, opts.HistoryMaxBytes+mediaOverhead),
-		download: download,
+		devices:      opts.Devices,
+		owner:        owner,
+		max:          opts.HistoryMaxBytes,
+		log:          newLibraryLogger(opts.Writer, opts.LogLevel, "whatsmeow", gate),
+		http:         newHTTPClients(dial, opts.HistoryMaxBytes+mediaOverhead),
+		download:     download,
+		transmit:     transmitMessage,
+		transmitPeer: transmitPeerMessage,
+		online:       loggedIn,
+		now:          now,
 	}
 	routeSignalLogs(newLibraryLogger(opts.Writer, opts.LogLevel, "libsignal", gate))
 	c.mu.Lock()
@@ -200,7 +208,21 @@ func (c *Client) dispatch(gen uint64, evt any) (handled bool) {
 	if !ok {
 		return true
 	}
-	return c.deliver(ev)
+	handled = c.deliver(ev)
+	if _, connected := evt.(*events.Connected); connected {
+		if id, known := identity(c.current().Store); known {
+			c.deliver(id)
+		}
+	}
+	return handled
+}
+
+func identity(device *store.Device) (engine.Identity, bool) {
+	pn, lid := device.GetJID().ToNonAD(), device.GetLID().ToNonAD()
+	if pn.Server != types.DefaultUserServer || pn.User == "" || lid.Server != types.HiddenUserServer || lid.User == "" {
+		return engine.Identity{}, false
+	}
+	return engine.Identity{PN: pn.String(), LID: lid.String()}, true
 }
 
 func (c *Client) update(gen uint64, fn func()) {

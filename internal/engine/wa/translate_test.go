@@ -180,6 +180,22 @@ func TestFixtureHistoryNotifications(t *testing.T) {
 	}
 }
 
+func TestFixtureOnDemandAnswersCarryTheirRequest(t *testing.T) {
+	answer, ok := translated(t, onDemandNotification(t, owner, "3EB0H4", "3EB0REQUEST", nil)).(engine.HistoryNotification)
+	if !ok || answer.Ref.SyncType != engine.SyncOnDemand || answer.Ref.RequestID != "3EB0REQUEST" || answer.Ref.ID != "3EB0H4" || answer.Ref.DirectPath == "" {
+		t.Fatalf("on-demand notification = %+v", answer)
+	}
+	bootstrap, ok := translated(t, historyNotification(t, owner, "3EB0H5", nil)).(engine.HistoryNotification)
+	if !ok || bootstrap.Ref.SyncType != "INITIAL_BOOTSTRAP" || bootstrap.Ref.RequestID != "" {
+		t.Fatalf("bootstrap notification = %+v", bootstrap)
+	}
+	unset := historyNotification(t, owner, "3EB0H6", nil)
+	unset.Message.GetProtocolMessage().GetHistorySyncNotification().SyncType = nil
+	if plain, ok := translated(t, unset).(engine.HistoryNotification); !ok || plain.Ref.SyncType != "" {
+		t.Fatalf("a notification without a sync type = %+v", plain)
+	}
+}
+
 func TestFixtureInlineBootstrapPayload(t *testing.T) {
 	inline := []byte{0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01}
 	got, ok := translated(t, historyNotification(t, owner, "3EB0H3", inline)).(engine.HistoryNotification)
