@@ -343,6 +343,9 @@ func TestTheSlotRule(t *testing.T) {
 	if got := lastSlot(time.Date(2026, 10, 6, 1, 0, 0, 0, time.FixedZone("synthetic", 3*3600)), config.DefaultBackupMinute); !got.Equal(day(0, 3, 0, 0)) {
 		t.Errorf("lastSlot of a zoned time = %v, want the slot in UTC", got)
 	}
+	if got := lastSlot(time.Date(2026, 10, 5, 23, 0, 0, 0, time.FixedZone("synthetic", -5*3600)), config.DefaultBackupMinute); !got.Equal(day(1, 3, 0, 0)) {
+		t.Errorf("lastSlot of a time behind UTC = %v, want the slot in UTC", got)
+	}
 }
 
 func TestNoNightlyBackupBeforeAFirstSuccess(t *testing.T) {
