@@ -54,7 +54,7 @@ var rules = []rule{
 	goroutineRule, netHTTPRule, dotImportRule, socketRule, muxRule, serverRule, handlerRule,
 	inListRule, bannedImportRule, reflectionRule, fenceRule, chatMethodRule, thirdPartyRule, hiddenPackageRule, nolintRule, generatedRule, wildcardRule,
 	credentialRule, preludeRule, secretComparisonRule, formRule, shadowRule, sealRule, keysDirectoryRule, standardLibraryOnlyRule, logHandlerRule, logOutputRule,
-	confinementRule, databaseFileRule, constantSQLRule, sqliteStatementRule, protocolCallRule, offlineTestRule, rawHandleRule,
+	confinementRule, databaseFileRule, constantSQLRule, sqliteStatementRule, protocolCallRule, protocolClientCallRule, offlineTestRule, rawHandleRule,
 	notifyEventRule, execRule, ageRecipientOnlyRule, backupsDirectoryRule, devOnlyRule, fakeImportRule, scopedGrantRule, scopedReadPathRule, analyzeRule,
 	mcpLoggerRule, mcpRegistrationRule, grantDecisionRule, sendGrantRule, sentByRule, auditDeleteRule, auditPruneCallerRule, verifierFenceRule,
 }
