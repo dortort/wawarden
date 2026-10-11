@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -131,7 +132,17 @@ func TestHTTPReadsAnswerBusyInsteadOfQueueing(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			opts := testOptions(t.TempDir())
 			opts.ReadSlots, opts.ReadTimeout, opts.Master, opts.AuditOut = 1, 100*time.Millisecond, syntheticMaster(t), &syncBuffer{}
-			s := openWith(t, opts)
+			var s *ingest.Store
+			for attempt := 1; s == nil; attempt++ {
+				opened, err := ingest.Open(t.Context(), opts)
+				switch {
+				case err == nil:
+					t.Cleanup(func() { _ = opened.Close() })
+					s = opened
+				case !errors.Is(err, context.DeadlineExceeded) || attempt == 50:
+					t.Fatalf("Open, attempt %d: %v", attempt, err)
+				}
+			}
 			auth := &httpClients{clients: map[string]*policy.Client{"synthetic-token": {ID: "clientaa", ReadAll: true, ExpiresAt: epoch.AddDate(1, 0, 0)}}}
 			h := clientHandler(t, s.Scoped(), auth, storeAudit{s.Audit()})
 			get := func() *httptest.ResponseRecorder {
