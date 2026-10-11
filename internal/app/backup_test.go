@@ -555,6 +555,29 @@ func TestABackupThatCannotBeRecordedWaitsBeforeTheNextAttempt(t *testing.T) {
 	}
 }
 
+func TestBackupsThatCannotBeRecordedDoubleTheWaitAndArePruned(t *testing.T) {
+	archive := triggerArchive(t)
+	tr := newTrigger(t, archive)
+	tr.status = pairedStatus
+	tr.at(t, 0)
+	failedAt := settleAfter
+	for i, wait := range []time.Duration{15 * time.Minute, 30 * time.Minute, time.Hour} {
+		ctx, cancel := context.WithCancel(t.Context())
+		tr.during = cancel
+		tr.clock.set(backupEpoch.Add(failedAt))
+		if err := tr.b.check(ctx); err == nil || tr.takes != i+1 || syncValue(t, archive, takenAtKey) != "" {
+			t.Fatalf("check = %v after %d backups, want backup %d taken and not recorded", err, tr.takes, i+1)
+		}
+		if got := tr.b.retryAt.Sub(backupEpoch.Add(failedAt)); got != wait {
+			t.Fatalf("after %d unrecorded backups the next is due %v later, want %v", i+1, got, wait)
+		}
+		if len(tr.protected) != i+1 {
+			t.Fatalf("pruned with %v after %d unrecorded backups", tr.protected, i+1)
+		}
+		failedAt += wait
+	}
+}
+
 func TestProcessedBlobRowsArePrunedOncePerSlotWithoutARecipient(t *testing.T) {
 	archive := triggerArchive(t)
 	old := backupEpoch.Add(-31 * 24 * time.Hour)

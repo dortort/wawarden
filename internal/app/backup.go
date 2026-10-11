@@ -223,13 +223,14 @@ func (b *scheduler) backup(ctx context.Context, keys ...string) error {
 		}
 		return nil
 	}
-	b.backoff, b.retryAt = 0, time.Time{}
 	b.last = began
 	b.setGauge()
 	if err := b.record(ctx, began, append(keys, lastAtKey)...); err != nil {
 		b.retry()
-		return err
+		_, _, pruneErr := b.prune(ctx, b.keep, name)
+		return errors.Join(err, pruneErr)
 	}
+	b.backoff, b.retryAt = 0, time.Time{}
 	if b.lastTaken, err = b.changes(ctx); err != nil {
 		b.taken = false
 		return err
