@@ -85,7 +85,7 @@ func (l logger) write(out *slog.Logger, level slog.Level, format string, args []
 	if !out.Enabled(ctx, level) {
 		return
 	}
-	detail := clip(maskNumbers(fmt.Sprintf(format, args...)))
+	detail := clip(maskNumbers(logx.RedactTokens(fmt.Sprintf(format, args...))))
 	out.LogAttrs(ctx, level, "protocol library log", slog.String("event", "whatsmeow_log"), slog.String("module", l.module), slog.String("detail", detail))
 }
 

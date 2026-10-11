@@ -11,6 +11,8 @@ import (
 
 	signallog "go.mau.fi/libsignal/logger"
 	"go.mau.fi/whatsmeow/store"
+
+	"github.com/dortort/wawarden/internal/token"
 )
 
 type fakeClock struct {
@@ -69,6 +71,24 @@ func TestLibraryLogsReachTheScrubbingWriter(t *testing.T) {
 	}
 	if d := lines[1]["detail"].(string); strings.Count(d, maskedNumber) != 3 || !strings.Contains(d, "jid:") {
 		t.Fatalf("detail %q, want the bare numbers masked and the identifier pseudonymised", d)
+	}
+}
+
+func TestLibraryLinesLoseTokensBeforeNumbersAreMasked(t *testing.T) {
+	l, logs, _, _ := newAdapterLogger(t, 0)
+	id, client := token.NewClient()
+	digits := client[:43] + "123456789012" + client[55:]
+	admin := token.NewAdmin()
+	l.Infof("request with %s, %s and %s", client, digits, admin)
+	got := logs.String()
+	for _, secret := range []string{client[12:55], digits[12:43], admin[6:49]} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("a token's secret reached the output:\n%s", got)
+		}
+	}
+	lines := logs.events("whatsmeow_log")
+	if len(lines) != 1 || strings.Count(lines[0]["detail"].(string), "ww_"+id+"_[redacted]") != 2 || !strings.Contains(lines[0]["detail"].(string), "wwadm_[redacted]") {
+		t.Fatalf("whatsmeow_log %v, want both client tokens and the admin token redacted", lines)
 	}
 }
 
