@@ -35,16 +35,20 @@ WhatsApp account or a WaWarden deployment that is not yours.
 
 ## Supported versions
 
-Only the latest minor release line receives security fixes. While WaWarden is at
-v0.x, each milestone release replaces the previous one; upgrade to the latest
-release before reporting, if you can.
+Only the latest minor release line receives security fixes. From v1.0.0,
+security fixes are released as patch versions of the latest minor release line
+only. Minor releases within v1 keep the documented interfaces compatible (see
+[`RELEASING.md`](RELEASING.md#versioning)), so upgrading to the latest minor is
+how you receive a fix; nothing is backported to an older line. The v0.x
+releases promised no compatibility, and each replaced the one before it.
+Upgrade to the latest release before reporting, if you can.
 
 | Version | Supported |
 |---|---|
 | Latest minor line (`vX.Y.*` of the newest release) | Yes |
 | Anything older | No |
 
-From milestone M1 on, every binary and image links third-party Go modules, among
+From `v0.2.0` on, every binary and image links third-party Go modules, among
 them the WhatsApp protocol library, the Signal protocol library, the SQLite
 driver and the age encryption library ([`README.md`](README.md#licence) lists
 them with their licences; [`RELEASING.md`](RELEASING.md#licences) describes how
@@ -56,23 +60,24 @@ checksums, signature and attestations.
 
 ## Scope
 
-The security design, its invariants and the parts already implemented are
-described in [`docs/threat-model.md`](docs/threat-model.md); the exact behaviour
-of the current build is in [`docs/configuration.md`](docs/configuration.md).
-WaWarden is under construction. The latest release, `v0.3.0`, is milestone M2.
-It holds the WhatsApp engine and its pairing guard, the message archive and the
-device store, the admin routes and `wawarden admin`, notification events and
-the webhook, and encrypted backups (M1); and clients with per-chat read scopes
-and tokens, the REST read API, the MCP read tools and the audit chain (M2).
-Sending is planned for M3 and is in no release. `main` may be ahead of the
-release. Reports against `main` and flaws in the documented design are welcome
-too.
+The security design, its invariants and the release that introduced each
+control are described in [`docs/threat-model.md`](docs/threat-model.md); the
+exact behaviour of the code at a commit or tag is in
+[`docs/configuration.md`](docs/configuration.md) at that commit or tag, and
+[`docs/hardening.md`](docs/hardening.md) describes the deployment the design
+assumes. The [README's Status table](README.md#status) names the release that
+introduced each part. Reports against any supported release, against `main`
+and against the documented design are welcome.
 
 ### In scope
 
 - Bypass of per-client or per-chat scoping: reading, searching or receiving
   changes from a chat outside a client's read scope, sending to a chat outside its
   write scope, or learning whether an out-of-scope chat or message exists.
+- Bypass of the send controls: a send to a direct chat that has never written
+  to the account by a client not allowed first contact, a send past the
+  per-client or global send limits or the pacer, one idempotency key causing
+  two sends, or a send whose outcome is unknown being sent again.
 - Forging, widening or reusing a read, write or admin grant outside the decision
   that mints it.
 - Flaws in handling client tokens or the admin credential: generation, storage,
@@ -135,7 +140,7 @@ too.
 
 Every release ships with build provenance attestations for the image and the
 binaries, whose Sigstore bundle is also a release asset, a keyless signature on
-the container image, SPDX SBOMs for the binaries and checksums. From M1 on, it
+the container image, SPDX SBOMs for the binaries and checksums. From `v0.2.0` on, it
 also ships the licence files of every linked module, as a release archive that
 the checksums and the binaries' provenance attestation cover, and under
 `/licenses` in the image. With the toolchain and builder the release pins, it
