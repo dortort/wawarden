@@ -200,7 +200,7 @@ func (n *Notifier) SendOutcomeUnknown(reason string) {
 }
 
 func (n *Notifier) SendUnrecorded() {
-	n.emit(slog.LevelWarn, "a send was acknowledged by WhatsApp but its result could not be stored", EventSendUnrecorded)
+	n.emit(slog.LevelWarn, "the outcome of a send could not be stored: its idempotency key answers send_outcome_unknown once its lease has ended", EventSendUnrecorded)
 }
 
 func (n *Notifier) AdminMutation(action, outcome string) {
