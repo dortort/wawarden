@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
@@ -26,18 +27,18 @@ var (
 	ref      = cursor.Ref{Chat: "15550100001@s.whatsapp.net", ID: "3EB0SYNTHETIC0001", Sender: "15550100001@s.whatsapp.net"}
 )
 
-func sealer(t testing.TB, k []byte, id string) *cursor.Sealer {
+func sealer(t testing.TB, k []byte, id string, retired ...cursor.Retired) *cursor.Sealer {
 	t.Helper()
-	s, err := cursor.New(k, id)
+	s, err := cursor.New(k, id, retired...)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	return s
 }
 
-func refSealer(t testing.TB, k []byte, id string) *cursor.Sealer {
+func refSealer(t testing.TB, k []byte, id string, retired ...cursor.Retired) *cursor.Sealer {
 	t.Helper()
-	s, err := cursor.NewRef(k, id)
+	s, err := cursor.NewRef(k, id, retired...)
 	if err != nil {
 		t.Fatalf("NewRef: %v", err)
 	}
@@ -336,5 +337,82 @@ func TestTheLongestReferenceFitsItsCap(t *testing.T) {
 	}
 	if _, err := s.SealRef(binding.Client, cursor.Ref{ID: strings.Repeat("x", cursor.MaxRef)}); err == nil || errors.Is(err, cursor.ErrInvalid) {
 		t.Fatalf("an oversized reference sealed or failed as a cursor error: %v", err)
+	}
+}
+
+func TestRetiredKeysOpenWhatTheySealedButNeverSeal(t *testing.T) {
+	retired := cursor.Retired{Key: otherKey, ID: otherKeyID}
+	oldCursor, err := sealer(t, otherKey, otherKeyID).Cursor(binding, position)
+	if err != nil {
+		t.Fatalf("Cursor: %v", err)
+	}
+	oldRef := mustSealRef(t, refSealer(t, otherKey, otherKeyID), binding.Client, ref)
+	cursors, refs := sealer(t, key, keyID, retired), refSealer(t, key, keyID, retired)
+	if got, err := cursors.OpenCursor(binding, oldCursor); err != nil || got != position {
+		t.Fatalf("a cursor sealed under the retired key opened to %v, %v, want %v", got, err, position)
+	}
+	if got, err := refs.OpenRef(binding.Client, oldRef); err != nil || got != ref {
+		t.Fatalf("a reference sealed under the retired key opened to %+v, %v, want %+v", got, err, ref)
+	}
+	_, err = cursors.OpenCursor(cursor.Binding{Client: "zzzzzzzz", Endpoint: binding.Endpoint, Filter: binding.Filter}, oldCursor)
+	requireInvalid(t, err)
+	_, err = refs.OpenRef("zzzzzzzz", oldRef)
+	requireInvalid(t, err)
+	_, err = sealer(t, key, keyID).OpenCursor(binding, oldCursor)
+	requireInvalid(t, err)
+	_, err = refSealer(t, key, keyID).OpenRef(binding.Client, oldRef)
+	requireInvalid(t, err)
+
+	fresh, err := cursors.Cursor(binding, position)
+	if err != nil {
+		t.Fatalf("Cursor: %v", err)
+	}
+	freshRef := mustSealRef(t, refs, binding.Client, ref)
+	if freshRef == oldRef {
+		t.Fatal("the reference sealer reused the retired key's text")
+	}
+	for name, text := range map[string]string{"cursor": fresh, "reference": strings.TrimPrefix(freshRef, cursor.RefPrefix)} {
+		raw, err := base64.RawURLEncoding.DecodeString(text)
+		if err != nil || len(raw) < 5 || hex.EncodeToString(raw[1:5]) != keyID {
+			t.Fatalf("a new %s carries the key id %x, want the current %s", name, raw[1:5], keyID)
+		}
+	}
+	if got, err := sealer(t, key, keyID).OpenCursor(binding, fresh); err != nil || got != position {
+		t.Fatalf("a new cursor needs the retired key: %v, %v", got, err)
+	}
+
+	forged, err := sealer(t, bytes.Repeat([]byte{0x44}, 32), otherKeyID).Cursor(binding, position)
+	if err != nil {
+		t.Fatalf("Cursor: %v", err)
+	}
+	_, err = cursors.OpenCursor(binding, forged)
+	requireInvalid(t, err)
+	forgedRef := mustSealRef(t, refSealer(t, bytes.Repeat([]byte{0x44}, 32), otherKeyID), binding.Client, ref)
+	_, err = refs.OpenRef(binding.Client, forgedRef)
+	requireInvalid(t, err)
+}
+
+func TestNewRefusesBadRetiredKeys(t *testing.T) {
+	third := cursor.Retired{Key: bytes.Repeat([]byte{0x44}, 32), ID: "0a1b2c3f"}
+	for _, tt := range []struct {
+		name    string
+		retired []cursor.Retired
+	}{
+		{name: "the current id", retired: []cursor.Retired{{Key: otherKey, ID: keyID}}},
+		{name: "one id twice", retired: []cursor.Retired{{Key: otherKey, ID: otherKeyID}, {Key: third.Key, ID: otherKeyID}}},
+		{name: "a short key", retired: []cursor.Retired{third, {Key: otherKey[:16], ID: otherKeyID}}},
+		{name: "a malformed id", retired: []cursor.Retired{{Key: otherKey, ID: "0a1b2c3"}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if s, err := cursor.New(key, keyID, tt.retired...); err == nil || s != nil {
+				t.Fatalf("New = %v, %v, want a refusal", s, err)
+			}
+			if s, err := cursor.NewRef(key, keyID, tt.retired...); err == nil || s != nil {
+				t.Fatalf("NewRef = %v, %v, want a refusal", s, err)
+			}
+		})
+	}
+	if _, err := cursor.New(key, keyID, third, cursor.Retired{Key: otherKey, ID: otherKeyID}); err != nil {
+		t.Fatalf("New with two retired keys: %v", err)
 	}
 }

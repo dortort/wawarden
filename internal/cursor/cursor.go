@@ -2,7 +2,6 @@
 package cursor
 
 import (
-	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
@@ -45,6 +44,12 @@ type Sealer struct {
 	fixed    cipher.AEAD
 	nonceKey []byte
 	id       [idSize]byte
+	retired  map[[idSize]byte]cipher.AEAD
+}
+
+type Retired struct {
+	Key []byte
+	ID  string
 }
 
 type Binding struct {
@@ -62,12 +67,8 @@ type Ref struct {
 	Sender string
 }
 
-func New(key []byte, keyID string) (*Sealer, error) {
-	id, err := hex.DecodeString(keyID)
-	if err != nil || len(id) != idSize || len(key) != keySize {
-		return nil, errKey
-	}
-	block, err := aes.NewCipher(key)
+func New(key []byte, keyID string, retired ...Retired) (*Sealer, error) {
+	id, block, err := keyed(key, keyID)
 	if err != nil {
 		return nil, err
 	}
@@ -79,13 +80,38 @@ func New(key []byte, keyID string) (*Sealer, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Sealer{aead: aead, fixed: fixed}
-	copy(s.id[:], id)
+	s := &Sealer{aead: aead, fixed: fixed, id: id, retired: make(map[[idSize]byte]cipher.AEAD, len(retired))}
+	for _, r := range retired {
+		rid, block, err := keyed(r.Key, r.ID)
+		if err != nil {
+			return nil, err
+		}
+		if _, dup := s.retired[rid]; dup || rid == id {
+			return nil, errKey
+		}
+		if s.retired[rid], err = cipher.NewGCMWithRandomNonce(block); err != nil {
+			return nil, err
+		}
+	}
 	return s, nil
 }
 
-func NewRef(key []byte, keyID string) (*Sealer, error) {
-	s, err := New(key, keyID)
+func keyed(key []byte, keyID string) ([idSize]byte, cipher.Block, error) {
+	var id [idSize]byte
+	raw, err := hex.DecodeString(keyID)
+	if err != nil || len(raw) != idSize || len(key) != keySize {
+		return id, nil, errKey
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return id, nil, err
+	}
+	copy(id[:], raw)
+	return id, block, nil
+}
+
+func NewRef(key []byte, keyID string, retired ...Retired) (*Sealer, error) {
+	s, err := New(key, keyID, retired...)
 	if err != nil {
 		return nil, err
 	}
@@ -191,10 +217,17 @@ func (s *Sealer) open(text string, limit int, fields []string) ([]byte, error) {
 	if err != nil || encoding.EncodeToString(raw) != text || len(raw) < headerSize+s.aead.Overhead() {
 		return nil, ErrInvalid
 	}
-	if raw[0] != version || !bytes.Equal(raw[1:headerSize], s.id[:]) {
+	if raw[0] != version {
 		return nil, ErrInvalid
 	}
-	pt, err := s.aead.Open(nil, nil, raw[headerSize:], additional(raw[:headerSize], fields))
+	aead := s.aead
+	if id := [idSize]byte(raw[1:headerSize]); id != s.id {
+		var ok bool
+		if aead, ok = s.retired[id]; !ok {
+			return nil, ErrInvalid
+		}
+	}
+	pt, err := aead.Open(nil, nil, raw[headerSize:], additional(raw[:headerSize], fields))
 	if err != nil {
 		return nil, ErrInvalid
 	}
