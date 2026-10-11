@@ -84,6 +84,26 @@ func TestPruneRemovesTheRowsBeforeTheCutoffBehindASignedAnchor(t *testing.T) {
 	}
 }
 
+func TestTheAnchorTimeIsTheNewestTimeItCovers(t *testing.T) {
+	f := open(t)
+	for _, at := range []time.Duration{5, 1, 2, 3, 4, 6} {
+		if err := f.store.Audit().Record(t.Context(), admin.Event{At: start.Add(at * time.Second), Client: "aaaaaaaa", Action: "messages.read", Reason: "ok"}); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+	heads := shippedHeads(t, f)
+	newest := start.Add(5 * time.Second).UnixMilli()
+	for i, want := range []int64{2, 4, 5} {
+		if res := prune(t, f, start.Add(4500*time.Millisecond), 2); res.Through != want {
+			t.Fatalf("batch %d = %+v, want the anchor at row %d", i, res, want)
+		}
+		rep := verify(t, f, f.copyArchive(t), heads)
+		if !rep.OK() || rep.AnchorTS != newest || rep.HeadsPruned != int(want)-1 || rep.HeadsMissing != 0 {
+			t.Fatalf("Verify after batch %d = %+v, want the anchor at the time of row 1, logged after the rows it precedes, and every removed head pruned", i, rep)
+		}
+	}
+}
+
 func TestPruneNeverRemovesTheNewestRow(t *testing.T) {
 	f, _ := chainFixture(t)
 	var total int64
@@ -151,8 +171,8 @@ func TestVerifyDetectsEveryAnchorTamper(t *testing.T) {
 			t.Fatalf("SELECT: %v", err)
 		}
 		exec(t, d, unlock, unlockAnchor, "DELETE FROM audit WHERE id <= "+strconv.FormatInt(through, 10))
-		if _, err := d.ExecContext(t.Context(), "UPDATE audit_anchor SET through = ?, ts = ?, key_id = ?, row_hmac = ?, mac_key_id = ?, mac = ?",
-			through, ts, kid, mac, keyID, admin.AnchorMAC(key, through, ts, start.UnixMilli(), kid, mac)); err != nil {
+		if _, err := d.ExecContext(t.Context(), "UPDATE audit_anchor SET through = ?, ts = ?, key_id = ?, row_hmac = ?, pruned_at = ?, mac_key_id = ?, mac = ?",
+			through, ts, kid, mac, start.UnixMilli(), keyID, admin.AnchorMAC(key, through, ts, start.UnixMilli(), kid, mac)); err != nil {
 			t.Fatalf("UPDATE audit_anchor: %v", err)
 		}
 	}
@@ -199,6 +219,55 @@ func TestVerifyDetectsEveryAnchorTamper(t *testing.T) {
 	}
 	if rep := verify(t, f, forged, heads); !rep.OK() || rep.PrunedThrough != 9 {
 		t.Fatalf("an anchor MACed with the chain key verifies as %+v: the fixture forges what the key allows", rep)
+	}
+
+	previous, current, _ := rotated(t)
+	dir := t.TempDir()
+	record := func(f *fixture) {
+		for range 3 {
+			f.clock.advance(time.Second)
+			if err := f.store.Audit().Record(t.Context(), admin.Event{At: f.clock.Now(), Client: "aaaaaaaa", Action: "messages.read", Reason: "ok"}); err != nil {
+				t.Fatalf("Record: %v", err)
+			}
+		}
+	}
+	before := openWith(t, dir, previous)
+	record(before)
+	if res := prune(t, before, start.Add(1500*time.Millisecond), pruneBatch); res.Through != 1 {
+		t.Fatalf("Prune under the retired key = %+v", res)
+	}
+	if err := before.store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	after := openWith(t, dir, current)
+	after.clock.advance(time.Minute)
+	record(after)
+	rotatedHeads := append(shippedHeads(t, before), shippedHeads(t, after)...)
+	for _, tt := range []struct {
+		name    string
+		through int64
+		invalid bool
+	}{
+		{name: "rows of the retired key cut behind an anchor under it", through: 2},
+		{name: "rows of the current key cut behind an anchor under the retired key", through: 4, invalid: true},
+		{name: "every row cut behind an anchor under the retired key", through: 6, invalid: true},
+	} {
+		path := after.copyArchive(t)
+		d := rawOpen(t, path)
+		forge(d, previous.AuditChainKey(), previous.ID(), tt.through)
+		if err := d.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		rep, err := admin.Verify(t.Context(), path, current, rotatedHeads)
+		if err != nil {
+			t.Fatalf("Verify: %v", err)
+		}
+		if tt.invalid && (rep.OK() || rep.FirstBad != tt.through || rep.Problem != admin.ReasonAnchorInvalid || rep.Bad != 1) {
+			t.Fatalf("%s: Verify = %+v, want the anchor refused", tt.name, rep)
+		}
+		if !tt.invalid && (!rep.OK() || rep.PrunedThrough != tt.through || rep.HeadsPruned != 1) {
+			t.Fatalf("%s: Verify = %+v, want what the retired key allows to verify", tt.name, rep)
+		}
 	}
 }
 

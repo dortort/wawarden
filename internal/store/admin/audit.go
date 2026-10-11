@@ -268,6 +268,7 @@ func Verify(ctx context.Context, path string, master *keys.Master, heads []Head)
 			return err
 		}
 		prev, prevID := genesis, int64(0)
+		retiredAnchor := false
 		if anchored = ok; ok {
 			rep.PrunedThrough, rep.AnchorTS = an.through, an.ts
 			if len(an.rowHMAC) >= headBytes {
@@ -276,6 +277,7 @@ func Verify(ctx context.Context, path string, master *keys.Master, heads []Head)
 			if key := chainKey(an.macKeyID); key == nil || !hmac.Equal(anchorMAC(key, an), an.mac) {
 				rep.Bad, rep.FirstBad, rep.Problem = 1, an.through, ReasonAnchorInvalid
 			}
+			retiredAnchor = rep.Bad == 0 && an.macKeyID != master.ID()
 			prev, prevID = an.rowHMAC, an.through
 		}
 		rows, err := q.QueryContext(ctx, selectAuditRows)
@@ -292,6 +294,9 @@ func Verify(ctx context.Context, path string, master *keys.Master, heads []Head)
 			r.ok = ok == 1
 			rep.Rows++
 			rep.KeyIDs[r.keyID]++
+			if retiredAnchor && rep.Rows == 1 && r.keyID == master.ID() {
+				rep.Bad, rep.FirstBad, rep.Problem = 1, an.through, ReasonAnchorInvalid
+			}
 			key := chainKey(r.keyID)
 			var problem string
 			switch {
@@ -318,6 +323,9 @@ func Verify(ctx context.Context, path string, master *keys.Master, heads []Head)
 				rep.Head = head
 			}
 			prev, prevID = stored, r.id
+		}
+		if retiredAnchor && rep.Rows == 0 {
+			rep.Bad, rep.FirstBad, rep.Problem = 1, an.through, ReasonAnchorInvalid
 		}
 		return errors.Join(rows.Err(), rows.Close())
 	})
