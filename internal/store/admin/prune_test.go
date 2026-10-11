@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -108,10 +109,13 @@ func TestTheAnchorTimeIsTheNewestTimeItCovers(t *testing.T) {
 }
 
 func TestTheAnchorTimeStaysWithinTheCommitLagOfTheCutoff(t *testing.T) {
-	dir := t.TempDir()
-	f := openWith(t, dir, syntheticMaster(t, 100))
+	f := open(t)
 	for i := range 8 {
-		if err := f.store.Audit().Record(t.Context(), admin.Event{At: start.Add(time.Duration(i) * time.Minute), Client: "aaaaaaaa", Action: "messages.read", Reason: "ok"}); err != nil {
+		at := start.Add(time.Duration(i) * time.Minute)
+		if i == 2 {
+			at = time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
+		}
+		if err := f.store.Audit().Record(t.Context(), admin.Event{At: at, Client: "aaaaaaaa", Action: "messages.read", Reason: "ok"}); err != nil {
 			t.Fatalf("Record: %v", err)
 		}
 	}
@@ -119,25 +123,15 @@ func TestTheAnchorTimeStaysWithinTheCommitLagOfTheCutoff(t *testing.T) {
 	if res := prune(t, f, start.Add(90*time.Second), pruneBatch); res.Through != 2 {
 		t.Fatalf("Prune = %+v, want the anchor at row 2", res)
 	}
-	if err := f.store.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	far := strconv.FormatInt(time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli(), 10)
-	d := rawOpen(t, filepath.Join(dir, "archive.db"))
-	exec(t, d, unlock, unlockAnchor, "UPDATE audit SET ts = "+far+" WHERE id = 3", "UPDATE audit_anchor SET ts = "+far)
-	if err := d.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	g := openWith(t, dir, f.master)
 	cutoff := start.Add(210 * time.Second)
-	if res := prune(t, g, cutoff, pruneBatch); res.Through != 4 {
-		t.Fatalf("Prune after the times moved = %+v, want the anchor at row 4", res)
+	if res := prune(t, f, cutoff, pruneBatch); res.Through != 4 {
+		t.Fatalf("Prune over a row written while the clock was ahead = %+v, want the anchor at row 4", res)
 	}
-	path := g.copyArchive(t)
-	exec(t, rawOpen(t, path), "DELETE FROM audit WHERE id >= 6")
-	rep := verify(t, g, path, heads)
-	if rep.OK() || rep.AnchorTS != cutoff.Add(10*time.Second).UnixMilli() || rep.HeadsPruned != 3 || rep.HeadsMissing != 3 || rep.FirstMissing != heads[5].Hex {
-		t.Fatalf("Verify after rows were cut from the end = %+v, want the anchor dated 10 seconds after the cutoff and rows 6 to 8 missing", rep)
+	path := f.copyArchive(t)
+	exec(t, rawOpen(t, path), unlock, "DELETE FROM audit WHERE id >= 6")
+	rep := verify(t, f, path, heads)
+	if rep.OK() || rep.AnchorTS != cutoff.Add(10*time.Second).UnixMilli() || rep.HeadsPruned != 2 || rep.HeadsMissing != 4 || rep.FirstMissing != heads[2].Hex {
+		t.Fatalf("Verify after rows were cut from the end = %+v, want the anchor dated 10 seconds after the cutoff and rows 3 and 6 to 8 missing", rep)
 	}
 }
 
@@ -430,6 +424,111 @@ func TestARetiredKeyCannotStandInForTheCurrentOne(t *testing.T) {
 	}
 	if rep := verify(t, f, path, nil); rep.OK() || rep.FirstBad != 6 || rep.Problem != admin.ReasonRetiredKey {
 		t.Fatalf("a row under the retired key after an anchor at the current key's row = %+v, want it refused", rep)
+	}
+}
+
+func tamperStopped(t *testing.T, f *fixture, master *keys.Master, tamper func(*sql.DB)) *fixture {
+	t.Helper()
+	if err := f.store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	d := rawOpen(t, filepath.Join(f.dir, "archive.db"))
+	tamper(d)
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	return openWith(t, f.dir, master)
+}
+
+func execArgs(t *testing.T, d *sql.DB, statement string, args ...any) {
+	t.Helper()
+	if _, err := d.ExecContext(t.Context(), statement, args...); err != nil {
+		t.Fatalf("%s: %v", statement, err)
+	}
+}
+
+func rowHMACOf(t *testing.T, d *sql.DB, id int64) []byte {
+	t.Helper()
+	var mac []byte
+	if err := d.QueryRowContext(t.Context(), "SELECT row_hmac FROM audit WHERE id = ?", id).Scan(&mac); err != nil {
+		t.Fatalf("SELECT row_hmac: %v", err)
+	}
+	return mac
+}
+
+func rekeyRow(t *testing.T, d *sql.DB, under *keys.Master, id int64, prev []byte) []byte {
+	t.Helper()
+	for _, r := range readRows(t, d) {
+		if r.ID == id {
+			r.Key = under.ID()
+			mac := admin.RowMAC(under.AuditChainKey(), r, prev)
+			execArgs(t, d, "UPDATE audit SET key_id = ?, row_hmac = ? WHERE id = ?", r.Key, mac, id)
+			return mac
+		}
+	}
+	t.Fatalf("no row %d", id)
+	return nil
+}
+
+func TestPruneRefusesRowsItCannotAuthenticate(t *testing.T) {
+	cutoff := start.Add(3 * time.Hour)
+	forgeTail := func(t *testing.T, d *sql.DB, previous *keys.Master, fourth []byte) {
+		exec(t, d, unlock, "DELETE FROM audit WHERE id = 6")
+		appendRow(t, d, previous, 6, rekeyRow(t, d, previous, 5, fourth))
+	}
+	for _, tt := range []struct {
+		name     string
+		anchorAt time.Time
+		tamper   func(t *testing.T, d *sql.DB, previous *keys.Master, fourth []byte)
+		through  int64
+		firstBad int64
+		problem  string
+	}{
+		{name: "the newest row forged under the retired key behind the second newest renamed to it", tamper: func(t *testing.T, d *sql.DB, previous *keys.Master, _ []byte) {
+			fifth := rowHMACOf(t, d, 5)
+			exec(t, d, unlock)
+			execArgs(t, d, "UPDATE audit SET key_id = ?, ts = (SELECT ts FROM audit WHERE id = 6) WHERE id = 5", previous.ID())
+			exec(t, d, "DELETE FROM audit WHERE id = 6")
+			appendRow(t, d, previous, 6, fifth)
+		}, firstBad: 5, problem: admin.ReasonRetiredKey},
+		{name: "the second newest row rewritten under the retired key", tamper: forgeTail, firstBad: 5, problem: admin.ReasonRetiredKey},
+		{name: "a row edited without a key", tamper: func(t *testing.T, d *sql.DB, _ *keys.Master, _ []byte) {
+			exec(t, d, unlock, "UPDATE audit SET reason = 'edited' WHERE id = 2")
+		}, firstBad: 2, problem: admin.ReasonHMACMismatch},
+		{name: "a row under the retired key after an anchor at the current key's row", anchorAt: start.Add(61500 * time.Millisecond), tamper: forgeTail,
+			through: 4, firstBad: 5, problem: admin.ReasonRetiredKey},
+		{name: "the anchor renamed to the retired key without a key", anchorAt: start.Add(61500 * time.Millisecond), tamper: func(t *testing.T, d *sql.DB, previous *keys.Master, fourth []byte) {
+			exec(t, d, unlockAnchor)
+			execArgs(t, d, "UPDATE audit_anchor SET key_id = ?", previous.ID())
+			forgeTail(t, d, previous, fourth)
+		}, through: 4, firstBad: 4, problem: admin.ReasonAnchorInvalid},
+		{name: "a removed row's time and the anchor's moved forward without a key", anchorAt: start.Add(61500 * time.Millisecond), tamper: func(t *testing.T, d *sql.DB, _ *keys.Master, _ []byte) {
+			later, far := strconv.FormatInt(start.Add(2*time.Hour).UnixMilli(), 10), strconv.FormatInt(time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli(), 10)
+			exec(t, d, unlock, unlockAnchor, "UPDATE audit SET ts = "+later+" WHERE id = 5", "UPDATE audit_anchor SET ts = "+far)
+		}, through: 4, firstBad: 4, problem: admin.ReasonAnchorInvalid},
+		{name: "the retired key's rows cut behind an anchor under it", tamper: func(t *testing.T, d *sql.DB, previous *keys.Master, _ []byte) {
+			third := rowHMACOf(t, d, 3)
+			exec(t, d, unlock, "DELETE FROM audit WHERE id <= 3")
+			installAnchor(t, d, previous, 3, start.Add(3*time.Second).UnixMilli(), previous.ID(), third)
+		}, through: 3, firstBad: 3, problem: admin.ReasonAnchorInvalid},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f, previous, current, heads := rotatedChain(t)
+			fourth := storedHMAC(t, f, 4)
+			if !tt.anchorAt.IsZero() {
+				if res := prune(t, f, tt.anchorAt, pruneBatch); res.Through != 4 {
+					t.Fatalf("Prune before the tamper = %+v, want the anchor at row 4", res)
+				}
+			}
+			f = tamperStopped(t, f, current, func(d *sql.DB) { tt.tamper(t, d, previous, fourth) })
+			if res, err := f.store.Audit().Prune(t.Context(), cutoff, f.clock.Now(), pruneBatch); !errors.Is(err, admin.ErrChainMismatch) {
+				t.Fatalf("Prune over the tampered rows = %+v, %v; want %v", res, err, admin.ErrChainMismatch)
+			}
+			rep := verify(t, f, f.copyArchive(t), heads)
+			if rep.OK() || rep.PrunedThrough != tt.through || rep.Rows != 6-tt.through || rep.FirstBad != tt.firstBad || rep.Problem != tt.problem {
+				t.Fatalf("Verify after the refused prune = %+v, want the anchor at row %d, nothing removed and first bad row %d (%q)", rep, tt.through, tt.firstBad, tt.problem)
+			}
+		})
 	}
 }
 

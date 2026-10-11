@@ -19,6 +19,7 @@ const (
 	commitLag = 10 * time.Second
 
 	ReasonAnchorInvalid = "anchor_invalid"
+	ReasonChainMismatch = "chain_mismatch"
 )
 
 const (
@@ -31,7 +32,10 @@ pruned_at = excluded.pruned_at, mac_key_id = excluded.mac_key_id, mac = excluded
 	deleteAuditThrough = `DELETE FROM audit WHERE id <= ?`
 	selectAnchorTable  = `SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = 'audit_anchor'`
 	selectAnchor       = `SELECT through, ts, key_id, row_hmac, pruned_at, mac_key_id, mac FROM audit_anchor WHERE id = 1`
+	selectRowsThrough  = `SELECT id, ts, client_id, action, chat, chat_hmac, ok, reason, peer, key_id, row_hmac FROM audit WHERE id <= ? ORDER BY id`
 )
+
+var ErrChainMismatch = errors.New("admin: the audit rows due for removal, or the anchor before them, do not verify")
 
 type anchor struct {
 	through  int64
@@ -70,6 +74,9 @@ func (a *Audit) Prune(ctx context.Context, cutoff, now time.Time, batch int) (Pr
 		if !through.Valid {
 			return nil
 		}
+		if err := a.authenticate(ctx, q, through.Int64); err != nil {
+			return err
+		}
 		an := anchor{through: through.Int64, prunedAt: now.UnixMilli(), macKeyID: a.keyID}
 		if err := q.QueryRowContext(ctx, selectAnchorTarget, an.through, cutoff.Add(commitLag).UnixMilli()).Scan(&an.ts, &an.keyID, &an.rowHMAC); err != nil {
 			return err
@@ -93,6 +100,41 @@ func (a *Audit) Prune(ctx context.Context, cutoff, now time.Time, batch int) (Pr
 		return PruneResult{}, err
 	}
 	return res, nil
+}
+
+func (a *Audit) authenticate(ctx context.Context, q db.Querier, through int64) error {
+	key := chainKeys(a.master)
+	w := walk{key: key, current: a.keyID, prev: genesis}
+	prev, anchored, err := readAnchor(ctx, q)
+	if err != nil {
+		return err
+	}
+	if anchored {
+		if !prev.valid(key) {
+			return ErrChainMismatch
+		}
+		w.prev, w.prevID, w.after = prev.rowHMAC, prev.through, prev.keyID == a.keyID
+	}
+	retiredAnchor := anchored && prev.macKeyID != a.keyID
+	rows, err := q.QueryContext(ctx, selectRowsThrough, through)
+	if err != nil {
+		return err
+	}
+	bad := false
+	for first := true; !bad && rows.Next(); first = false {
+		r, stored, err := scanRow(rows)
+		if err != nil {
+			return errors.Join(err, rows.Close())
+		}
+		bad = (first && retiredAnchor && r.keyID == a.keyID) || w.check(r, stored) != ""
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	if bad {
+		return ErrChainMismatch
+	}
+	return nil
 }
 
 func readAnchor(ctx context.Context, q db.Querier) (anchor, bool, error) {

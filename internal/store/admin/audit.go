@@ -42,19 +42,20 @@ var (
 )
 
 type Audit struct {
-	db    *db.DB
-	keyID string
-	chain *string
-	chat  *string
-	out   io.Writer
-	mu    sync.Mutex
+	db     *db.DB
+	master *keys.Master
+	keyID  string
+	chain  *string
+	chat   *string
+	out    io.Writer
+	mu     sync.Mutex
 }
 
 func NewAudit(d *db.DB, master *keys.Master, out io.Writer) *Audit {
 	a := &Audit{db: d, out: out}
 	if master != nil {
 		chain, chat := string(master.AuditChainKey()), string(master.ChatHMACKey())
-		a.keyID, a.chain, a.chat = master.ID(), &chain, &chat
+		a.master, a.keyID, a.chain, a.chat = master, master.ID(), &chain, &chat
 	}
 	return a
 }
