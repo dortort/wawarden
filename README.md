@@ -136,7 +136,8 @@ What `main` does:
   [the audit chain](docs/configuration.md#audit-chain) and
   [the guide for agents](docs/agents.md).
 - **Events and metrics.** Operational events such as `unpaired`,
-  `disconnected`, `quarantine`, `backup_done` and `admin_mutation` are written
+  `disconnected`, `quarantine`, `backup_done`, `backup_failed` and
+  `admin_mutation` are written
   as JSON lines on standard output and, with `WAWARDEN_NOTIFY_URL`, posted with
   an HMAC signature to a webhook (see
   [notifications](docs/configuration.md#notifications)). With
@@ -144,10 +145,13 @@ What `main` does:
   CloudWatch's embedded metric format, which needs no token (see
   [metrics](docs/configuration.md#embedded-metric-format)).
 - **Backups.** With `WAWARDEN_BACKUP_AGE_RECIPIENT`, an age public key, `serve`
-  writes one encrypted backup of `archive.db` and `session.db` to `backups/`
-  once a paired device's initial history sync has settled. It holds only the
-  recipient and cannot read a backup; without it, no backup is taken. There is
-  no schedule, retention or restore tool yet (see
+  writes an encrypted backup of `archive.db` and `session.db` to `backups/`
+  once a paired device's initial history sync has settled, then one each night
+  at `WAWARDEN_BACKUP_TIME` (`03:00` UTC by default), catching up after
+  downtime and retrying failures, and keeps the newest `WAWARDEN_BACKUP_KEEP`
+  (14 by default). It holds only the recipient and cannot read a backup;
+  without it, no backup is taken. `wawarden backup verify` checks a backup that
+  `age` decrypted on another machine; restoring is done by hand (see
   [backups](docs/configuration.md#backups)).
 - **Logs.** Every log line passes through one writer that turns WhatsApp
   identifiers into pseudonyms keyed by the master key and drops lines carrying
@@ -254,6 +258,9 @@ wawarden_admin_auth_failures_total 0
 # HELP wawarden_auth_failures_total Failed client authentications.
 # TYPE wawarden_auth_failures_total counter
 wawarden_auth_failures_total 1
+# HELP wawarden_backup_last_success_timestamp_seconds Unix time at which the newest successful backup began, 0 until one succeeds.
+# TYPE wawarden_backup_last_success_timestamp_seconds gauge
+wawarden_backup_last_success_timestamp_seconds 0
 # HELP wawarden_build_info Build metadata of the running binary.
 # TYPE wawarden_build_info gauge
 wawarden_build_info{version="dev",revision="<commit>",dev="false"} 1
@@ -587,15 +594,28 @@ times, is quarantined: the `quarantine` event reports it with `queue`
 
 ### 6. The first backup
 
-With a backup recipient, the service takes one backup once no history blob is
-waiting and 10 minutes have passed since the later of the pairing and the
+With a backup recipient, the service takes a first backup once no history blob
+is waiting and 10 minutes have passed since the later of the pairing and the
 latest blob's arrival. It writes `backups/<UTC time>.age`, such as
 `backups/20261005T120000Z.age`, and reports `backup_done` with `bytes`,
 `archive_bytes`, `session_bytes` and `duration_ms`, or `backup_failed` with a
-reason, which is tried again only at the next start. It is the only backup for
-this pairing: `v0.3.0` has no schedule or retention (M3). Copy it off the host
-and check that it decrypts with the identity file, as
-[backups](docs/configuration.md#backups) describes.
+reason; a failed backup is tried again after 15 minutes, then after waits
+that double up to 4 hours. From then on it takes one backup each night at
+`WAWARDEN_BACKUP_TIME`, `03:00` UTC by default, at once after a start that
+missed one, and keeps the newest `WAWARDEN_BACKUP_KEEP`, 14 by default,
+reporting `backup_pruned` when it deletes older ones. `v0.3.0` takes only the
+first backup. Copy a backup off the host and check it where the age identity
+is kept:
+
+```sh
+set -o pipefail
+mkdir -m 700 verify
+age --decrypt -i backup-identity.txt 20261005T120000Z.age |
+  ./wawarden backup verify --work-dir verify -
+```
+
+It prints counts only and ends with `verified: yes`; see
+[backups](docs/configuration.md#backups) for restoring.
 
 ### 7. When the engine disconnects
 
