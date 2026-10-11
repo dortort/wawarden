@@ -2026,7 +2026,7 @@ route's grant was decided. It answers with a fixed error and reads no further wh
 | Answer | Refused when |
 |---|---|
 | `415` `{"error":"unsupported_media_type"}` | The request does not carry exactly one `Content-Type` header, or that header is not `application/json`, optionally with the single parameter `charset=utf-8` (media type and charset in any letter case). A body the request announces is not read, and the connection is closed. |
-| `413` `{"error":"body_too_large"}` | The body is longer than 16384 bytes, or 65536 bytes for the client create route so that two sets of 256 chats fit, as announced by `Content-Length` (the body is not read) or found while reading; the connection is closed. |
+| `413` `{"error":"body_too_large"}` | The body is longer than 16384 bytes, or 65536 bytes for the client create route so that two sets of 256 chats fit and for the send route so that the longest text fits with every character written as a `\u` escape, as announced by `Content-Length` (the body is not read) or found while reading; the connection is closed. |
 | `400` `{"error":"invalid_body"}` | The body is not valid UTF-8, starts with a byte-order mark, or is not exactly one JSON object with nothing but white space after it; it nests objects and arrays more than 8 levels deep, counting the outer object; an object holds a key that is not lower-case `snake_case` (a letter `a` to `z`, then letters, digits and `_`), or holds the same key twice once escapes are decoded (`"te\u0078t"` is `"text"`); a key is not a field of the route's request; or a value does not fit its field. |
 
 `POST /mcp` checks its bodies with the same media type rule and its own size,
@@ -2097,9 +2097,13 @@ The checks run in this order, and the first that fails answers:
 1. The client must hold a write grant at the time of the request: a client
    without write chats, an all-chats client, and an expired or revoked one get
    the same `404` as an unknown route, before any body is read.
-2. The body: `415`, `413` or `400` `invalid_body` as for every body, and
-   `invalid_body` when `text` is missing, `null` or not a string, or `reply_to`
-   is not a string.
+2. The body: `415`, `413` or `400` `invalid_body` as for every body, under a
+   65536-byte cap, and `invalid_body` when `text` is missing, `null` or not a
+   string, or `reply_to` is not a string. The cap counts the bytes sent, so it
+   is wide enough for the longest text the next rule allows written entirely
+   in `\u` escapes, as Python's `json` module and Go's `encoding/json` write
+   some characters by default; the text's own length is checked after
+   decoding.
 3. The `Idempotency-Key`: missing, repeated or malformed answers `400`
    `invalid_idempotency_key`.
 4. The text: 1 to 4096 characters, at most 8192 bytes of UTF-8, and none of

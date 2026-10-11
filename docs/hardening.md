@@ -108,9 +108,9 @@ these constraints on the proxy:
   that carries either header ([client and admin requests](configuration.md#client-and-admin-requests)),
   so the proxy must not add them, and must not answer CORS preflights itself.
 - **Bodies.** The service refuses a body over 16384 bytes, 65536 for the client
-  create route and 64 KiB for `POST /mcp`
+  create route and the send route, and 64 KiB for `POST /mcp`
   ([request bodies](configuration.md#request-bodies)); a proxy limit below
-  64 KiB breaks MCP calls.
+  64 KiB breaks MCP calls and sends of long or escaped texts.
 - **Timeouts.** A send can take 25 seconds and the service writes a response
   within 30; give the proxy's upstream read timeout at least 30 seconds.
 - **MCP is plain HTTP.** The endpoint is `POST /mcp` only, stateless and
