@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -42,8 +43,8 @@ func TestWriteHolderMatchesDecideWriteForEveryShape(t *testing.T) {
 }
 
 var specChats = []string{
-	"15550100001@s.whatsapp.net", "+1 555 0100 002", "100000000000001@lid", "120363000000000001@g.us",
-	"15550100003:7@s.whatsapp.net", "status@broadcast", "not a chat", "",
+	"15550100001@s.whatsapp.net", "100000000000001@lid", "120363000000000001@g.us", "15550100003:7@s.whatsapp.net",
+	"+1 555 0100 002", "status@broadcast", "not a chat", "",
 }
 
 func drawClient(t *rapid.T) *Client {
@@ -67,6 +68,25 @@ func drawTime(t *rapid.T, label string) time.Time {
 	return now.Add(time.Duration(rapid.Int64Range(-int64(48*time.Hour), int64(400*24*time.Hour)).Draw(t, label)))
 }
 
+func drawPlausibleSpec(t *rapid.T) (ClientSpec, bool) {
+	valid := specChats[:4]
+	read := rapid.SliceOfN(rapid.SampledFrom(valid), 1, 4).Draw(t, "plausible_read")
+	var write []string
+	for _, chat := range read {
+		if rapid.Bool().Draw(t, "write_read") {
+			write = append(write, chat)
+		}
+	}
+	readable := true
+	if rapid.Bool().Draw(t, "write_extra") {
+		extra := rapid.SampledFrom(valid).Draw(t, "extra")
+		readable = slices.Contains(read, extra)
+		write = append(write, extra)
+	}
+	return ClientSpec{Name: "agent", Read: read, Write: write, AllowFirstContact: rapid.Bool().Draw(t, "plausible_first_contact"),
+		ExpiresInDays: rapid.IntRange(0, 365).Draw(t, "plausible_days")}, readable
+}
+
 func TestAcceptedSpecsWriteOnlyWhatTheyReadAndHoldWritesAsDecided(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		spec := ClientSpec{
@@ -76,6 +96,13 @@ func TestAcceptedSpecsWriteOnlyWhatTheyReadAndHoldWritesAsDecided(t *testing.T) 
 			AllChats:          rapid.Bool().Draw(t, "all_chats"),
 			AllowFirstContact: rapid.Bool().Draw(t, "first_contact"),
 			ExpiresInDays:     rapid.IntRange(-1, 400).Draw(t, "days"),
+		}
+		if rapid.Bool().Draw(t, "plausible") {
+			var readable bool
+			spec, readable = drawPlausibleSpec(t)
+			if _, err := ValidateClientSpec(spec, now); (err == nil) != readable {
+				t.Fatalf("a spec reading %q and writing %q: error %v", spec.Read, spec.Write, err)
+			}
 		}
 		c, err := ValidateClientSpec(spec, now)
 		if spec.AllChats && len(spec.Write) > 0 && err == nil {
