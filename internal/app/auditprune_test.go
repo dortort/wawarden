@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -163,6 +164,29 @@ func TestTheAuditPruneLoopsToTheEndAndLogsOnce(t *testing.T) {
 	if len(pruned) != 1 || pruned[0]["rows"] != float64(2*ingest.PruneBatch+7) || pruned[0]["through"] != float64(2*ingest.PruneBatch+7) ||
 		pruned[0]["anchor_head"] != "2233445566778899aabbccddeeff0011" || pruned[0]["level"] != "INFO" || len(pruned[0]) != 7 {
 		t.Fatalf("audit_pruned %v, want one line with the rows, the anchor row and its head only", pruned)
+	}
+}
+
+func TestAChainMismatchIsLoggedAndEndsTheAuditPruneUntilTheNextSlot(t *testing.T) {
+	tr, stub := auditTrigger(t, triggerArchive(t))
+	tr.b.take = nil
+	stub.results = []admin.PruneResult{{Rows: 5, Through: 5, AnchorHead: "00112233445566778899aabbccddeeff"}}
+	stub.during = func() {
+		if len(stub.calls) == 2 {
+			stub.err = fmt.Errorf("admin: synthetic wrap: %w", admin.ErrChainMismatch)
+		}
+	}
+	tr.at(t, 0)
+	tr.at(t, 10*time.Minute)
+	tr.at(t, 11*time.Minute)
+	refused, pruned := tr.logs.find("audit_prune_refused"), tr.logs.find("audit_pruned")
+	if len(stub.calls) != 2 || len(refused) != 1 || refused[0]["reason"] != admin.ReasonChainMismatch || refused[0]["level"] != "WARN" || len(refused[0]) != 5 ||
+		len(pruned) != 1 || pruned[0]["rows"] != float64(5) {
+		t.Fatalf("%d batches, audit_prune_refused %v, audit_pruned %v; want the refusal logged once with its reason only and the batch before it reported", len(stub.calls), refused, pruned)
+	}
+	tr.on(t, day(1, 3, 0, 0))
+	if len(stub.calls) != 3 || len(tr.logs.find("audit_prune_refused")) != 2 {
+		t.Fatalf("the next slot gave %d batches and %d refusals, want the prune tried and refused again", len(stub.calls), len(tr.logs.find("audit_prune_refused")))
 	}
 }
 

@@ -288,6 +288,11 @@ func (b *scheduler) pruneAudit(ctx context.Context) error {
 	var pruned admin.PruneResult
 	for {
 		res, err := b.audit(ctx, cutoff, now, ingest.PruneBatch)
+		if errors.Is(err, admin.ErrChainMismatch) {
+			b.logger.Warn("the audit rows due for removal, or the anchor before them, do not verify: they and the anchor stay until the next slot",
+				slog.String("event", "audit_prune_refused"), slog.String("reason", admin.ReasonChainMismatch))
+			break
+		}
 		if err != nil {
 			return err
 		}
