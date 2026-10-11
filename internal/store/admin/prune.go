@@ -22,7 +22,7 @@ const (
 const (
 	selectAuditBounds  = `SELECT min(id), max(id) FROM audit`
 	selectPruneThrough = `SELECT max(id) FROM audit WHERE id BETWEEN ?1 AND ?2 AND ts < ?3`
-	selectAnchorTarget = `SELECT ts, key_id, row_hmac FROM audit WHERE id = ?`
+	selectAnchorTarget = `SELECT (SELECT max(ts) FROM (SELECT ts FROM audit WHERE id <= ?1 UNION ALL SELECT ts FROM audit_anchor)), key_id, row_hmac FROM audit WHERE id = ?1`
 	upsertAnchor       = `INSERT INTO audit_anchor (id, through, ts, key_id, row_hmac, pruned_at, mac_key_id, mac) VALUES (1, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET through = excluded.through, ts = excluded.ts, key_id = excluded.key_id, row_hmac = excluded.row_hmac,
 pruned_at = excluded.pruned_at, mac_key_id = excluded.mac_key_id, mac = excluded.mac`
