@@ -130,6 +130,7 @@ func TestDefaults(t *testing.T) {
 		HistoryMaxBytes: 33554432,
 		BackupMinute:    180,
 		BackupKeep:      14,
+		AuditRetention:  90,
 		ReadPerMinute:   600,
 		SearchPerMinute: 60,
 	}
@@ -321,6 +322,18 @@ func TestRefusals(t *testing.T) {
 		{name: "malformed backup time without a recipient", vars: map[string]string{envBackupTime: "24:00"}, reason: "backup_time_invalid", variable: envBackupTime},
 		{name: "empty backup count without a recipient", vars: map[string]string{envBackupKeep: ""}, reason: "backup_keep_invalid", variable: envBackupKeep},
 		{name: "invalid recipient with a backup time", vars: map[string]string{envBackupRecipient: "", envBackupTime: "03:00"}, reason: "backup_recipient_invalid", variable: envBackupRecipient},
+		{name: "empty audit retention", vars: map[string]string{envAuditRetention: ""}, reason: "audit_retention_invalid", variable: envAuditRetention},
+		{name: "no audit retention", vars: map[string]string{envAuditRetention: "0"}, reason: "audit_retention_invalid", variable: envAuditRetention},
+		{name: "audit retention below a week", vars: map[string]string{envAuditRetention: "6"}, reason: "audit_retention_invalid", variable: envAuditRetention},
+		{name: "audit retention above ten years", vars: map[string]string{envAuditRetention: "3651"}, reason: "audit_retention_invalid", variable: envAuditRetention},
+		{name: "negative audit retention", vars: map[string]string{envAuditRetention: "-7"}, reason: "audit_retention_invalid", variable: envAuditRetention},
+		{name: "signed audit retention", vars: map[string]string{envAuditRetention: "+7"}, reason: "audit_retention_invalid", variable: envAuditRetention},
+		{name: "audit retention with a leading zero", vars: map[string]string{envAuditRetention: "007"}, reason: "audit_retention_invalid", variable: envAuditRetention},
+		{name: "audit retention with a space", vars: map[string]string{envAuditRetention: "7 "}, reason: "audit_retention_invalid", variable: envAuditRetention},
+		{name: "audit retention as text", vars: map[string]string{envAuditRetention: "forever"}, reason: "audit_retention_invalid", variable: envAuditRetention},
+		{name: "audit retention with a unit", vars: map[string]string{envAuditRetention: "90d"}, reason: "audit_retention_invalid", variable: envAuditRetention},
+		{name: "audit retention checked after the backup options", vars: map[string]string{envBackupKeep: "14", envAuditRetention: "0"}, reason: "backup_option_without_recipient", variable: envBackupKeep},
+		{name: "audit retention checked before the rate caps", vars: map[string]string{envAuditRetention: "0", envUnsafeRateCaps: "2"}, reason: "audit_retention_invalid", variable: envAuditRetention},
 
 		{name: "uid 0 without --allow-root", opts: func(o *Options) { o.UIDs = uids(0, 0); o.FileOwner = owned(0) }, reason: "running_as_root"},
 		{name: "effective uid 0 without --allow-root", opts: func(o *Options) { o.UIDs = uids(testUID, 0); o.FileOwner = owned(0) }, reason: "running_as_root"},
@@ -837,6 +850,19 @@ func TestBackupSchedule(t *testing.T) {
 	}
 }
 
+func TestAuditRetention(t *testing.T) {
+	for value, want := range map[string]int{"": 90, "7": 7, "90": 90, "365": 365, "3650": 3650} {
+		vars := map[string]string{}
+		if value != "" {
+			vars[envAuditRetention] = value
+		}
+		cfg, r := Load(environ(withDataDir(t, vars)), testOptions())
+		if r != nil || cfg.AuditRetention != want {
+			t.Fatalf("Load with %s=%q = %d, %v, want %d", envAuditRetention, value, cfg.AuditRetention, r, want)
+		}
+	}
+}
+
 func TestNotifySettings(t *testing.T) {
 	for _, mode := range []fs.FileMode{0o600, 0o400, 0o640, 0o440} {
 		path := secretFile(t, mode)
@@ -892,6 +918,7 @@ func TestRefusalsNeverEchoValues(t *testing.T) {
 		{envBackupRecipient: syntheticAgeRecipient, envBackupTime: secret},
 		{envBackupRecipient: syntheticAgeRecipient, envBackupKeep: secret},
 		{envBackupTime: secret},
+		{envAuditRetention: secret},
 	}
 	for _, vars := range tests {
 		_, r := Load(environ(withDataDir(t, vars)), testOptions())

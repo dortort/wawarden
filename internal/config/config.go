@@ -50,6 +50,7 @@ const (
 	envReadPerMinute   = "WAWARDEN_READ_PER_CLIENT_PER_MINUTE"
 	envSearchPerMinute = "WAWARDEN_SEARCH_PER_CLIENT_PER_MINUTE"
 	envUnsafeRateCaps  = "WAWARDEN_UNSAFE_RATE_CAPS"
+	envAuditRetention  = "WAWARDEN_AUDIT_RETENTION_DAYS"
 
 	prefix    = "WAWARDEN_"
 	devPrefix = "WAWARDEN_DEV_"
@@ -73,6 +74,10 @@ const (
 	DefaultBackupMinute = 3 * 60
 	DefaultBackupKeep   = 14
 	MaxBackupKeep       = 365
+
+	DefaultAuditRetentionDays = 90
+	MinAuditRetentionDays     = 7
+	MaxAuditRetentionDays     = 3650
 
 	maxHashFileBytes = 4096
 
@@ -117,11 +122,12 @@ const (
 	reasonUnsafeRateCapsInvalid    = "unsafe_rate_caps_invalid"
 	reasonReadPerMinuteInvalid     = "read_per_minute_invalid"
 	reasonSearchPerMinuteInvalid   = "search_per_minute_invalid"
+	reasonAuditRetentionInvalid    = "audit_retention_invalid"
 )
 
 var known = []string{envDataDir, envListen, envAdminListen, envHealthListen, envAdminHash, envAdminHashFile, envLogLevel, envStorageProfile, envMinFreeBytes,
 	envOwnerPhone, envHistoryMax, envUnsafeDebug, envMetricsEMF, envNotifyURL, envNotifySecret, envNotifyPrivate, envBackupRecipient,
-	envReadPerMinute, envSearchPerMinute, envUnsafeRateCaps, envBackupTime, envBackupKeep}
+	envReadPerMinute, envSearchPerMinute, envUnsafeRateCaps, envBackupTime, envBackupKeep, envAuditRetention}
 
 type StorageProfile string
 
@@ -157,6 +163,7 @@ type Config struct {
 	BackupRecipient string
 	BackupMinute    int
 	BackupKeep      int
+	AuditRetention  int
 	ReadPerMinute   int
 	SearchPerMinute int
 	UnsafeRateCaps  bool
@@ -244,6 +251,9 @@ func Load(environ []string, opts Options) (Config, *Refusal) {
 		return Config{}, r
 	}
 	if cfg.BackupMinute, cfg.BackupKeep, r = backupSchedule(env); r != nil {
+		return Config{}, r
+	}
+	if cfg.AuditRetention, r = auditRetention(env); r != nil {
 		return Config{}, r
 	}
 	if cfg.UnsafeRateCaps, r = unsafeRateCaps(env); r != nil {
@@ -599,6 +609,19 @@ func backupSchedule(env map[string]string) (minute, keep int, r *Refusal) {
 		}
 	}
 	return minute, keep, nil
+}
+
+func auditRetention(env map[string]string) (int, *Refusal) {
+	value, ok := env[envAuditRetention]
+	if !ok {
+		return DefaultAuditRetentionDays, nil
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil || strconv.Itoa(n) != value || n < MinAuditRetentionDays || n > MaxAuditRetentionDays {
+		return 0, &Refusal{Reason: reasonAuditRetentionInvalid, Variable: envAuditRetention,
+			detail: "must be a number of days written in decimal digits, from " + strconv.Itoa(MinAuditRetentionDays) + " to " + strconv.Itoa(MaxAuditRetentionDays)}
+	}
+	return n, nil
 }
 
 func minuteOfDay(v string) int {
