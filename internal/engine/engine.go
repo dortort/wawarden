@@ -62,7 +62,11 @@ type HistoryRef struct {
 	FileEncSHA256 []byte `json:"file_enc_sha256,omitempty"`
 	FileLength    uint64 `json:"file_length,omitempty"`
 	Inline        []byte `json:"inline,omitempty"`
+	SyncType      string `json:"sync_type,omitempty"`
+	RequestID     string `json:"request_id,omitempty"`
 }
+
+const SyncOnDemand = "ON_DEMAND"
 
 type Client interface {
 	Connect(ctx context.Context) error
@@ -181,6 +185,11 @@ type HistoryNotification struct {
 	Ref    HistoryRef
 }
 
+type Identity struct {
+	PN  string
+	LID string
+}
+
 type (
 	Connected        struct{}
 	Disconnected     struct{}
@@ -198,6 +207,7 @@ func (Message) engineEvent()             {}
 func (Group) engineEvent()               {}
 func (ContactName) engineEvent()         {}
 func (HistoryNotification) engineEvent() {}
+func (Identity) engineEvent()            {}
 func (Connected) engineEvent()           {}
 func (Disconnected) engineEvent()        {}
 func (ClientOutdated) engineEvent()      {}
