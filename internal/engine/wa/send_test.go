@@ -434,6 +434,27 @@ func TestBackfillAsksThePrimaryDeviceForHistoryBeforeTheAnchor(t *testing.T) {
 	}
 }
 
+func TestBackfillNeverLetsTheCallerCancelTheLibrary(t *testing.T) {
+	r, w := wiredRig(t, pairedDevice())
+	w.resp = whatsmeow.SendResponse{ID: "3EB0REQUEST"}
+	ctx, cancel := context.WithCancel(t.Context())
+	r.c.transmitPeer = func(c context.Context, cli *whatsmeow.Client, msg *waE2E.Message) (whatsmeow.SendResponse, error) {
+		cancel()
+		return w.peer(c, cli, msg)
+	}
+	id, err := r.c.Backfill(ctx, engine.BackfillRequest{Chat: peerChat, AnchorID: "3EB0OLDEST", AnchorTime: epoch, Count: 50})
+	if err != nil || id != "3EB0REQUEST" {
+		t.Fatalf("Backfill = %q, %v", id, err)
+	}
+	calls := w.sent()
+	if len(calls) != 1 {
+		t.Fatalf("%d library calls", len(calls))
+	}
+	if calls[0].err != nil || ctx.Err() == nil {
+		t.Fatalf("the caller's cancellation reached the library: %v", calls[0].err)
+	}
+}
+
 func TestMessageIDsAreTheLibrarysOwn(t *testing.T) {
 	r := newRig(t, pairedDevice())
 	seen := map[string]bool{}
