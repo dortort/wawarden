@@ -91,7 +91,7 @@ ahead is not released.
 | M0 | Released as `v0.1.0` | Configuration checks and startup refusals; the client, admin and health listeners; the admin token; Prometheus metrics; `healthcheck` and `version`; the policy core; the container image and verifiable releases. |
 | M1 | Released as `v0.2.0` | The WhatsApp engine: pairing guarded by an account check, history sync, the session and the message archive in SQLite; `admin status`, `pair` and `reconnect`; notification events and a signed webhook; metrics on standard output; one encrypted backup per paired device. |
 | M2 | Released as `v0.3.0` | Clients with per-chat read scopes and expiring tokens; the read API over REST (chats, messages, search, change feed) and MCP; owner-saved contact names; the audit chain and `audit verify`; the [guide for agents](docs/agents.md). |
-| M3 | Planned, not released | Sending over REST and MCP, with idempotency, pacing, per-client budgets and a first-contact rule; nightly encrypted backups with retention; the v1.0 documentation. |
+| M3 | Planned, not released | Sending over REST and MCP, with idempotency, pacing, per-client budgets and a first-contact rule; nightly encrypted backups with retention; audit retention and master key rotation; the v1.0 documentation. |
 
 What `main` does:
 
@@ -131,7 +131,12 @@ What `main` does:
   as Claude Code calls with the same token and budgets. Each client
   change, and each client request, is appended to a hash-chained audit table
   and written on standard output with its chain head, and `wawarden audit
-  verify` checks a copy of the archive against the master key and those heads. See
+  verify` checks a copy of the archive against the master key and those heads.
+  Each night, after the backup, rows older than `WAWARDEN_AUDIT_RETENTION_DAYS`
+  (90 by default) are removed behind an anchor signed under the master key.
+  `wawarden keys rotate` replaces the master key of a stopped service and keeps
+  the old one, which still opens earlier cursors and references and verifies
+  earlier audit rows. See
   [admin clients](docs/configuration.md#admin-clients-and-admin-chats),
   [the audit chain](docs/configuration.md#audit-chain) and
   [the guide for agents](docs/agents.md).
@@ -153,9 +158,9 @@ What `main` does:
   without it, no backup is taken. `wawarden backup verify` checks a backup that
   `age` decrypted on another machine; restoring is done by hand (see
   [backups](docs/configuration.md#backups)).
-- **Logs.** Every log line passes through one writer that turns WhatsApp
-  identifiers into pseudonyms keyed by the master key and drops lines carrying
-  XML in the recognised shapes. The protocol library's debug output is
+- **Logs.** Every log line passes through one writer that redacts client and
+  admin tokens, turns WhatsApp identifiers into pseudonyms keyed by the master
+  key and drops lines carrying XML in the recognised shapes. The protocol library's debug output is
   discarded unless `WAWARDEN_UNSAFE_DEBUG` opens a window of a few minutes (see
   [logging](docs/configuration.md#pseudonyms-and-dropped-lines)).
 - **Development builds.** Built with the `dev` tag, WaWarden can run a scripted
