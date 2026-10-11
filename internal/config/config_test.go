@@ -128,6 +128,8 @@ func TestDefaults(t *testing.T) {
 		StorageProfile:  StorageLocal,
 		MinFreeBytes:    268435456,
 		HistoryMaxBytes: 33554432,
+		BackupMinute:    180,
+		BackupKeep:      14,
 		ReadPerMinute:   600,
 		SearchPerMinute: 60,
 	}
@@ -299,6 +301,26 @@ func TestRefusals(t *testing.T) {
 		{name: "age secret key as the backup recipient", vars: map[string]string{envBackupRecipient: syntheticAgeSecret}, reason: "backup_recipient_invalid", variable: envBackupRecipient},
 		{name: "two backup recipients", vars: map[string]string{envBackupRecipient: syntheticAgeRecipient + "\n" + syntheticAgeRecipient}, reason: "backup_recipient_invalid", variable: envBackupRecipient},
 		{name: "backup recipient with a space", vars: map[string]string{envBackupRecipient: syntheticAgeRecipient + " "}, reason: "backup_recipient_invalid", variable: envBackupRecipient},
+		{name: "empty backup time", vars: map[string]string{envBackupRecipient: syntheticAgeRecipient, envBackupTime: ""}, reason: "backup_time_invalid", variable: envBackupTime},
+		{name: "backup time past midnight", vars: map[string]string{envBackupRecipient: syntheticAgeRecipient, envBackupTime: "24:00"}, reason: "backup_time_invalid", variable: envBackupTime},
+		{name: "backup time with a one-digit hour", vars: map[string]string{envBackupRecipient: syntheticAgeRecipient, envBackupTime: "3:00"}, reason: "backup_time_invalid", variable: envBackupTime},
+		{name: "backup time at minute 60", vars: map[string]string{envBackupRecipient: syntheticAgeRecipient, envBackupTime: "03:60"}, reason: "backup_time_invalid", variable: envBackupTime},
+		{name: "backup time with seconds", vars: map[string]string{envBackupRecipient: syntheticAgeRecipient, envBackupTime: "03:00:00"}, reason: "backup_time_invalid", variable: envBackupTime},
+		{name: "backup time with a zone", vars: map[string]string{envBackupRecipient: syntheticAgeRecipient, envBackupTime: "03:00Z"}, reason: "backup_time_invalid", variable: envBackupTime},
+		{name: "backup time with a dot", vars: map[string]string{envBackupRecipient: syntheticAgeRecipient, envBackupTime: "03.00"}, reason: "backup_time_invalid", variable: envBackupTime},
+		{name: "signed backup time", vars: map[string]string{envBackupRecipient: syntheticAgeRecipient, envBackupTime: "+3:00"}, reason: "backup_time_invalid", variable: envBackupTime},
+		{name: "empty backup count", vars: map[string]string{envBackupRecipient: syntheticAgeRecipient, envBackupKeep: ""}, reason: "backup_keep_invalid", variable: envBackupKeep},
+		{name: "zero backups kept", vars: map[string]string{envBackupRecipient: syntheticAgeRecipient, envBackupKeep: "0"}, reason: "backup_keep_invalid", variable: envBackupKeep},
+		{name: "backups kept above the cap", vars: map[string]string{envBackupRecipient: syntheticAgeRecipient, envBackupKeep: "366"}, reason: "backup_keep_invalid", variable: envBackupKeep},
+		{name: "backup count with a leading zero", vars: map[string]string{envBackupRecipient: syntheticAgeRecipient, envBackupKeep: "007"}, reason: "backup_keep_invalid", variable: envBackupKeep},
+		{name: "signed backup count", vars: map[string]string{envBackupRecipient: syntheticAgeRecipient, envBackupKeep: "+5"}, reason: "backup_keep_invalid", variable: envBackupKeep},
+		{name: "backup count with a unit", vars: map[string]string{envBackupRecipient: syntheticAgeRecipient, envBackupKeep: "14d"}, reason: "backup_keep_invalid", variable: envBackupKeep},
+		{name: "backup time without a recipient", vars: map[string]string{envBackupTime: "03:00"}, reason: "backup_option_without_recipient", variable: envBackupTime},
+		{name: "backup count without a recipient", vars: map[string]string{envBackupKeep: "14"}, reason: "backup_option_without_recipient", variable: envBackupKeep},
+		{name: "both backup options without a recipient", vars: map[string]string{envBackupTime: "03:00", envBackupKeep: "14"}, reason: "backup_option_without_recipient", variable: envBackupTime},
+		{name: "malformed backup time without a recipient", vars: map[string]string{envBackupTime: "24:00"}, reason: "backup_time_invalid", variable: envBackupTime},
+		{name: "empty backup count without a recipient", vars: map[string]string{envBackupKeep: ""}, reason: "backup_keep_invalid", variable: envBackupKeep},
+		{name: "invalid recipient with a backup time", vars: map[string]string{envBackupRecipient: "", envBackupTime: "03:00"}, reason: "backup_recipient_invalid", variable: envBackupRecipient},
 
 		{name: "uid 0 without --allow-root", opts: func(o *Options) { o.UIDs = uids(0, 0); o.FileOwner = owned(0) }, reason: "running_as_root"},
 		{name: "effective uid 0 without --allow-root", opts: func(o *Options) { o.UIDs = uids(testUID, 0); o.FileOwner = owned(0) }, reason: "running_as_root"},
@@ -796,6 +818,25 @@ func TestBackupRecipient(t *testing.T) {
 	}
 }
 
+func TestBackupSchedule(t *testing.T) {
+	for _, tt := range []struct {
+		vars         map[string]string
+		minute, keep int
+	}{
+		{vars: map[string]string{}, minute: 180, keep: 14},
+		{vars: map[string]string{envBackupRecipient: syntheticAgeRecipient}, minute: 180, keep: 14},
+		{vars: map[string]string{envBackupRecipient: syntheticAgeRecipient, envBackupTime: "00:00", envBackupKeep: "1"}, minute: 0, keep: 1},
+		{vars: map[string]string{envBackupRecipient: syntheticAgeRecipient, envBackupTime: "23:59", envBackupKeep: "365"}, minute: 23*60 + 59, keep: 365},
+		{vars: map[string]string{envBackupRecipient: syntheticAgeRecipient, envBackupTime: "19:07"}, minute: 19*60 + 7, keep: 14},
+		{vars: map[string]string{envBackupRecipient: syntheticAgeRecipient, envBackupKeep: "30"}, minute: 180, keep: 30},
+	} {
+		cfg, r := Load(environ(withDataDir(t, tt.vars)), testOptions())
+		if r != nil || cfg.BackupMinute != tt.minute || cfg.BackupKeep != tt.keep {
+			t.Fatalf("Load(%v) = minute %d, keep %d, %v, want %d and %d", tt.vars, cfg.BackupMinute, cfg.BackupKeep, r, tt.minute, tt.keep)
+		}
+	}
+}
+
 func TestNotifySettings(t *testing.T) {
 	for _, mode := range []fs.FileMode{0o600, 0o400, 0o640, 0o440} {
 		path := secretFile(t, mode)
@@ -848,6 +889,9 @@ func TestRefusalsNeverEchoValues(t *testing.T) {
 		{envNotifyURL: "https://hooks.example.test/x", envNotifySecret: writeFile(t, secret[:20])},
 		{envBackupRecipient: secret},
 		{envBackupRecipient: "age1" + secret},
+		{envBackupRecipient: syntheticAgeRecipient, envBackupTime: secret},
+		{envBackupRecipient: syntheticAgeRecipient, envBackupKeep: secret},
+		{envBackupTime: secret},
 	}
 	for _, vars := range tests {
 		_, r := Load(environ(withDataDir(t, vars)), testOptions())

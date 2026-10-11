@@ -45,6 +45,8 @@ const (
 	envNotifySecret    = "WAWARDEN_NOTIFY_SECRET_FILE"
 	envNotifyPrivate   = "WAWARDEN_NOTIFY_ALLOW_PRIVATE"
 	envBackupRecipient = "WAWARDEN_BACKUP_AGE_RECIPIENT"
+	envBackupTime      = "WAWARDEN_BACKUP_TIME"
+	envBackupKeep      = "WAWARDEN_BACKUP_KEEP"
 	envReadPerMinute   = "WAWARDEN_READ_PER_CLIENT_PER_MINUTE"
 	envSearchPerMinute = "WAWARDEN_SEARCH_PER_CLIENT_PER_MINUTE"
 	envUnsafeRateCaps  = "WAWARDEN_UNSAFE_RATE_CAPS"
@@ -67,6 +69,10 @@ const (
 	DefaultReadPerMinute   = 600
 	DefaultSearchPerMinute = 60
 	MaxUnsafeRatePerMinute = 1000000
+
+	DefaultBackupMinute = 3 * 60
+	DefaultBackupKeep   = 14
+	MaxBackupKeep       = 365
 
 	maxHashFileBytes = 4096
 
@@ -105,6 +111,9 @@ const (
 	reasonNotifySecretPermissions  = "notify_secret_permissions"
 	reasonNotifySecretInvalid      = "notify_secret_invalid"
 	reasonBackupRecipientInvalid   = "backup_recipient_invalid"
+	reasonBackupTimeInvalid        = "backup_time_invalid"
+	reasonBackupKeepInvalid        = "backup_keep_invalid"
+	reasonBackupOptionNoRecipient  = "backup_option_without_recipient"
 	reasonUnsafeRateCapsInvalid    = "unsafe_rate_caps_invalid"
 	reasonReadPerMinuteInvalid     = "read_per_minute_invalid"
 	reasonSearchPerMinuteInvalid   = "search_per_minute_invalid"
@@ -112,7 +121,7 @@ const (
 
 var known = []string{envDataDir, envListen, envAdminListen, envHealthListen, envAdminHash, envAdminHashFile, envLogLevel, envStorageProfile, envMinFreeBytes,
 	envOwnerPhone, envHistoryMax, envUnsafeDebug, envMetricsEMF, envNotifyURL, envNotifySecret, envNotifyPrivate, envBackupRecipient,
-	envReadPerMinute, envSearchPerMinute, envUnsafeRateCaps}
+	envReadPerMinute, envSearchPerMinute, envUnsafeRateCaps, envBackupTime, envBackupKeep}
 
 type StorageProfile string
 
@@ -146,6 +155,8 @@ type Config struct {
 	MetricsEMF      bool
 	Notify          Notify
 	BackupRecipient string
+	BackupMinute    int
+	BackupKeep      int
 	ReadPerMinute   int
 	SearchPerMinute int
 	UnsafeRateCaps  bool
@@ -230,6 +241,9 @@ func Load(environ []string, opts Options) (Config, *Refusal) {
 		return Config{}, r
 	}
 	if cfg.BackupRecipient, r = backupRecipient(env); r != nil {
+		return Config{}, r
+	}
+	if cfg.BackupMinute, cfg.BackupKeep, r = backupSchedule(env); r != nil {
 		return Config{}, r
 	}
 	if cfg.UnsafeRateCaps, r = unsafeRateCaps(env); r != nil {
@@ -560,6 +574,48 @@ func backupRecipient(env map[string]string) (string, *Refusal) {
 		return "", &Refusal{Reason: reasonBackupRecipientInvalid, Variable: envBackupRecipient, detail: "must be one age recipient, age1 followed by its key, without spaces or other text"}
 	}
 	return v, nil
+}
+
+func backupSchedule(env map[string]string) (minute, keep int, r *Refusal) {
+	minute, keep = DefaultBackupMinute, DefaultBackupKeep
+	if at, ok := env[envBackupTime]; ok {
+		if minute = minuteOfDay(at); minute < 0 {
+			return 0, 0, &Refusal{Reason: reasonBackupTimeInvalid, Variable: envBackupTime, detail: "must be a time of day in UTC written HH:MM, from 00:00 to 23:59"}
+		}
+	}
+	if count, ok := env[envBackupKeep]; ok {
+		n, err := strconv.Atoi(count)
+		if err != nil || strconv.Itoa(n) != count || n < 1 || n > MaxBackupKeep {
+			return 0, 0, &Refusal{Reason: reasonBackupKeepInvalid, Variable: envBackupKeep, detail: "must be a number of backups written in decimal digits, from 1 to " + strconv.Itoa(MaxBackupKeep)}
+		}
+		keep = n
+	}
+	if _, ok := env[envBackupRecipient]; ok {
+		return minute, keep, nil
+	}
+	for _, name := range []string{envBackupTime, envBackupKeep} {
+		if _, ok := env[name]; ok {
+			return 0, 0, &Refusal{Reason: reasonBackupOptionNoRecipient, Variable: name, detail: "is set without " + envBackupRecipient}
+		}
+	}
+	return minute, keep, nil
+}
+
+func minuteOfDay(v string) int {
+	if len(v) != 5 || v[2] != ':' {
+		return -1
+	}
+	for _, i := range []int{0, 1, 3, 4} {
+		if v[i] < '0' || v[i] > '9' {
+			return -1
+		}
+	}
+	h := int(v[0]-'0')*10 + int(v[1]-'0')
+	m := int(v[3]-'0')*10 + int(v[4]-'0')
+	if h > 23 || m > 59 {
+		return -1
+	}
+	return h*60 + m
 }
 
 func readNotifySecret(path string) ([]byte, *Refusal) {
