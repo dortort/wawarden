@@ -851,24 +851,33 @@ func TestV1SurfaceMatchesTheGolden(t *testing.T) {
 		t.Error(p)
 	}
 	entries := slices.Sorted(maps.Keys(s.entries))
+	if err := surfaceVerdict(entries, surfaceFloors, filepath.Join("testdata", surfaceGolden), *updateSurface && !t.Failed()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func surfaceVerdict(entries []string, floors map[string]int, file string, update bool) error {
 	counts := map[string]int{}
 	for _, e := range entries {
 		section, _, _ := strings.Cut(e, " ")
 		counts[section]++
 	}
-	for _, section := range slices.Sorted(maps.Keys(surfaceFloors)) {
-		if counts[section] < surfaceFloors[section] {
-			t.Errorf("the scan found %d %s entries, fewer than the %d of the v1 surface: removing one breaks the v1 compatibility promise, and a scan that misses entries would let a regeneration drop them unnoticed", counts[section], section, surfaceFloors[section])
+	var errs []error
+	for _, section := range slices.Sorted(maps.Keys(floors)) {
+		if counts[section] < floors[section] {
+			errs = append(errs, fmt.Errorf("the scan found %d %s entries, fewer than the %d of the v1 surface: removing one breaks the v1 compatibility promise, and a scan that misses entries would let a regeneration drop them unnoticed", counts[section], section, floors[section]))
 		}
 	}
 	for _, section := range slices.Sorted(maps.Keys(counts)) {
-		if _, ok := surfaceFloors[section]; !ok {
-			t.Errorf("the section %q has no floor in surfaceFloors", section)
+		if _, ok := floors[section]; !ok {
+			errs = append(errs, fmt.Errorf("the section %q has no floor in surfaceFloors", section))
 		}
 	}
-	if err := checkSurfaceGolden(filepath.Join("testdata", surfaceGolden), []byte(strings.Join(entries, "\n")+"\n"), *updateSurface && !t.Failed()); err != nil {
-		t.Fatal(err)
+	got := []byte(strings.Join(entries, "\n") + "\n")
+	if len(errs) > 0 {
+		return errors.Join(append(errs, checkSurfaceGolden(file, got, false))...)
 	}
+	return checkSurfaceGolden(file, got, update)
 }
 
 func scanSnippets(t *testing.T, srcs map[string]string) *surfaceScan {
@@ -1258,22 +1267,36 @@ func TestSurfaceGoldenComparison(t *testing.T) {
 	}
 	t.Run("regenerated", func(t *testing.T) {
 		file := filepath.Join(t.TempDir(), surfaceGolden)
+		for _, got := range [][]byte{[]byte(golden), []byte(golden + "route GET /c class=read\n")} {
+			if err := checkSurfaceGolden(file, got, true); err != nil {
+				t.Fatalf("regeneration failed: %v", err)
+			}
+			info, err := os.Stat(file)
+			if err != nil || info.Mode().Perm() != 0o600 {
+				t.Fatalf("the regenerated file: %v, %v, want mode 0600", info, err)
+			}
+			if data, err := fs.ReadFile(os.DirFS(filepath.Dir(file)), surfaceGolden); err != nil || !bytes.Equal(data, got) {
+				t.Fatalf("the regenerated file holds %q (%v), want %q", data, err, got)
+			}
+			if err := checkSurfaceGolden(file, got, false); err != nil {
+				t.Fatalf("the regenerated surface failed: %v", err)
+			}
+		}
+	})
+	t.Run("below a floor", func(t *testing.T) {
+		file := filepath.Join(t.TempDir(), surfaceGolden)
 		if err := os.WriteFile(file, []byte(golden), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		got := []byte(golden + "route GET /c class=read\n")
-		if err := checkSurfaceGolden(file, got, true); err != nil {
-			t.Fatalf("regeneration failed: %v", err)
+		err := surfaceVerdict([]string{"route GET /a class=read"}, map[string]int{"route": 2}, file, true)
+		if err == nil || !strings.Contains(err.Error(), "the scan found 1 route entries, fewer than the 2") {
+			t.Fatalf("a scan below its floor gave %v", err)
 		}
-		info, err := os.Stat(file)
-		if err != nil || info.Mode().Perm() != 0o600 {
-			t.Fatalf("the regenerated file: %v, %v, want mode 0600", info, err)
+		if data, err := fs.ReadFile(os.DirFS(filepath.Dir(file)), surfaceGolden); err != nil || string(data) != golden {
+			t.Fatalf("a scan below its floor left %q (%v), want the golden untouched", data, err)
 		}
-		if data, err := fs.ReadFile(os.DirFS(filepath.Dir(file)), surfaceGolden); err != nil || !bytes.Equal(data, got) {
-			t.Fatalf("the regenerated file holds %q (%v), want %q", data, err, got)
-		}
-		if err := checkSurfaceGolden(file, got, false); err != nil {
-			t.Fatalf("the regenerated surface failed: %v", err)
+		if err := surfaceVerdict([]string{"route GET /a class=read", "route GET /c class=read"}, map[string]int{"route": 2}, file, true); err != nil {
+			t.Fatalf("a scan at its floor was not regenerated: %v", err)
 		}
 	})
 	t.Run("missing", func(t *testing.T) {
