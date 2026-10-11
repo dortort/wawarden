@@ -61,3 +61,7 @@ type AuditRow struct {
 func RowMAC(key []byte, r AuditRow, prev []byte) []byte {
 	return rowMAC(key, row{id: r.ID, ts: r.TS, client: r.Client, action: r.Action, chat: r.Chat, chatHMAC: r.ChatHMAC, ok: r.OK, reason: r.Reason, peer: r.Peer, keyID: r.Key}, prev)
 }
+
+func AnchorMAC(key []byte, through, ts, prunedAt int64, keyID string, rowHMAC []byte) []byte {
+	return anchorMAC(key, anchor{through: through, ts: ts, prunedAt: prunedAt, keyID: keyID, rowHMAC: rowHMAC})
+}

@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/dortort/wawarden/internal/keys"
 	adminstore "github.com/dortort/wawarden/internal/store/admin"
@@ -54,7 +55,7 @@ func audit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "audit verify:", refusal.Error())
 		return exitFailed
 	}
-	var heads []string
+	var heads []adminstore.Head
 	if *logPath != "" {
 		var err error
 		if heads, err = shippedHeads(*logPath); err != nil {
@@ -107,7 +108,7 @@ func audit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func shippedHeads(path string) ([]string, error) {
+func shippedHeads(path string) ([]adminstore.Head, error) {
 	f, err := os.OpenFile(filepath.Clean(path), os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
@@ -116,15 +117,23 @@ func shippedHeads(path string) ([]string, error) {
 	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
 		return nil, errLogNotFile
 	}
-	var heads []string
+	var heads []adminstore.Head
 	lines := bufio.NewScanner(f)
 	lines.Buffer(make([]byte, 64<<10), maxLogLine)
 	for lines.Scan() {
 		var line struct {
-			ChainHead *string `json:"chain_head"`
+			ChainHead *string         `json:"chain_head"`
+			TS        json.RawMessage `json:"ts"`
 		}
 		if json.Unmarshal(lines.Bytes(), &line) == nil && line.ChainHead != nil && chainHead.MatchString(*line.ChainHead) {
-			heads = append(heads, *line.ChainHead)
+			h := adminstore.Head{Hex: *line.ChainHead}
+			var ts string
+			if json.Unmarshal(line.TS, &ts) == nil {
+				if at, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+					h.TS = at.UnixMilli()
+				}
+			}
+			heads = append(heads, h)
 		}
 	}
 	return heads, lines.Err()

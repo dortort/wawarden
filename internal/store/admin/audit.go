@@ -214,20 +214,30 @@ func field(dst []byte, present bool, s string) []byte {
 }
 
 type Report struct {
-	Rows         int64
-	Verified     int64
-	Bad          int64
-	FirstBad     int64
-	Problem      string
-	Head         string
-	Heads        int
-	HeadsMissing int
-	FirstMissing string
+	Rows          int64
+	Verified      int64
+	Bad           int64
+	FirstBad      int64
+	Problem       string
+	Head          string
+	Heads         int
+	HeadsMissing  int
+	FirstMissing  string
+	PrunedThrough int64
+	AnchorHead    string
+	AnchorTS      int64
+	HeadsPruned   int
+	KeyIDs        map[string]int64
 }
 
 func (r Report) OK() bool { return r.Bad == 0 && r.HeadsMissing == 0 }
 
-func Verify(ctx context.Context, path string, master *keys.Master, heads []string) (Report, error) {
+type Head struct {
+	Hex string
+	TS  int64
+}
+
+func Verify(ctx context.Context, path string, master *keys.Master, heads []Head) (Report, error) {
 	if master == nil {
 		return Report{}, errAuditUnkeyed
 	}
@@ -237,16 +247,41 @@ func Verify(ctx context.Context, path string, master *keys.Master, heads []strin
 	}
 	shipped := make(map[string]bool, len(heads))
 	for _, h := range heads {
-		shipped[h] = false
+		shipped[h.Hex] = false
 	}
-	key := master.AuditChainKey()
-	var rep Report
+	chainKeys := map[string][]byte{}
+	chainKey := func(id string) []byte {
+		key, seen := chainKeys[id]
+		if !seen {
+			if k, ok := master.Lookup(id); ok {
+				key = k.AuditChainKey()
+			}
+			chainKeys[id] = key
+		}
+		return key
+	}
+	rep := Report{KeyIDs: map[string]int64{}}
+	anchored := false
 	err = d.Read(ctx, "admin.audit_verify", func(ctx context.Context, q db.Querier) error {
-		rows, err := q.QueryContext(ctx, selectAuditRows)
+		an, ok, err := readAnchor(ctx, q)
 		if err != nil {
 			return err
 		}
 		prev, prevID := genesis, int64(0)
+		if anchored = ok; ok {
+			rep.PrunedThrough, rep.AnchorTS = an.through, an.ts
+			if len(an.rowHMAC) >= headBytes {
+				rep.AnchorHead = hex.EncodeToString(an.rowHMAC[:headBytes])
+			}
+			if key := chainKey(an.macKeyID); key == nil || !hmac.Equal(anchorMAC(key, an), an.mac) {
+				rep.Bad, rep.FirstBad, rep.Problem = 1, an.through, ReasonAnchorInvalid
+			}
+			prev, prevID = an.rowHMAC, an.through
+		}
+		rows, err := q.QueryContext(ctx, selectAuditRows)
+		if err != nil {
+			return err
+		}
 		for rows.Next() {
 			var r row
 			var stored []byte
@@ -256,11 +291,13 @@ func Verify(ctx context.Context, path string, master *keys.Master, heads []strin
 			}
 			r.ok = ok == 1
 			rep.Rows++
+			rep.KeyIDs[r.keyID]++
+			key := chainKey(r.keyID)
 			var problem string
 			switch {
 			case r.id != prevID+1:
 				problem = ReasonIDGap
-			case r.keyID != master.ID():
+			case key == nil:
 				problem = ReasonUnknownKey
 			case !hmac.Equal(rowMAC(key, r, prev), stored):
 				problem = ReasonHMACMismatch
@@ -291,14 +328,21 @@ func Verify(ctx context.Context, path string, master *keys.Master, heads []strin
 		return Report{}, fmt.Errorf("admin: read the audit chain: %w", err)
 	}
 	rep.Heads = len(shipped)
+	if _, ok := shipped[rep.AnchorHead]; ok && anchored {
+		shipped[rep.AnchorHead] = true
+	}
 	for _, h := range heads {
-		if !shipped[h] {
+		switch {
+		case shipped[h.Hex]:
+		case anchored && h.TS > 0 && h.TS <= rep.AnchorTS:
+			rep.HeadsPruned++
+		default:
 			rep.HeadsMissing++
 			if rep.FirstMissing == "" {
-				rep.FirstMissing = h
+				rep.FirstMissing = h.Hex
 			}
-			shipped[h] = true
 		}
+		shipped[h.Hex] = true
 	}
 	return rep, nil
 }

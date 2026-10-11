@@ -14,7 +14,7 @@ import (
 	"github.com/dortort/wawarden/internal/store/admin"
 )
 
-func chainFixture(t *testing.T) (*fixture, []string) {
+func chainFixture(t *testing.T) (*fixture, []admin.Head) {
 	t.Helper()
 	f := open(t)
 	c, _ := f.create(t, policy.ClientSpec{Name: "agent", Read: []string{phoneA, groupG}})
@@ -33,14 +33,24 @@ func chainFixture(t *testing.T) (*fixture, []string) {
 	if _, err := f.clients.Revoke(t.Context(), c.ID); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
-	var heads []string
-	for _, line := range f.auditLines(t) {
-		heads = append(heads, line["chain_head"].(string))
-	}
+	heads := shippedHeads(t, f)
 	if len(heads) != 12 {
 		t.Fatalf("%d audit lines, want 12", len(heads))
 	}
 	return f, heads
+}
+
+func shippedHeads(t *testing.T, f *fixture) []admin.Head {
+	t.Helper()
+	var heads []admin.Head
+	for _, line := range f.auditLines(t) {
+		at, err := time.Parse(time.RFC3339Nano, line["ts"].(string))
+		if err != nil {
+			t.Fatalf("audit line time %v: %v", line["ts"], err)
+		}
+		heads = append(heads, admin.Head{Hex: line["chain_head"].(string), TS: at.UnixMilli()})
+	}
+	return heads
 }
 
 func TestAuditLinesCarryTheShapeAndTheHead(t *testing.T) {
@@ -71,8 +81,8 @@ func TestAuditLinesCarryTheShapeAndTheHead(t *testing.T) {
 		if got := strings.Join(keys, " "); got != "action chain_head chat_hmac client event ok reason ts" || line["event"] != "audit" {
 			t.Fatalf("audit line %d has the keys %s and the event %v, want the audit event", i, got, line["event"])
 		}
-		if heads[i] != hex.EncodeToString(stored[i][:16]) {
-			t.Fatalf("line %d ships the head %s, the row's HMAC starts %x", i, heads[i], stored[i][:16])
+		if heads[i].Hex != hex.EncodeToString(stored[i][:16]) {
+			t.Fatalf("line %d ships the head %s, the row's HMAC starts %x", i, heads[i].Hex, stored[i][:16])
 		}
 	}
 	m := hmac.New(sha256.New, chatKey)
@@ -113,7 +123,7 @@ func TestAppendRefusesEventsTheChainDoesNotRecord(t *testing.T) {
 	}
 }
 
-func verify(t *testing.T, f *fixture, path string, heads []string) admin.Report {
+func verify(t *testing.T, f *fixture, path string, heads []admin.Head) admin.Report {
 	t.Helper()
 	rep, err := admin.Verify(t.Context(), path, f.master, heads)
 	if err != nil {
@@ -153,7 +163,7 @@ const unlock = "DROP TRIGGER audit_no_update; DROP TRIGGER audit_no_delete"
 func TestVerifyDetectsEveryTamper(t *testing.T) {
 	f, heads := chainFixture(t)
 	intact := verify(t, f, f.copyArchive(t), heads)
-	if !intact.OK() || intact.Rows != 12 || intact.Verified != 12 || intact.Heads != 12 || intact.HeadsMissing != 0 || intact.Head != heads[11] {
+	if !intact.OK() || intact.Rows != 12 || intact.Verified != 12 || intact.Heads != 12 || intact.HeadsMissing != 0 || intact.Head != heads[11].Hex {
 		t.Fatalf("the intact chain reports %+v", intact)
 	}
 	other := syntheticMaster(t, 7)
@@ -219,8 +229,8 @@ func TestVerifyDetectsEveryTamper(t *testing.T) {
 				if err != nil || !chainOnly.OK() || chainOnly.Rows != 8 {
 					t.Fatalf("without the shipped heads the truncated chain reports %+v, %v: truncation is visible only through the heads", chainOnly, err)
 				}
-				if rep.FirstMissing != heads[8] {
-					t.Fatalf("first missing head %s, want %s", rep.FirstMissing, heads[8])
+				if rep.FirstMissing != heads[8].Hex {
+					t.Fatalf("first missing head %s, want %s", rep.FirstMissing, heads[8].Hex)
 				}
 			}
 		})
