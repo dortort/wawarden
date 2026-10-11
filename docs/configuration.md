@@ -1,11 +1,13 @@
 # Configuration reference
 
 This is the authoritative reference for configuring and running WaWarden. It
-describes the current build on `main`; the latest release, `v0.3.0`, is
-milestone **M2**, and what `main` holds beyond it is unreleased work toward
-**M3**. To M0's
-configuration checks, listeners, admin token and metrics, M1 adds the
-[master key](#master-key), the pseudonyms and dropped lines in the
+describes the code at the commit or tag you are reading; the
+[README's Status table](../README.md#status) names the release that introduced
+each part, and [`wawarden version`](#version) prints a binary's version. It
+covers the configuration checks, [startup refusals](#startup-refusals),
+[listeners](#listeners), admin token and [metrics](#metrics); the
+[master key](#master-key) and its rotation by [`keys rotate`](#keys-rotate),
+the pseudonyms and dropped lines in the
 [logs](#pseudonyms-and-dropped-lines), the
 [request-body decoder](#request-bodies), the
 [message archive](#message-archive), the [device store](#device-store), the
@@ -14,20 +16,20 @@ library, the [admin routes](#admin-routes) with the
 [admin commands](#admin-status-admin-pair-and-admin-reconnect) that call them,
 [notifications](#notifications),
 [metrics in embedded metric format](#embedded-metric-format),
-[backups](#backups) and, in development builds only, the
-[fake engine](#fake-engine). M2 adds clients with per-chat read scopes and
+nightly [backups](#backups) with retention, checked offline by
+[`backup verify`](#backup-verify), and, in development builds only, the
+[fake engine](#fake-engine). Clients with per-chat read and write scopes and
 expiring tokens, which [`admin clients`](#admin-clients-and-admin-chats)
-creates and revokes; the client listener's [read routes](#client-api) and the same
-reads as [MCP tools](#mcp); the names the owner saved for contacts; per-client
-[read rate limits](#read-rate-limits); and the [audit chain](#audit-chain) with
-[`audit verify`](#audit-verify). Toward M3, this build takes a nightly
-[backup](#backups), keeps a bounded number of them, deletes old processed
-history-blob rows, and checks a decrypted backup with
-[`backup verify`](#backup-verify). It also sends: a client with write chats
-sends text through the [client API](#client-api) and the `send_message`
-[MCP tool](#mcp-tools), at most once per idempotency key and within the
-[send limits](#send-limits), and [`admin backfill`](#admin-backfill) asks the
-owner's phone for a chat's older history. Sending is in no release yet. How an agent should
+creates and revokes, read through the client listener's
+[routes](#client-api) and the same reads as [MCP tools](#mcp), within per-client
+[read rate limits](#read-rate-limits), and see the names the owner saved for
+contacts. A client with write chats sends text through the
+[client API](#sending) and the `send_message` [MCP tool](#mcp-tools), at most
+once per idempotency key and within the [send limits](#send-limits), and
+[`admin backfill`](#admin-backfill) asks the owner's phone for a chat's older
+history. The [audit chain](#audit-chain) records client changes and requests,
+is checked offline by [`audit verify`](#audit-verify) and drops rows past its
+retention behind a signed anchor. How an agent should
 treat what it reads is in [docs/agents.md](agents.md). A service without a
 paired device makes no connection to WhatsApp until `wawarden admin pair`
 requests pairing. Everything listed here
@@ -53,10 +55,6 @@ agent's host only; never put it in the service's environment, where `serve`
 refuses it as `unknown_variable`.
 
 ### Reserved names
-
-No `WAWARDEN_` name is reserved for a later milestone in this build: the two
-send limits and their `UNSAFE_` override, once reserved here, are now
-[environment variables](#environment-variables).
 
 `WAWARDEN_DEV_*` names are reserved for development builds; a release build
 refuses every one of them with `dev_variable_in_release`. A development build
@@ -514,7 +512,7 @@ These are all the variables this build reads.
 | `WAWARDEN_BACKUP_AGE_RECIPIENT` | unset | The one [age](https://age-encryption.org) recipient that [backups](#backups) are encrypted to: an X25519 recipient (`age1` followed by 58 characters, as `age-keygen` prints it) or a post-quantum hybrid one (`age1pq1...`), with no white space, comment or second recipient. An SSH key, a plugin recipient or an age secret key is refused, and the refusal never repeats the value. Unset, no backup is ever taken and `backup_disabled` is logged at start. | `backup_recipient_invalid` |
 | `WAWARDEN_BACKUP_TIME` | `03:00` | The time of day, in UTC and written `HH:MM`, of the nightly [backup](#backups) slot. Only with `WAWARDEN_BACKUP_AGE_RECIPIENT`. | `backup_time_invalid`, `backup_option_without_recipient` |
 | `WAWARDEN_BACKUP_KEEP` | `14` | How many [backups](#backups) `backups/` keeps: after each successful backup, the oldest beyond this count, by the time in their names, are deleted. A whole number from 1 to 365. Only with `WAWARDEN_BACKUP_AGE_RECIPIENT`. | `backup_keep_invalid`, `backup_option_without_recipient` |
-| `WAWARDEN_AUDIT_RETENTION_DAYS` | `90` | How many days the [audit chain](#audit-chain) keeps its rows: each night, after the backup, rows written more than this many days before are removed behind a signed anchor. A whole number from 7 to 3650 in decimal digits; no value keeps rows forever. | `audit_retention_invalid` |
+| `WAWARDEN_AUDIT_RETENTION_DAYS` | `90` | How many days the [audit chain](#audit-chain) keeps its rows: each night, after the backup, rows written more than this many days before are removed behind a signed anchor. A whole number from 7 to 3650 in decimal digits. Unset means 90; no setting keeps rows forever. | `audit_retention_invalid` |
 | `WAWARDEN_READ_PER_CLIENT_PER_MINUTE` | `600` | Each client's [read budget](#read-rate-limits): requests per minute, from 1 to 600, refilled evenly with a burst of at most 60. Every authenticated client request, whatever its route or answer, costs one. | `read_per_minute_invalid` |
 | `WAWARDEN_SEARCH_PER_CLIENT_PER_MINUTE` | `60` | Each client's [search budget](#read-rate-limits): searches per minute, from 1 to 60, refilled evenly with a burst of at most 6. A search costs one from both budgets. | `search_per_minute_invalid` |
 | `WAWARDEN_UNSAFE_RATE_CAPS` | unset | `1` lifts the upper caps of the two read budgets to 1000000 per minute and logs `unsafe_rate_caps` at start; `0` or unset keeps them. Zero or a negative budget stays refused. It never lifts the send limits. | `unsafe_rate_caps_invalid` |
@@ -1938,7 +1936,7 @@ message exists.
 The status object carries no identifier, name or text:
 
 ```json
-{"state":"connected","reason":"","paired":true,"counts":{"chats":12,"messages":3456,"history_blobs_pending":0,"history_blobs_quarantined":0,"inbox_backlog":0,"inbox_quarantined":0,"backfills_today":1},"clients":{"active":2,"expired":0,"revoked":1,"all_chats_active":1},"warnings":["all_chats_client"],"last_ingest_at":"2026-10-05T08:00:00Z","version":"v0.2.0"}
+{"state":"connected","reason":"","paired":true,"counts":{"chats":12,"messages":3456,"history_blobs_pending":0,"history_blobs_quarantined":0,"inbox_backlog":0,"inbox_quarantined":0,"backfills_today":1},"clients":{"active":2,"expired":0,"revoked":1,"all_chats_active":1},"warnings":["all_chats_client"],"last_ingest_at":"2026-10-05T08:00:00Z","version":"v1.0.0"}
 ```
 
 | Key | Content |
@@ -2505,8 +2503,8 @@ found in the write scope.
    `claude mcp list` shows it as pending approval.
 3. `claude mcp get whatsapp` or `claude mcp list` shows the server as
    connected (a server from `.mcp.json` once it is approved), and `/mcp` in a session lists its five tools: `get_changes`,
-   `get_chat`, `get_messages`, `list_chats` and `search_messages`. There is no
-   `send_message`. A wrong, expired or revoked token shows as a failed
+   `get_chat`, `get_messages`, `list_chats` and `search_messages`, and
+   `send_message` as a sixth for a client with write chats. A wrong, expired or revoked token shows as a failed
    connection rather than as a server that needs authentication: the endpoint
    offers no OAuth flow.
 4. Rotate the token before it expires by creating, switching and revoking:
@@ -3192,10 +3190,9 @@ at once.
 
 Release images are published as `ghcr.io/dortort/wawarden` for `linux/amd64` and
 `linux/arm64`, by the release workflow only. Deploy them by digest;
-[`RELEASING.md`](../RELEASING.md) explains how to verify one. The latest
-release, `v0.3.0`, is milestone M2: its image has the WhatsApp engine, the
-clients, the read API, the MCP endpoint and the audit chain, and cannot send.
-The contract below applies to release images from M1 on:
+[`RELEASING.md`](../RELEASING.md) explains how to verify one, and
+[the hardening guide](hardening.md#container-hardening) gives the flags to run
+one with. The contract below applies to release images from `v0.2.0` on:
 
 | Item | Value |
 |---|---|
