@@ -529,10 +529,14 @@ func TestReadsNeverQueue(t *testing.T) {
 	s := openWith(t, opts)
 	held, release := make(chan struct{}), make(chan struct{})
 	done := holdUntilHeld(t, held, release, func() error { return s.Scoped().Hold(grantAll(t), context.Background(), held, release) })
-	_, err := s.Scoped().Chats(grantAll(t), t.Context(), scoped.ChatPosition{}, 5)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err := s.Scoped().Chats(grantAll(t), ctx, scoped.ChatPosition{}, 5)
+	took := time.Since(start)
 	close(release)
-	if !errors.Is(err, scoped.ErrBusy) {
-		t.Fatalf("a read while every slot is held = %v, want ErrBusy", err)
+	if !errors.Is(err, scoped.ErrBusy) || took > 5*time.Second {
+		t.Fatalf("a read while every slot is held = %v after %v, want ErrBusy at once", err, took)
 	}
 	if err := <-done; err != nil {
 		t.Fatalf("the held read = %v", err)
