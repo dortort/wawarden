@@ -17,19 +17,22 @@ library, the [admin routes](#admin-routes) with the
 [backups](#backups) and, in development builds only, the
 [fake engine](#fake-engine). M2 adds clients with per-chat read scopes and
 expiring tokens, which [`admin clients`](#admin-clients-and-admin-chats)
-creates and revokes; the client listener's [read API](#read-api) and the same
+creates and revokes; the client listener's [read routes](#client-api) and the same
 reads as [MCP tools](#mcp); the names the owner saved for contacts; per-client
 [read rate limits](#read-rate-limits); and the [audit chain](#audit-chain) with
 [`audit verify`](#audit-verify). Toward M3, this build takes a nightly
 [backup](#backups), keeps a bounded number of them, deletes old processed
 history-blob rows, and checks a decrypted backup with
-[`backup verify`](#backup-verify). Sending is planned for M3 and is in no
-release. How an agent should
+[`backup verify`](#backup-verify). It also sends: a client with write chats
+sends text through the [client API](#client-api) and the `send_message`
+[MCP tool](#mcp-tools), at most once per idempotency key and within the
+[send limits](#send-limits), and [`admin backfill`](#admin-backfill) asks the
+owner's phone for a chat's older history. Sending is in no release yet. How an agent should
 treat what it reads is in [docs/agents.md](agents.md). A service without a
 paired device makes no connection to WhatsApp until `wawarden admin pair`
 requests pairing. Everything listed here
-is implemented, and nothing else is. Settings planned for later milestones are
-listed under [Reserved names](#reserved-names) and are refused by this build.
+is implemented, and nothing else is. The names reserved for development builds
+are listed under [Reserved names](#reserved-names).
 
 ## Unknown variables stop the service
 
@@ -38,7 +41,7 @@ listed under [Reserved names](#reserved-names) and are refused by this build.
 > typo, a variable meant for a later release, or a leftover from another
 > deployment stops the service with the reason code `unknown_variable` instead of
 > being ignored. An empty value counts as set:
-> `WAWARDEN_SEND_GLOBAL_PER_HOUR=` is refused as well.
+> `WAWARDEN_SEND_RATE=` is refused as well.
 
 Only the names in [Environment variables](#environment-variables) are accepted.
 Names are matched exactly, so a lower-case `wawarden_listen` is not recognised as a
@@ -51,18 +54,9 @@ refuses it as `unknown_variable`.
 
 ### Reserved names
 
-These names are reserved for later milestones. Do not set them before the
-release that implements them: until then, each one makes `serve` refuse to start
-with `unknown_variable`.
-
-| Variable | Planned purpose | Becomes valid in |
-|---|---|---|
-| `WAWARDEN_SEND_PER_CLIENT_PER_MINUTE` | Per-client send rate limit | M3 |
-| `WAWARDEN_SEND_GLOBAL_PER_HOUR` | Global send rate limit | M3 |
-
-Further names are planned and not final yet: an `UNSAFE_` override of the send
-rate-limit hard caps (M3). Any of them set as a `WAWARDEN_` variable is refused
-with `unknown_variable` until the release that implements it.
+No `WAWARDEN_` name is reserved for a later milestone in this build: the two
+send limits and their `UNSAFE_` override, once reserved here, are now
+[environment variables](#environment-variables).
 
 `WAWARDEN_DEV_*` names are reserved for development builds; a release build
 refuses every one of them with `dev_variable_in_release`. A development build
@@ -82,6 +76,7 @@ wawarden admin clients create --name NAME (--read CHAT... | --all-chats) [--writ
 wawarden admin clients list ADMIN
 wawarden admin clients show|revoke --id ID ADMIN
 wawarden admin chats list [--match TEXT] ADMIN
+wawarden admin backfill --chat CHAT [--count N] ADMIN
                                  call the admin listener; ADMIN is [--addr URL] and one of
                                  --token-file PATH, --token-stdin or --token-command COMMAND
                                  (default --addr http://127.0.0.1:8082)
@@ -161,7 +156,7 @@ The shell, not WaWarden, creates the file when you redirect this output; set a
 restrictive `umask` or write it into a private directory.
 
 The other `admin` subcommands of this build call the admin listener; see
-below. `backfill` (M3) does not exist in this build and is a usage error.
+below.
 
 ### `admin status`, `admin pair` and `admin reconnect`
 
@@ -170,7 +165,7 @@ makes one request with the admin token and prints the answer:
 
 | Command | Request | Prints on standard output |
 |---|---|---|
-| `admin status` | `GET /admin/v1/status` | One `key: value` line each for `state`, `reason` (`none` when empty), `paired`, `chats`, `messages`, `history blobs pending`, `history blobs quarantined`, `inbox backlog`, `inbox quarantined`, `clients active`, `clients expired`, `clients revoked`, `all-chats clients active`, `last ingest` (`never` before the first message) and `version`. |
+| `admin status` | `GET /admin/v1/status` | One `key: value` line each for `state`, `reason` (`none` when empty), `paired`, `chats`, `messages`, `history blobs pending`, `history blobs quarantined`, `inbox backlog`, `inbox quarantined`, `backfills today`, `clients active`, `clients expired`, `clients revoked`, `all-chats clients active`, `last ingest` (`never` before the first message) and `version`. |
 | `admin pair` | `POST /admin/v1/pair` with the body `{}` | `pairing code: <code>`. Standard error says where to enter it on the phone: Linked devices, Link a device, then Link with phone number instead. |
 | `admin reconnect` | `POST /admin/v1/reconnect` with the body `{}` | `reconnect requested` |
 
@@ -266,6 +261,28 @@ seen yet and, with `--all-chats`, that the client reads every chat, including
 chats that appear later; the flag is the confirmation, there is no prompt.
 `chats list` lists at most 100 chats, most recent first, and says on standard
 error when more match.
+
+### `admin backfill`
+
+`admin backfill --chat CHAT [--count N]` takes the same `--addr` and token
+flags as `admin status`, uses the same HTTP client, sanitiser and refusal
+message, and calls `POST /admin/v1/backfill` (see [Admin routes](#admin-routes))
+to ask the owner's phone for the `N` messages of a chat that come before the
+oldest one the archive holds. `--chat` takes the forms that `--read` takes
+under [`admin clients`](#admin-clients-and-admin-chats): a chat identifier, a
+`+E.164` number or a chat reference, which is looked up first. `--count` is
+from 1 to 50, 50 by default. A missing `--chat`, a value of none of these forms
+or a `--count` out of range stops the command with exit `2` before it sends
+anything, and an unknown reference with exit `5`.
+
+On success it prints `backfill requested: <request id>` on standard output,
+and on standard error that the phone sends the messages when it processes the
+request. They arrive as [history](#history-sync), whenever the phone answers;
+`admin status` prints `backfills today`, the requests made since midnight UTC.
+The quota, one request every 5 minutes and 20 a day, answers `backfill_quota`
+and a chat the archive holds no message of `backfill_no_anchor`; both exit `5`.
+`not_connected`, `send_rejected` and `send_outcome_unknown` exit `1`; see the
+[exit codes](#exit-codes).
 
 ### `audit verify`
 
@@ -500,7 +517,10 @@ These are all the variables this build reads.
 | `WAWARDEN_AUDIT_RETENTION_DAYS` | `90` | How many days the [audit chain](#audit-chain) keeps its rows: each night, after the backup, rows written more than this many days before are removed behind a signed anchor. A whole number from 7 to 3650 in decimal digits; no value keeps rows forever. | `audit_retention_invalid` |
 | `WAWARDEN_READ_PER_CLIENT_PER_MINUTE` | `600` | Each client's [read budget](#read-rate-limits): requests per minute, from 1 to 600, refilled evenly with a burst of at most 60. Every authenticated client request, whatever its route or answer, costs one. | `read_per_minute_invalid` |
 | `WAWARDEN_SEARCH_PER_CLIENT_PER_MINUTE` | `60` | Each client's [search budget](#read-rate-limits): searches per minute, from 1 to 60, refilled evenly with a burst of at most 6. A search costs one from both budgets. | `search_per_minute_invalid` |
-| `WAWARDEN_UNSAFE_RATE_CAPS` | unset | `1` lifts the upper caps of the two read budgets to 1000000 per minute and logs `unsafe_rate_caps` at start; `0` or unset keeps them. Zero or a negative budget stays refused. | `unsafe_rate_caps_invalid` |
+| `WAWARDEN_UNSAFE_RATE_CAPS` | unset | `1` lifts the upper caps of the two read budgets to 1000000 per minute and logs `unsafe_rate_caps` at start; `0` or unset keeps them. Zero or a negative budget stays refused. It never lifts the send limits. | `unsafe_rate_caps_invalid` |
+| `WAWARDEN_UNSAFE_SEND_CAPS` | unset | `1` lifts the upper caps of the two [send limits](#send-limits) to 600 an hour and 60 a minute and logs `unsafe_send_caps` at every start; `0` or unset keeps them. Zero or a negative limit stays refused. | `unsafe_send_caps_invalid` |
+| `WAWARDEN_SEND_GLOBAL_PER_HOUR` | `30` | The [global send limit](#send-limits): sends a sliding hour, all clients together, from 1 to 60, or to 600 with `WAWARDEN_UNSAFE_SEND_CAPS=1`. Each client's hourly share is this divided by the number of clients that may write, at least 1. | `send_global_per_hour_invalid` |
+| `WAWARDEN_SEND_PER_CLIENT_PER_MINUTE` | `10` | Each client's [send limit](#send-limits) per sliding minute, from 1 to 10, or to 60 with `WAWARDEN_UNSAFE_SEND_CAPS=1`. | `send_per_client_per_minute_invalid` |
 | `WAWARDEN_DEV_FAKE_ENGINE` | unset | Development builds only; a release build refuses it with `dev_variable_in_release`. `1` runs the [fake engine](#fake-engine) in place of WhatsApp, `wrong_account` runs it pairing a number that is not the owner's, and `0` or unset runs the WhatsApp engine. | `dev_fake_engine_invalid` |
 
 Rules that apply to all of them:
@@ -666,13 +686,17 @@ The checks run in this order:
 | 87 | `retired_key_size` | none; the error names the retired key | A retired key does not hold exactly 32 bytes. |
 | 88 | `retired_key_id_mismatch` | none; the error names the retired key | The key id derived from a retired key is not its name. |
 | 89 | `retired_key_current` | none; the error names the retired key | A retired key is the current master key, as a [`keys rotate`](#keys-rotate) interrupted before it replaced `keys/master` leaves it; run `keys rotate` again. |
+| 90 | `unsafe_send_caps_invalid` | `WAWARDEN_UNSAFE_SEND_CAPS` | The value is not `0` or `1`. |
+| 91 | `send_global_per_hour_invalid` | `WAWARDEN_SEND_GLOBAL_PER_HOUR` | The value is not a whole number written in decimal digits, without a sign or leading zero, from 1 to 60, or to 600 with `WAWARDEN_UNSAFE_SEND_CAPS=1`. Zero, a negative number and an empty value are always refused; `WAWARDEN_UNSAFE_RATE_CAPS` does not lift this cap. |
+| 92 | `send_per_client_per_minute_invalid` | `WAWARDEN_SEND_PER_CLIENT_PER_MINUTE` | The value is not a whole number written in decimal digits, without a sign or leading zero, from 1 to 10, or to 60 with `WAWARDEN_UNSAFE_SEND_CAPS=1`. Zero, a negative number and an empty value are always refused; `WAWARDEN_UNSAFE_RATE_CAPS` does not lift this cap. |
 
 Checks 73 to 76 are appended to the table but run right after check 26, in that
-order, so a malformed value is refused before a missing recipient. Checks 77 to
+order, so a malformed value is refused before a missing recipient. Checks 90 to
+92 run right after check 29, in that order. Checks 77 to
 89 run right after check 52, in that order, and only when `keys/retired` exists;
 checks 83 to 89 run for each retired key in turn, in order of name.
-When the data directory is missing, it is created only after checks 1 to 31 and
-73 to 76 pass, so a start refused by any of them leaves nothing behind. `history/` and
+When the data directory is missing, it is created only after checks 1 to 31,
+73 to 76 and 90 to 92 pass, so a start refused by any of them leaves nothing behind. `history/` and
 `backups/` are checked only when they exist; `serve` creates neither at start (see
 [Data directory](#data-directory)). `keys/` and the master key are created, when
 missing, only after checks 32 to 43 pass, an empty `archive.db` only after
@@ -896,7 +920,7 @@ The [admin routes](#admin-routes) create and revoke clients, and each change
 appends a row to the [audit chain](#audit-chain). The engine writes saved
 names from changes to the owner's contact list (see [Ingest](#ingest)), and a
 read shows one only to a client whose scope includes that contact's direct
-chat (see [Read API](#read-api)). The service never runs `ANALYZE` or `PRAGMA optimize` on the archive: planner
+chat (see [Client API](#client-api)). The service never runs `ANALYZE` or `PRAGMA optimize` on the archive: planner
 statistics could make SQLite read a whole table where its read queries now
 search an index.
 
@@ -1734,7 +1758,7 @@ public internet.
 
 | Listener | Address | Opened | Serves |
 |---|---|---|---|
-| `client` | `WAWARDEN_LISTEN`, default `127.0.0.1:8080` | Always | The [read API](#read-api) and the [MCP endpoint](#mcp) `POST /mcp`, with a client token. |
+| `client` | `WAWARDEN_LISTEN`, default `127.0.0.1:8080` | Always | The [client API](#client-api) and the [MCP endpoint](#mcp) `POST /mcp`, with a client token. |
 | `admin` | `WAWARDEN_ADMIN_LISTEN`, default `127.0.0.1:8082` | Only when an admin token hash is configured | `GET /metrics` and the [admin routes](#admin-routes): the status, pairing and reconnection, the clients (create, list, show, revoke) and the chat lookup, all with the admin token. |
 | `health` | `WAWARDEN_HEALTH_LISTEN`, default `127.0.0.1:8081`, loopback only | Always | `GET /healthz`, without authentication. |
 
@@ -1814,7 +1838,7 @@ a change is being published, or after a change that did not commit and before
 the copy has been reloaded in the background, waits for the new copy for up to
 2 seconds and is then answered `503` (`busy`) with `Retry-After: 1`, whatever
 token it presents; that answer is not a failure and spends no failure budget.
-An authenticated request goes on to the [read API](#read-api); every other
+An authenticated request goes on to the [client API](#client-api); every other
 request that passes checks 1 and 2 is answered `401` (or `429`):
 
 ```text
@@ -1861,6 +1885,7 @@ and its outcome: `ok` or the error code it answered.
 | `GET /admin/v1/clients` | none | `200` `{"clients":[...]}`, oldest first: each client's `id`, `name`, `state`, `created_at`, `expires_at`, `revoked_at`, `all_chats`, `allow_first_contact`, `read_chat_count` and `write_chat_count`. |
 | `GET /admin/v1/clients/{id}` | none | `200` with the client. |
 | `POST /admin/v1/clients/{id}/revoke` | exactly `{}` | `200` with the revoked client. Revoking a revoked client changes nothing and answers the same. |
+| `POST /admin/v1/backfill` | `{"chat":..., "count":...}`, below | `202` `{"request_id":"<id>"}`: the [history request](#what-a-send-does-on-the-wire) went to WhatsApp under that id; the phone answers when it processes it. |
 | `GET /admin/v1/chats` | none; the query may hold one `match` | `200` `{"chats":[{"id","kind","ref","name"}...],"truncated":false}`: at most 100 chats, most recent message first, whose name contains `match` (ignoring the letter case of ASCII letters), whose identifier contains it, or whose reference is it; every chat without `match`. `truncated` is `true` when more match. |
 
 A client is:
@@ -1882,10 +1907,22 @@ optional:
 |---|---|
 | `name` | 1 to 64 characters without control characters, unique among all clients, revoked ones included, ignoring the letter case of ASCII letters. |
 | `read_chats` | The chats the client may read: at most 256 chat identifiers. |
-| `write_chats` | The chats a later release will let the client write to: at most 256, each also in `read_chats`. |
+| `write_chats` | The chats the client may [send](#sending) to: at most 256, each also in `read_chats`. |
 | `all_chats` | `true` lets the client read every chat, including chats that appear later; then `read_chats` and `write_chats` must be empty. |
 | `allow_first_contact` | `true` lets a write chat be a direct chat the archive has not seen yet. |
 | `expires_in_days` | 1 to 365; `0` or no key means 90. A client never lives longer than 365 days, so a token cannot be made that never expires. |
+
+The body of `POST /admin/v1/backfill` holds `chat`, a chat identifier as
+below or a chat reference (the 32 hexadecimal digits that `GET
+/admin/v1/chats` answers as `ref`), and optionally `count`, from 1 to 50, 50
+when omitted. The request asks the owner's primary device for the `count`
+messages that come before the chat's oldest message in the archive. At most
+one request is made every 5 minutes and 20 each UTC day, all chats together;
+a request that wrote nothing to WhatsApp (`not_connected`, or `rate_limited`
+while a send runs) does not count, and one that may have reached it counts
+whatever its answer. When a history notification answers it, the engine marks
+the request complete. The route reports `admin_mutation` with the action
+`backfill`.
 
 A chat identifier is `<digits>@s.whatsapp.net`, `<digits>@lid` or
 `<digits>[-<digits>]@g.us`; `@c.us` is read as `@s.whatsapp.net`, and a device
@@ -1901,14 +1938,14 @@ message exists.
 The status object carries no identifier, name or text:
 
 ```json
-{"state":"connected","reason":"","paired":true,"counts":{"chats":12,"messages":3456,"history_blobs_pending":0,"history_blobs_quarantined":0,"inbox_backlog":0,"inbox_quarantined":0},"clients":{"active":2,"expired":0,"revoked":1,"all_chats_active":1},"warnings":["all_chats_client"],"last_ingest_at":"2026-10-05T08:00:00Z","version":"v0.2.0"}
+{"state":"connected","reason":"","paired":true,"counts":{"chats":12,"messages":3456,"history_blobs_pending":0,"history_blobs_quarantined":0,"inbox_backlog":0,"inbox_quarantined":0,"backfills_today":1},"clients":{"active":2,"expired":0,"revoked":1,"all_chats_active":1},"warnings":["all_chats_client"],"last_ingest_at":"2026-10-05T08:00:00Z","version":"v0.2.0"}
 ```
 
 | Key | Content |
 |---|---|
 | `state`, `reason` | The [engine state](#engine-states); `reason` is empty unless the state is `disconnected`. |
 | `paired` | Whether a device is stored. |
-| `counts` | Chats and messages in the archive; history blobs waiting to be processed and quarantined; inbox rows waiting to be applied and quarantined. |
+| `counts` | Chats and messages in the archive; history blobs waiting to be processed and quarantined; inbox rows waiting to be applied and quarantined; backfills requested since midnight UTC. |
 | `clients` | Clients that are active, expired and not revoked, and revoked; and active clients that read every chat. |
 | `warnings` | Fixed codes, empty when nothing needs attention: `all_chats_client` while a client that reads every chat is active. |
 | `last_ingest_at` | When the engine last stored a message, in UTC to the second, or `null` before the first. |
@@ -1937,6 +1974,14 @@ The routes refuse with fixed codes:
 | `409` `{"error":"name_taken"}` | create client | Another client has the name. |
 | `422` `{"error":"write_chat_unknown"}` | create client | The archive has not seen a write chat, and it is a group or `allow_first_contact` is not set. |
 | `404` `{"error":"not_found"}` | show and revoke client | No client has the id. |
+| `400` `{"error":"invalid_body"}` | backfill | `chat` is neither a chat identifier nor a chat reference, or `count` is not from 1 to 50. |
+| `404` `{"error":"not_found"}` | backfill | No chat has the reference. |
+| `422` `{"error":"backfill_no_anchor"}` | backfill | The archive holds no message of the chat, so there is nothing to ask for history before. |
+| `429` `{"error":"backfill_quota"}` | backfill | A request was made less than 5 minutes ago, or 20 were made this UTC day. `Retry-After` gives the whole seconds until the next is allowed: up to 300, or until midnight UTC for the daily quota. |
+| `503` `{"error":"not_connected"}` | backfill | The engine is not connected or not paired; nothing was sent and the quota is unchanged. `Retry-After: 5`. |
+| `429` `{"error":"rate_limited"}` | backfill | A send or another history request is running; nothing was sent. `Retry-After: 1`. |
+| `502` `{"error":"send_rejected"}` | backfill | WhatsApp refused the request. It counts against the quota. |
+| `504` `{"error":"send_outcome_unknown"}` | backfill | The request was written and no acknowledgement came. It counts against the quota and is not repeated. |
 | `400` `{"error":"invalid_query"}` | list chats | The query holds another key, `match` twice, a malformed escape, or a `match` longer than 64 characters, not UTF-8 or with a control character. |
 | `500` `{"error":"internal_error"}` | all | Anything else, such as an archive read that failed; the cause is never sent. |
 
@@ -1970,8 +2015,10 @@ requests.
 #### Request bodies
 
 The admin routes `pair`, `reconnect` and the client revoke route read their
-body, which must be the empty object `{}`, and the client create route reads the
-client to create, all with one decoder. No client REST route reads a body. Only a
+body, which must be the empty object `{}`, the client create route reads the
+client to create, the backfill route its request, and the client send route
+`POST /v1/chats/{ref}/messages` the message, all with one decoder. No other
+client REST route reads a body. Only a
 route handler can call it, so it runs only after authentication and after the
 route's grant was decided. It answers with a fixed error and reads no further when:
 
@@ -1984,11 +2031,12 @@ route's grant was decided. It answers with a fixed error and reads no further wh
 `POST /mcp` checks its bodies with the same media type rule and its own size,
 depth and key rules; see [MCP requests](#mcp-requests).
 
-### Read API
+### Client API
 
-The client listener serves these routes, all read-only, with a client token. A
-client reads only the chats its read scope names (or every chat, for an
-all-chats client); nothing in this build sends a message.
+The client listener serves these routes with a client token. A client reads
+only the chats its read scope names (or every chat, for an all-chats client),
+and sends only to the chats its write scope names; an all-chats client never
+writes.
 
 | Route | Query | Answer |
 |---|---|---|
@@ -1999,6 +2047,7 @@ all-chats client); nothing in this build sends a message.
 | `GET /v1/search` | `q`, `chat`, `cursor`, `limit` | `{messages:[Message], next, more, truncated, session}`, newest first by arrival, without rank or count |
 | `GET /v1/changes` | `since`, `chat`, `limit` | `{messages:[Message], next, more, truncated, session}`, every message in scope that was added, edited, revoked or expired, in the order of its latest change, oldest first |
 | `GET /v1/messages/{mref}` | none | one `Message` |
+| `POST /v1/chats/{ref}/messages` | none; a body and an `Idempotency-Key` header, see [Sending](#sending) | `201` `{message, replayed, session}`, the sent `Message` |
 
 A `Chat` is `{id, kind, name, name_source, last_message_at}`: `id` is the chat's
 reference, 32 hexadecimal digits that stay the same when WhatsApp re-keys the chat
@@ -2024,13 +2073,108 @@ untrusted}`:
   says whether either was cut.
 - `reply_to` is the message reference of the quoted message when it is in the
   archive, or `null`; `quote_verified` passes on whether the quote matched it.
-- `origin` is `owner` for a message the owner's account sent and `peer` for any
-  other. `untrusted` is always `true`: every string in a message, and every chat
-  and sender name, is third-party text.
+- `origin` is `gateway:<client id>` for a message a client sent through this
+  service, shown to every client whose scope holds the chat; `owner` for any
+  other message the owner's account sent; and `peer` for the rest. A message
+  that history also delivers keeps its `gateway:` origin. `untrusted` is always
+  `true`: every string in a message, and every chat and sender name, is
+  third-party text, a gateway send's included.
 
 No answer carries a database sequence number, an alternate sender identifier,
 raw protocol data or media metadata. `session` is `{state}` alone, one of
 `unpaired`, `connecting`, `connected` and `disconnected`.
+
+#### Sending
+
+`POST /v1/chats/{ref}/messages` sends one text message to a chat in the
+client's write scope. The body is `{"text": ..., "reply_to": ...}`, read by the
+[strict decoder](#request-bodies); `reply_to` is optional and `null` is the
+same as absent. The header `Idempotency-Key` is required, exactly once, and
+holds 8 to 128 printable ASCII characters (`!` to `~`), for example a UUID.
+The checks run in this order, and the first that fails answers:
+
+1. The client must hold a write grant at the time of the request: a client
+   without write chats, an all-chats client, and an expired or revoked one get
+   the same `404` as an unknown route, before any body is read.
+2. The body: `415`, `413` or `400` `invalid_body` as for every body, and
+   `invalid_body` when `text` is missing, `null` or not a string, or `reply_to`
+   is not a string.
+3. The `Idempotency-Key`: missing, repeated or malformed answers `400`
+   `invalid_idempotency_key`.
+4. The text: 1 to 4096 characters, at most 8192 bytes of UTF-8, and none of
+   the control characters other than line feed and tab, the bidirectional
+   controls U+202A to U+202E and U+2066 to U+2069, the marks U+200E, U+200F
+   and U+061C, U+FEFF, the separators U+2028 and U+2029, or the tag characters
+   U+E0000 to U+E007F; otherwise `400` `invalid_text`. Text is refused, never
+   altered, so what is sent is what was asked for. Zero-width joiners,
+   non-joiners and variation selectors stay, for emoji. Text of white space
+   only passes.
+5. The chat: `{ref}` must be a chat the client may read and write to;
+   otherwise the uniform `404`, whether the chat is missing, unreadable or
+   readable but outside the write scope.
+6. The reply: `reply_to` must be a message reference, sealed for this client,
+   of a message in the same chat that is not revoked and has text; otherwise
+   the uniform `404`. The reply quotes that message's text only, under its
+   stored sender, and is stored as a verified reply.
+7. The send itself, under the [send limits](#send-limits).
+
+| Status | `error` | When |
+|---|---|---|
+| `201` | | Sent, or a replay of a sent message; `replayed` says which. |
+| `404` | `not_found` | No write grant, a chat missing or outside the scope, a reply target that fails. |
+| `400` | `invalid_body` | The body does not decode, or `text` or `reply_to` has the wrong type. |
+| `400` | `invalid_idempotency_key` | The key is missing, given twice or malformed. |
+| `400` | `invalid_text` | The text breaks the length or character rules. |
+| `413`, `415` | `body_too_large`, `unsupported_media_type` | As for every body. |
+| `403` | `first_contact_refused` | The chat is a direct chat that has never written to the account (no stored message from the other person, of any kind, history included), and the client was created without `allow_first_contact`. Groups are exempt. |
+| `409` | `request_in_progress` | Another request with the same key is still running. `Retry-After` gives 1 to 5 seconds. |
+| `422` | `idempotency_key_reused` | The key was used for another request: another chat, text or reply target. Also while the first is still running. |
+| `429` | `rate_limited` | A send limit or the pacer, or another send that is running; one code whatever the cause, so no client learns which limit another client spent. `Retry-After` gives the whole seconds until the send would be admitted, 1 to 3600. |
+| `503` | `busy` | The archive did not answer within its deadline. `Retry-After: 1`. |
+| `503` | `not_connected` | The engine is not connected or not paired; nothing was sent. `Retry-After: 5`. |
+| `502` | `send_rejected` | WhatsApp refused the message, or the recipient cannot be reached (not a member of the group, a missing group). Stored, never retried. |
+| `504` | `send_outcome_unknown` | The message may have reached WhatsApp, but no acknowledgement came: a timeout, a drop after the message was written, a restart or an expired lease. Stored, never retried. |
+| `500` | `internal_error` | Anything else, such as an acknowledged send whose result could not be stored. |
+
+Idempotency: the service keeps each key for 24 hours from its first use, per
+client, and fingerprints the request by the chat's reference, the text and the
+reply target's message id and sender. A later request with the same key and
+the same chat, text and reply target sends nothing and answers what the first
+did: `201` with the same message, read again from the archive, or the same
+`502` or `504`, with the header `Idempotent-Replayed: true` and, on a `201`,
+`replayed: true` in the body. A replay is answered whatever the limits, and
+reads the message as it is now, so a message revoked since shows no text. A
+request that ended with `400`, `403`, `404`, `429` or `503` stored nothing, so
+the same request can be made again under its key once the cause is gone; after
+a `409` the first request's answer follows, and after a `422` the key stays
+bound to its first request. After a `500` from an acknowledged send whose
+result could not be stored, the key answers `409` until its lease ends and
+`504` afterwards, and the service reports
+[`send_unrecorded`](#notifications). The same key reaches the same send from
+REST and from the MCP tool.
+
+A send is at most once: when the outcome is unknown, the service never sends
+again by itself, and answers `504` to the request and to every replay. A
+`504` therefore means the contact may or may not have the message; read the
+chat to find out before sending anything else. A send whose acknowledgement
+came is stored as the owner's message with `origin` `gateway:<client id>`,
+under the requested chat, in the same write that settles the key; in a chat
+with a disappearing timer it carries the timer of the chat's newest message
+that has one, and expires with it.
+
+The handler gives a send 25 seconds: the engine waits at most 12 seconds for
+WhatsApp's acknowledgement within a 20-second call, and the result is stored
+within 5 more seconds, even when the client has gone. A key stays reserved
+while its send runs, for at most 60 seconds; a key still reserved after that,
+or by a send cut short by a restart, is settled as `send_outcome_unknown` at
+the next request with it or at the next start, which reports
+[`send_outcome_unknown`](#notifications) with the reason `lease_expired` or
+`restart`. The engine runs one send at a time and queues none: a send while
+another runs, or while a history request runs, is refused at once with `429`
+`rate_limited` and `Retry-After: 1`, and gives its budget back.
+
+Any other method on `/v1/chats/{ref}/messages` is answered `405` with
+`Allow: GET, HEAD, POST`, for every client.
 
 #### Query parameters and pages
 
@@ -2116,6 +2260,30 @@ admitted. Failed authentications cost nothing here; they have their own
 logs `unsafe_rate_caps` at every start. The budgets start full at every start of
 the service.
 
+#### Send limits
+
+Sends have their own limits, apart from the read budgets: they are counted
+over the rows of the archive's idempotency table, so a restart does not refill
+them, in sliding windows measured with the service's clock.
+
+| Limit | Default | Cap | Lifted cap |
+|---|---|---|---|
+| Each client, per minute | `WAWARDEN_SEND_PER_CLIENT_PER_MINUTE`, 10 | 10 | 60 |
+| All clients, per hour | `WAWARDEN_SEND_GLOBAL_PER_HOUR`, 30 | 60 | 600 |
+| Each client, per hour | the hourly limit divided by the number of clients that may write (active, not all-chats, with a write chat), at least 1 | | |
+| Pacer | one send, then 3 seconds plus a random wait of up to 2 seconds before the next send of any client | | |
+
+A send is counted from the moment it is admitted. A send that wrote nothing
+to WhatsApp (`not_connected`, or `rate_limited` behind a running send) gives
+its place back; a rejected send and one with an unknown outcome stay counted,
+because WhatsApp may have seen them. A refused send answers `429`
+`rate_limited` with `Retry-After`, the whole seconds until the earliest moment
+it would be admitted, at least 1 and at most 3600; nothing queues. A request
+also costs one read from the [read budget](#read-rate-limits), like every
+request. `WAWARDEN_UNSAFE_SEND_CAPS=1` lifts the caps as in the table and logs
+`unsafe_send_caps` at every start; `WAWARDEN_UNSAFE_RATE_CAPS` never lifts
+them. `wawarden_sends_rejected_total` counts the refusals by limit.
+
 #### Busy reads
 
 Reads share the archive's single database connection with ingest. At most 8
@@ -2133,13 +2301,17 @@ ends.
 Every request the read budget admits writes one [audit](#audit-chain) row and
 one standard-output line before it is answered, allowed or not. The action is
 `rest.me`, `rest.chats`, `rest.chat`, `rest.messages`, `rest.search`,
-`rest.changes` or `rest.message` for the routes above, in that order, and
-`rest.unrouted` for an unknown path or method; the reason is `ok` or the error
+`rest.changes`, `rest.message` or `rest.send` for the routes above, in that order, and
+`rest.unrouted` for an unknown path or method, a send of a client without a
+write grant included; the reason is `ok` (for a `201` too) or the error
 code of the answer (`not_found`, `invalid_query`, `invalid_cursor`,
-`rate_limited`, `busy`, `method_not_allowed` or `internal_error`, which a handler
+`rate_limited`, `busy`, `method_not_allowed`, one of the [sending](#sending)
+codes, or `internal_error`, which a handler
 that panics also records). The row names
 a chat only when the answer is about one chat (`rest.chat`, `rest.messages` and
-`rest.message` that succeed); a `404` names none. Every `POST /mcp` writes one
+`rest.message` that succeed, and `rest.send` once the chat is found in the
+write scope, whatever the send's outcome); a `404` names none. No row holds the
+text or the idempotency key. Every `POST /mcp` writes one
 row too, with the actions and reasons listed under [MCP audit](#mcp-audit). A request whose row cannot be
 written within 2 seconds is answered `503` (`busy`) with `Retry-After: 1`, and
 one whose row fails for another reason `500` (`internal_error`); either way
@@ -2148,7 +2320,7 @@ and a failed authentication, write no row.
 
 ### MCP
 
-The client listener also serves the read API as [Model Context
+The client listener also serves the client API as [Model Context
 Protocol](https://modelcontextprotocol.io) tools at `POST /mcp`, through the MCP
 Go SDK `v1.8.0`, over its streamable HTTP transport: stateless, every answer one
 `application/json` body, no session (`Mcp-Session-Id` is ignored and never
@@ -2206,9 +2378,14 @@ nosniff`. The library's own log output is discarded.
 #### MCP tools
 
 The tool definitions are constants: their names, descriptions and schemas never
-contain a chat name or anything else read from the archive, and every client
-gets the same list. Each tool calls the same code as its route and answers the
-same JSON, which the [read API](#read-api) describes:
+contain a chat name or anything else read from the archive. A client that holds
+a write grant at the time of the request gets the five read tools and
+`send_message`; every other client gets the five read tools, and its call of
+`send_message` is answered exactly as a call of a tool that does not exist,
+byte for byte, with the audit reason `unknown_tool`. The endpoint holds the two
+lists as two servers built at start and picks one for each request. Each tool
+calls the same code as its route and answers the same JSON, which the
+[client API](#client-api) describes:
 
 | Tool | Arguments | Answer |
 |---|---|---|
@@ -2217,6 +2394,7 @@ same JSON, which the [read API](#read-api) describes:
 | `get_messages` | `chat` (required), `cursor`, `limit` | As `GET /v1/chats/{ref}/messages`: `{messages, next, truncated, session}` |
 | `search_messages` | `query` (required), `chat`, `cursor`, `limit` | As `GET /v1/search`: `{messages, next, more, truncated, session}` |
 | `get_changes` | `since`, `chat`, `limit` | As `GET /v1/changes`: `{messages, next, more, truncated, session}` |
+| `send_message` | `chat`, `text`, `idempotency_key` (all required), `reply_to` | As `POST /v1/chats/{ref}/messages`: `{message, replayed, session}` |
 
 There is no tool for `GET /v1/me` or `GET /v1/messages/{mref}`.
 
@@ -2227,13 +2405,18 @@ There is no tool for `GET /v1/me` or `GET /v1/messages/{mref}`.
 | `since` | string, 1 to 256 characters | The `next` value of the previous `get_changes` call, or an RFC 3339 time for the first one, as for `GET /v1/changes`. |
 | `query` | string, 3 to 128 characters | The search query, under the rules of `GET /v1/search`: 3 to 128 bytes after NFC normalisation, 1 to 8 terms of at least 3 characters each. |
 | `limit` | integer, 1 to 200 | Items per page; 50 when omitted. |
+| `text` | string, 1 to 4096 characters | The message to send, under the [text rules](#sending). |
+| `reply_to` | string, 1 to 640 characters | The `mref` of a message of the same chat to reply to. |
+| `idempotency_key` | string, 8 to 128 characters matching `^[\x21-\x7e]{8,128}$` | The key `Idempotency-Key` carries on the route: unique per intended message, repeated only to retry the same call. |
 
 Each input schema is an object that allows no other property, and the arguments
 are checked against it before anything is read. Omitted or `null` arguments are
 an empty object. Cursors are the route's: a `next` value from a tool continues
 on its route and the other way round, under the same [cursor](#cursors-and-message-references) rules.
-Every tool carries the annotation `readOnlyHint: true` and an `outputSchema`
-inferred from the answer's type.
+Every read tool carries the annotation `readOnlyHint: true`; `send_message`
+carries `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: true`
+and `openWorldHint: true`, and its description asks for at most one send per
+trigger. Every tool has an `outputSchema` inferred from the answer's type.
 
 A result carries the answer in `structuredContent` and the same JSON as text in
 `content[0]`. A refused call is a result with `isError: true`, the fixed code
@@ -2241,7 +2424,11 @@ alone as the text of `content[0]`, and in `structuredContent` the answer's shape
 with empty data and the current `session`, for example
 `{"chats":null,"next":null,"truncated":false,"session":{"state":"connected"}}`.
 No error text of the service or of the library, and no argument value, reaches a
-result.
+result. A refused `send_message` call carries `retry_after_seconds`, the whole
+seconds the route's `Retry-After` would give, in its `structuredContent` for
+`request_in_progress`, `rate_limited`, `busy` and `not_connected`, and
+`replayed: true` when it repeats the stored `send_rejected` or
+`send_outcome_unknown` of an earlier call with the same key.
 
 | Code | Answered when |
 |---|---|
@@ -2249,8 +2436,9 @@ result.
 | `invalid_arguments` | The arguments do not fit the input schema: a missing required argument, another property, a wrong type, an empty string, a value out of bounds or a non-integral `limit`. |
 | `invalid_query` | The query passes the schema but not the search rules. |
 | `invalid_cursor` | As on the routes. |
-| `rate_limited` | The client's search budget is spent. A tool result carries no `Retry-After`; at the default rate a search is admitted again within a second. A spent read budget refuses the whole `POST` with `429` before the call. |
-| `busy` | As on the routes, or the call passed its 10-second deadline. |
+| `rate_limited` | The client's search budget is spent, or for `send_message` a [send limit](#send-limits). A tool result carries no `Retry-After`; at the default rate a search is admitted again within a second. A spent read budget refuses the whole `POST` with `429` before the call. |
+| `busy` | As on the routes, or the call passed its deadline: 10 seconds for a read tool, 25 seconds for `send_message`. |
+| `invalid_text`, `invalid_idempotency_key`, `first_contact_refused`, `request_in_progress`, `idempotency_key_reused`, `not_connected`, `send_rejected`, `send_outcome_unknown` | `send_message` only, when the route would answer that code. A text or key that breaks the input schema, such as an empty text or a seven-character key, is `invalid_arguments` instead; control characters and the 8192-byte cap reach the text check. |
 | `internal_error` | Anything else failed, a panic in the tool included; the panic is counted as `api.mcp` and the endpoint keeps serving. |
 
 Pages and texts are cut as on the routes. Because a result carries the page
@@ -2262,14 +2450,15 @@ instead of passing it to the model, so a smaller `limit` keeps answers inline.
 
 Every `POST /mcp` that the read budget admits writes one [audit](#read-audit)
 row. The action is `mcp.list_chats`, `mcp.get_chat`, `mcp.get_messages`,
-`mcp.search_messages` or `mcp.get_changes` for a call of that tool, and
+`mcp.search_messages`, `mcp.get_changes` or `mcp.send_message` for a call of that tool, and
 `mcp.protocol` for everything else: the handshake, `tools/list`, `ping`,
 notifications, refused methods, unknown tools and refused bodies. The reason is
 `ok`, the tool's code, the body refusal (`unsupported_media_type`,
 `body_too_large` or `invalid_body`), `method_not_found`, `unknown_tool`, or
 `bad_request` for a message the library refused before it reached the server. A
 notification answered `202` is `ok`. A row names a chat only for a successful
-`get_chat` or `get_messages`.
+`get_chat` or `get_messages`, and for a `send_message` call once the chat is
+found in the write scope.
 
 #### Registering with Claude Code
 
@@ -2368,10 +2557,12 @@ an `Access-Control-*` header. Their error bodies are fixed JSON objects with
 | `{"error":"not_found"}` | `404` |
 | `{"error":"method_not_allowed"}` | `405` |
 | `{"error":"internal_error"}` | `500`, when a handler fails or panics, or a client request's [audit row](#read-audit) fails for a reason other than its 2-second wait |
-| `{"error":"invalid_query"}`, `{"error":"invalid_cursor"}` | `400`, from the [read API](#read-api) and, for `invalid_query`, `GET /admin/v1/chats` |
-| `{"error":"rate_limited"}` | `429` with `Retry-After`, from the client listener's [read and search budgets](#read-rate-limits) |
+| `{"error":"invalid_query"}`, `{"error":"invalid_cursor"}` | `400`, from the [client API](#client-api) and, for `invalid_query`, `GET /admin/v1/chats` |
+| `{"error":"rate_limited"}` | `429` with `Retry-After`, from the client listener's [read and search budgets](#read-rate-limits) and [send limits](#send-limits) |
+| `{"error":"invalid_idempotency_key"}`, `{"error":"invalid_text"}`, `{"error":"first_contact_refused"}`, `{"error":"request_in_progress"}`, `{"error":"idempotency_key_reused"}`, `{"error":"not_connected"}`, `{"error":"send_rejected"}`, `{"error":"send_outcome_unknown"}` | `400`, `400`, `403`, `409` with `Retry-After`, `422`, `503` with `Retry-After: 5`, `502`, `504`, from [sending](#sending); `not_connected`, `send_rejected` and `send_outcome_unknown` also from `POST /admin/v1/backfill` |
+| `{"error":"backfill_quota"}`, `{"error":"backfill_no_anchor"}` | `429` with `Retry-After`, `422`, from `POST /admin/v1/backfill` |
 | `{"error":"busy"}` | `503` with `Retry-After: 1`, from the [read API](#busy-reads), including when a request's audit row cannot be written within 2 seconds |
-| `{"error":"unsupported_media_type"}`, `{"error":"body_too_large"}`, `{"error":"invalid_body"}` | `415`, `413`, `400`, from a route that reads a body (`pair`, `reconnect` and `POST /admin/v1/clients`) and from `POST /mcp`; see [Request bodies](#request-bodies) and [MCP requests](#mcp-requests) |
+| `{"error":"unsupported_media_type"}`, `{"error":"body_too_large"}`, `{"error":"invalid_body"}` | `415`, `413`, `400`, from a route that reads a body (`pair`, `reconnect`, `POST /admin/v1/clients`, `POST /admin/v1/backfill` and `POST /v1/chats/{ref}/messages`) and from `POST /mcp`; see [Request bodies](#request-bodies) and [MCP requests](#mcp-requests) |
 | `{"error":"already_paired"}`, `{"error":"already_connected"}`, `{"error":"not_paired"}`, `{"error":"owner_phone_missing"}`, `{"error":"owner_mismatch"}`, `{"error":"rate_limited"}`, `{"error":"pair_failed"}`, `{"error":"engine_unavailable"}` | `409`, `429`, `502` or `503`, from the [admin routes](#admin-routes) |
 
 Responses never echo request content, header values or tokens, with one
@@ -2465,11 +2656,14 @@ notices of a [debug window](#protocol-library-logs). Lines in
 | `whatsmeow_log` | the line's own: `ERROR`, `WARN`, `INFO`, or `DEBUG` in a debug window | `module`, `detail` | A log line of the protocol library; see [Protocol library logs](#protocol-library-logs). |
 | `unsafe_debug` | `WARN`, at every log level | `minutes`, `until` | `WAWARDEN_UNSAFE_DEBUG` opened a debug window at the start. |
 | `unsafe_rate_caps` | `WARN`, at every log level | `read_per_minute`, `search_per_minute` | `WAWARDEN_UNSAFE_RATE_CAPS=1` lifted the upper caps of the [read budgets](#read-rate-limits). Logged once per start. |
+| `unsafe_send_caps` | `WARN`, at every log level | `send_global_per_hour`, `send_per_client_per_minute` | `WAWARDEN_UNSAFE_SEND_CAPS=1` lifted the upper caps of the [send limits](#send-limits). Logged once per start. |
 | `unsafe_debug_ended` | `WARN`, at every log level | | The debug window has passed, and the protocol library's debug output is discarded again. Logged at the first debug line after the window. |
 | `audit_key_changed` | `INFO` or `WARN`, at every log level | `previous_key_id`, `key_id`, `previous_key` | A [notification event](#notifications). |
 | `audit_key_unread` | `WARN` | `error_type` | At start, the key id of the newest audit row could not be read, so `audit_key_changed` was not checked. |
 | `admin_mutation` | `INFO`, at every log level | `action`, `outcome` | A [notification event](#notifications). |
 | `admin_auth_failure` | `WARN`, at every log level | `count` | A [notification event](#notifications). |
+| `send_outcome_unknown` | `WARN`, at every log level | `reason` | A [notification event](#notifications). |
+| `send_unrecorded` | `WARN`, at every log level | | A [notification event](#notifications). |
 | `notify_failed` | `WARN`, at every log level | `attempts`, `reason`, `status` | The [webhook](#webhook) did not take an event, which is dropped. |
 | `notify_dropped` | `WARN`, at every log level | `count` | At shutdown, the [webhook](#webhook) dropped `count` events it had not delivered, and `serve` exits `1`. |
 | `emf_failed` | `WARN` | `error_type` | Writing the [embedded-metric-format](#embedded-metric-format) lines failed. |
@@ -2752,12 +2946,14 @@ the [webhook](#webhook).
 | `quarantine` | `WARN` | `queue`: `inbox`, `history`; `attempts` | An inbox row or a history blob was set aside after three failed attempts. |
 | `rekey_conflict` | `WARN` | `conflict`: `mapping_contradicts`, `both_chats_have_messages`, `message_collision`, `scoped_chat` | A LID mapping was refused; the event that carried it is still applied. Reported once per refused mapping, as described under [Ingest](#ingest). |
 | `ingest_paused` | `WARN` | `free_bytes`, `floor_bytes` | The data directory fell below its [free-space floor](#free-space). |
-| `admin_mutation` | `INFO` | `action`: `pair`, `reconnect`, `client_create`, `client_revoke`; `outcome` | A `POST` [admin route](#admin-routes) was called with the admin token; `outcome` is `ok` or the error code it answered, such as `already_paired`, `name_taken` or `invalid_body`. The event never names the client: the [audit chain](#audit-chain) records its id. |
+| `admin_mutation` | `INFO` | `action`: `pair`, `reconnect`, `backfill`, `client_create`, `client_revoke`; `outcome` | A `POST` [admin route](#admin-routes) was called with the admin token; `outcome` is `ok` or the error code it answered, such as `already_paired`, `name_taken` or `invalid_body`. The event never names the client: the [audit chain](#audit-chain) records its id. |
 | `backup_done` | `INFO` | `bytes`, `archive_bytes`, `session_bytes`, `duration_ms` | A [backup](#backups) was written: `bytes` is the size of the encrypted file, the others the sizes of the two database copies and the time it took. |
 | `backup_failed` | `WARN` | `reason` | A [backup](#backups) failed and what it had written was removed; `reason` as in the table under [Backups](#backups). It is reported on every failure, retries included. |
 | `backup_pruned` | `INFO` | `removed`, `kept` | After a successful [backup](#backups), backups beyond `WAWARDEN_BACKUP_KEEP` were deleted: `removed` files, `kept` remain. Not reported when nothing was deleted. |
 | `backup_prune_failed` | `WARN` | `reason`: `directory`, `unexpected_entry`, `remove`, `sync` | Deleting old backups failed or was refused; see [Retention](#backups). |
 | `audit_key_changed` | `INFO` when `previous_key` is `retired`, `WARN` otherwise | `previous_key_id`, `key_id`, `previous_key`: `retired`, `missing` | At start, the newest [audit row](#audit-chain) carries the key id `previous_key_id`, not the master key's `key_id`, as after [`keys rotate`](#keys-rotate) or a replaced master key. `previous_key` is `retired` when that key is in `keys/retired/`, and `missing` when it is not, so `audit verify` will report the rows written under it as `unknown_key` unless it is given a copy. Reported at each start until a row is written under the master key. |
+| `send_outcome_unknown` | `WARN` | `reason`: `ack_timeout`, `lease_expired`, `restart` | A [send](#sending) may have reached WhatsApp without an acknowledgement: the engine call ended without one (`ack_timeout`, which covers a timeout, a drop after the message was written and any error the engine cannot place), a request found its key still reserved past the 60-second lease (`lease_expired`), or the start found a send left running by the previous process (`restart`, one event per send). The send is stored as failed and never resent. |
+| `send_unrecorded` | `WARN` | | The outcome of a [send](#sending) could not be stored after three retries, or arrived after its lease had been settled: the key answers `send_outcome_unknown` once its lease has ended, although the message may have been delivered. |
 | `admin_auth_failure` | `WARN` | `count` | Authentication failed on the admin listener. The first failure is reported at once with `count` `1`; further failures within the next minute are held back, and reported together once the minute has passed, within ten seconds, or at shutdown. `count` is the number of failures since the previous `admin_auth_failure`. |
 
 No event carries an identifier, a name, message text, a token, a key or a
@@ -2871,8 +3067,8 @@ in [embedded metric format](#embedded-metric-format), which needs no token.
 |---|---|---|---|
 | `wawarden_auth_failures_total` | counter | | Failed authentications on the client listener, including those answered `429`. |
 | `wawarden_admin_auth_failures_total` | counter | | Failed authentications on the admin listener, including those answered `429`. |
-| `wawarden_policy_denials_total` | counter | | Client requests that the client's grant did not allow. Always `0` in this build: the read API resolves a chat outside the scope and a missing chat by the same query, so it cannot count one apart from the other, and nothing sends yet. |
-| `wawarden_sends_rejected_total` | counter | | Sends refused by a scope, a budget or a rate limit. Always `0` in this build, which does not send. |
+| `wawarden_policy_denials_total` | counter | | Client requests that the client's grant did not allow. Always `0` in this build: the client API resolves a chat outside the scope and a missing chat by the same query, so it cannot count one apart from the other; a send to a chat the client reads but may not write to is counted in `wawarden_sends_rejected_total` as `scope`. |
+| `wawarden_sends_rejected_total` | counter | `reason` | [Sends](#sending) refused: `scope` (a chat the client reads but may not write to), `first_contact`, `budget_minute`, `budget_hour`, `budget_global`, `pacer` (the pacer, or another send that was running). Every reason is present from the start, at `0`. Other refusals, such as a malformed text or key, are not counted. |
 | `wawarden_panics_total` | counter | `name` | Panics recovered, by handler or goroutine name. Absent until the first panic. |
 | `wawarden_notify_dropped_total` | counter | `reason` | Notification events the [webhook](#webhook) did not deliver: `queue_full`, `failed`, `shutdown`. |
 | `wawarden_build_info` | gauge | `version`, `revision`, `dev` | Always `1`; the labels describe the running binary. |
@@ -2943,8 +3139,8 @@ nothing changed:
 {"AdminAuthFailures":0,"AuthFailures":0,"Connected":1,"MessagesIngested":42,"Paired":1,"Panics":1,"PolicyDenials":0,"SendsRejected":0,"_aws":{"Timestamp":1791201600000,"CloudWatchMetrics":[{"Namespace":"WaWarden","Dimensions":[[]],"Metrics":[{"Name":"Paired","Unit":"None"},{"Name":"Connected","Unit":"None"},{"Name":"MessagesIngested","Unit":"Count"},{"Name":"PolicyDenials","Unit":"Count"},{"Name":"Panics","Unit":"Count"},{"Name":"SendsRejected","Unit":"Count"},{"Name":"AuthFailures","Unit":"Count"},{"Name":"AdminAuthFailures","Unit":"Count"}]}]}}
 ```
 
-A metric that also has a label, in this build `Panics` by `name`, is
-additionally written, for each label value whose count grew, in a line of its
+A metric that also has a label, in this build `Panics` by `name` and
+`SendsRejected` by `reason`, is additionally written, for each label value whose count grew, in a line of its
 own with that label as its only dimension. The dimensionless line holds the
 total, and no line carries the metric twice, so an alarm without dimensions
 matches the total:
