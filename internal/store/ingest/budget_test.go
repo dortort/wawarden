@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,6 +111,44 @@ func TestReleasingASendRefundsItsBudget(t *testing.T) {
 		t.Fatalf("ReleaseSend: %v", err)
 	}
 	reserved(t, s, g, budgeted(t, "refund-k02", epoch.Add(10*time.Second), one, 0))
+}
+
+func uncounted(t *testing.T, s *Store, client, k string, at time.Time) {
+	t.Helper()
+	write(t, s, func(tx *Tx) error {
+		_, err := tx.q.ExecContext(tx.ctx, `INSERT INTO idempotency (client_id, key, state, fingerprint, msg_id, reserved_at, next_ok_at, counted, expires_at)
+			VALUES (?1, ?2, 'failed', zeroblob(32), 'MSG-' || ?2, ?3, ?4, 0, ?5)`, client, k, ms(at), ms(at.Add(time.Hour)), ms(at.Add(SendTTL)))
+		return err
+	})
+}
+
+func TestOnlyCountedRowsSpendTheBudget(t *testing.T) {
+	s := inboundStore(t)
+	g, other := grantFor(t, writerID, false, alice), grantFor(t, otherID, false, alice)
+	uncounted(t, s, writerID, "uncounted-1", epoch)
+	uncounted(t, s, otherID, "uncounted-2", epoch)
+	at := epoch.Add(30 * time.Second)
+	reserved(t, s, g, budgeted(t, "counted-k01", at, SendLimits{PerMinute: 1, GlobalPerHour: 1, Holders: 1}, 0))
+	refused(t, s, g, budgeted(t, "counted-k02", at.Add(10*time.Second), SendLimits{PerMinute: 1, GlobalPerHour: 60, Holders: 1}, 0), ReasonMinute, 50*time.Second)
+	refused(t, s, other, budgeted(t, "counted-k03", at.Add(10*time.Second), SendLimits{PerMinute: 10, GlobalPerHour: 1, Holders: 1}, 0), ReasonGlobal, time.Hour-10*time.Second)
+}
+
+func TestTheBudgetQueriesUseThePartialIndexes(t *testing.T) {
+	s := openStore(t)
+	for name, tt := range map[string]struct {
+		query                string
+		args                 []any
+		clientWindow, window int
+	}{
+		"the window counts":     {selectSendWindows, []any{writerID, 0, 0, "budget-key"}, 2, 2},
+		"the client admit time": {selectClientAdmit, []any{writerID, 0, "budget-key", 0}, 1, 0},
+		"the global admit time": {selectGlobalAdmit, []any{writerID, 0, "budget-key", 0}, 0, 1},
+	} {
+		plan := queryPlan(t, s, tt.query, tt.args...)
+		if strings.Count(plan, "INDEX idempotency_client_window (") != tt.clientWindow || strings.Count(plan, "INDEX idempotency_window (") != tt.window || strings.Contains(plan, "SCAN idempotency") {
+			t.Errorf("%s plans as %q, want idempotency_client_window %d and idempotency_window %d times and no scan", name, plan, tt.clientWindow, tt.window)
+		}
+	}
 }
 
 func TestTheBudgetSurvivesReopening(t *testing.T) {

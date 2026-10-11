@@ -143,7 +143,7 @@ func TestMigratingToVersion4KeepsMappingsMessagesAndTheAuditChain(t *testing.T) 
 			t.Errorf("trigger %s missing", trigger)
 		}
 	}
-	if plan := queryPlan(t, s, "SELECT EXISTS (SELECT 1 FROM messages WHERE chat_jid = ?1 AND from_me = 0)", alice); !strings.Contains(plan, "COVERING INDEX messages_inbound") {
+	if plan := queryPlan(t, s, selectInbound, alice); !strings.Contains(plan, "COVERING INDEX messages_inbound") {
 		t.Errorf("the inbound probe plans as %q, want the covering index messages_inbound", plan)
 	}
 	if res := learn(t, s, "100000000000004@lid", "15550100005@s.whatsapp.net", MappingSelf); res.Outcome != LIDLearned {
