@@ -58,7 +58,7 @@ type App struct {
 	notify      *notify.Notifier
 	emf         *metrics.EMF
 	emfEvery    time.Duration
-	backup      *initialBackup
+	backup      *scheduler
 	backupEvery time.Duration
 	starts      int
 	serving     listenerSet
@@ -160,6 +160,11 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 	}); err != nil {
 		return nil, errors.Join(err, a.closeStores())
 	}
+	a.backup = &scheduler{
+		archive: archive, status: a.engine.Status, unpairs: unpairs.count.Load, logger: logger, now: time.Now,
+		minute: cfg.BackupMinute, keep: cfg.BackupKeep,
+		gauge: reg.Gauge("wawarden_backup_last_success_timestamp_seconds", "Unix time at which the newest successful backup began, 0 until one succeeds."),
+	}
 	switch {
 	case cfg.BackupRecipient == "":
 		alerts.Warn("no backup recipient is configured: no backup is ever taken", slog.String("event", "backup_disabled"))
@@ -168,15 +173,15 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 	default:
 		taker, err := backup.New(backup.Options{
 			DataDir: cfg.DataDir, UID: cfg.UID, Recipient: cfg.BackupRecipient, Version: info.Version,
-			Archive: archive, Session: a.session, Notify: notifier,
+			Archive: archive, Session: a.session, Notify: notifier, Space: archive.Space,
 		})
 		if err != nil {
 			return nil, errors.Join(err, a.closeStores())
 		}
-		a.backup = &initialBackup{archive: archive, status: a.engine.Status, unpairs: unpairs.count.Load, take: func(ctx context.Context) error {
-			_, err := taker.Take(ctx)
-			return err
-		}, now: time.Now}
+		a.backup.take, a.backup.prune, a.backup.changes = taker.Take, taker.Prune, changesOf(archive, a.session)
+	}
+	if err := a.backup.load(ctx); err != nil {
+		return nil, errors.Join(err, a.closeStores())
 	}
 	specs := []listeners.Spec{{
 		Name: listenerClient,
@@ -229,6 +234,17 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 	return a, nil
 }
 
+func changesOf(archive, session backup.Database) func(context.Context) ([2]int64, error) {
+	return func(ctx context.Context) ([2]int64, error) {
+		a, err := archive.Changes(ctx)
+		if err != nil {
+			return [2]int64{}, err
+		}
+		s, err := session.Changes(ctx)
+		return [2]int64{a, s}, err
+	}
+}
+
 func (a *App) healthy() bool {
 	return a.ready.Load() && a.archive.Healthy() && (a.session == nil || a.session.Healthy())
 }
@@ -262,14 +278,10 @@ func (a *App) Run(ctx context.Context) error {
 	backingUp, stopBackingUp := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopBackingUp()
 	backedUp := make(chan struct{})
-	if a.backup != nil {
-		safego.Go("backup.initial", func() {
-			defer close(backedUp)
-			a.backup.run(backingUp, a.backupEvery, a.logger)
-		})
-	} else {
-		close(backedUp)
-	}
+	safego.Go("backup.schedule", func() {
+		defer close(backedUp)
+		a.backup.run(backingUp, a.backupEvery)
+	})
 	a.ready.Store(true)
 	a.serving.Serve()
 	a.health.Serve()

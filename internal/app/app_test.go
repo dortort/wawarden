@@ -127,7 +127,8 @@ func (h heldClient) Authenticate(context.Context, string) (*policy.Client, bool,
 func testConfig(t *testing.T, adminToken string) config.Config {
 	t.Helper()
 	loopback := netip.MustParseAddrPort("127.0.0.1:0")
-	cfg := config.Config{DataDir: t.TempDir(), UID: os.Geteuid(), Listen: loopback, AdminListen: loopback, HealthListen: loopback, StorageProfile: config.StorageLocal, MinFreeBytes: 1, HistoryMaxBytes: config.DefaultHistoryMaxBytes}
+	cfg := config.Config{DataDir: t.TempDir(), UID: os.Geteuid(), Listen: loopback, AdminListen: loopback, HealthListen: loopback, StorageProfile: config.StorageLocal, MinFreeBytes: 1, HistoryMaxBytes: config.DefaultHistoryMaxBytes,
+		BackupMinute: config.DefaultBackupMinute, BackupKeep: config.DefaultBackupKeep}
 	if adminToken != "" {
 		cred, err := policy.ParseAdminCredential(token.Hash(adminToken))
 		if err != nil {
@@ -580,6 +581,7 @@ func TestAdminServesMetricsOnlyWithItsToken(t *testing.T) {
 		"wawarden_auth_failures_total 1\n",
 		"wawarden_policy_denials_total 0\n",
 		"wawarden_sends_rejected_total 0\n",
+		"wawarden_backup_last_success_timestamp_seconds 0\n",
 		`wawarden_build_info{version="dev",revision="`,
 		`",dev="` + strconv.FormatBool(buildinfo.Dev) + `"} 1` + "\n",
 	} {

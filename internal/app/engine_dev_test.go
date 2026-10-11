@@ -62,8 +62,8 @@ func TestTheFakeEngineSaysItTakesNoBackup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if a.backup != nil {
-		t.Fatal("the fake engine, which opens no device store, has a backup trigger")
+	if a.backup.take != nil {
+		t.Fatal("the fake engine, which opens no device store, can take a backup")
 	}
 	if err := run(t, a)(); err != nil {
 		t.Fatalf("Run = %v", err)
