@@ -230,3 +230,39 @@ func TestPendingSendsFailAtStartAndAreReported(t *testing.T) {
 		t.Fatalf("the recovered key replays %+v, %v, want the outcome unknown", res, err)
 	}
 }
+
+type rejectingEngine struct{ calls *int }
+
+func (e rejectingEngine) Ready() bool          { return true }
+func (e rejectingEngine) NewMessageID() string { return "3EB0REJECTED" }
+func (e rejectingEngine) Send(context.Context, sender.Message) (sender.Ack, error) {
+	*e.calls++
+	return sender.Ack{}, &sender.Rejection{Code: 479}
+}
+
+type quietNotifier struct{}
+
+func (quietNotifier) SendOutcomeUnknown(string) {}
+func (quietNotifier) SendUnrecorded()           {}
+
+func TestAReplayedRejectionIsMarkedReplayed(t *testing.T) {
+	archive, group, _ := backfillArchive(t)
+	var calls int
+	s := sendService{sender: sender.New(sender.Options{Store: archive, Engine: rejectingEngine{calls: &calls}, Notifier: quietNotifier{},
+		Holders: func(context.Context, time.Time) (int, error) { return 1, nil }, PerMinute: 10, GlobalPerHour: 30}),
+		rejected: func(string) {}}
+	g, ok := policy.DecideWrite(&policy.Client{ID: "aaaaaaaa", Write: map[policy.CanonicalChat]struct{}{group: {}}, ExpiresAt: time.Now().Add(time.Hour)}, time.Now())
+	if !ok {
+		t.Fatal("DecideWrite refused the test client")
+	}
+	req := api.SendRequest{Key: "replay-key-001", Chat: group, ChatRef: "synthetic-ref", Text: "synthetic"}
+	for i, replayed := range []bool{false, true} {
+		sent, err := s.Send(g, t.Context(), req)
+		if !errors.Is(err, api.ErrSendRejected) || sent.Replayed != replayed {
+			t.Fatalf("send %d = %+v, %v, want a rejection replayed %v", i+1, sent, err, replayed)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("the engine was asked %d times, want once", calls)
+	}
+}

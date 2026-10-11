@@ -524,9 +524,9 @@ func TestAStopDuringABackupIsNotRetried(t *testing.T) {
 
 func seedProcessed(t *testing.T, archive *ingest.Store, n int, at time.Time) {
 	t.Helper()
-	for start := 0; start < n; start += 1000 {
+	for start := 0; start < n; start += 200 {
 		writeArchive(t, archive, func(tx *ingest.Tx) error {
-			for i := start; i < min(start+1000, n); i++ {
+			for i := start; i < min(start+200, n); i++ {
 				id := "old-" + strconv.Itoa(i)
 				if _, err := tx.RecordBlob(id, []byte("ref"), at); err != nil {
 					return err

@@ -188,3 +188,30 @@ func TestABackfillOfAChatWithoutRowsIsRefused(t *testing.T) {
 		t.Fatalf("a chat without rows = %v after %d engine calls", err, len(e.calls))
 	}
 }
+
+func TestTheStatusCountsOnlyTheBackfillsRequestedSinceUTCMidnight(t *testing.T) {
+	a, err := newAppWith(t.Context(), testConfig(t, ""), logx.NewWriter(&syncBuffer{}), nil, noClients{}, idle())
+	if err != nil {
+		t.Fatalf("newAppWith: %v", err)
+	}
+	t.Cleanup(func() { _ = run(t, a)() })
+	group, _ := policy.Normalize("120363000000000001@g.us")
+	member, _ := policy.Normalize("15550100002@s.whatsapp.net")
+	midnight := time.Now().UTC().Truncate(24 * time.Hour)
+	if err := a.archive.Write(t.Context(), "test.fill", func(tx *ingest.Tx) error {
+		_, _, err := tx.InsertMessage(ingest.Message{Chat: group, ID: "OLDEST", Sender: member, Origin: ingest.OriginLive, Timestamp: midnight.Add(-48 * time.Hour),
+			Kind: ingest.KindText, Text: "synthetic", Ingested: midnight.Add(-48 * time.Hour)})
+		return err
+	}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	for i, at := range []time.Time{midnight.Add(-10 * time.Minute), midnight} {
+		if _, err := requestBackfill(adminGrant(t), t.Context(), a.archive, &scriptedBackfiller{id: "3EB0REQUEST" + strconv.Itoa(i)}, at, group, 20); err != nil {
+			t.Fatalf("requestBackfill at %v: %v", at, err)
+		}
+	}
+	st, err := adminService{engine: a.engine, archive: a.archive}.Status(t.Context())
+	if err != nil || st.BackfillsToday != 1 {
+		t.Fatalf("Status = %d backfills today, %v; want 1", st.BackfillsToday, err)
+	}
+}
