@@ -62,3 +62,36 @@ func encodedReplacement(s string) bool {
 	_, size := utf8.DecodeRuneInString(s)
 	return size == utf8.RuneLen(utf8.RuneError)
 }
+
+const (
+	maxOutboundRunes = 4096
+	maxOutboundBytes = 8192
+)
+
+func Outbound(text string) bool {
+	if text == "" || len(text) > maxOutboundBytes || !utf8.ValidString(text) || utf8.RuneCountInString(text) > maxOutboundRunes {
+		return false
+	}
+	for _, r := range text {
+		if refusedOutbound(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func refusedOutbound(r rune) bool {
+	switch {
+	case r == '\n' || r == '\t':
+		return false
+	case r < 0x20 || r >= 0x7f && r <= 0x9f:
+		return true
+	case r >= 0x202a && r <= 0x202e || r >= 0x2066 && r <= 0x2069 || r >= tagFirst && r <= tagLast:
+		return true
+	}
+	switch r {
+	case 0x061c, 0x200e, 0x200f, 0x2028, 0x2029, 0xfeff:
+		return true
+	}
+	return false
+}
