@@ -838,8 +838,9 @@ Right after the master key, `serve`:
    transactions of 10,000 messages that each run under the 5-minute rewrite
    deadline, and a stop in between leaves the rest to the next start. Version 4
    follows version 3 and only adds a column, tables, indexes and triggers and
-   rebuilds the identity-mapping table, which takes well under a second per
-   500,000 messages. Then
+   rebuilds the identity-mapping table, which takes one to two seconds per
+   500,000 messages on a laptop, most of it checking the new column's
+   constraint against every stored message. Then
    `serve` completes a rewrite of the full-text index that a stop or a failed
    rewrite left due (see below) and logs `archive_opened`.
 
@@ -1052,10 +1053,10 @@ the initial backup and whether a nightly backup are due.
   bookkeeping is noticed only with the next write.
 - *Failures.* A failed backup, initial or nightly, reports `backup_failed` and
   is tried again 15 minutes later, then after 30 minutes, 1, 2 and 4 hours,
-  then every 4 hours, until one succeeds, which resets the wait. The wait is
-  held in memory: after a restart a backup that is due is tried at once. A
-  backup cut short by shutdown (`cancelled`) is not retried before the next
-  start.
+  then every 4 hours, until one succeeds and its time is recorded, which
+  resets the wait. The wait is held in memory: after a restart a backup that
+  is due is tried at once. A backup cut short by shutdown (`cancelled`) is not
+  retried before the next start.
 
 At each slot, and at the first check after a start, the scheduler then deletes
 the rows of [history blobs](#history-sync) processed more than 30 days before,
@@ -1652,9 +1653,9 @@ Apart from the busy refusal below, a send ends in one of five outcomes:
 |---|---|
 | sent | WhatsApp acknowledged the message; its time is the server's, or the service's clock when the server named none. |
 | not connected | Nothing was written: the engine was not connected or not paired, the connection was not logged in, or it was gone before the message was written. |
-| recipient unavailable | The account is not a member of the group, or the group does not exist; nothing was written. |
+| recipient unavailable | The account is not a member of the group, the group does not exist, or WhatsApp found no account for the phone number; nothing was written. |
 | rejected | WhatsApp answered with an error, whose number is kept, or the request could not be built: a malformed chat, quote or timer, an empty id or text, or no encryption session with a device. |
-| unknown | The message was written and no acknowledgement came: a timeout, a drop, the deadline, or a panic; and any error the adapter cannot place. |
+| unknown | The adapter cannot rule out that WhatsApp received the message: no acknowledgement came after it was written (a timeout, a drop, the deadline, or a panic), or an error the adapter cannot place ended the call. |
 
 The protocol library's own error text never leaves the adapter, so no outcome
 carries a chat identifier. The adapter reports the owner's LID as the sender
@@ -2130,7 +2131,7 @@ The checks run in this order, and the first that fails answers:
 | `429` | `rate_limited` | A send limit or the pacer, or another send that is running; one code whatever the cause, so no client learns which limit another client spent. `Retry-After` gives the whole seconds until the send would be admitted, 1 to 3600. |
 | `503` | `busy` | The archive did not answer within its deadline. `Retry-After: 1`. |
 | `503` | `not_connected` | The engine is not connected or not paired; nothing was sent. `Retry-After: 5`. |
-| `502` | `send_rejected` | WhatsApp refused the message, or the recipient cannot be reached (not a member of the group, a missing group). Stored, never retried. |
+| `502` | `send_rejected` | WhatsApp refused the message, or the recipient cannot be reached (not a member of the group, a missing group, a phone number without a WhatsApp account). Stored, never retried. |
 | `504` | `send_outcome_unknown` | The message may have reached WhatsApp, but no acknowledgement came: a timeout, a drop after the message was written, a restart or an expired lease. Stored, never retried. |
 | `500` | `internal_error` | Anything else, such as an acknowledged send whose result could not be stored. |
 
