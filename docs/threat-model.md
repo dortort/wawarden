@@ -2,7 +2,8 @@
 
 > **Status: draft for v1.0.** This document describes the security design that
 > v1.0 will ship and marks which parts are in place. The latest release,
-> `v0.2.0`, is milestone **M1**: a loopback health endpoint; when an admin token
+> `v0.3.0`, is milestone **M2**. Its M1 part, first released as `v0.2.0`, is:
+> a loopback health endpoint; when an admin token
 > hash is configured, an admin listener that serves metrics, the engine's
 > status, pairing and reconnection to the admin token, which `wawarden admin`
 > calls; the message archive and the device store, `session.db`, opened and
@@ -13,20 +14,21 @@
 > administrator requests pairing; operational events on standard output and,
 > optionally, a signed webhook; metrics on standard output in embedded metric
 > format; and, when an age recipient is configured, one encrypted backup of both
-> databases per paired device. Its client listener has no routes and refuses
-> every request. `main` holds milestone **M2**, which is not released yet:
+> databases per paired device. Its M2 part adds:
 > clients with per-chat read scopes and expiring tokens, which the
 > administrator creates and revokes; the REST read API and the same reads as
 > MCP tools at `POST /mcp`, with sealed cursors and message references and
 > per-client read and search budgets; the names the owner saved for contacts;
 > and the audit chain of client changes and client requests, with
-> `wawarden audit verify`. Nothing sends a message; sending arrives in M3. A
+> `wawarden audit verify`. Nothing sends a message; sending is planned for M3
+> and is in no release. `main` may be ahead of the release; what is ahead is
+> not released. A
 > service without a paired device makes no connection to WhatsApp until
 > pairing is requested.
 >
 > Every control carries a status. **M0** and **M1** mean it is in place in that
-> release. **M2** means it is in place on `main` and ships with the M2 release.
-> **M3** means it is planned for that milestone and does not exist yet. The
+> release. **M2** means it is in place in `v0.3.0`, the M2 release.
+> **M3** means it is planned for that milestone and is in no release. The
 > residual-risks section describes the state at v1.0, and the controls it names
 > carry their milestone too. [`configuration.md`](configuration.md) documents
 > the behaviour of the current build in detail.
