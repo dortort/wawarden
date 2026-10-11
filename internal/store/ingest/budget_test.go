@@ -157,17 +157,25 @@ func TestTheBudgetQueriesUseThePartialIndexes(t *testing.T) {
 	}
 }
 
-func TestTheSendPathQueriesUseTheirIndexes(t *testing.T) {
+func TestTheSendBackfillAndBlobQueriesUseTheirIndexes(t *testing.T) {
 	s := openStore(t)
+	backfills := "SEARCH backfills USING COVERING INDEX backfills_requested (requested_at>?)"
 	for name, tt := range map[string]struct {
 		query, want string
 		args        []any
 	}{
-		"the chat timer": {selectChatTimer, "SEARCH messages USING INDEX messages_chat_expiring (chat_jid=?)", []any{alice}},
+		"the chat timer":        {selectChatTimer, "SEARCH messages USING INDEX messages_chat_expiring (chat_jid=?)", []any{alice}},
+		"the idempotency sweep": {sweepSends, "SEARCH idempotency USING INDEX idempotency_expiry (expires_at<?)", []any{0}},
+		"the backfill count":    {countBackfills, backfills, []any{0}},
+		"the backfill quota":    {selectQuota, "SCALAR SUBQUERY 1; " + backfills + "; SCALAR SUBQUERY 2; " + backfills, []any{0, 0}},
+		"the backfill anchor":   {selectAnchor, "SEARCH messages USING INDEX messages_chat_ts (chat_jid=?)", []any{alice}},
+		"the sent row":          {selectSentBy, "SEARCH messages USING INDEX sqlite_autoindex_messages_1 (chat_jid=? AND id=?)", []any{alice, "3EB0SENT", writerID}},
+		"the blob prune":        {pruneBlobs, "SEARCH history_blobs USING INTEGER PRIMARY KEY (rowid<?)", []any{0, 10}},
 	} {
 		plan := queryPlan(t, s, tt.query, tt.args...)
-		if !strings.Contains(plan, tt.want) || strings.Contains(plan, "TEMP B-TREE") || strings.Contains(plan, "SCAN messages") {
-			t.Errorf("%s plans as %q, want %q without a scan or a temporary b-tree", name, plan, tt.want)
+		scan := strings.Contains(plan, "SCAN messages") || strings.Contains(plan, "SCAN idempotency") || strings.Contains(plan, "SCAN backfills")
+		if !strings.Contains(plan, tt.want) || scan || strings.Contains(plan, "TEMP B-TREE") {
+			t.Errorf("%s plans as %q, want %q without a scan of the table or a temporary b-tree", name, plan, tt.want)
 		}
 	}
 }
