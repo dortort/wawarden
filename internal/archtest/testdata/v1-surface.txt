@@ -1,0 +1,179 @@
+command wawarden admin backfill
+command wawarden admin chats list
+command wawarden admin clients create
+command wawarden admin clients list
+command wawarden admin clients revoke
+command wawarden admin clients show
+command wawarden admin init
+command wawarden admin pair
+command wawarden admin reconnect
+command wawarden admin status
+command wawarden audit verify
+command wawarden backup verify
+command wawarden healthcheck
+command wawarden keys rotate
+command wawarden serve
+command wawarden version
+default wawarden serve
+emf-metric WaWarden/AdminAuthFailures
+emf-metric WaWarden/AuthFailures
+emf-metric WaWarden/Connected
+emf-metric WaWarden/MessagesIngested
+emf-metric WaWarden/Paired
+emf-metric WaWarden/Panics
+emf-metric WaWarden/PolicyDenials
+emf-metric WaWarden/SendsRejected
+env WAWARDEN_ADMIN_LISTEN
+env WAWARDEN_ADMIN_TOKEN_SHA256
+env WAWARDEN_ADMIN_TOKEN_SHA256_FILE
+env WAWARDEN_AUDIT_RETENTION_DAYS
+env WAWARDEN_BACKUP_AGE_RECIPIENT
+env WAWARDEN_BACKUP_KEEP
+env WAWARDEN_BACKUP_TIME
+env WAWARDEN_DATA_DIR
+env WAWARDEN_HEALTH_LISTEN
+env WAWARDEN_HISTORY_MAX_BYTES
+env WAWARDEN_LISTEN
+env WAWARDEN_LOG_LEVEL
+env WAWARDEN_METRICS_EMF
+env WAWARDEN_MIN_FREE_BYTES
+env WAWARDEN_NOTIFY_ALLOW_PRIVATE
+env WAWARDEN_NOTIFY_SECRET_FILE
+env WAWARDEN_NOTIFY_URL
+env WAWARDEN_OWNER_PHONE
+env WAWARDEN_READ_PER_CLIENT_PER_MINUTE
+env WAWARDEN_SEARCH_PER_CLIENT_PER_MINUTE
+env WAWARDEN_SEND_GLOBAL_PER_HOUR
+env WAWARDEN_SEND_PER_CLIENT_PER_MINUTE
+env WAWARDEN_STORAGE_PROFILE
+env WAWARDEN_UNSAFE_DEBUG
+env WAWARDEN_UNSAFE_RATE_CAPS
+env WAWARDEN_UNSAFE_SEND_CAPS
+event admin_auth_failure
+event admin_mutation
+event audit_key_changed
+event backup_done
+event backup_failed
+event backup_prune_failed
+event backup_pruned
+event disconnected
+event ingest_paused
+event logout_failed
+event pair_rejected
+event quarantine
+event rekey_conflict
+event send_outcome_unknown
+event send_unrecorded
+event unpaired
+exit-code 1 exitFailed
+exit-code 2 exitUsage
+exit-code 3 exitToken
+exit-code 4 exitDenied
+exit-code 5 exitRefused
+exit-code 6 exitUnverified
+flag wawarden admin backfill --addr string
+flag wawarden admin backfill --chat string
+flag wawarden admin backfill --count int
+flag wawarden admin backfill --token-command string
+flag wawarden admin backfill --token-file string
+flag wawarden admin backfill --token-stdin bool
+flag wawarden admin chats list --addr string
+flag wawarden admin chats list --match string
+flag wawarden admin chats list --token-command string
+flag wawarden admin chats list --token-file string
+flag wawarden admin chats list --token-stdin bool
+flag wawarden admin clients create --addr string
+flag wawarden admin clients create --all-chats bool
+flag wawarden admin clients create --allow-first-contact bool
+flag wawarden admin clients create --expires-days int
+flag wawarden admin clients create --name string
+flag wawarden admin clients create --read value
+flag wawarden admin clients create --token-command string
+flag wawarden admin clients create --token-file string
+flag wawarden admin clients create --token-stdin bool
+flag wawarden admin clients create --write value
+flag wawarden admin clients list --addr string
+flag wawarden admin clients list --token-command string
+flag wawarden admin clients list --token-file string
+flag wawarden admin clients list --token-stdin bool
+flag wawarden admin clients revoke --addr string
+flag wawarden admin clients revoke --id string
+flag wawarden admin clients revoke --token-command string
+flag wawarden admin clients revoke --token-file string
+flag wawarden admin clients revoke --token-stdin bool
+flag wawarden admin clients show --addr string
+flag wawarden admin clients show --id string
+flag wawarden admin clients show --token-command string
+flag wawarden admin clients show --token-file string
+flag wawarden admin clients show --token-stdin bool
+flag wawarden admin pair --addr string
+flag wawarden admin pair --token-command string
+flag wawarden admin pair --token-file string
+flag wawarden admin pair --token-stdin bool
+flag wawarden admin reconnect --addr string
+flag wawarden admin reconnect --token-command string
+flag wawarden admin reconnect --token-file string
+flag wawarden admin reconnect --token-stdin bool
+flag wawarden admin status --addr string
+flag wawarden admin status --token-command string
+flag wawarden admin status --token-file string
+flag wawarden admin status --token-stdin bool
+flag wawarden audit verify --db string
+flag wawarden audit verify --log string
+flag wawarden audit verify --master-key-file string
+flag wawarden audit verify --retired-keys-dir string
+flag wawarden backup verify --extract-to string
+flag wawarden backup verify --work-dir string
+flag wawarden keys rotate --data-dir string
+flag wawarden serve --allow-root bool
+mcp-tool all_chats get_changes properties=chat,limit,since required=-
+mcp-tool all_chats get_chat properties=chat required=chat
+mcp-tool all_chats get_messages properties=chat,cursor,limit required=chat
+mcp-tool all_chats list_chats properties=cursor,limit required=-
+mcp-tool all_chats search_messages properties=chat,cursor,limit,query required=query
+mcp-tool read_chats get_changes properties=chat,limit,since required=-
+mcp-tool read_chats get_chat properties=chat required=chat
+mcp-tool read_chats get_messages properties=chat,cursor,limit required=chat
+mcp-tool read_chats list_chats properties=cursor,limit required=-
+mcp-tool read_chats search_messages properties=chat,cursor,limit,query required=query
+mcp-tool write_chats get_changes properties=chat,limit,since required=-
+mcp-tool write_chats get_chat properties=chat required=chat
+mcp-tool write_chats get_messages properties=chat,cursor,limit required=chat
+mcp-tool write_chats list_chats properties=cursor,limit required=-
+mcp-tool write_chats search_messages properties=chat,cursor,limit,query required=query
+mcp-tool write_chats send_message properties=chat,idempotency_key,reply_to,text required=chat,idempotency_key,text
+metric wawarden_admin_auth_failures_total counter
+metric wawarden_auth_failures_total counter
+metric wawarden_backup_last_success_timestamp_seconds gauge
+metric wawarden_build_info gauge labels=dev,revision,version
+metric wawarden_connected gauge
+metric wawarden_ingest_dropped_total counter labels=reason
+metric wawarden_ingest_quarantined_total counter labels=queue
+metric wawarden_ingest_refused_total counter labels=reason
+metric wawarden_messages_ingested_total counter
+metric wawarden_notify_dropped_total counter labels=reason
+metric wawarden_paired gauge
+metric wawarden_panics_total counter labels=name
+metric wawarden_policy_denials_total counter
+metric wawarden_rekey_conflicts_total counter labels=conflict
+metric wawarden_sends_rejected_total counter labels=reason
+route GET /admin/v1/chats class=admin
+route GET /admin/v1/clients class=admin
+route GET /admin/v1/clients/{id} class=admin
+route GET /admin/v1/status class=admin
+route GET /healthz class=health
+route GET /metrics class=admin
+route GET /v1/changes class=read
+route GET /v1/chats class=read
+route GET /v1/chats/{ref} class=read
+route GET /v1/chats/{ref}/messages class=read
+route GET /v1/me class=read
+route GET /v1/messages/{mref} class=read
+route GET /v1/search class=read
+route POST /admin/v1/backfill class=admin
+route POST /admin/v1/clients class=admin
+route POST /admin/v1/clients/{id}/revoke class=admin
+route POST /admin/v1/pair class=admin
+route POST /admin/v1/reconnect class=admin
+route POST /mcp class=mcp
+route POST /v1/chats/{ref}/messages class=write
