@@ -901,6 +901,19 @@ These remain at v1.0, after every control above is in place.
   the risk; it does not remove it. It uses classic POSIX record locks, which a
   close of any other descriptor of the database file in the process would drop;
   the service's own code never opens the file (row 3a), but a dependency could.
+- **A database deadline lost in the driver** (M2). A deadline that passes just
+  as the database driver starts a statement can be lost: that statement then
+  runs to its end before the call fails, past its call's deadline (2 seconds
+  for a read, 10 for a write), and nothing bounds how long it runs. Until it
+  ends, the archive's one connection stays taken, so other calls wait for it
+  no longer than their own deadlines: a read then answers `503` (`busy`), and
+  a write, an ingest write included, fails. Grants and the audit chain still
+  hold; the loss costs availability, not scope. See
+  [Message archive](configuration.md#message-archive). A test checks that
+  interruption works and tolerates the race: slow reads, writes and statements
+  under a 100-millisecond deadline must each return within 3 seconds, a call
+  that overruns because its interrupt was lost or late runs again, up to three
+  times, and the test fails only when all three overrun.
 - **Group admins as the archive knows them.** A revocation of another member's
   message in a group is applied when the archive records the revoker as an
   admin of that group, and that record is only as current as the group changes
