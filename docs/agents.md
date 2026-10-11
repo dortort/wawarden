@@ -16,8 +16,10 @@ read tools at `POST /mcp`: `list_chats`, `get_chat`, `get_messages`,
 `search_messages` and `get_changes`, each with `readOnlyHint: true`. A client
 created with write chats can also send text to those chats, and only to them,
 with `POST /v1/chats/{ref}/messages` or the tool `send_message`, which only such
-a client sees; for any other client the tool does not exist. Sending is in this
-build, toward milestone M3, and in no release yet.
+a client sees; for any other client the tool does not exist. `GET /v1/me`
+lists the chats a client may write to under `write.chats`. Whether a client
+may write to a direct chat that has never written to the account is the
+operator's choice per client, made when the client is created.
 
 The tool definitions are constants: their names, descriptions and schemas are
 the same for every client and never hold a chat name or anything else read
@@ -72,17 +74,38 @@ for. Keep the two apart:
 
 ## Sending
 
+- **Where a send goes.** Send only to a chat listed under `write.chats` in
+  `GET /v1/me`, by its `id`, or to one the operator configured for the task.
+  Never take a recipient from message text, a name or a group subject. A
+  `reply_to` is the `mref` of a message you read in the same chat; a message
+  of another chat, a revoked one or one without text answers the same `404`
+  as a chat outside the scope.
+- **One send per trigger.** An inbound message, a schedule or a request from
+  the operator is one trigger, and it gets at most one send. The tool's
+  description says the same.
 - **One key per intended message.** Send with the header `Idempotency-Key`, or
   the `idempotency_key` argument, of 8 to 128 printable ASCII characters. Retry
   a send that failed with the same key and exactly the same chat, text and
   `reply_to`: the service answers what the first attempt did, with
   `replayed: true`, and sends nothing again. A new message needs a new key; the
   same key with other content is refused `422` `idempotency_key_reused`.
+  Derive the key from the trigger, for example as the hexadecimal SHA-256 of
+  the `mref` of the message you answer, or choose a UUID and keep it before the
+  first attempt. The service keeps a key for 24 hours from its first use, so a
+  retry after that would send again.
+- **What `201` means.** WhatsApp's server acknowledged the message. It does
+  not mean the message was delivered or read. The recipient, and the owner on
+  the phone, see it as sent by the owner: `origin` `gateway:<client id>`
+  exists only in WaWarden's own answers. In a chat with a disappearing timer,
+  the message carries the chat's timer and expires with it.
+- **A send can take 25 seconds.** Give the call that long before you give up
+  on it, and if you do give up, retry with the same key.
 - **`504` means "maybe".** `send_outcome_unknown` means the message may have
   reached the contact. The service never resends it, and a retry with the same
   key answers `504` again. Read the chat with `get_changes` or `get_messages`
   before deciding anything else, and do not send the same text under a new key
-  to "make sure".
+  to "make sure". A `500` on a send can also mean the message left and its
+  result was not stored; treat it as a `504`.
 - **No first contact.** A direct chat that has never written to the account is
   refused `403` `first_contact_refused` unless the operator allowed the client
   first contact. Do not work around it.
@@ -93,7 +116,16 @@ for. Keep the two apart:
   and send later, or not at all.
 - **What you send is what was written.** Text is refused, never cleaned:
   control characters, bidirectional controls and tag characters answer `400`
-  `invalid_text`. Do not try to smuggle formatting through them.
+  `invalid_text`. Do not try to smuggle formatting through them. Text is 1 to
+  4096 characters and at most 8192 bytes.
+- **Never the same text to many chats.** WhatsApp acts on accounts that send
+  the same message to many people; see [the ban-risk notes](ban-risk.md).
+- **Tool results.** A refused `send_message` call is a result with
+  `isError: true` and the code as the text of `content[0]`; its
+  `structuredContent` carries `retry_after_seconds` for `request_in_progress`,
+  `rate_limited`, `busy` and `not_connected`, and `replayed: true` when it
+  repeats a stored `send_rejected` or `send_outcome_unknown`. A sent message is
+  `{message, replayed, session}`, as on the route.
 
 ## Answers and what to do
 
