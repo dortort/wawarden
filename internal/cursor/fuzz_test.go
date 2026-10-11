@@ -38,7 +38,7 @@ func FuzzOpenCursor(f *testing.F) {
 }
 
 func FuzzOpenRef(f *testing.F) {
-	s := sealer(f, key, keyID)
+	s := refSealer(f, key, keyID)
 	text, err := s.SealRef(binding.Client, ref)
 	if err != nil {
 		f.Fatalf("SealRef: %v", err)

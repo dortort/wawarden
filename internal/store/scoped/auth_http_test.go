@@ -30,9 +30,9 @@ func storeClientHandler(t *testing.T, s *ingest.Store, reg *metrics.Registry) ht
 	if err != nil {
 		t.Fatalf("cursor.New: %v", err)
 	}
-	refs, err := cursor.New(bytes.Repeat([]byte{0x32}, 32), "0a1b2c3d")
+	refs, err := cursor.NewRef(bytes.Repeat([]byte{0x32}, 32), "0a1b2c3d")
 	if err != nil {
-		t.Fatalf("cursor.New: %v", err)
+		t.Fatalf("cursor.NewRef: %v", err)
 	}
 	return api.NewClientHandler(api.ClientDeps{
 		Authenticator: s.Clients(), Metrics: reg, Archive: s.Scoped(), Audit: storeAudit{s.Audit()},

@@ -24,8 +24,8 @@ func testSealers(t testing.TB) (cursors, refs *cursor.Sealer) {
 	if cursors, err = cursor.New(bytes.Repeat([]byte{0x11}, 32), sealKeyID); err != nil {
 		t.Fatalf("cursor.New: %v", err)
 	}
-	if refs, err = cursor.New(bytes.Repeat([]byte{0x22}, 32), sealKeyID); err != nil {
-		t.Fatalf("cursor.New: %v", err)
+	if refs, err = cursor.NewRef(bytes.Repeat([]byte{0x22}, 32), sealKeyID); err != nil {
+		t.Fatalf("cursor.NewRef: %v", err)
 	}
 	return cursors, refs
 }

@@ -24,7 +24,7 @@ func sealers(master *keys.Master) (cursors, refs *cursor.Sealer, err error) {
 	if cursors, err = cursor.New(master.CursorSealKey(), master.ID()); err != nil {
 		return nil, nil, err
 	}
-	if refs, err = cursor.New(master.MessageRefKey(), master.ID()); err != nil {
+	if refs, err = cursor.NewRef(master.MessageRefKey(), master.ID()); err != nil {
 		return nil, nil, err
 	}
 	return cursors, refs, nil

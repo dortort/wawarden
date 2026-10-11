@@ -35,6 +35,15 @@ func sealer(t testing.TB, k []byte, id string) *cursor.Sealer {
 	return s
 }
 
+func refSealer(t testing.TB, k []byte, id string) *cursor.Sealer {
+	t.Helper()
+	s, err := cursor.NewRef(k, id)
+	if err != nil {
+		t.Fatalf("NewRef: %v", err)
+	}
+	return s
+}
+
 func requireInvalid(t testing.TB, err error) {
 	t.Helper()
 	if err != cursor.ErrInvalid || err.Error() != "invalid cursor" {
@@ -57,6 +66,9 @@ func TestNewRefusesMalformedKeys(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if s, err := cursor.New(tt.key, tt.id); err == nil || s != nil {
 				t.Fatalf("New = %v, %v, want a refusal", s, err)
+			}
+			if s, err := cursor.NewRef(tt.key, tt.id); err == nil || s != nil {
+				t.Fatalf("NewRef = %v, %v, want a refusal", s, err)
 			}
 		})
 	}
@@ -174,8 +186,18 @@ func TestCursorRefusesOtherKeys(t *testing.T) {
 	}
 }
 
+func TestOnlyTheReferenceSealerSealsReferences(t *testing.T) {
+	if text, err := sealer(t, key, keyID).SealRef(binding.Client, ref); err == nil || text != "" || errors.Is(err, cursor.ErrInvalid) {
+		t.Fatalf("a sealer from New sealed a reference: %q, %v, want no text and an error apart from the invalid cursor one", text, err)
+	}
+	text := mustSealRef(t, refSealer(t, key, keyID), binding.Client, ref)
+	if got, err := sealer(t, key, keyID).OpenRef(binding.Client, text); err != nil || got != ref {
+		t.Fatalf("a sealer from New under the same key opened the reference to %+v, %v, want %+v", got, err, ref)
+	}
+}
+
 func TestRefRoundTripsUnderItsClientOnly(t *testing.T) {
-	s := sealer(t, key, keyID)
+	s := refSealer(t, key, keyID)
 	text, err := s.SealRef(binding.Client, ref)
 	if err != nil {
 		t.Fatalf("SealRef: %v", err)
@@ -206,12 +228,12 @@ func TestRefRoundTripsUnderItsClientOnly(t *testing.T) {
 }
 
 func TestARefIsStablePerClientAndMessage(t *testing.T) {
-	s := sealer(t, key, keyID)
+	s := refSealer(t, key, keyID)
 	first := mustSealRef(t, s, binding.Client, ref)
 	if again := mustSealRef(t, s, binding.Client, ref); again != first {
 		t.Fatalf("the same message under the same client sealed to %q and %q, want one stable reference", first, again)
 	}
-	if again := mustSealRef(t, sealer(t, key, keyID), binding.Client, ref); again != first {
+	if again := mustSealRef(t, refSealer(t, key, keyID), binding.Client, ref); again != first {
 		t.Fatalf("a second sealer with the same key sealed the message to %q, want %q", again, first)
 	}
 	seen := map[string]string{first: "the message"}
@@ -227,7 +249,7 @@ func TestARefIsStablePerClientAndMessage(t *testing.T) {
 		{name: "another chat", s: s, client: binding.Client, r: cursor.Ref{Chat: "15550100002@s.whatsapp.net", ID: ref.ID, Sender: ref.Sender}},
 		{name: "another message", s: s, client: binding.Client, r: cursor.Ref{Chat: ref.Chat, ID: "3EB0SYNTHETIC0002", Sender: ref.Sender}},
 		{name: "another sender", s: s, client: binding.Client, r: cursor.Ref{Chat: ref.Chat, ID: ref.ID, Sender: "15550100002@s.whatsapp.net"}},
-		{name: "another key", s: sealer(t, otherKey, keyID), client: binding.Client, r: ref},
+		{name: "another key", s: refSealer(t, otherKey, keyID), client: binding.Client, r: ref},
 	} {
 		text := mustSealRef(t, tt.s, tt.client, tt.r)
 		if other, dup := seen[text]; dup {
@@ -271,7 +293,7 @@ func hmacSHA256(k []byte, parts ...[]byte) []byte {
 }
 
 func TestARefNonceIsKeyedApartFromTheSealingKey(t *testing.T) {
-	nonce := nonceOf(t, mustSealRef(t, sealer(t, key, keyID), binding.Client, ref))
+	nonce := nonceOf(t, mustSealRef(t, refSealer(t, key, keyID), binding.Client, ref))
 	var input []byte
 	for _, f := range []string{binding.Client, ref.Chat, ref.ID, ref.Sender} {
 		input = binary.AppendUvarint(input, uint64(len(f)))
@@ -287,13 +309,13 @@ func TestARefNonceIsKeyedApartFromTheSealingKey(t *testing.T) {
 
 func TestARefMatchesItsFixedVector(t *testing.T) {
 	const want = "m1_AQobLD01M8YE1B595tpcy9fRF3UouehCjm0ehclfRHvRxOfGcONMcvXsQCjaoD0hCto1Vg_jJSgk-0XHd81AC03tzzCpVN6swCU6MK6lyzbLGboYpB1St0eHGHUxGU26tcFYp5yS9Yh1"
-	if got := mustSealRef(t, sealer(t, key, keyID), binding.Client, ref); got != want {
+	if got := mustSealRef(t, refSealer(t, key, keyID), binding.Client, ref); got != want {
 		t.Fatalf("SealRef = %q, want the fixed vector %q", got, want)
 	}
 }
 
 func TestRefFieldsCannotShift(t *testing.T) {
-	s := sealer(t, key, keyID)
+	s := refSealer(t, key, keyID)
 	shifted := cursor.Ref{Chat: ref.Chat + ref.ID, ID: "", Sender: ref.Sender}
 	text, err := s.SealRef(binding.Client, shifted)
 	if err != nil {
@@ -306,7 +328,7 @@ func TestRefFieldsCannotShift(t *testing.T) {
 }
 
 func TestTheLongestReferenceFitsItsCap(t *testing.T) {
-	s := sealer(t, key, keyID)
+	s := refSealer(t, key, keyID)
 	longest := cursor.Ref{Chat: "120363999999999999999999@g.us", ID: strings.Repeat("~", 128), Sender: "999999999999999999999999@lid"}
 	text, err := s.SealRef(binding.Client, longest)
 	if err != nil || len(text) > cursor.MaxRef {

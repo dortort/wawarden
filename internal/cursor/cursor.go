@@ -32,9 +32,10 @@ const (
 )
 
 var (
-	ErrInvalid = errors.New("invalid cursor")
-	errKey     = errors.New("cursor: the key is not 32 bytes with an 8-hex-digit key id")
-	errRefSize = errors.New("cursor: the message reference would exceed its length cap")
+	ErrInvalid  = errors.New("invalid cursor")
+	errKey      = errors.New("cursor: the key is not 32 bytes with an 8-hex-digit key id")
+	errRefSize  = errors.New("cursor: the message reference would exceed its length cap")
+	errNoRefKey = errors.New("cursor: this sealer has no reference nonce key")
 )
 
 var encoding = base64.RawURLEncoding.Strict()
@@ -78,10 +79,19 @@ func New(key []byte, keyID string) (*Sealer, error) {
 	if err != nil {
 		return nil, err
 	}
+	s := &Sealer{aead: aead, fixed: fixed}
+	copy(s.id[:], id)
+	return s, nil
+}
+
+func NewRef(key []byte, keyID string) (*Sealer, error) {
+	s, err := New(key, keyID)
+	if err != nil {
+		return nil, err
+	}
 	derive := hmac.New(sha256.New, key)
 	derive.Write([]byte(nonceLabel))
-	s := &Sealer{aead: aead, fixed: fixed, nonceKey: derive.Sum(nil)}
-	copy(s.id[:], id)
+	s.nonceKey = derive.Sum(nil)
 	return s, nil
 }
 
@@ -106,8 +116,8 @@ func (s *Sealer) OpenCursor(b Binding, text string) (Position, error) {
 }
 
 func (s *Sealer) SealRef(client string, r Ref) (string, error) {
-	if s == nil {
-		return "", ErrInvalid
+	if s == nil || s.nonceKey == nil {
+		return "", errNoRefKey
 	}
 	var pt []byte
 	for _, f := range [refFields]string{r.Chat, r.ID, r.Sender} {

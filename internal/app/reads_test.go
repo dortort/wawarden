@@ -23,6 +23,9 @@ func TestSealersUseTheCursorAndMessageReferenceKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SealRef: %v", err)
 	}
+	if text, err := cursors.SealRef("aaaaaaaa", cursor.Ref{Chat: "120363000000000001@g.us", ID: "SYNTHETIC", Sender: "15550100001@s.whatsapp.net"}); err == nil || text != "" {
+		t.Fatalf("the cursor sealer sealed a message reference: %q, %v", text, err)
+	}
 	purposes := map[string][]byte{
 		"log redact":  master.LogRedactKey(),
 		"chat hmac":   master.ChatHMACKey(),
