@@ -98,7 +98,7 @@ raises the risk is likewise unknown.
 | Bounded history requests. `admin backfill` is allowed once every 5 minutes and 20 times a UTC day, for at most 50 messages. | [`admin backfill`](configuration.md#admin-backfill) |
 | No read receipts, presence, typing indicators or status updates; an architecture test refuses the library calls that send them. | [Traffic the protocol library sends by itself](configuration.md#traffic-the-protocol-library-sends-by-itself) |
 | Measured reconnection. The library's own reconnection is off; the engine waits 2 seconds, doubling to 5 minutes, and stops for the operator on a replaced session, a ban, a logout or an outdated client. More than 5 starts in 10 minutes keep it from connecting. | [Engine states](configuration.md#engine-states) |
-| A current protocol version, fetched when the engine starts and on an explicit reconnect, with bounded retries. | [Engine states](configuration.md#engine-states) |
+| A current protocol version, fetched when the engine starts with a paired device and again when WhatsApp reports the client as outdated, with bounded retries; after no fetch succeeded, an explicit reconnect fetches before it connects. | [Engine states](configuration.md#engine-states) |
 | The traffic the library sends by itself, such as acknowledgements and inactive delivery receipts, is listed. | [Traffic the protocol library sends by itself](configuration.md#traffic-the-protocol-library-sends-by-itself) |
 
 ## What the operator must do
