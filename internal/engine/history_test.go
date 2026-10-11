@@ -410,7 +410,7 @@ func TestALeftoverFileIsCleanedWithinTheHourWithoutARestart(t *testing.T) {
 	if names := r.historyFiles(); len(names) != 0 {
 		t.Fatalf("history files %v after the hourly clean", names)
 	}
-	if at := cleans(); at[1].Sub(at[0]) < cleanInterval || at[1].Sub(at[0]) > cleanInterval+sweepInterval {
+	if at := cleans(); at[1].Sub(at[0]) < time.Hour || at[1].Sub(at[0]) > time.Hour+sweepInterval {
 		t.Fatalf("cleaned at %v, want an hour apart", at)
 	}
 }
