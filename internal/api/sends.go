@@ -25,6 +25,7 @@ const (
 	maxKeyBytes      = 128
 	keyPattern       = "^[\\x21-\\x7e]{8,128}$"
 	maxOutboundChars = 4096
+	maxSendBodyBytes = 64 << 10
 	reasonScope      = "scope"
 	notConnected     = 5 * time.Second
 )
@@ -134,7 +135,7 @@ func notedWrite(action string, h writeHandler) func(context.Context, policy.Writ
 
 func (w *writes) send(ctx context.Context, g policy.WriteGrant, r *Request) (dto.Response, policy.CanonicalChat, error) {
 	var body sendBody
-	if err := r.DecodeJSON(&body); err != nil {
+	if err := r.decodeJSON(&body, maxSendBodyBytes); err != nil {
 		return nil, policy.CanonicalChat{}, err
 	}
 	if body.Text == nil {

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -236,11 +237,50 @@ func TestSendRefusalsFollowTheFixedOrder(t *testing.T) {
 	r.Header.Set("Content-Type", "text/plain")
 	r.Header.Set("Authorization", "Bearer "+keyAlice)
 	requireError(t, serve(f.handler, r), http.StatusUnsupportedMediaType, codeUnsupportedMediaType)
-	requireError(t, f.post(t, keyAlice, sendTarget, `{"text":"`+strings.Repeat("a", maxBodyBytes)+`"}`, idempotency(sendKey)), http.StatusRequestEntityTooLarge, codeBodyTooLarge)
+	requireError(t, f.post(t, keyAlice, sendTarget, `{"text":"`+strings.Repeat("a", maxSendBodyBytes)+`"}`, idempotency(sendKey)), http.StatusRequestEntityTooLarge, codeBodyTooLarge)
 	for _, text := range []string{`a\u200db`, `a\ufe0fb`, `a\u200cb`, "   "} {
 		if rec := f.post(t, keyAlice, sendTarget, `{"text":"`+text+`"}`, idempotency("kept-"+fmt.Sprintf("%x", text))); rec.Code != http.StatusCreated {
 			t.Fatalf("text %q = %d %s, want it sent", text, rec.Code, rec.Body.String())
 		}
+	}
+}
+
+func escaped(s string) string {
+	var b strings.Builder
+	for _, u := range utf16.Encode([]rune(s)) {
+		fmt.Fprintf(&b, `\u%04x`, u)
+	}
+	return b.String()
+}
+
+func TestAnEscapedTextWithinThePolicyIsSentOverRESTAndMCP(t *testing.T) {
+	f := newMCPFixture(t)
+	f.acceptSends()
+	ref := decodeBody[pageView](t, f.get(t, keyAlice, "/v1/chats/"+aliceRef+"/messages")).Messages[0].Ref
+	angles := strings.Repeat("<", maxOutboundChars)
+	encoded, err := json.Marshal(sendBody{Text: &angles})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	widest := strings.Repeat("a", 2731) + strings.Repeat("\U0001F600", 1365)
+	for i, body := range []string{
+		`{"text":"` + escaped(strings.Repeat("\u0436", maxOutboundChars)) + `"}`,
+		`{"text":"` + escaped(strings.Repeat("\U0001F600", maxOutboundChars/2)) + `"}`,
+		string(encoded),
+		`{"text":"` + escaped(widest) + `","reply_to":"` + escaped(ref) + `"}`,
+	} {
+		if rec := f.post(t, keyAlice, sendTarget, body, idempotency(fmt.Sprintf("escaped-key-%04d", i))); rec.Code != http.StatusCreated {
+			t.Fatalf("an escaped text within the policy in a %d-byte body = %d %s", len(body), rec.Code, rec.Body.String())
+		}
+	}
+	requireError(t, f.post(t, keyAlice, sendTarget, `{"text":"`+escaped(strings.Repeat("a", maxOutboundChars+1))+`"}`, idempotency("escaped-key-over")),
+		http.StatusBadRequest, codeInvalidText)
+	cs := connect(t, f.handler, keyAlice, protocols[0])
+	if res := call(t, cs, toolSendMessage, map[string]any{"chat": aliceRef, "text": angles, "idempotency_key": "escaped-key-mcp1"}); res.IsError {
+		t.Fatalf("send_message with the text REST took = %+v", res)
+	}
+	if calls := f.sender.requests(); len(calls) != 5 || calls[3].Text != widest || calls[3].Reply == nil || calls[4].Text != angles {
+		t.Fatalf("%d sender calls, want five with the decoded texts", len(calls))
 	}
 }
 
