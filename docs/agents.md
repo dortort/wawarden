@@ -151,6 +151,7 @@ for. Keep the two apart:
 | `409` `request_in_progress` | A send with the same key is still running. | Wait `Retry-After` and retry with the same key and content. |
 | `422` `idempotency_key_reused` | The key was used for another message. | Use a new key for a new message; never reuse one to change a message. |
 | `429` `rate_limited` on a send | A send limit or the pacer. | Wait `Retry-After`, or `retry_after_seconds` from the tool, then retry with the same key. |
+| `503` `busy` on a send | Usually nothing was sent, but a send that went out answers `busy` too when the archive could not store its audit row or read the message back in time. | Retry with the same key and content after `Retry-After`, never with a new key: a send that went out then answers `201` with `replayed: true`. If you give up, read the chat before sending anything else. |
 | `503` `not_connected` | The service is not connected to WhatsApp; nothing was sent. | Retry with the same key after `Retry-After` (5 seconds), a few times at most. |
 | `502` `send_rejected` | WhatsApp refused the message, or the recipient cannot be reached. | Do not retry; a retry with the same key answers the same. |
 | `504` `send_outcome_unknown` | The message may or may not have arrived. | Do not resend; read the chat to find out. |

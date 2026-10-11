@@ -247,8 +247,10 @@ Signs: `disconnected` with `temporary_ban` or `connect_failure`, or
 2. Look at the owner's phone and in WhatsApp for a notice of a restriction or
    ban. WaWarden does not report WhatsApp's reason.
 3. Check what was sent before: the audit lines with the actions `rest.send`
-   and `mcp.send_message`, `wawarden_sends_rejected_total` by reason, and the
-   chats themselves on the phone.
+   and `mcp.send_message`, `wawarden_sends_rejected_total` by reason, the
+   archive's messages with `origin` `gateway:<client id>` as a read client sees
+   them, which also hold a send whose audit row the busy archive could not
+   take, and the chats themselves on the phone.
 4. For a temporary ban, wait for its end, then `admin reconnect`. After a
    logout, pair again only once the phone works normally; pairing is limited to
    3 attempts an hour.

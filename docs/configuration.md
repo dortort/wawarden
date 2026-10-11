@@ -2135,7 +2135,7 @@ The checks run in this order, and the first that fails answers:
 | `409` | `request_in_progress` | Another request with the same key is still running. `Retry-After` gives 1 to 5 seconds. |
 | `422` | `idempotency_key_reused` | The key was used for another request: another chat, text or reply target. Also while the first is still running. |
 | `429` | `rate_limited` | A send limit or the pacer, or another send that is running; one code whatever the cause, so no client learns which limit another client spent. `Retry-After` gives the whole seconds until the send would be admitted, 1 to 3600. |
-| `503` | `busy` | The archive did not answer within its deadline. `Retry-After: 1`. |
+| `503` | `busy` | The archive did not answer within its deadline, or the client list was being republished. `Retry-After: 1`. Usually nothing was sent, but see below. |
 | `503` | `not_connected` | The engine is not connected or not paired; nothing was sent. `Retry-After: 5`. |
 | `502` | `send_rejected` | WhatsApp refused the message, or the recipient cannot be reached (not a member of the group, a missing group, a phone number without a WhatsApp account). Stored, never retried. |
 | `504` | `send_outcome_unknown` | The message may have reached WhatsApp, but no acknowledgement came: a timeout, a drop after the message was written, a restart or an expired lease. Stored, never retried. |
@@ -2153,10 +2153,15 @@ reads the message as it is now, so a message revoked since shows no text. The
 reply target is checked before the key is looked up, so a retry whose target
 was revoked or lost its text at expiry since answers `404` and sends nothing,
 as a new request with that target would. A
-request that ended with `400`, `403`, `404`, `429` or `503` stored nothing, so
-the same request can be made again under its key once the cause is gone; after
-a `409` the first request's answer follows, and after a `422` the key stays
-bound to its first request. After a `500` from an acknowledged send whose
+request that ended with `400`, `403`, `404`, `429` or `503` `not_connected`
+stored nothing, so the same request can be made again under its key once the
+cause is gone; after a `409` the first request's answer follows, and after a
+`422` the key stays bound to its first request. A `503` `busy` usually stored
+nothing either, but it also answers a send that went out and was stored when
+the archive is too busy to read the message back, or to write the request's
+audit row, within 2 seconds. Retry it under the same key: a send that never
+left is then made, and one that went out answers `201` with
+`Idempotent-Replayed: true` and writes its audit row. After a `500` from an acknowledged send whose
 result could not be stored, or from a send that never left whose key could not
 be freed, the key answers `409` until its lease ends and `504` afterwards, and
 the service reports [`send_unrecorded`](#notifications). The same key reaches the same send from
@@ -2324,8 +2329,12 @@ text or the idempotency key. Every `POST /mcp` writes one
 row too, with the actions and reasons listed under [MCP audit](#mcp-audit). A request whose row cannot be
 written within 2 seconds is answered `503` (`busy`) with `Retry-After: 1`, and
 one whose row fails for another reason `500` (`internal_error`); either way
-nothing of the read leaves the service. A request refused by the read budget,
-and a failed authentication, write no row.
+nothing of the read leaves the service, although a send may already have gone
+out (see [sending](#sending)). The row is written also when the client has
+closed the connection before its answer, with the outcome the request reached:
+a send whose client left during the acknowledgement wait is recorded with the
+send's own result. A request refused by the read budget, and a failed
+authentication, write no row.
 
 ### MCP
 
@@ -2467,7 +2476,8 @@ notifications, refused methods, unknown tools and refused bodies. The reason is
 `bad_request` for a message the library refused before it reached the server. A
 notification answered `202` is `ok`. A row names a chat only for a successful
 `get_chat` or `get_messages`, and for a `send_message` call once the chat is
-found in the write scope.
+found in the write scope. When the client has left before the answer, the
+library writes none, and the row records the call's own outcome.
 
 #### Registering with Claude Code
 
