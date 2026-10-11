@@ -174,6 +174,10 @@ func f(ctx context.Context, cli *whatsmeow.Client, log waLog.Logger) error {
 	_ = types.NewsletterServer
 	_ = waLog.Noop
 	log.Infof("x")
+	if cli.IsConnected() && cli.IsLoggedIn() {
+		_, _ = cli.SendMessage(ctx, types.EmptyJID, nil, whatsmeow.SendRequestExtra{ID: cli.GenerateMessageID()})
+		_, _ = cli.SendPeerMessage(ctx, cli.BuildHistorySyncRequest(&types.MessageInfo{}, 50))
+	}
 	return cli.SendProtocolMessageReceipt(ctx, "", types.ReceiptTypeHistorySync)
 }
 `},
@@ -595,7 +599,7 @@ var offlineTestRule = rule{
 	name:  "offline-tests",
 	check: offlineTests(testAddressAllowances),
 	cases: []snippet{
-		{name: "protocol hosts and network calls in a test", rel: "internal/engine/wa/x_test.go", want: 17, src: `package wa
+		{name: "protocol hosts and network calls in a test", rel: "internal/engine/wa/x_test.go", want: 19, src: `package wa
 
 import (
 	"context"
@@ -621,6 +625,8 @@ func f(ctx context.Context, cli *whatsmeow.Client) {
 	_, _ = whatsmeow.GetLatestVersion(ctx, nil)
 	_ = cli.ConnectContext(ctx)
 	_ = cli.DownloadToFile(ctx, nil, nil)
+	_, _ = cli.SendMessage(ctx, cli.Store.GetJID(), nil)
+	_, _ = cli.SendPeerMessage(ctx, nil)
 }
 `},
 		{name: "the client constructor, its frame socket, its transport setters, downloads, uploads and state fetches in a test", rel: "internal/engine/wa/x_test.go", want: 12, src: `package wa
