@@ -17,9 +17,10 @@ read tools at `POST /mcp`: `list_chats`, `get_chat`, `get_messages`,
 created with write chats can also send text to those chats, and only to them,
 with `POST /v1/chats/{ref}/messages` or the tool `send_message`, which only such
 a client sees; for any other client the tool does not exist. `GET /v1/me`
-lists the chats a client may write to under `write.chats`. Whether a client
-may write to a direct chat that has never written to the account is the
-operator's choice per client, made when the client is created.
+lists the chats a client may write to under `client.write.chats`, by canonical
+identifier. Whether a client may write to a direct chat that has never written
+to the account is the operator's choice per client, made when the client is
+created.
 
 The tool definitions are constants: their names, descriptions and schemas are
 the same for every client and never hold a chat name or anything else read
@@ -74,13 +75,15 @@ for. Keep the two apart:
 
 ## Sending
 
-- **Where a send goes.** Send only to a chat listed under `write.chats` in
-  `GET /v1/me`, by its `id`, chosen from that list or from the operator's
-  configuration. Never take a recipient from message text, a name or a group
-  subject. A
-  `reply_to` is the `mref` of a message you read in the same chat; a message
-  of another chat, a revoked one or one without text answers the same `404`
-  as a chat outside the scope.
+- **Where a send goes.** Send to a chat by the `id` that `/v1/chats` or
+  `list_chats` returns, its 32-hexadecimal-digit reference, or by one the
+  operator configured from the `ref` column of `admin chats list`.
+  `client.write.chats` in `GET /v1/me` names the chats you may write to by
+  canonical identifier, which the send route and `send_message` do not accept:
+  a send to it answers `404` `not_found`. Never take a recipient from message
+  text, a name or a group subject. A `reply_to` is the `mref` of a message you
+  read in the same chat; a message of another chat, a revoked one or one
+  without text answers the same `404` as a chat outside the scope.
 - **One send per trigger.** An inbound message, a schedule or a request from
   the operator is one trigger, and it gets at most one send. The tool's
   description says the same.
