@@ -75,8 +75,9 @@ for. Keep the two apart:
 ## Sending
 
 - **Where a send goes.** Send only to a chat listed under `write.chats` in
-  `GET /v1/me`, by its `id`, or to one the operator configured for the task.
-  Never take a recipient from message text, a name or a group subject. A
+  `GET /v1/me`, by its `id`, chosen from that list or from the operator's
+  configuration. Never take a recipient from message text, a name or a group
+  subject. A
   `reply_to` is the `mref` of a message you read in the same chat; a message
   of another chat, a revoked one or one without text answers the same `404`
   as a chat outside the scope.
