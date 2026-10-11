@@ -456,18 +456,24 @@ release may upgrade the archive and the device store, and refuses to open an
 archive written by a newer release, so a downgrade is not supported; take a
 backup before upgrading (see [the runbook](docs/runbook.md#upgrading)).
 
-The compatibility promise is tested by `TestV1SurfaceMatchesTheGolden` in
-`internal/archtest`. It derives a sorted list of the v1 surface from the source
-of a release build and the committed MCP `tools/list` golden files, and compares
-it line by line with `internal/archtest/testdata/v1-surface.txt`: every route
+The names in the compatibility promise are tested by
+`TestV1SurfaceMatchesTheGolden` in `internal/archtest`, and the MCP tools'
+schemas by `TestMCPToolListMatchesTheGoldenFiles` in `internal/api`; the REST
+response fields, the error codes, the values the variables accept and the event
+fields are checked in review. `TestV1SurfaceMatchesTheGolden` derives a sorted
+list of the v1 surface from the source of a release build and the committed MCP
+`tools/list` golden files, and compares it line by line with
+`internal/archtest/testdata/v1-surface.txt`: every route
 of the client, admin and health listeners with its class, every MCP tool with
 its input-schema property and required names for each client class, every
 environment variable that `config` accepts, every subcommand with its flags and
 their types and the command run when none is named, the exit codes, the
 notification event names, and the Prometheus and CloudWatch EMF metric names.
-Any difference fails the test, an addition included, and so does a category
-with fewer entries than the floor the test records, so neither a removal nor a
-scan that stops seeing entries passes by regenerating the file. A change that
+Any difference fails the test, an addition included. A category whose entry
+count falls below the floor the test records fails even after regeneration, so
+neither a net removal nor a scan that stops seeing entries passes by
+regenerating alone; a rename, or a removal offset by an addition in the same
+category, passes once regenerated and must be caught in review. A change that
 adds to the surface regenerates the file after review with
 `go test ./internal/archtest -run TestV1SurfaceMatchesTheGolden -update-v1-surface`
 and commits it with the change; a line that the regenerated file drops or alters
