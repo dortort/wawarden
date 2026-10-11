@@ -214,8 +214,7 @@ func (b *scheduler) backup(ctx context.Context, keys ...string) error {
 	name, err := b.take(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
-			b.backoff = min(max(2*b.backoff, firstRetry), lastRetry)
-			b.retryAt = b.now().Add(b.backoff)
+			b.retry()
 		}
 		return nil
 	}
@@ -223,6 +222,7 @@ func (b *scheduler) backup(ctx context.Context, keys ...string) error {
 	b.last = began
 	b.setGauge()
 	if err := b.record(ctx, began, append(keys, lastAtKey)...); err != nil {
+		b.retry()
 		return err
 	}
 	if b.lastTaken, err = b.changes(ctx); err != nil {
@@ -232,6 +232,11 @@ func (b *scheduler) backup(ctx context.Context, keys ...string) error {
 	b.taken = true
 	_, _, err = b.prune(ctx, b.keep, name)
 	return err
+}
+
+func (b *scheduler) retry() {
+	b.backoff = min(max(2*b.backoff, firstRetry), lastRetry)
+	b.retryAt = b.now().Add(b.backoff)
 }
 
 func (b *scheduler) pruneBlobs(ctx context.Context) error {

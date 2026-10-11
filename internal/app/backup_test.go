@@ -528,6 +528,21 @@ func seedProcessed(t *testing.T, archive *ingest.Store, n int, at time.Time) {
 	}
 }
 
+func TestABackupThatCannotBeRecordedWaitsBeforeTheNextAttempt(t *testing.T) {
+	archive := triggerArchive(t)
+	tr := newTrigger(t, archive)
+	tr.status = pairedStatus
+	tr.at(t, 0)
+	tr.during = func() { _ = archive.Close() }
+	tr.clock.set(backupEpoch.Add(settleAfter))
+	if err := tr.b.check(t.Context()); err == nil || tr.takes != 1 {
+		t.Fatalf("check = %v after %d backups, want the failed record", err, tr.takes)
+	}
+	if !tr.b.retryAt.Equal(backupEpoch.Add(settleAfter + 15*time.Minute)) {
+		t.Fatalf("the next attempt is due at %v, want 15 minutes later", tr.b.retryAt)
+	}
+}
+
 func TestProcessedBlobRowsArePrunedOncePerSlotWithoutARecipient(t *testing.T) {
 	archive := triggerArchive(t)
 	old := backupEpoch.Add(-31 * 24 * time.Hour)
