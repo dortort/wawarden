@@ -16,7 +16,12 @@ var (
 	grantFreeSends   = set("Store.RecoverSends", "Tx.SweepSends")
 	sentByFiles      = set(ingestDir+"/schema.go", sendsFile, scopedDir+"/messages.go")
 	sentByColumn     = regexp.MustCompile(`(?i)\bsent_by\b`)
-	auditDeleteQuery = regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+(?:\w+\s*\.\s*)?["'\x60\[]?audit\b`)
+	auditDeleteQuery = regexp.MustCompile(`(?i)\bDELETE` + sqlSpace + `*FROM` + sqlSpace + `*` + sqlSchema + `["'\x60\[]?audit\b`)
+)
+
+const (
+	sqlSpace  = `(?:[\s\v]|/\*(?s:.*?)\*/|--[^\n]*(?:\n|$))`
+	sqlSchema = `(?:(?:\w+|"[^"]*"|\x60[^\x60]*\x60|\[[^\]]*\]|'[^']*')` + sqlSpace + `*\.` + sqlSpace + `*)?`
 )
 
 var sendGrantRule = rule{
@@ -180,7 +185,7 @@ var auditDeleteRule = rule{
 	name:  "audit-delete-confinement",
 	check: checkAuditDelete,
 	cases: []snippet{
-		{name: "audit rows deleted outside the prune file", rel: storeDir + "/admin/audit.go", want: 5, src: `package admin
+		{name: "audit rows deleted outside the prune file", rel: storeDir + "/admin/audit.go", want: 10, src: `package admin
 
 import "context"
 
@@ -189,12 +194,17 @@ type querier interface {
 }
 
 const (
-	prune  = "DELETE FROM audit WHERE id <= ?1"
-	folded = "delete  from\n\taudit WHERE id = ?1"
-	quoted = "DELETE FROM \"audit\""
-	schema = "DELETE FROM main.audit"
-	verb   = "DELETE FROM "
-	table  = "audit WHERE id = ?1"
+	prune    = "DELETE FROM audit WHERE id <= ?1"
+	folded   = "delete  from\n\taudit WHERE id = ?1"
+	quoted   = "DELETE FROM \"audit\""
+	schema   = "DELETE FROM main.audit"
+	comment  = "DELETE/**/FROM audit WHERE id <= ?1"
+	line     = "DELETE FROM -- the chain\n audit WHERE id <= ?1"
+	named    = "DELETE FROM \"main\".\"audit\" WHERE id <= ?1"
+	brackets = "DELETE FROM [main].[audit]"
+	spaced   = "delete from main /* a */ . -- b\n audit"
+	verb     = "DELETE FROM "
+	table    = "audit WHERE id = ?1"
 )
 
 func f(ctx context.Context, q querier) {
