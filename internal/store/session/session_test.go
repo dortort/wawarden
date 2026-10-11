@@ -199,3 +199,24 @@ func TestOpenRefusesAStoreItCannotUpgrade(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 }
+
+func TestChangesCountTheLibrarysWritesAndSizeIsTheFile(t *testing.T) {
+	dir := t.TempDir()
+	s := open(t, dir)
+	before, err := s.Changes(t.Context())
+	if err != nil {
+		t.Fatalf("Changes: %v", err)
+	}
+	if again, err := s.Changes(t.Context()); err != nil || again != before {
+		t.Fatalf("Changes moved from %d to %d without a write (%v)", before, again, err)
+	}
+	save(t, s, "15550100001")
+	if after, err := s.Changes(t.Context()); err != nil || after <= before {
+		t.Fatalf("Changes after the library saved a device = %d, %v, want more than %d", after, err, before)
+	}
+	size, err := s.Size()
+	fi, statErr := os.Lstat(filepath.Join(dir, "session.db"))
+	if err != nil || statErr != nil || size != fi.Size() || size == 0 {
+		t.Fatalf("Size = %d, %v, want the file's %v", size, err, fi)
+	}
+}
