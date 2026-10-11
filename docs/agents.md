@@ -116,8 +116,10 @@ search as well.
   `reply_to`) opens only for the client it was issued to, and the same message
   gets the same reference in every answer to that client, so you can use it to
   recognise a message you have already seen. It changes when WhatsApp re-keys
-  the message's chat or sender, or the operator replaces the master key; an
-  older reference still opens while the master key stays the same.
+  the message's chat or sender, or the operator replaces or rotates the master
+  key; an older reference still opens while the master key stays the same or
+  the operator keeps the rotated key, but do not compare a reference from
+  before a rotation with one from after it as text.
 - **Keep MCP pages small.** A tool result carries its page twice, as
   structured content and as text, and Claude Code saves a result over 50,000
   characters to a file instead of passing it to the model. A smaller `limit`,

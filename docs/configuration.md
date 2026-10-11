@@ -2070,7 +2070,9 @@ client: a client can use it to recognise a message it has seen before, while
 two clients get different references for one message. The reference changes
 only when WhatsApp re-keys the message's chat or sender, or the master key is
 replaced, and every reference issued to the client opens for it while the
-master key stays the same. It is opened, its chat mapped to the chat's current
+master key stays the same, or while it stays in `keys/retired/` after
+[`keys rotate`](#keys-rotate) replaced it; a reference issued after the
+rotation reads differently for the same message. It is opened, its chat mapped to the chat's current
 identifier, and the client's scope checked before the message is looked up.
 
 **Not found.** An unknown, out-of-scope or malformed chat reference in the
