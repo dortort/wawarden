@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/store/ingest"
 )
 
@@ -358,6 +359,59 @@ func TestCleanKeepsOnlyTheFilesOfPendingBlobs(t *testing.T) {
 	}
 	if !slices.Equal(*steps, []string{"sync_dir"}) {
 		t.Fatalf("steps %v, want one directory sync", *steps)
+	}
+}
+
+func TestALeftoverFileIsCleanedWithinTheHourWithoutARestart(t *testing.T) {
+	r := newHistRig(t)
+	dir := filepath.Join(r.opts.DataDir, "history")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	leftover := func(name string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("synthetic"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	leftover("HS8.bin")
+	o := r.opts
+	o.Metrics = metrics.NewRegistry()
+	e, err := New(o)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	var mu sync.Mutex
+	var cleaned []time.Time
+	e.hist.fsyncDir = func(string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		cleaned = append(cleaned, r.clock.Now())
+		return nil
+	}
+	cleans := func() []time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(cleaned)
+	}
+	e.Start(t.Context(), MaxRecentStarts+1)
+	t.Cleanup(func() { _ = e.Stop(context.Background()) })
+	eventually(t, "the start-up clean", func() bool { return len(cleans()) == 1 })
+	r.write(func(tx *ingest.Tx) error {
+		if _, err := tx.RecordBlob("HS9", []byte("ref"), epoch); err != nil {
+			return err
+		}
+		return tx.MarkBlobProcessed("HS9", epoch)
+	})
+	leftover("HS9.bin")
+	eventually(t, "the hourly clean", func() bool { return len(cleans()) == 2 })
+	if err := e.Stop(t.Context()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if names := r.historyFiles(); len(names) != 0 {
+		t.Fatalf("history files %v after the hourly clean", names)
+	}
+	if at := cleans(); at[1].Sub(at[0]) < cleanInterval || at[1].Sub(at[0]) > cleanInterval+sweepInterval {
+		t.Fatalf("cleaned at %v, want an hour apart", at)
 	}
 }
 

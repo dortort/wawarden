@@ -104,11 +104,12 @@ func (e *Engine) dispatch(ev Event) bool {
 
 func (e *Engine) loop(ctx context.Context) {
 	defer close(e.done)
-	e.hist.clean(ctx)
 	clock := e.pipe.clock
+	e.hist.cleanDue(ctx)
 	for ctx.Err() == nil {
 		e.pipe.drainInbox(ctx)
 		e.hist.drain(ctx)
+		e.hist.cleanDue(ctx)
 		next := e.pipe.nextSweep
 		if e.pipe.nextSpace.Before(next) {
 			next = e.pipe.nextSpace

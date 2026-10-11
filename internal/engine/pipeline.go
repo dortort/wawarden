@@ -18,6 +18,7 @@ const (
 	maxAttempts     = 3
 	retryBase       = time.Second
 	sweepInterval   = time.Minute
+	cleanInterval   = time.Hour
 	sweepBatch      = 100
 	spaceInterval   = 30 * time.Second
 	maxAlerted      = 1024

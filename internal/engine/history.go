@@ -40,6 +40,7 @@ type historian struct {
 	max       int64
 	connected func() bool
 	acked     map[string]bool
+	nextClean time.Time
 
 	fsyncFile  func(*os.File) error
 	closeFile  func(*os.File) error
@@ -305,6 +306,13 @@ func (h *historian) remove(id string) {
 		}
 	}
 	delete(h.acked, id)
+}
+
+func (h *historian) cleanDue(ctx context.Context) {
+	if now := h.p.clock.Now(); !now.Before(h.nextClean) {
+		h.clean(ctx)
+		h.nextClean = now.Add(cleanInterval)
+	}
 }
 
 func (h *historian) clean(ctx context.Context) {
