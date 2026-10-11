@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -253,13 +254,21 @@ func TestPruneRefusesToKeepNothing(t *testing.T) {
 	}
 }
 
+type foreignInfo struct {
+	fs.FileInfo
+	sys *syscall.Stat_t
+}
+
+func (f foreignInfo) Sys() any { return f.sys }
+
 func TestAnUnexpectedEntryAbortsTheWholePrune(t *testing.T) {
 	old := []string{stamp(0), stamp(1), stamp(2), stamp(3)}
 	for _, tt := range []struct {
-		name   string
-		reason string
-		uid    int
-		add    func(t *testing.T, backups string)
+		name    string
+		reason  string
+		uid     int
+		foreign string
+		add     func(t *testing.T, backups string)
 	}{
 		{name: "a symbolic link with a backup name", reason: reasonUnexpected, add: func(t *testing.T, backups string) {
 			if err := os.Symlink(filepath.Join(backups, stamp(0)), filepath.Join(backups, stamp(9))); err != nil {
@@ -305,6 +314,7 @@ func TestAnUnexpectedEntryAbortsTheWholePrune(t *testing.T) {
 			writeBackups(t, filepath.Dir(backups), "archive"+stageSuffix)
 		}},
 		{name: "files owned by another user", reason: reasonDirectory, uid: os.Geteuid() + 1},
+		{name: "a backup owned by another user", reason: reasonUnexpected, foreign: stamp(1)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -316,6 +326,17 @@ func TestAnUnexpectedEntryAbortsTheWholePrune(t *testing.T) {
 			tk, rec := taker(t, dir, identity(t).Recipient().String(), fakeArchive(), fakeSession())
 			if tt.uid != 0 {
 				tk.uid = tt.uid
+			}
+			if tt.foreign != "" {
+				tk.lstat = func(path string) (fs.FileInfo, error) {
+					fi, err := os.Lstat(path)
+					if err != nil || filepath.Base(path) != tt.foreign {
+						return fi, err
+					}
+					st := *fi.Sys().(*syscall.Stat_t)
+					st.Uid++
+					return foreignInfo{FileInfo: fi, sys: &st}, nil
+				}
 			}
 			removed, _, err := tk.Prune(t.Context(), 1, stamp(3))
 			if err == nil || removed != 0 {

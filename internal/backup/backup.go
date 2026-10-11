@@ -105,6 +105,7 @@ type Taker struct {
 	syncDir   func(string) error
 	removeAll func(string) error
 	remove    func(string) error
+	lstat     func(string) (fs.FileInfo, error)
 }
 
 type failure struct {
@@ -161,7 +162,7 @@ func New(opts Options) (*Taker, error) {
 		dir: filepath.Join(opts.DataDir, Dir), uid: opts.UID, recipient: recipient, version: opts.Version,
 		archive: opts.Archive, session: opts.Session, notify: opts.Notify, now: now, space: opts.Space,
 		output: func(w io.Writer) io.Writer { return w }, syncFile: (*os.File).Sync, rename: os.Rename, syncDir: syncDir, removeAll: os.RemoveAll,
-		remove: os.Remove,
+		remove: os.Remove, lstat: os.Lstat,
 	}, nil
 }
 
@@ -270,7 +271,7 @@ func (t *Taker) prune(ctx context.Context, keep int, protect string) (removed, k
 	}
 	var files []backupFile
 	for _, e := range entries {
-		fi, err := os.Lstat(filepath.Join(t.dir, e.Name()))
+		fi, err := t.lstat(filepath.Join(t.dir, e.Name()))
 		if err != nil {
 			return 0, 0, reasonDirectory, err
 		}

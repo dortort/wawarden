@@ -164,6 +164,7 @@ func TestExtractRefusesAnythingButACompleteBackup(t *testing.T) {
 	}
 	a, s := tarMember{name: "archive.db", body: archive}, tarMember{name: "session.db", body: session}
 	man := tarMember{name: manifestName, body: manifestOf(t, good)}
+	emptyArchive := tarMember{name: manifestName, body: with(func(m *manifest) { m.Databases[0].Bytes = 0 })}
 	complete := tarOf(t, a, s, man)
 	tests := []struct {
 		name   string
@@ -180,8 +181,8 @@ func TestExtractRefusesAnythingButACompleteBackup(t *testing.T) {
 		{name: "a member with a dot path", stream: tarOf(t, tarMember{name: "./archive.db", body: archive}, s, man), want: ErrRejected},
 		{name: "the archive twice", stream: tarOf(t, a, a, man), want: ErrRejected},
 		{name: "the members swapped", stream: tarOf(t, s, a, man), want: ErrRejected},
-		{name: "a symbolic link", stream: tarOf(t, tarMember{name: "archive.db", typeflag: tar.TypeSymlink}, s, man), want: ErrRejected},
-		{name: "a directory", stream: tarOf(t, tarMember{name: "archive.db", typeflag: tar.TypeDir}, s, man), want: ErrRejected},
+		{name: "a symbolic link", stream: tarOf(t, tarMember{name: "archive.db", typeflag: tar.TypeSymlink}, s, emptyArchive), want: ErrRejected},
+		{name: "a directory", stream: tarOf(t, tarMember{name: "archive.db", typeflag: tar.TypeDir}, s, emptyArchive), want: ErrRejected},
 		{name: "a header beyond any backup", stream: tarOf(t, tarMember{name: "archive.db", size: maxMemberBytes + 1}), want: ErrRejected},
 		{name: "a manifest beyond its limit", stream: tarOf(t, a, s, tarMember{name: manifestName, body: bytes.Repeat([]byte(" "), maxManifestBytes+1)}), want: ErrRejected},
 		{name: "a member after the manifest", stream: tarOf(t, a, s, man, a), want: ErrRejected},
