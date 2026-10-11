@@ -302,19 +302,24 @@ When the [audit retention](#audit-chain) removed rows, the walk starts from
 the audit anchor: `pruned through` is the id of the last row removed and
 `anchor head` the first 16 bytes of its HMAC, both `none` while nothing was
 removed. The anchor's MAC is checked with the key whose id it names, and the
-first retained row must follow it. `key ids` counts the retained rows by the
+first retained row must follow it. An anchor made under a retired key is
+refused when no row is left or the first retained row was written under the
+master key: a removal signs the anchor under the key the service runs with and
+never removes the newest row, and rows under the master key were written only
+after the retired key was replaced. `key ids` counts the retained rows by the
 key id they were written under, in order of key id. A shipped head that the
 copy lacks counts under `shipped heads pruned` when the `ts` of its line is not
-after the time of the anchor's row, so the retention removed it, and under
-`shipped heads missing` otherwise, also when its line has no readable `ts`;
-the anchor's own head counts as found.
+after the anchor's time, the latest time of the rows removed, so the retention
+removed it, and under `shipped heads missing` otherwise, also when its line
+has no readable `ts`; the anchor's own head counts as found.
 
 `problem` is `id_gap` when a row's id is not one more than the previous row's
 (or than the anchor's), `unknown_key` when the row was written under a key id
 that is neither the master key's nor a retired key's, `hmac_mismatch` when its
 HMAC is not the one its key gives, and `anchor_invalid` when the anchor names a
-key that is not given or its MAC is not the one that key gives; the first
-failing row is then the anchor's. Without
+key that is not given, its MAC is not the one that key gives, or it was made
+under a retired key while no row is left or the first retained row was written
+under the master key; the first failing row is then the anchor's. Without
 `--log` it warns on standard error that rows removed from the end of the chain
 go unnoticed. A `--log` that holds no chain head, such as a capture whose
 lines a log pipeline wrapped in an envelope, compares nothing: it prints the
@@ -2680,22 +2685,27 @@ taken (at once when no backup recipient is configured, and never while that
 backup is still owed, though a slot skipped because nothing changed counts as
 taken), and first ten minutes after the backup scheduler's first check after
 a start, the service removes the rows written more than
-`WAWARDEN_AUDIT_RETENTION_DAYS` days before (90 by default, at least 7). It
+`WAWARDEN_AUDIT_RETENTION_DAYS` days before (90 by default, at least 7). With
+a backup recipient, nothing is removed before the first backup succeeds: not
+while no device is paired, while the history sync settles, or while the first
+backup fails and is retried. It
 works from the oldest row, in transactions of at most 10,000 rows, each of
 which first moves the audit anchor to the last row it removes and then deletes
 the rows up to it, never the newest row; it stops when no older row is left or
 after 15 minutes, and goes on the next night. Rows are taken in id order, so a
 row whose time is a few seconds out of order goes with its neighbours. The
-anchor keeps the removed row's id, time, key id and HMAC, the time of the
-removal, the id of the current master key and an HMAC-SHA256, under that key's
-`audit-chain` key, over the domain string `wawarden/audit-anchor/v1`, a zero
-byte, the row's id, its time and the removal time as 8-byte big-endian
-integers, the key id with a presence byte and its length, and the row's HMAC.
+anchor keeps the last removed row's id, key id and HMAC, the anchor's time
+(the latest time of the rows removed so far, which an out-of-order row can make
+later than the last row's), the time of the removal, the id of the current
+master key and an HMAC-SHA256, under that key's `audit-chain` key, over the
+domain string `wawarden/audit-anchor/v1`, a zero byte, the row's id, the
+anchor's time and the removal time as 8-byte big-endian integers, the key id
+with a presence byte and its length, and the row's HMAC.
 Triggers refuse to move the anchor back or to remove it. One `audit_pruned`
 line reports each night's removal. The verification starts from the anchor,
-and a shipped head older than the anchor counts as pruned, not missing; those
-rows can be checked only in a backup taken before they were removed, which is
-why the retention waits for the night's backup.
+and a shipped head whose time is not after the anchor's counts as pruned, not
+missing; those rows can be checked only in a backup taken before they were
+removed, which is why the retention waits for the night's backup.
 
 **Key changes.** After [`keys rotate`](#keys-rotate) or a replaced master key,
 rows keep the key id they were written under, and each start with the new
