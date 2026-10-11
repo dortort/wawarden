@@ -560,7 +560,7 @@ func TestGoModDirectives(t *testing.T) {
 		gomod string
 		want  int
 	}{
-		{name: "the module's own directives", gomod: "module " + module + "\n\ngo 1.26.0 // comment\n\ntoolchain go1.27.1\n"},
+		{name: "the module's own directives", gomod: "module " + module + "\n\ngo 1.26.0 // comment\n\ntoolchain go1.27.2\n"},
 		{name: "reviewed requirements", gomod: "require example.com/allowed v1.0.0\n\nrequire (\n\texample.com/allowed/sub v1.0.0 // indirect\n\texample.com/transitive v1.0.0 // indirect\n" +
 			"\texample.com/transitive/sub v1.0.0 // indirect; for a test\n)\n\nrequire example.com/transitive/other v1.0.0 //indirect\n"},
 		{name: "unreviewed requirements", want: 4, gomod: "require example.com/allowedx v1.0.0\n\nrequire (\n\t" + module + "/internal/evil v0.0.0\n\texample.com/other v1.0.0 // indirect\n" +
