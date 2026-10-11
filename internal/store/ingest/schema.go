@@ -320,6 +320,11 @@ CREATE TRIGGER audit_anchor_keep BEFORE DELETE ON audit_anchor BEGIN
 	SELECT RAISE(ABORT, 'the audit anchor is never removed');
 END;
 
+CREATE TRIGGER audit_anchor_no_replace BEFORE INSERT ON audit_anchor
+WHEN NEW.through <= (SELECT through FROM audit_anchor) BEGIN
+	SELECT RAISE(ABORT, 'the audit anchor only moves forward');
+END;
+
 DROP TRIGGER audit_no_delete;
 
 CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit

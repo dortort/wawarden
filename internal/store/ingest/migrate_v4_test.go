@@ -138,7 +138,7 @@ func TestMigratingToVersion4KeepsMappingsMessagesAndTheAuditChain(t *testing.T) 
 			t.Errorf("index %s missing", index)
 		}
 	}
-	for _, trigger := range []string{"audit_no_update", "audit_no_delete", "audit_no_replace", "audit_anchor_forward", "audit_anchor_keep"} {
+	for _, trigger := range []string{"audit_no_update", "audit_no_delete", "audit_no_replace", "audit_anchor_forward", "audit_anchor_keep", "audit_anchor_no_replace"} {
 		if n := scalar[int](t, s, "SELECT count(*) FROM sqlite_schema WHERE type = 'trigger' AND name = ?", trigger); n != 1 {
 			t.Errorf("trigger %s missing", trigger)
 		}
@@ -187,6 +187,9 @@ func TestMigratingToVersion4KeepsMappingsMessagesAndTheAuditChain(t *testing.T) 
 		"the anchor moved back":          {"UPDATE audit_anchor SET through = 1", "the audit anchor only moves forward"},
 		"the anchor kept in place":       {"UPDATE audit_anchor SET through = 2", "the audit anchor only moves forward"},
 		"the anchor removed":             {"DELETE FROM audit_anchor", "the audit anchor is never removed"},
+		"the anchor replaced back":       {"INSERT OR REPLACE INTO audit_anchor (id, through, ts, key_id, row_hmac, pruned_at, mac_key_id, mac) VALUES (1, 1, 1, 'k1', " + hash32 + ", 1, 'k1', " + hash32 + ")", "the audit anchor only moves forward"},
+		"the anchor replaced in place":   {"REPLACE INTO audit_anchor (id, through, ts, key_id, row_hmac, pruned_at, mac_key_id, mac) VALUES (1, 2, 1, 'k2', " + hash32 + ", 1, 'k2', " + hash32 + ")", "the audit anchor only moves forward"},
+		"the anchor upserted back":       {"INSERT INTO audit_anchor (id, through, ts, key_id, row_hmac, pruned_at, mac_key_id, mac) VALUES (1, 1, 1, 'k1', " + hash32 + ", 1, 'k1', " + hash32 + ") ON CONFLICT (id) DO UPDATE SET through = excluded.through", "the audit anchor only moves forward"},
 		"an update of an audit row":      {"UPDATE audit SET ok = 0 WHERE id = 3", "audit rows are append-only"},
 		"the newest row under an anchor": {"UPDATE audit_anchor SET through = 4; DELETE FROM audit WHERE id <= 4", "audit rows are append-only"},
 	} {
