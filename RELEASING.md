@@ -429,12 +429,32 @@ remains.
 
 ## Versioning
 
-- `v0.x` during the milestones. Each milestone release raises the minor version;
-  fixes to the latest milestone raise the patch version.
-- `v1.0.0` is released when milestone M3 is complete and the v1.0 documentation
-  set is complete: the threat model, configuration reference, hardening guide,
-  agent guidance, ban-risk notes, `SECURITY.md` and this document.
+- `v0.1.0`, `v0.2.0` and `v0.3.0` are development releases: each raised the
+  minor version, replaced the one before it and promised no compatibility.
+- `v1.0.0` is released when sending, scheduled backups with retention, audit
+  retention and master key rotation are complete and the v1.0 documentation set
+  is complete: the threat model, configuration reference, hardening guide,
+  agent guidance, ban-risk notes, runbook, `SECURITY.md` and this document with
+  the compatibility promise below.
+- From `v1.0.0` on, a patch release fixes, a minor release adds, and a major
+  release is the only one that removes or changes.
 - Only the latest minor release line is supported (see `SECURITY.md`).
+
+The compatibility promise, from `v1.0.0` on: within v1.x, no release removes,
+renames or changes the meaning of the routes of the client, admin and health
+listeners with their parameters, response fields and error codes; the MCP tool
+names and their argument schemas; the environment variable names and the values
+they accept; the subcommands, their flags and the exit codes; the notification
+event names and their fields; and the Prometheus and CloudWatch EMF metric
+names. A minor release may add optional parameters, response fields, tools,
+routes, variables, flags, events and metrics. A removal or other breaking change
+needs `v2.0.0`, announced as a deprecation in the release notes at least one
+minor release ahead. A security fix may tighten behaviour in a patch release,
+with an advisory. Behaviour that depends on WhatsApp, the protocol library or
+the owner's phone is outside the promise. Schema migrations go forward only: a
+release may upgrade the archive and the device store, and refuses to open an
+archive written by a newer release, so a downgrade is not supported; take a
+backup before upgrading (see [the runbook](docs/runbook.md#upgrading)).
 
 The compatibility promise is tested by `TestV1SurfaceMatchesTheGolden` in
 `internal/archtest`. It derives a sorted list of the v1 surface from the source
