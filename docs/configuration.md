@@ -278,7 +278,7 @@ never changes its inputs.
 | `--db PATH` | The copy of the archive to check, for example the `archive.db` of a decrypted [backup](#backups). It is opened read-only, without a lock: never point it at the archive of a running service. |
 | `--master-key-file PATH` | A copy of the master key the rows were written with: any regular file of exactly 32 bytes. Nothing is created when it is missing. |
 | `--retired-keys-dir PATH` | Optional: a directory of retired master keys, as [`keys rotate`](#keys-rotate) leaves them in `keys/retired/`: files of exactly 32 bytes, each named by its key id; names starting with `.` are skipped. Without the flag, the directory `retired` beside the master key file is read when it exists. Its owner and modes are not checked; a missing directory given with the flag, a misnamed or malformed key, a key under another key id than its name or a copy of the master key is refused. |
-| `--log PATH` | Optional: a capture of the service's standard output, one JSON object per line. Each line with a `chain_head` of 32 hexadecimal digits is one shipped head; every other line is skipped. |
+| `--log PATH` | Optional: a capture of the service's standard output, one JSON object per line. Each line with a `chain_head` of 32 hexadecimal digits is one shipped head, under the key its `key_id` names when that is 8 hexadecimal digits; every other line is skipped. |
 
 It prints:
 
@@ -310,13 +310,19 @@ after the retired key was replaced. `key ids` counts the retained rows by the
 key id they were written under, in order of key id. A shipped head that the
 copy lacks counts under `shipped heads pruned` when the `ts` of its line is not
 after the anchor's time, the latest time of the rows removed, so the retention
-removed it, and under `shipped heads missing` otherwise, also when its line
-has no readable `ts`; the anchor's own head counts as found.
+removed it, and under `shipped heads missing` otherwise: also when its line
+has no readable `ts`, and when the anchor was made under a retired key and
+the line names the master key's id or no valid `key_id`, since only an anchor
+under the master key covers rows written under it; the anchor's own head
+counts as found.
 
 `problem` is `id_gap` when a row's id is not one more than the previous row's
 (or than the anchor's), `unknown_key` when the row was written under a key id
 that is neither the master key's nor a retired key's, `hmac_mismatch` when its
-HMAC is not the one its key gives, and `anchor_invalid` when the anchor names a
+HMAC is not the one its key gives, `retired_key` when the row was written
+under a retired key after a row written under the master key or after an
+anchor at such a row, since the service never writes under a retired key
+again, and `anchor_invalid` when the anchor names a
 key that is not given, its MAC is not the one that key gives, or it was made
 under a retired key while no row is left or the first retained row was written
 under the master key; the first failing row is then the anchor's. Without
@@ -743,7 +749,7 @@ only the derived keys, of the master key and of each retired key:
 
 | Purpose | Length | Use in this build |
 |---|---|---|
-| `key-id` | 4 bytes | The key id: logged as 8 hexadecimal digits in the `keys_loaded` event, so that log lines can be grouped by the key their pseudonyms were made with. It names a retired key's file, and the key of each audit row, of the audit anchor, and of each cursor and message reference. |
+| `key-id` | 4 bytes | The key id: logged as 8 hexadecimal digits in the `keys_loaded` event, so that log lines can be grouped by the key their pseudonyms were made with, and in each [audit line](#audit-chain). It names a retired key's file, and the key of each audit row, of the audit anchor, and of each cursor and message reference. |
 | `log-redact` | 32 bytes | The key of the [log pseudonyms](#pseudonyms-and-dropped-lines). |
 | `chat-hmac` | 32 bytes | The `chat_hmac` of [audit lines](#audit-chain): the first 16 bytes of HMAC-SHA256 under this key over the chat's canonical identifier. No [notification event](#notifications) names a chat. |
 | `cursor-seal` | 32 bytes | Seals the `next` cursors of the [read API](#cursors-and-message-references). |
@@ -2469,7 +2475,7 @@ notices of a [debug window](#protocol-library-logs). Lines in
 | `emf_failed` | `WARN` | `error_type` | Writing the [embedded-metric-format](#embedded-metric-format) lines failed. |
 | `backup_disabled` | `WARN`, at every log level | | `WAWARDEN_BACKUP_AGE_RECIPIENT` is not set, or the [fake engine](#fake-engine) runs and opens no device store, so no [backup](#backups) is ever taken. Logged once per start. |
 | `backup_check_failed` | `WARN` | `error_type` | A step of the [backup](#backups) scheduler failed: reading or recording whether a backup is due, the prune of old backups (also reported as `backup_prune_failed`), the [audit retention](#audit-chain) or the prune of history blob rows; the scheduler runs again 30 seconds later. |
-| `audit` | none, written at every log level | `ts`, `client`, `action`, `chat_hmac`, `ok`, `reason`, `chain_head` | An [audit row](#audit-chain) was committed; the line has no `time`, `level` or `msg`. |
+| `audit` | none, written at every log level | `ts`, `client`, `action`, `chat_hmac`, `ok`, `reason`, `key_id`, `chain_head` | An [audit row](#audit-chain) was committed; the line has no `time`, `level` or `msg`. |
 
 What is never logged: requests (there is no access log), request bodies, header
 values, tokens, failed authentications other than the count in
@@ -2655,19 +2661,21 @@ After the transaction commits, the service writes one line on standard output,
 through the same scrubbing writer as every log line:
 
 ```json
-{"event":"audit","ts":"2026-10-06T12:00:00.000Z","client":"aaaqeaye","action":"client_create","chat_hmac":null,"ok":true,"reason":"ok","chain_head":"3fa8c2d14be0917a5c6e2b8f0d4a7c19"}
+{"event":"audit","ts":"2026-10-06T12:00:00.000Z","client":"aaaqeaye","action":"client_create","chat_hmac":null,"ok":true,"reason":"ok","key_id":"6a53922c","chain_head":"3fa8c2d14be0917a5c6e2b8f0d4a7c19"}
 ```
 
 `chat_hmac` is the first 16 bytes, in hexadecimal, of HMAC-SHA256 under the
-`chat-hmac` key over the chat's canonical identifier, or `null`; `chain_head`
-is the first 16 bytes of the row's HMAC. The line names no chat, person or
+`chat-hmac` key over the chat's canonical identifier, or `null`; `key_id` is
+the id of the key the row was written under; `chain_head` is the first 16
+bytes of the row's HMAC. The line names no chat, person or
 message, and the peer address stays in the archive.
 
 **What verification proves.** [`audit verify`](#audit-verify) recomputes every
 row's HMAC from a copy of the archive, the master key and the retired keys,
 each row under the key its key id names, and reports a row whose content, HMAC
 or id sequence was changed, a row removed from the middle (as an `id_gap` on
-the next row), a row written under a key it was not given, and an audit anchor
+the next row), a row written under a key it was not given, a row written under
+a retired key after one written under the master key, and an audit anchor
 that was changed, forged without a key, or removed with the rows after it
 (as an `id_gap` on the first retained row). The
 triggers do not stop someone who holds the database file, and whoever holds
@@ -2696,7 +2704,9 @@ after 15 minutes, and goes on the next night. Rows are taken in id order, so a
 row whose time is a few seconds out of order goes with its neighbours. The
 anchor keeps the last removed row's id, key id and HMAC, the anchor's time
 (the latest time of the rows removed so far, which an out-of-order row can make
-later than the last row's), the time of the removal, the id of the current
+later than the last row's, but never more than 10 seconds after the removal's
+cutoff, the archive's write timeout and so the longest a row's time can precede
+its commit), the time of the removal, the id of the current
 master key and an HMAC-SHA256, under that key's `audit-chain` key, over the
 domain string `wawarden/audit-anchor/v1`, a zero byte, the row's id, the
 anchor's time and the removal time as 8-byte big-endian integers, the key id
@@ -2704,7 +2714,8 @@ with a presence byte and its length, and the row's HMAC.
 Triggers refuse to move the anchor back or to remove it. One `audit_pruned`
 line reports each night's removal. The verification starts from the anchor,
 and a shipped head whose time is not after the anchor's counts as pruned, not
-missing; those rows can be checked only in a backup taken before they were
+missing, unless the anchor was made under a retired key and the head's line
+names the master key or no key; those rows can be checked only in a backup taken before they were
 removed, which is why the retention waits for the night's backup.
 
 **Key changes.** After [`keys rotate`](#keys-rotate) or a replaced master key,
@@ -2712,7 +2723,8 @@ rows keep the key id they were written under, and each start with the new
 key emits `audit_key_changed` (see [Notifications](#notifications)) until a
 row is written under it. `audit verify` needs the retired keys to verify the
 older rows and an anchor made under an older key; the next removal makes the
-anchor again under the current key.
+anchor again under the current key. Until then, the head of a removed row on a
+line without `key_id`, as earlier versions wrote them, counts as missing.
 
 **Growth.** A row takes about 150 bytes of the archive, measured over ten
 million rows. Client changes add a handful of rows; a client that reads
