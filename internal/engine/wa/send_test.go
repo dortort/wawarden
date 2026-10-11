@@ -373,6 +373,22 @@ func TestSendRefusesBeforeTheLibrary(t *testing.T) {
 	}
 }
 
+type socketDouble struct{ connected, loggedIn bool }
+
+func (s socketDouble) IsConnected() bool { return s.connected }
+func (s socketDouble) IsLoggedIn() bool  { return s.loggedIn }
+
+func TestThePreCheckNeedsAnOpenSocketThatIsLoggedIn(t *testing.T) {
+	for _, s := range []socketDouble{{}, {connected: true}, {loggedIn: true}} {
+		if usable(s) {
+			t.Errorf("%+v passed the pre-check", s)
+		}
+	}
+	if s := (socketDouble{connected: true, loggedIn: true}); !usable(s) {
+		t.Errorf("%+v failed the pre-check", s)
+	}
+}
+
 func TestBackfillAsksThePrimaryDeviceForHistoryBeforeTheAnchor(t *testing.T) {
 	r, w := wiredRig(t, pairedDevice())
 	w.resp = whatsmeow.SendResponse{ID: "3EB0REQUEST"}

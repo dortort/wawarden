@@ -36,7 +36,14 @@ func transmitPeerMessage(ctx context.Context, cli *whatsmeow.Client, msg *waE2E.
 	return cli.SendPeerMessage(ctx, msg)
 }
 
-func loggedIn(cli *whatsmeow.Client) bool { return cli.IsConnected() && cli.IsLoggedIn() }
+type socketState interface {
+	IsConnected() bool
+	IsLoggedIn() bool
+}
+
+func usable(s socketState) bool { return s.IsConnected() && s.IsLoggedIn() }
+
+func loggedIn(cli *whatsmeow.Client) bool { return usable(cli) }
 
 func (c *Client) NewMessageID() string { return c.current().GenerateMessageID() }
 
