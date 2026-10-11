@@ -669,8 +669,9 @@ queue, it holds:
   (`pending`, `done` or `failed`), a 32-byte SHA-256 fingerprint of the request,
   the message id, when it was reserved, the earliest time the next send may
   follow it, when it was settled, whether it counts against the send budget, a
-  result that holds a status, a code and an ack time only, never message text
-  or a chat identifier, and an expiry 24 hours after the reservation. The rows that count are
+  result that holds only a status, an error code with the server's error
+  number when it gave one, and an ack time, never message text or a chat
+  identifier, and an expiry 24 hours after the reservation. The rows that count are
   also the send budget's ledger, so the budget survives a restart; its windows
   are measured with the service's clock, never SQLite's;
 - backfill requests: a request id, the chat, a count of 1 to 50, when the
