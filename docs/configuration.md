@@ -1,8 +1,9 @@
 # Configuration reference
 
 This is the authoritative reference for configuring and running WaWarden. It
-describes the current build on `main`, which holds milestone **M2** and is not
-released yet; the latest release, `v0.2.0`, is milestone **M1**. To M0's
+describes the current build on `main`; the latest release, `v0.3.0`, is
+milestone **M2**, and what `main` holds beyond it is unreleased work toward
+**M3**. To M0's
 configuration checks, listeners, admin token and metrics, M1 adds the
 [master key](#master-key), the pseudonyms and dropped lines in the
 [logs](#pseudonyms-and-dropped-lines), the
@@ -19,7 +20,8 @@ expiring tokens, which [`admin clients`](#admin-clients-and-admin-chats)
 creates and revokes; the client listener's [read API](#read-api) and the same
 reads as [MCP tools](#mcp); the names the owner saved for contacts; per-client
 [read rate limits](#read-rate-limits); and the [audit chain](#audit-chain) with
-[`audit verify`](#audit-verify). Sending comes with M3. How an agent should
+[`audit verify`](#audit-verify). Sending is planned for M3 and is in no
+release. How an agent should
 treat what it reads is in [docs/agents.md](agents.md). A service without a
 paired device makes no connection to WhatsApp until `wawarden admin pair`
 requests pairing. Everything listed here
@@ -2477,10 +2479,9 @@ at once.
 Release images are published as `ghcr.io/dortort/wawarden` for `linux/amd64` and
 `linux/arm64`, by the release workflow only. Deploy them by digest;
 [`RELEASING.md`](../RELEASING.md) explains how to verify one. The latest
-release, `v0.2.0`, is milestone M1: its image has the WhatsApp engine but no
-clients, read API, MCP endpoint or audit chain. Until M2 is released, build
-`main` from source to run what this document describes. The contract below applies to release images from M1
-on:
+release, `v0.3.0`, is milestone M2: its image has the WhatsApp engine, the
+clients, the read API, the MCP endpoint and the audit chain, and cannot send.
+The contract below applies to release images from M1 on:
 
 | Item | Value |
 |---|---|
