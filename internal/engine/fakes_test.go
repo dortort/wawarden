@@ -191,6 +191,10 @@ type fakeClient struct {
 	onDisconnect func()
 	acks         []string
 	called       chan string
+	ids          int
+	sendErrs     []error
+	backfillErrs []error
+	onSend       func(SendRequest)
 }
 
 func newClient(paired bool) *fakeClient {
@@ -351,6 +355,44 @@ func (f *fakeClient) AckHistory(_ context.Context, ref HistoryRef) error {
 		hook(ref)
 	}
 	return nil
+}
+
+func (f *fakeClient) NewMessageID() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ids++
+	return "TEST-" + strconv.Itoa(f.ids)
+}
+
+func (f *fakeClient) Send(_ context.Context, req SendRequest) (Sent, error) {
+	f.mu.Lock()
+	f.record("send:" + req.ID)
+	var err error
+	if len(f.sendErrs) > 0 {
+		err, f.sendErrs = f.sendErrs[0], f.sendErrs[1:]
+	}
+	hook := f.onSend
+	f.mu.Unlock()
+	if hook != nil {
+		hook(req)
+	}
+	if err != nil {
+		return Sent{}, err
+	}
+	return Sent{ID: req.ID, Chat: req.Chat, Sender: owner, Timestamp: epoch}, nil
+}
+
+func (f *fakeClient) Backfill(_ context.Context, req BackfillRequest) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("backfill:" + req.AnchorID)
+	if len(f.backfillErrs) > 0 {
+		var err error
+		err, f.backfillErrs = f.backfillErrs[0], f.backfillErrs[1:]
+		return "", err
+	}
+	f.ids++
+	return "TEST-BF" + strconv.Itoa(f.ids), nil
 }
 
 func (f *fakeClient) OnEvent(handler func(Event) bool) func() {

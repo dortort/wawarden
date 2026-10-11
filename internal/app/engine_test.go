@@ -88,6 +88,15 @@ func (c *stubClient) DownloadHistory(context.Context, engine.HistoryRef, io.Writ
 	return errors.New("synthetic: no download")
 }
 func (c *stubClient) AckHistory(context.Context, engine.HistoryRef) error { return nil }
+func (c *stubClient) NewMessageID() string                                { return "STUB-1" }
+func (c *stubClient) Send(_ context.Context, req engine.SendRequest) (engine.Sent, error) {
+	c.record("send")
+	return engine.Sent{ID: req.ID, Chat: req.Chat, Sender: "15550100009@s.whatsapp.net", Timestamp: time.Unix(1, 0)}, nil
+}
+func (c *stubClient) Backfill(context.Context, engine.BackfillRequest) (string, error) {
+	c.record("backfill")
+	return "STUB-BF1", nil
+}
 
 func (c *stubClient) OnEvent(handler func(engine.Event) bool) func() {
 	c.mu.Lock()
