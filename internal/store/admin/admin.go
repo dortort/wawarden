@@ -28,6 +28,10 @@ type Reader struct{ db *db.DB }
 
 func New(d *db.DB) *Reader { return &Reader{db: d} }
 
+func ArchiveUnlocked(ctx context.Context, dataDir string) error {
+	return db.Unlocked(ctx, dataDir, db.Archive)
+}
+
 const selectCounters = `SELECT
 	(SELECT count(*) FROM chats),
 	(SELECT count(*) FROM messages),
