@@ -2139,12 +2139,16 @@ The checks run in this order, and the first that fails answers:
 
 Idempotency: the service keeps each key for 24 hours from its first use, per
 client, and fingerprints the request by the chat's reference, the text and the
-reply target's message id and sender. A later request with the same key and
+reply target's message id and archive row, which a re-key of the target's
+sender leaves unchanged. A later request with the same key and
 the same chat, text and reply target sends nothing and answers what the first
 did: `201` with the same message, read again from the archive, or the same
 `502` or `504`, with the header `Idempotent-Replayed: true` and, on a `201`,
 `replayed: true` in the body. A replay is answered whatever the limits, and
-reads the message as it is now, so a message revoked since shows no text. A
+reads the message as it is now, so a message revoked since shows no text. The
+reply target is checked before the key is looked up, so a retry whose target
+was revoked or lost its text at expiry since answers `404` and sends nothing,
+as a new request with that target would. A
 request that ended with `400`, `403`, `404`, `429` or `503` stored nothing, so
 the same request can be made again under its key once the cause is gone; after
 a `409` the first request's answer follows, and after a `422` the key stays

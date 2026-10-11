@@ -93,10 +93,14 @@ for. Keep the two apart:
   `reply_to`: the service answers what the first attempt did, with
   `replayed: true`, and sends nothing again. A new message needs a new key; the
   same key with other content is refused `422` `idempotency_key_reused`.
-  Derive the key from the trigger, for example as the hexadecimal SHA-256 of
-  the `mref` of the message you answer, or choose a UUID and keep it before the
-  first attempt. The service keeps a key for 24 hours from its first use, so a
-  retry after that would send again.
+  Choose the key before the first attempt and keep it for every retry, for
+  example a UUID or the hexadecimal SHA-256 of the `mref` of the message you
+  answer as you first read it: an `mref` changes when WhatsApp re-keys the chat
+  or the sender, so a key derived again from a later read can differ and send
+  again. A retry whose `reply_to` message was revoked or has vanished since
+  answers `404` and sends nothing; read the chat to learn whether the first
+  attempt went out. The service keeps a key for 24 hours from its first use, so
+  a retry after that would send again.
 - **What `201` means.** WhatsApp's server acknowledged the message. It does
   not mean the message was delivered or read. The recipient, and the owner on
   the phone, see it as sent by the owner: `origin` `gateway:<client id>`
