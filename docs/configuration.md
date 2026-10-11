@@ -2696,15 +2696,18 @@ are logged: the `listening` and `listener_not_loopback` events carry the bound
 address, and the `error` texts of `startup_failed` and `listener_failed` come
 from the operating system and can contain a listen address.
 
-The CLI writes to standard error only its usage text, the flag parser's one-line
-error when `serve` gets an unknown flag or an invalid flag value (it repeats the flag as typed,
-for example `flag provided but not defined: -nope`), `healthcheck` failures,
-the `admin init` reminder, and the fixed messages of the
-[admin commands](#admin-status-admin-pair-and-admin-reconnect): their warning
-about plain HTTP, the flag they could not parse, named but never repeated as
-typed, the reason a token could not be used, the reason a request
-failed, a refusal's code and status, and the hint where to enter a pairing
-code. The Go runtime writes crash output to standard error.
+The CLI writes to standard error only its usage text, `healthcheck` failures,
+the `admin init` reminder, and fixed messages: the flag a command could not
+parse, named but never repeated as typed (for example
+`serve: --allow-root is not given as it must be`, or
+`serve: an argument is not a flag of this command` for an unknown flag); the
+messages of the [admin commands](#admin-status-admin-pair-and-admin-reconnect):
+their warning about plain HTTP, the reason a token could not be used, the
+reason a request failed, a refusal's code and status, and the hint where to
+enter a pairing code; and the refusals and warnings of `audit verify`,
+`keys rotate` and `backup verify`, which give the operating system's reason
+when a file cannot be opened or read but never its path. The Go runtime writes
+crash output to standard error.
 
 ### Protocol library logs
 
