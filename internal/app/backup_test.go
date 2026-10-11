@@ -265,9 +265,15 @@ func TestAFailedInitialBackupIsRetriedAfterABackoffThatDoublesAndResets(t *testi
 		}
 		failedAt += wait
 	}
+	if len(tr.protected) != 0 {
+		t.Fatalf("pruned with %v after failed backups", tr.protected)
+	}
 	tr.fail = false
 	if tr.at(t, failedAt+4*time.Hour) != 8 || syncValue(t, archive, takenAtKey) == "" {
 		t.Fatal("the backup was not retried once it could succeed")
+	}
+	if len(tr.protected) != 1 {
+		t.Fatalf("pruned with %v, want once after the success", tr.protected)
 	}
 	next := lastSlot(backupEpoch.Add(failedAt+4*time.Hour), config.DefaultBackupMinute).AddDate(0, 0, 1)
 	tr.fail = true
@@ -277,6 +283,9 @@ func TestAFailedInitialBackupIsRetriedAfterABackoffThatDoublesAndResets(t *testi
 	}
 	if tr.on(t, next.Add(15*time.Minute-time.Millisecond)) != 9 || tr.on(t, next.Add(15*time.Minute)) != 10 {
 		t.Fatal("a success did not reset the backoff to 15 minutes")
+	}
+	if len(tr.protected) != 1 {
+		t.Fatalf("pruned with %v after failed nightly backups", tr.protected)
 	}
 }
 
