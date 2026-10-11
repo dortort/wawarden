@@ -306,8 +306,8 @@ func TestServeKeysItsOutputWithTheMasterKey(t *testing.T) {
 			panicked = append(panicked, rec)
 		}
 	}
-	if len(loaded) != 1 || loaded[0]["key_id"] != master.ID() || len(loaded[0]) != 5 {
-		t.Fatalf("keys_loaded events = %v, want one carrying only the key id %s", loaded, master.ID())
+	if len(loaded) != 1 || loaded[0]["key_id"] != master.ID() || loaded[0]["retired"] != float64(0) || len(loaded[0]) != 6 {
+		t.Fatalf("keys_loaded events = %v, want one carrying only the key id %s and no retired key", loaded, master.ID())
 	}
 	if len(panicked) != 1 || panicked[0]["name"] != "probe "+pseudonym || !strings.HasPrefix(pseudonym, "jid:") || pseudonym == "jid:unkeyed" {
 		t.Fatalf("panic events = %v, want one naming the goroutine with the keyed pseudonym %q", panicked, pseudonym)

@@ -17,6 +17,8 @@ import (
 	"syscall"
 )
 
+const Subcommand = "keys"
+
 const (
 	dirName     = "keys"
 	masterName  = "master"

@@ -33,8 +33,10 @@ const usage = `usage:
                                    call the admin listener; ADMIN is [--addr URL] and one of
                                    --token-file PATH, --token-stdin or --token-command COMMAND
                                    (default --addr http://127.0.0.1:8082)
-  wawarden audit verify --db PATH --master-key-file PATH [--log PATH]
+  wawarden audit verify --db PATH --master-key-file PATH [--retired-keys-dir PATH] [--log PATH]
                                    verify the audit chain of a copy of the archive, offline
+  wawarden keys rotate --data-dir DIR
+                                   retire the master key and create a new one, service stopped
   wawarden backup verify --work-dir DIR [--extract-to NEW] -
                                    check a decrypted backup read from standard input, offline
 `
@@ -63,6 +65,8 @@ func run(ctx context.Context, args, environ []string, stdin io.Reader, stdout, s
 		return audit(ctx, args[1:], stdout, stderr)
 	case "backup":
 		return backupCommand(ctx, args[1:], stdin, stdout, stderr)
+	case keys.Subcommand:
+		return keysCommand(ctx, args[1:], stdout, stderr)
 	}
 	return usageError(stderr)
 }
@@ -92,7 +96,7 @@ func serve(ctx context.Context, args, environ []string, stdout, stderr io.Writer
 	}
 	out.SetKey(master.LogRedactKey())
 	logger := logx.New(out, cfg.LogLevel)
-	logger.Info("keys loaded", slog.String("event", "keys_loaded"), slog.String("key_id", master.ID()))
+	logger.Info("keys loaded", slog.String("event", "keys_loaded"), slog.String("key_id", master.ID()), slog.Int("retired", len(master.Retired())))
 	a, err := app.New(ctx, cfg, out, master)
 	if r, ok := errors.AsType[*app.Refusal](err); ok {
 		return refused(out, r.Reason, r)
