@@ -527,13 +527,13 @@ func TestReadsNeverQueue(t *testing.T) {
 	opts := testOptions(t.TempDir())
 	opts.ReadSlots = 1
 	s := openWith(t, opts)
-	held, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
-	go func() { done <- s.Scoped().Hold(grantAll(t), context.Background(), held, release) }()
-	<-held
-	if _, err := s.Scoped().Chats(grantAll(t), t.Context(), scoped.ChatPosition{}, 5); !errors.Is(err, scoped.ErrBusy) {
+	held, release := make(chan struct{}), make(chan struct{})
+	done := holdUntilHeld(t, held, release, func() error { return s.Scoped().Hold(grantAll(t), context.Background(), held, release) })
+	_, err := s.Scoped().Chats(grantAll(t), t.Context(), scoped.ChatPosition{}, 5)
+	close(release)
+	if !errors.Is(err, scoped.ErrBusy) {
 		t.Fatalf("a read while every slot is held = %v, want ErrBusy", err)
 	}
-	close(release)
 	if err := <-done; err != nil {
 		t.Fatalf("the held read = %v", err)
 	}
