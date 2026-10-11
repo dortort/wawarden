@@ -274,8 +274,12 @@ func (p *pipeline) sweep(ctx context.Context) {
 	for ctx.Err() == nil {
 		var purged int
 		if err := p.write(ctx, "engine.expiry_sweep", func(tx *ingest.Tx) error {
+			now := p.clock.Now()
+			if _, err := tx.SweepSends(now); err != nil {
+				return err
+			}
 			var err error
-			purged, err = tx.PurgeExpired(p.clock.Now(), sweepBatch)
+			purged, err = tx.PurgeExpired(now, sweepBatch)
 			return err
 		}); err != nil {
 			if ctx.Err() == nil {

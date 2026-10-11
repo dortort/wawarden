@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/sanitize"
 	"github.com/dortort/wawarden/internal/store/ingest"
 )
@@ -364,6 +365,38 @@ func TestSweepPurgesInBatches(t *testing.T) {
 	db := r.inspect()
 	if n := query[int](t, db, "SELECT count(*) FROM messages WHERE text IS NOT NULL"); n != 0 {
 		t.Fatalf("%d expired messages kept their text", n)
+	}
+}
+
+func TestSweepDeletesSendRecordsPastTheirDay(t *testing.T) {
+	r := newPipeRig(t)
+	r.ingest(dm("M1", alice, "inbound"))
+	chat, _ := policy.Normalize(alice)
+	g, ok := policy.DecideWrite(&policy.Client{ID: "aaaaaaaa", Write: map[policy.CanonicalChat]struct{}{chat: {}}, ExpiresAt: r.clock.Now().Add(72 * time.Hour)}, r.clock.Now())
+	if !ok {
+		t.Fatal("DecideWrite refused the test client")
+	}
+	reserve := func(k string) ingest.Reservation {
+		t.Helper()
+		key, _ := ingest.ParseKey(k)
+		res, err := r.archive.ReserveSend(g, t.Context(), ingest.SendReservation{Key: key, Chat: chat, MsgID: "3EB0SWEEP", Now: r.clock.Now(),
+			Limits: ingest.SendLimits{PerMinute: 10, GlobalPerHour: 30, Holders: 1}, Ready: func() bool { return true }})
+		if err != nil {
+			t.Fatalf("ReserveSend: %v", err)
+		}
+		return res
+	}
+	reserve("synthetic-key-01")
+	r.clock.advance(time.Hour)
+	reserve("synthetic-key-02")
+	r.p.sweep(t.Context())
+	if res := reserve("synthetic-key-01"); res.Kind != ingest.LeaseExpired {
+		t.Fatalf("a record within its day = %+v after a sweep, want it kept", res)
+	}
+	r.clock.advance(ingest.SendTTL - time.Hour)
+	r.p.sweep(t.Context())
+	if n := query[int](t, r.inspect(), "SELECT count(*) FROM idempotency"); n != 1 || strings.Contains(r.logs.String(), "expiry_sweep_failed") {
+		t.Fatalf("%d send records after the first one's day, want the second only: %s", n, r.logs.String())
 	}
 }
 
