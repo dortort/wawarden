@@ -124,7 +124,7 @@ What `main` does:
   chosen chats, or every chat, for 90 days by default and 365 at most, and
   prints its token once; `list`, `show` and `revoke` manage it, and `admin
   chats list` finds the chats to name. With the token, the client reads its
-  chats through the [read API](docs/configuration.md#read-api): `/v1/me`,
+  chats through the [read API](docs/configuration.md#client-api): `/v1/me`,
   `/v1/chats`, a chat's messages, search and a change feed, in pages with
   sealed cursors, within per-client read and search budgets, or through five
   [MCP tools](docs/configuration.md#mcp) at `POST /mcp` that an MCP client such
@@ -141,6 +141,15 @@ What `main` does:
   [admin clients](docs/configuration.md#admin-clients-and-admin-chats),
   [the audit chain](docs/configuration.md#audit-chain) and
   [the guide for agents](docs/agents.md).
+- **Sending (unreleased, toward M3).** A client created with `--write` chats
+  sends text to them with `POST /v1/chats/{ref}/messages` or the MCP tool
+  `send_message`, at most once per idempotency key, within per-client and
+  global send limits behind a pacer, and never to a direct chat that has not
+  written first unless the client may make first contact. A send whose outcome
+  is unknown is never repeated. `wawarden admin backfill` asks the owner's
+  phone for a chat's older history. See
+  [sending](docs/configuration.md#sending) and
+  [send limits](docs/configuration.md#send-limits).
 - **Events and metrics.** Operational events such as `unpaired`,
   `disconnected`, `quarantine`, `backup_done`, `backup_failed` and
   `admin_mutation` are written
@@ -282,9 +291,14 @@ wawarden_paired 0
 # HELP wawarden_policy_denials_total Client requests that the client's grant did not allow.
 # TYPE wawarden_policy_denials_total counter
 wawarden_policy_denials_total 0
-# HELP wawarden_sends_rejected_total Sends refused by a scope, budget or rate limit.
+# HELP wawarden_sends_rejected_total Sends refused by a scope, the first-contact rule, a budget or the pacer.
 # TYPE wawarden_sends_rejected_total counter
-wawarden_sends_rejected_total 0
+wawarden_sends_rejected_total{reason="budget_global"} 0
+wawarden_sends_rejected_total{reason="budget_hour"} 0
+wawarden_sends_rejected_total{reason="budget_minute"} 0
+wawarden_sends_rejected_total{reason="first_contact"} 0
+wawarden_sends_rejected_total{reason="pacer"} 0
+wawarden_sends_rejected_total{reason="scope"} 0
 ```
 
 The admin commands call the admin listener with the token from a file; this one
@@ -314,7 +328,7 @@ curl -H @"$demo/client.header" -G --data-urlencode 'since=2026-10-01T00:00:00Z' 
 cursor to pass back as `cursor` (or, for `/v1/changes`, as `since`). With no
 device paired the archive is empty, and the lists are too. The routes, limits
 and codes are in
-[docs/configuration.md](docs/configuration.md#read-api).
+[docs/configuration.md](docs/configuration.md#client-api).
 
 The same client can read through MCP. To register the demo endpoint in Claude
 Code (for a deployment, use the HTTPS address of the proxy in front of the
