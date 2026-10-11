@@ -204,17 +204,17 @@ both builds produced.
 |---|---|
 | Multi-arch image (`linux/amd64`, `linux/arm64`) | `ghcr.io/dortort/wawarden@sha256:<digest>`, also tagged `<version>`; the release notes state the index digest |
 | Binaries `wawarden_<version>_linux_amd64` and `wawarden_<version>_linux_arm64` | Release assets |
-| From M1 on, the licence files of the Go standard library, of WaWarden and of every module linked into the binaries, `wawarden_<version>_licenses.tar.gz` | Release asset, and `/licenses` in the image |
-| `SHA256SUMS` for the binaries and, from M1 on, the licence archive | Release asset |
+| From `v0.2.0` on, the licence files of the Go standard library, of WaWarden and of every module linked into the binaries, `wawarden_<version>_licenses.tar.gz` | Release asset, and `/licenses` in the image |
+| `SHA256SUMS` for the binaries and, from `v0.2.0` on, the licence archive | Release asset |
 | SPDX 2.3 SBOMs for the binaries, `wawarden_<version>_linux_<arch>.spdx.json` | Release assets, and attested to each binary in GitHub's attestation store |
 | Build provenance attestations (SLSA, via `actions/attest-build-provenance`): one for the image index, and one whose subjects are the files `SHA256SUMS` lists | GitHub's attestation store; the image attestation is also pushed to the registry, and the files' Sigstore bundle is the release asset `wawarden_<version>_provenance.sigstore.json` |
 | Keyless cosign signature on the image index, made with cosign v3.1.3 | Registry, next to the image |
 
 The SBOMs list the Go modules and the Go standard library compiled into each
 binary. No SBOM covers the image as a whole, so the packages of the distroless
-base image are not listed; an image-level SBOM is planned and not produced yet.
+base image are not listed; no image-level SBOM is produced.
 
-Sizes, measured on `main` with `hack/repro-build.sh` once M1 was complete: the
+Sizes, measured with `hack/repro-build.sh` on the code of `v0.2.0`: the
 binaries take about 27.9 MiB (`linux/amd64`) and 26.5 MiB (`linux/arm64`); the
 image's compressed layers add up to about 15.3 MiB and 14.4 MiB, and the
 `linux/arm64` image takes about 29.0 MiB unpacked. An unpaired `serve` left
@@ -229,14 +229,14 @@ Signing and attesting use GitHub's OIDC identity for the release workflow on
 
 ## Licences
 
-WaWarden is licensed under `GPL-3.0-or-later` from milestone M1 on; `v0.1.0` was
-released under the MIT licence. From M1 on, the image's
+WaWarden is licensed under `GPL-3.0-or-later` from `v0.2.0` on; `v0.1.0` was
+released under the MIT licence. From `v0.2.0` on, the image's
 `org.opencontainers.image.licenses` label, set in the `Dockerfile`, and the same
 annotation on the image index, set by `hack/repro-build.sh`, are
 `GPL-3.0-or-later`.
 
 The binaries link the Go standard library, under Go's BSD-style licence and
-patent grant, and from M1 on third-party Go modules, each under its own
+patent grant, and from `v0.2.0` on third-party Go modules, each under its own
 licence: the WhatsApp protocol library `go.mau.fi/whatsmeow` and its
 `go.mau.fi/util` under MPL-2.0, the Signal protocol implementation
 `go.mau.fi/libsignal` under GPL-3.0, `github.com/petermattis/goid` and the MCP
@@ -245,7 +245,7 @@ library's code contributed before its move to Apache-2.0 under MIT unless its
 authors relicensed it (its licence file carries both texts),
 `github.com/coder/websocket` under ISC, ten modules under MIT, and the rest, the
 SQLite driver and its C library translation included, under BSD-3-Clause; [`README.md`](README.md#licence) lists them all. GPL-3.0 is why
-WaWarden itself is GPL-3.0-or-later from M1 on. Every release ships their
+WaWarden itself is GPL-3.0-or-later from `v0.2.0` on. Every release ships their
 licence texts, the GPL-3.0 and MPL-2.0 texts included, and WaWarden's own:
 
 - `hack/licenses.sh` lists, with `go list -deps`, the modules whose packages are
@@ -341,7 +341,7 @@ gh attestation verify wawarden_<version>_linux_<arch> \
 ```
 
 The same command, given `wawarden_<version>_licenses.tar.gz`, checks the
-provenance of the licence archive of a release from M1 on.
+provenance of the licence archive of a release from `v0.2.0` on.
 
 `go version -m <binary>` prints the build settings embedded in a binary. A release
 binary shows `CGO_ENABLED=0`, `-trimpath=true`, `vcs.revision` equal to the
