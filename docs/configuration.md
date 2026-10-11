@@ -20,7 +20,10 @@ expiring tokens, which [`admin clients`](#admin-clients-and-admin-chats)
 creates and revokes; the client listener's [read API](#read-api) and the same
 reads as [MCP tools](#mcp); the names the owner saved for contacts; per-client
 [read rate limits](#read-rate-limits); and the [audit chain](#audit-chain) with
-[`audit verify`](#audit-verify). Sending is planned for M3 and is in no
+[`audit verify`](#audit-verify). Toward M3, this build takes a nightly
+[backup](#backups), keeps a bounded number of them, deletes old processed
+history-blob rows, and checks a decrypted backup with
+[`backup verify`](#backup-verify). Sending is planned for M3 and is in no
 release. How an agent should
 treat what it reads is in [docs/agents.md](agents.md). A service without a
 paired device makes no connection to WhatsApp until `wawarden admin pair`
@@ -84,6 +87,8 @@ wawarden admin chats list [--match TEXT] ADMIN
                                  (default --addr http://127.0.0.1:8082)
 wawarden audit verify --db PATH --master-key-file PATH [--log PATH]
                                  verify the audit chain of a copy of the archive, offline
+wawarden backup verify --work-dir DIR [--extract-to NEW] -
+                                 check a decrypted backup read from standard input, offline
 ```
 
 ### `serve`
@@ -293,17 +298,88 @@ lines a log pipeline wrapped in an envelope, compares nothing: it prints the
 same warning and exits `6`. The log must be a regular file; a pipe or a
 directory is refused without waiting for a writer.
 
+### `backup verify`
+
+`wawarden backup verify` checks a [backup](#backups) that `age` has decrypted
+and writes to its standard input; the binary itself holds nothing that
+decrypts. It runs offline, needs neither the service nor the network, and is
+meant for a machine apart from the service's host, where the age identity is
+kept:
+
+```sh
+set -o pipefail
+age --decrypt -i backup-identity.txt 20261005T030000Z.age |
+  wawarden backup verify --work-dir "$HOME/verify" -
+```
+
+`set -o pipefail` makes the pipeline fail when `age` fails, for example with
+the wrong identity or on a truncated or altered file; `age` then stops its
+output, which `backup verify` sees as a stream that ended early.
+
+| Argument | Effect |
+|---|---|
+| `--work-dir DIR` | An existing directory owned by the user running the command with mode exactly `0700` (a symbolic link is refused). The command extracts the two databases into a new directory inside it and removes that directory before it exits, whatever the outcome. |
+| `--extract-to NEW` | Optional: a path that does not exist yet, on the filesystem of `--work-dir`. When every check passes, the command creates it with mode `0700` and moves the two databases there as `archive.db` and `session.db`, mode `0600`, for a restore or for [`audit verify`](#audit-verify). |
+| `-` | Required, last: read the decrypted backup from standard input. |
+
+The stream must be exactly the tar archive a backup holds: `archive.db`,
+`session.db` and `manifest.json`, in that order, each a regular file with no
+directory in its name, a database no larger than the free space of the work
+directory and the manifest at most 64 KiB, followed by nothing but the end of
+the archive. The manifest must have `format` `1`, a `created` time, and name
+both databases with their sizes. Then each database is opened read-only and
+SQLite's integrity check runs on it, the full-text index included; a database
+that passes has its schema version read and its rows counted. The archive's
+schema version must equal the manifest's and be no newer than this build
+migrates to; the device store's must equal the manifest's. It prints counts,
+never an identifier, a name or a key:
+
+```text
+format: 1
+written by: v1.0.0
+created: 2026-10-05T03:00:00Z
+archive integrity: ok
+archive schema version: 4
+archive schema: ok
+archive chats: 212
+archive messages: 48210
+archive history blobs pending: 0
+archive history blobs quarantined: 0
+archive inbox backlog: 0
+archive inbox quarantined: 0
+archive active clients: 2
+archive audit rows: 1204
+device store integrity: ok
+device store schema version: 16
+device store schema: ok
+device store paired: yes
+device store pre-keys: 812
+device store sessions: 96
+verified: yes
+```
+
+A database that fails the integrity check prints `integrity: failed` and up to
+five of SQLite's problem lines as `integrity problem`, and no counts; one that
+passes but cannot be counted prints `counts: unreadable`. A schema version
+that differs prints `schema: differs from the manifest's N`, one too new
+`schema: newer than this build, which reads up to N`. `written by` is the
+manifest's build version, or `unrecognised` when it does not look like one. The
+counts use the same rules as [`admin status`](#admin-status-admin-pair-and-admin-reconnect),
+so they can be compared with the live service, whose counts are never lower
+than a backup's unless messages expired or were deleted since. Problems with
+the stream are explained on standard error, with a fixed text.
+
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
-| `0` | `serve` stopped cleanly after `SIGTERM` or `SIGINT`; `healthcheck` got `200`; `version` and `admin init` printed their output; an admin command got `200` and printed the answer; `audit verify` verified every row and found every shipped head. |
-| `1` | `serve` failed after its configuration was accepted: the [archive](#message-archive) or the [device store](#device-store) could not be opened or its lock was not acquired within five minutes, the device store could not be brought up to date, or a listener could not be opened (`startup_failed`), a listener failed while running (`listener_failed`), or shutdown ended with errors, for example when the grace period ran out. `healthcheck` failed for any reason, including extra arguments. `version` or `admin init` could not write to standard output. An admin command's request failed: no connection, no answer within 40 seconds, an answer over 64 KiB or not in the expected shape, a redirect, or any status other than those of codes `0`, `4` and `5`, such as `engine_unavailable` (`503`), `pair_failed` (`502`), `invalid_query` (`400`) or `internal_error` (`500`). `audit verify` could not open the copy, the master key file or the log. |
-| `2` | `serve` refused to start (`startup_refused`, see [Startup refusals](#startup-refusals)). Or a usage error: an unknown subcommand, or an unknown flag or extra argument given to `serve`, `version`, `admin` or `audit`, an admin command without exactly one token source or with an empty `--token-file` or `--token-command`, an invalid `--addr`, a `clients create` without `--name` or with a chat value it cannot use, a `--id` that is not a client id, or an `audit verify` without `--db` or `--master-key-file`; the usage text goes to standard error. |
+| `0` | `serve` stopped cleanly after `SIGTERM` or `SIGINT`; `healthcheck` got `200`; `version` and `admin init` printed their output; an admin command got `200` and printed the answer; `audit verify` verified every row and found every shipped head; `backup verify` read a complete backup and every check passed. |
+| `1` | `serve` failed after its configuration was accepted: the [archive](#message-archive) or the [device store](#device-store) could not be opened or its lock was not acquired within five minutes, the device store could not be brought up to date, or a listener could not be opened (`startup_failed`), a listener failed while running (`listener_failed`), or shutdown ended with errors, for example when the grace period ran out. `healthcheck` failed for any reason, including extra arguments. `version` or `admin init` could not write to standard output. An admin command's request failed: no connection, no answer within 40 seconds, an answer over 64 KiB or not in the expected shape, a redirect, or any status other than those of codes `0`, `4` and `5`, such as `engine_unavailable` (`503`), `pair_failed` (`502`), `invalid_query` (`400`) or `internal_error` (`500`). `audit verify` could not open the copy, the master key file or the log. `backup verify` was given a `--work-dir` that is not a private directory of its user or an `--extract-to` that exists, could not read standard input to the end, found it ended early (as after a failed or wrong-key decryption), could not write a database into the work directory or had too little space for it, or could not move the verified databases to `--extract-to`. |
+| `2` | `serve` refused to start (`startup_refused`, see [Startup refusals](#startup-refusals)). Or a usage error: an unknown subcommand, or an unknown flag or extra argument given to `serve`, `version`, `admin`, `audit` or `backup`, an admin command without exactly one token source or with an empty `--token-file` or `--token-command`, an invalid `--addr`, a `clients create` without `--name` or with a chat value it cannot use, a `--id` that is not a client id, an `audit verify` without `--db` or `--master-key-file`, or a `backup verify` without `--work-dir` or without `-` as its only argument; the usage text goes to standard error. |
 | `3` | An admin command could not use its token: the file or standard input could not be read, held more than 4096 bytes or was a terminal; the token command could not start, failed, timed out, left a process holding its output or printed more than 4096 bytes; or what it read is not an admin token. Nothing was sent. |
 | `4` | The admin listener refused the token: `401` (`unauthorized`), or `429` with `too_many_requests` (the failure budget is spent, see [Failed authentication](#failed-authentication)). |
 | `5` | The service refused the operation: `409` (`already_paired`, `already_connected`, `not_paired`, `owner_phone_missing`, `owner_mismatch` or `name_taken`), `422` (a [client refusal](#admin-routes)), `404` (`not_found`, such as an unknown client id) or `429` with `rate_limited`; see [Admin routes](#admin-routes). `clients create` also exits `5` when no chat has a reference it was given. |
-| `6` | `audit verify` read everything but found a row that does not verify or a shipped head that the copy lacks, or was given a `--log` that holds no chain head. |
+| `6` | `audit verify` read everything but found a row that does not verify or a shipped head that the copy lacks, or was given a `--log` that holds no chain head. `backup verify` read the stream but it is not a complete backup (a missing, extra, misnamed, oversized or non-regular member, an inconsistent manifest or data after the archive), or a database failed its integrity check, could not be counted, or has a schema version other than the manifest's or newer than this build reads. |
 
 `healthcheck` never exits `2`, because container runtimes reserve that code in
 health checks. A process stopped by a second signal during shutdown ends with
@@ -332,6 +408,8 @@ These are all the variables this build reads.
 | `WAWARDEN_NOTIFY_SECRET_FILE` | unset | A path to the webhook's signing secret, required with `WAWARDEN_NOTIFY_URL` and refused without it: a regular file (symbolic links are followed) with no write permission for its group and no permission at all for others (`0400`, `0440`, `0600` and `0640` pass; `0644` and `0444` do not), of at most 4096 bytes, holding at least 32 bytes apart from surrounding white space. Generate one with `openssl rand -hex 32`. | `notify_url_missing`, `notify_secret_missing`, `notify_secret_unreadable`, `notify_secret_permissions`, `notify_secret_invalid` |
 | `WAWARDEN_NOTIFY_ALLOW_PRIVATE` | unset | `1` lets the webhook reach loopback, private (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`) and shared (`100.64.0.0/10`, which mesh VPNs use) addresses; `0` or unset refuses them. Only with `WAWARDEN_NOTIFY_URL`. | `notify_allow_private_invalid`, `notify_url_missing` |
 | `WAWARDEN_BACKUP_AGE_RECIPIENT` | unset | The one [age](https://age-encryption.org) recipient that [backups](#backups) are encrypted to: an X25519 recipient (`age1` followed by 58 characters, as `age-keygen` prints it) or a post-quantum hybrid one (`age1pq1...`), with no white space, comment or second recipient. An SSH key, a plugin recipient or an age secret key is refused, and the refusal never repeats the value. Unset, no backup is ever taken and `backup_disabled` is logged at start. | `backup_recipient_invalid` |
+| `WAWARDEN_BACKUP_TIME` | `03:00` | The time of day, in UTC and written `HH:MM`, of the nightly [backup](#backups) slot. Only with `WAWARDEN_BACKUP_AGE_RECIPIENT`. | `backup_time_invalid`, `backup_option_without_recipient` |
+| `WAWARDEN_BACKUP_KEEP` | `14` | How many [backups](#backups) `backups/` keeps: after each successful backup, the oldest beyond this count, by the time in their names, are deleted. A whole number from 1 to 365. Only with `WAWARDEN_BACKUP_AGE_RECIPIENT`. | `backup_keep_invalid`, `backup_option_without_recipient` |
 | `WAWARDEN_READ_PER_CLIENT_PER_MINUTE` | `600` | Each client's [read budget](#read-rate-limits): requests per minute, from 1 to 600, refilled evenly with a burst of at most 60. Every authenticated client request, whatever its route or answer, costs one. | `read_per_minute_invalid` |
 | `WAWARDEN_SEARCH_PER_CLIENT_PER_MINUTE` | `60` | Each client's [search budget](#read-rate-limits): searches per minute, from 1 to 60, refilled evenly with a burst of at most 6. A search costs one from both budgets. | `search_per_minute_invalid` |
 | `WAWARDEN_UNSAFE_RATE_CAPS` | unset | `1` lifts the upper caps of the two read budgets to 1000000 per minute and logs `unsafe_rate_caps` at start; `0` or unset keeps them. Zero or a negative budget stays refused. | `unsafe_rate_caps_invalid` |
@@ -483,9 +561,14 @@ The checks run in this order:
 | 70 | `session_journal_not_regular` | none; the error names `session.db-journal` | `session.db-journal` exists but is not a regular file. |
 | 71 | `session_journal_foreign_owner` | none; the error names `session.db-journal` | `session.db-journal` is not owned by the process's effective user ID. |
 | 72 | `session_journal_permissions` | none; the error names `session.db-journal` | `session.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 73 | `backup_time_invalid` | `WAWARDEN_BACKUP_TIME` | The value is not a time of day written `HH:MM` with two digits each, from `00:00` to `23:59`: it is empty, has one digit for the hour, seconds, a zone or another separator. |
+| 74 | `backup_keep_invalid` | `WAWARDEN_BACKUP_KEEP` | The value is not a whole number from 1 to 365 written in decimal digits: it is empty, `0`, above `365`, signed, has a leading zero or a unit. |
+| 75 | `backup_option_without_recipient` | `WAWARDEN_BACKUP_TIME`, or `WAWARDEN_BACKUP_KEEP` when only it is set | `WAWARDEN_BACKUP_TIME` or `WAWARDEN_BACKUP_KEEP` is set while `WAWARDEN_BACKUP_AGE_RECIPIENT` is not. |
 
-When the data directory is missing, it is created only after checks 1 to 31 pass,
-so a start refused by checks 1 to 31 leaves nothing behind. `history/` and
+Checks 73 to 75 are appended to the table but run right after check 26, in that
+order, so a malformed value is refused before a missing recipient.
+When the data directory is missing, it is created only after checks 1 to 31 and
+73 to 75 pass, so a start refused by any of them leaves nothing behind. `history/` and
 `backups/` are checked only when they exist; `serve` creates neither at start (see
 [Data directory](#data-directory)). `keys/` and the master key are created, when
 missing, only after checks 32 to 43 pass, an empty `archive.db` only after
@@ -524,7 +607,9 @@ downloads a [history-sync blob](#history-sync), and keeps each blob there as
 `history/<id>.bin`, mode `0600`, only until it is processed or quarantined.
 A [backup](#backups) creates `backups/` and `backups/tmp/` with mode `0700` when
 it is first taken, and `serve` removes `backups/tmp/` at every start once
-`archive.db` is locked. The directory must be on a writable, persistent
+`archive.db` is locked. After each successful backup the service deletes backups
+beyond `WAWARDEN_BACKUP_KEEP` from `backups/`, and refuses to delete anything
+when that directory holds an entry it did not write. The directory must be on a writable, persistent
 filesystem that supports hard links and that only the service's user can read.
 
 Mechanisms that add group permissions or the setgid bit to a volume, such as
@@ -701,7 +786,8 @@ search an index.
 Revoked, edited and expired message text is removed from the database file,
 its journal and the full-text index, as described in the
 [threat model](threat-model.md#security-invariants) (I-8); backups are
-outside that guarantee, as are the same text, or any three-character run of it,
+outside that guarantee (they keep the old text until [retention](#backups)
+deletes them), as are the same text, or any three-character run of it,
 held elsewhere in the archive (by another message, a message waiting in the
 inbox, a push name, a chat name or group subject, an identifier or the schema),
 and so is a revocation or edit that arrives before
@@ -775,7 +861,9 @@ a blob that the pause
 interrupts stays waiting without using an attempt and is applied from its start
 once ingest resumes. Pausing reports the
 [notification event](#notifications) `ingest_paused`, and resuming logs
-`ingest_resumed`. With profile `nfs` the floor
+`ingest_resumed`. A [backup](#backups) refuses to start, with
+`backup_failed` reason `space`, when its copies could take the free space
+below the floor. With profile `nfs` the floor
 never applies, because a network filesystem such as Amazon EFS grows on demand;
 watch its own capacity metrics instead.
 
@@ -790,25 +878,58 @@ every start logs the warning `backup_disabled`. The [fake engine](#fake-engine)
 of a development build opens no device store, so it takes no backup either and
 logs the same warning even with the variable set.
 
-**When.** This release takes exactly one backup automatically for each paired
-device, once its initial [history sync](#history-sync) has settled, and nothing
-else: no schedule, no retention, no admin route and no restore tool. Every 30
-seconds the service checks whether the owner's device is paired. The first time
-it sees it paired, it records that moment in the archive's `sync_state` table as
-`backup_paired_at`, so a restart does not start the wait again; a device paired
-before this release counts from the first start of this release. The backup is
-taken once no history blob is waiting to be processed (a
-[quarantined](#history-sync) blob does not count) and 10 minutes have passed
-since the later of that moment and the arrival of the latest history blob. A
-successful backup is recorded as `backup_taken_at`, and no further backup is
-taken for that device. When a check finds the device no longer paired, or the
-engine has reported an unpairing since the previous check (a device unpaired
-and paired again between two checks), both keys are cleared, so the next paired
-device is backed up once in turn, without a restart. A failed backup reports
-`backup_failed` and is tried again only after the next start, or for the next
-paired device.
+**When.** Every 30 seconds the backup scheduler checks, in this order, whether
+the initial backup and whether a nightly backup are due.
 
-**How.** Each database is copied online, in steps of 256 pages on its own
+- *Initial backup.* One backup is taken for each paired device once its
+  initial [history sync](#history-sync) has settled. The first time the
+  scheduler sees the owner's device paired, it records that moment in the
+  archive's `sync_state` table as `backup_paired_at`, so a restart does not
+  start the wait again. The backup is taken once no history blob is waiting to
+  be processed (a [quarantined](#history-sync) blob does not count) and 10
+  minutes have passed since the later of that moment and the arrival of the
+  latest history blob. Its success is recorded as `backup_taken_at`. When a
+  check finds the device no longer paired, or the engine has reported an
+  unpairing since the previous check (a device unpaired and paired again
+  between two checks), both keys are cleared, so the next paired device is
+  backed up once in turn, without a restart.
+- *Nightly backup.* Once a backup has succeeded, one backup is owed per day at
+  the slot `WAWARDEN_BACKUP_TIME`, a UTC time of day (default `03:00`). Every
+  successful backup, initial or nightly, records the time it began as
+  `backup_last_at`, which unpairing does not clear; a `backup_taken_at` left by
+  an earlier release counts as one. A backup is owed when the newest success
+  began before the most recent slot, or is recorded later than the current
+  time, so that a clock set back cannot silence backups. This is also the
+  catch-up: after downtime across one or more slots, the first check after the
+  start takes one backup at once, while a start shortly before the slot, with
+  the previous slot's backup done, waits for the slot. A service that has
+  never taken a backup, such as one never paired, takes none. The nightly
+  backup does not depend on the engine: an unpaired service goes on backing
+  up its archive. When neither database has been written since the last
+  backup this process took and recorded, the slot is skipped and
+  `backup_skipped` is logged once; the first slot after a start always backs
+  up, and a paired, connected service writes often enough that it practically
+  never skips. A write that lands between the end of a backup's copy and its
+  bookkeeping is noticed only with the next write.
+- *Failures.* A failed backup, initial or nightly, reports `backup_failed` and
+  is tried again 15 minutes later, then after 30 minutes, 1, 2 and 4 hours,
+  then every 4 hours, until one succeeds, which resets the wait. The wait is
+  held in memory: after a restart a backup that is due is tried at once. A
+  backup cut short by shutdown (`cancelled`) is not retried before the next
+  start.
+
+At each slot, and at the first check after a start, the scheduler then deletes
+the rows of [history blobs](#history-sync) processed more than 30 days before,
+in batches of 10,000 rows for at most 15 minutes, and logs
+`history_blobs_pruned` when it deleted any. It does so with or without a
+recipient.
+
+**How.** First, on the `local` [storage profile](#storage-profiles) with a
+non-zero [free-space floor](#free-space), the backup checks that the data
+directory has at least the floor plus the size of the larger database plus the
+sizes of both databases free, since its staging copy and its output come out of
+the space ingest needs; otherwise it fails with reason `space` and writes
+nothing. Each database is copied online, in steps of 256 pages on its own
 connection, each step bound by the 10-second write deadline, so ingest goes on
 between steps. A copy that stops early, for a failure or a cancellation, is
 closed on that connection as soon as the connection is free, waiting out other
@@ -835,7 +956,32 @@ Decrypted, a backup is a tar archive of three files: `archive.db`, `session.db`
 and `manifest.json`. The manifest holds `format` (`1`), the build `version`, the
 `created` time in UTC and, for each database, its `name`, `schema_version` and
 size in `bytes`; it holds no identifier. The two databases hold everything the
-archive and the device store hold, the linked device's keys included.
+archive and the device store hold, the linked device's keys included. The
+[master key](#master-key) `keys/master` is not in a backup.
+
+**Retention.** After each successful backup, and only then, the service keeps
+the newest `WAWARDEN_BACKUP_KEEP` backups (default `14`), ordered by the time in
+their names, never by the files' modification times, plus the file just
+written even when a clock set back gave it an older name, and deletes the
+others; it never keeps fewer than one. It deletes only regular files of mode
+`0600`, owned by the service's user, whose name is a backup's name with a valid
+time, and accepts `backups/tmp/` only as a `0700` directory of that user, which
+it does not enter. Any other entry in `backups/`, such as a symbolic link,
+another directory, a copy under another name, or a backup with another mode or
+owner, makes it delete nothing and report `backup_prune_failed` with reason
+`unexpected_entry`, after every backup until the entry is removed. A full disk
+never makes the service delete backups: it reports `ingest_paused` or
+`backup_failed` with reason `space` and leaves the decision to the operator. On
+an active service the backups cover the last `WAWARDEN_BACKUP_KEEP` nights;
+copies of the data directory made by the storage, such as snapshots or
+recovery points, hold deleted backups for as long as they are kept.
+
+| `backup_prune_failed` reason | Old backups were not all deleted because |
+|---|---|
+| `directory` | `backups/` cannot be read or inspected, or is not a directory owned by the service's user with mode exactly `0700`. Nothing was deleted. |
+| `unexpected_entry` | `backups/` holds an entry the service did not write, as above. Nothing was deleted. |
+| `remove` | Deleting a file failed; the files deleted before it stay deleted and the rest are kept until the next backup. |
+| `sync` | Flushing `backups/` to disk after the deletions failed. |
 
 | `backup_failed` reason | The backup failed because |
 |---|---|
@@ -850,6 +996,7 @@ archive and the device store hold, the linked device's keys included.
 | `rename` | Renaming the file into `backups/` failed. |
 | `cleanup` | Removing `backups/tmp/` failed after the file was in place; the file is removed too. |
 | `cancelled` | The service began shutting down during the backup. |
+| `space` | The data directory has less free space than the floor plus the larger database plus both databases, or the free space or a database's size cannot be read. Only on the `local` profile with a non-zero floor. |
 
 **Decrypting and inspecting a backup offline.** Create the key pair on a machine
 other than the service's host with the [age](https://github.com/FiloSottile/age)
@@ -860,26 +1007,76 @@ recipient:
 age-keygen -o backup-identity.txt     # prints "Public key: age1..."
 ```
 
-Copy a backup off the host and, on that machine:
+Copy a backup off the host and, on that machine, check it with
+[`backup verify`](#backup-verify), which reads what `age` decrypts and holds no
+key itself:
 
 ```sh
-mkdir restore
-age --decrypt -i backup-identity.txt 20261005T120000Z.age | tar -x -C restore
-cat restore/manifest.json
-sqlite3 -readonly restore/archive.db 'PRAGMA integrity_check'
-sqlite3 -readonly restore/session.db 'PRAGMA integrity_check'
+set -o pipefail
+mkdir -m 700 verify
+age --decrypt -i backup-identity.txt 20261005T030000Z.age |
+  wawarden backup verify --work-dir verify --extract-to restore -
 ```
 
-A truncated or altered file fails to decrypt. The decrypted files hold the
-whole archive and the linked device's keys: keep them as private as the data
-directory, and delete them when done.
+A truncated or altered file fails to decrypt, and so does a file given the
+wrong identity. With `--extract-to`, `restore/` then holds `archive.db` and
+`session.db`. To inspect a backup by hand instead, `age --decrypt ... | tar -x`
+gives the three files; `sqlite3` needs version 3.34 or later with FTS5 to read
+the archive's full-text index. The decrypted files hold the whole archive and
+the linked device's keys: keep them as private as the data directory, and
+delete them when done.
 
-**Restoring.** There is no restore tool yet. Restore only into a stopped
-service: stop it, replace `archive.db` and `session.db` in the data directory
-with the two files of one backup, mode `0600` and owned by the service's user,
-remove any `archive.db-journal` and `session.db-journal`, then start it. Never
-start two instances from one `session.db`, for example a restored copy while the
-original still runs: both would act as the same linked device.
+**Restoring.** There is no command that restores; a restore is done by hand,
+into a stopped service:
+
+1. Stop the service and make sure that no process or task still runs on the
+   data directory.
+2. Verify the backup with `backup verify --extract-to` as above, on a machine
+   apart from the host.
+3. Replace `archive.db` and `session.db` in the data directory with the two
+   files of that one backup, never one from another; they are two points in
+   time, the archive's first. Give them the service's user as owner and mode
+   `0600`, keep the data directory at `0700`, and delete any
+   `archive.db-journal` and `session.db-journal`. Never restore `backups/`
+   itself.
+4. Restore the operator's own copy of `keys/master`, which no backup holds.
+   Without it the service creates a new master key: pseudonyms, cursors and
+   message references change, and audit rows written under the old key verify
+   as `unknown_key` (see [Master key](#master-key)).
+5. Start the service.
+
+A restore takes the service back to the time of the backup:
+
+- Clients revoked after the backup are active again, with their old tokens,
+  and clients created after it are gone. The send budgets and the record of
+  sends already made, which the archive holds, roll back too, so a send
+  retried after the restore can go out again. Before giving agents access, check the `admin_mutation` events
+  since the backup, revoke again what was revoked, and keep agents that can
+  send stopped until you are sure.
+- Messages received after the backup are missing. The text of messages
+  revoked or edited after it comes back, and so does the text of messages
+  that expired after it, until the expiry sweep, which runs within a minute of
+  the start, removes it again.
+- The device store holds the linked device's keys and sessions as of the
+  backup. The protocol library logs in with the stored keys and does not
+  compare them with WhatsApp's view; if the device was unlinked since, the
+  service is logged out and must be paired again. What WhatsApp's servers and
+  contacts do with sessions and pre-key numbers that went back in time is not
+  known, and can be tried only against the real service.
+- Never start two instances from one `session.db`, for example a restored copy
+  while the original still runs: both would act as the same linked device and
+  replace each other.
+
+A restore drill runs outside the deployment, on a copy of a backup, with the
+age identity kept off the service's host: `backup verify` proves that the
+identity opens the backup, that both databases pass their integrity checks and
+that this build reads their schemas; its counts can be compared with
+[`admin status`](#admin-status-admin-pair-and-admin-reconnect) of the live
+service, and [`audit verify --db`](#audit-verify) checks the extracted archive's
+audit chain (heads shipped after the backup are missing from it, as expected).
+To run `serve` on a restored archive in a drill, use a scratch data directory
+that holds only the restored `archive.db`: the missing `session.db` is created
+empty, so the engine stays unpaired and makes no connection.
 
 ## WhatsApp engine
 
@@ -1218,7 +1415,12 @@ reference and inline content, deletes its file and flushes the directory. Blobs
 not yet processed are taken up again at the next start, and each start of the
 engine first deletes every `history/<id>.bin` and `history/<id>.part` whose blob
 is not waiting to be processed, such as a file that a crash left behind after
-its blob was marked processed or quarantined. An attempt that panics while it
+its blob was marked processed or quarantined; the engine repeats this once an
+hour while it runs, so a file whose deletion failed does not wait for a restart.
+A processed blob's row, which holds only its identifier, two times and its
+attempt count, is deleted 30 days after it was processed by the nightly prune of
+the [backup](#backups) scheduler, which runs with or without a backup recipient;
+a quarantined blob's row is kept. An attempt that panics while it
 downloads, decodes or applies a blob fails like any other. After three failed attempts, attempts cut
 short by a crash included, a blob is quarantined: its reference and
 files are deleted and the [notification event](#notifications) `quarantine` is
@@ -2127,11 +2329,15 @@ notices of a [debug window](#protocol-library-logs). Lines in
 | `ingest_paused` | `WARN`, at every log level | `free_bytes`, `floor_bytes` | A [notification event](#notifications). |
 | `backup_done` | `INFO`, at every log level | `bytes`, `archive_bytes`, `session_bytes`, `duration_ms` | A [notification event](#notifications). |
 | `backup_failed` | `WARN`, at every log level | `reason` | A [notification event](#notifications). |
+| `backup_pruned` | `INFO`, at every log level | `removed`, `kept` | A [notification event](#notifications). |
+| `backup_prune_failed` | `WARN`, at every log level | `reason` | A [notification event](#notifications). |
+| `backup_skipped` | `INFO` | `reason`: `unchanged` | Neither database was written since this process's last [backup](#backups), so the nightly backup of this slot is skipped. Logged once per slot. |
+| `history_blobs_pruned` | `INFO` | `rows` | The nightly prune deleted `rows` [history blob](#history-sync) rows processed more than 30 days before. Not logged when it deleted none. |
 | `ingest_resumed` | `INFO` | `free_bytes`, `floor_bytes` | The free space reached 1.25 times the floor again. |
 | `free_space_unknown` | `WARN` | `error_type` | The free space of the data directory could not be read. |
 | `index_rewrite_pending` | `WARN` | `operation` | A change committed, but the full-text index rewrite it requires failed; it stays due and runs at the next start. |
 | `history_ack_failed` | `WARN` | `error_type` | Sending the history receipt failed; the blob is processed anyway. |
-| `history_file_kept` | `WARN` | `error_type` | A history file could not be deleted, or the directory could not be flushed after a deletion. The next start of the engine deletes a file whose blob is no longer waiting. |
+| `history_file_kept` | `WARN` | `error_type` | A history file could not be deleted, or the directory could not be flushed after a deletion. The engine deletes a file whose blob is no longer waiting at its next start and once an hour while it runs. |
 | `expiry_sweep_failed` | `WARN` | `error_type` | Removing the text of expired messages failed; the sweep runs again a minute later. |
 | `whatsmeow_log` | the line's own: `ERROR`, `WARN`, `INFO`, or `DEBUG` in a debug window | `module`, `detail` | A log line of the protocol library; see [Protocol library logs](#protocol-library-logs). |
 | `unsafe_debug` | `WARN`, at every log level | `minutes`, `until` | `WAWARDEN_UNSAFE_DEBUG` opened a debug window at the start. |
@@ -2143,7 +2349,7 @@ notices of a [debug window](#protocol-library-logs). Lines in
 | `notify_dropped` | `WARN`, at every log level | `count` | At shutdown, the [webhook](#webhook) dropped `count` events it had not delivered, and `serve` exits `1`. |
 | `emf_failed` | `WARN` | `error_type` | Writing the [embedded-metric-format](#embedded-metric-format) lines failed. |
 | `backup_disabled` | `WARN`, at every log level | | `WAWARDEN_BACKUP_AGE_RECIPIENT` is not set, or the [fake engine](#fake-engine) runs and opens no device store, so no [backup](#backups) is ever taken. Logged once per start. |
-| `backup_check_failed` | `WARN` | `error_type` | Reading or recording whether the [backup](#backups) is due failed; the check runs again 30 seconds later. |
+| `backup_check_failed` | `WARN` | `error_type` | A step of the [backup](#backups) scheduler failed: reading or recording whether a backup is due, the prune of old backups (also reported as `backup_prune_failed`) or the prune of history blob rows; the scheduler runs again 30 seconds later. |
 | `audit` | none, written at every log level | `ts`, `client`, `action`, `chat_hmac`, `ok`, `reason`, `chain_head` | An [audit row](#audit-chain) was committed; the line has no `time`, `level` or `msg`. |
 
 What is never logged: requests (there is no access log), request bodies, header
@@ -2364,7 +2570,9 @@ the [webhook](#webhook).
 | `ingest_paused` | `WARN` | `free_bytes`, `floor_bytes` | The data directory fell below its [free-space floor](#free-space). |
 | `admin_mutation` | `INFO` | `action`: `pair`, `reconnect`, `client_create`, `client_revoke`; `outcome` | A `POST` [admin route](#admin-routes) was called with the admin token; `outcome` is `ok` or the error code it answered, such as `already_paired`, `name_taken` or `invalid_body`. The event never names the client: the [audit chain](#audit-chain) records its id. |
 | `backup_done` | `INFO` | `bytes`, `archive_bytes`, `session_bytes`, `duration_ms` | A [backup](#backups) was written: `bytes` is the size of the encrypted file, the others the sizes of the two database copies and the time it took. |
-| `backup_failed` | `WARN` | `reason` | A [backup](#backups) failed and what it had written was removed; `reason` as in the table under [Backups](#backups). |
+| `backup_failed` | `WARN` | `reason` | A [backup](#backups) failed and what it had written was removed; `reason` as in the table under [Backups](#backups). It is reported on every failure, retries included. |
+| `backup_pruned` | `INFO` | `removed`, `kept` | After a successful [backup](#backups), backups beyond `WAWARDEN_BACKUP_KEEP` were deleted: `removed` files, `kept` remain. Not reported when nothing was deleted. |
+| `backup_prune_failed` | `WARN` | `reason`: `directory`, `unexpected_entry`, `remove`, `sync` | Deleting old backups failed or was refused; see [Retention](#backups). |
 | `admin_auth_failure` | `WARN` | `count` | Authentication failed on the admin listener. The first failure is reported at once with `count` `1`; further failures within the next minute are held back, and reported together once the minute has passed, within ten seconds, or at shutdown. `count` is the number of failures since the previous `admin_auth_failure`. |
 
 No event carries an identifier, a name, message text, a token, a key or a
@@ -2481,6 +2689,7 @@ in [embedded metric format](#embedded-metric-format), which needs no token.
 | `wawarden_panics_total` | counter | `name` | Panics recovered, by handler or goroutine name. Absent until the first panic. |
 | `wawarden_notify_dropped_total` | counter | `reason` | Notification events the [webhook](#webhook) did not deliver: `queue_full`, `failed`, `shutdown`. |
 | `wawarden_build_info` | gauge | `version`, `revision`, `dev` | Always `1`; the labels describe the running binary. |
+| `wawarden_backup_last_success_timestamp_seconds` | gauge | | Unix time at which the newest successful [backup](#backups) began, read from the archive at start; `0` until a backup succeeds. It is not written to the [embedded-metric-format](#embedded-metric-format) lines. |
 
 The [WhatsApp engine](#whatsapp-engine) adds these:
 
@@ -2512,7 +2721,7 @@ it translates one of the protocol library's events or the engine handles it,
 which refuses the event. Other code on goroutines that the protocol library
 starts itself is not covered: a panic there ends the process. The notifier adds
 `notify.flush` and `notify.webhook`, the embedded-metric-format writer
-`metrics.emf`, the [backup](#backups) check `backup.initial`, and each
+`metrics.emf`, the [backup](#backups) scheduler `backup.schedule`, and each
 database call the watcher `db.deadline`, which logs a call that runs past its
 deadline. In development builds, the [fake engine](#fake-engine) adds
 `fake.connection`.
@@ -2571,7 +2780,9 @@ from the start of the process; a restart starts the counts again.
    workers stop after the row or batch in hand.
 4. A [backup](#backups) still copying stops after the step or the read in
    hand, removes what it had written and reports `backup_failed` with reason
-   `cancelled`; one already flushing its file to disk finishes first.
+   `cancelled`, and is not retried; one already flushing its file to disk
+   finishes first. A prune of old backups stops before its next file, and a
+   prune of history blob rows after the batch in hand.
 5. With `WAWARDEN_METRICS_EMF=1`, the last
    [embedded-metric-format](#embedded-metric-format) lines are written.
 6. Held-back admin authentication failures are reported as
