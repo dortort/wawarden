@@ -19,6 +19,7 @@ import (
 const (
 	apiDir     = "internal/api"
 	appDir     = "internal/app"
+	senderDir  = "internal/sender"
 	engineDir  = "internal/engine"
 	adapterDir = engineDir + "/wa"
 	policyDir  = "internal/policy"
@@ -33,6 +34,8 @@ var engineDenied = []string{"go.mau.fi/whatsmeow", "google.golang.org/protobuf",
 var apiDenied = []string{"database/sql", "html/template", "text/template", "modernc.org/sqlite", "go.mau.fi/whatsmeow", module + "/internal/store", module + "/internal/engine"}
 
 const apiStore = module + "/" + scopedDir
+
+var senderDenied = []string{"database/sql", "modernc.org/sqlite", "go.mau.fi/whatsmeow", "google.golang.org/protobuf", module + "/internal/engine", module + "/internal/api"}
 
 var policyAllowed = set("bytes", "cmp", "crypto/sha256", "crypto/subtle", "encoding/base64", "encoding/binary", "encoding/hex",
 	"errors", "hash/crc32", "iter", "maps", "slices", "sort", "strconv", "strings", "time", "unicode", "unicode/utf8", "unique")
@@ -373,6 +376,24 @@ import (
 
 import "go.mau.fi/whatsmeow"
 `},
+		{name: "the sender imports the engine, the handlers and the database", rel: "internal/sender/x.go", want: 6, src: `package sender
+
+import (
+	"database/sql"
+	"go.mau.fi/whatsmeow"
+	"google.golang.org/protobuf/proto"
+	"github.com/dortort/wawarden/internal/api"
+	"github.com/dortort/wawarden/internal/api/dto"
+	"github.com/dortort/wawarden/internal/engine"
+)
+`},
+		{name: "the sender imports the policy and the ingest store", rel: "internal/sender/x.go", src: `package sender
+
+import (
+	"github.com/dortort/wawarden/internal/policy"
+	"github.com/dortort/wawarden/internal/store/ingest"
+)
+`},
 	},
 }
 
@@ -392,6 +413,10 @@ func checkFences(f *sourceFile) []string {
 		case within(f.dir, apiDir):
 			if imp.path != apiStore && slices.ContainsFunc(apiDenied, func(denied string) bool { return within(imp.path, denied) }) {
 				out = append(out, f.at(imp.node, "%s may not import %q", apiDir, imp.path))
+			}
+		case within(f.dir, senderDir):
+			if slices.ContainsFunc(senderDenied, func(denied string) bool { return within(imp.path, denied) }) {
+				out = append(out, f.at(imp.node, "%s reaches the engine and the handlers through interfaces that %s wires: it may not import %q", senderDir, appDir, imp.path))
 			}
 		case within(f.dir, engineDir) && !within(f.dir, adapterDir):
 			if slices.ContainsFunc(engineDenied, func(denied string) bool { return within(imp.path, denied) }) {

@@ -43,6 +43,21 @@ linters:
               desc: internal/api reads the archive only through internal/store/scoped, whose every read takes a grant, and never imports another store package
             - pkg: github.com/dortort/wawarden/internal/engine
               desc: internal/api depends on interfaces that internal/app wires, never on the engine
+        sender-fence:
+          list-mode: lax
+          files:
+            - ${base-path}/internal/sender/**
+          deny:
+            - pkg: database/sql
+              desc: internal/sender reaches the archive through the ingest store's send methods only
+            - pkg: modernc.org/sqlite
+              desc: the raw database handle lives in internal/store/internal/db
+            - pkg: go.mau.fi/whatsmeow
+              desc: the protocol client is confined to internal/engine
+            - pkg: github.com/dortort/wawarden/internal/engine
+              desc: internal/sender depends on an engine interface that internal/app wires
+            - pkg: github.com/dortort/wawarden/internal/api
+              desc: internal/sender knows nothing of the handlers; internal/app maps its errors to answers
         store-sql:
           files:
             - $all
