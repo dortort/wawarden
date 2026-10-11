@@ -233,6 +233,37 @@ func TestTheChatTimerAndTheQuoteReachTheEngineAndTheRow(t *testing.T) {
 	}
 }
 
+func TestASendToAChatWithoutATimerStoresNoExpiry(t *testing.T) {
+	f := newFixture(t, 10, 30)
+	if timer, err := f.store.ChatTimer(t.Context(), chat(t, alice)); err != nil || timer != 0 {
+		t.Fatalf("ChatTimer = %v, %v, want no timer", timer, err)
+	}
+	g := grantFor(t, writerID, false, alice)
+	res, err := f.svc.Send(g, t.Context(), request(t, "untimed-key-1", alice, "synthetic plain"))
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if calls := f.engine.sent(); len(calls) != 1 || calls[0].msg.Expiration != 0 {
+		t.Fatalf("engine sends %+v, want one without an expiration", calls)
+	}
+	for _, at := range []time.Time{epoch.Add(time.Hour), farFuture} {
+		var purged int
+		err := f.store.Write(t.Context(), "test.purge", func(tx *ingest.Tx) error {
+			var err error
+			purged, err = tx.PurgeExpired(at, 10)
+			return err
+		})
+		if err != nil || purged != 0 {
+			t.Fatalf("PurgeExpired(%v) = %d, %v, want nothing purged", at, purged, err)
+		}
+	}
+	readAll, _ := policy.DecideRead(&policy.Client{ID: writerID, ReadAll: true, ExpiresAt: farFuture}, epoch)
+	row, found, err := f.store.Scoped().Message(readAll, t.Context(), res.Sent.Chat, res.Sent.ID, res.Sent.Sender)
+	if err != nil || !found || row.Text != "synthetic plain" {
+		t.Fatalf("stored row after the sweep = %+v, %v, %v, want the sent text kept", row, found, err)
+	}
+}
+
 func TestAFailedSettlementIsRetriedThenReported(t *testing.T) {
 	f := newFixture(t, 10, 30)
 	g := grantFor(t, writerID, false, alice)
