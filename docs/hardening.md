@@ -368,7 +368,7 @@ webhook post can be late or lost, and a dead process sends nothing.
 | Events `backup_failed`, `backup_prune_failed` | any | A backup or its retention failed. |
 | Events `send_outcome_unknown`, `send_unrecorded` | any | A send may have reached WhatsApp without a record of it. |
 | Event `audit_key_changed` at `WARN` | any | The audit chain's key changed without the old key kept as a retired key. |
-| Log event `audit_prune_refused` | any | The audit retention found rows or an anchor that do not verify and removed nothing ([runbook](runbook.md#audit-chain)). |
+| Log event `audit_prune_refused` | any | The audit retention found rows or an anchor that do not verify and removed nothing more that night; an `audit_pruned` line reports what earlier batches removed ([runbook](runbook.md#audit-chain)). |
 | Event `admin_auth_failure` | any | Someone is trying tokens on the admin listener. |
 | Log events `notify_failed`, `notify_dropped` | any | Webhook posts failed or were dropped. |
 | Log events `listener_not_loopback`, `unsafe_debug`, `unsafe_rate_caps`, `unsafe_send_caps` | unexpected | A setting that widens exposure is on. |
