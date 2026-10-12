@@ -70,7 +70,7 @@ here as decoded by whatsmeow:
 |---|---|---|
 | 101 | Sent too many messages to people who do not have the account in their address book | The first-contact rule: a client sends to a direct chat that has never written to the account only when the operator allowed it first contact |
 | 102 | Too many people blocked the account | Send only where the recipient expects a message; the operator chooses each write chat |
-| 103 | Created too many groups with people who do not have the account in their address book | WaWarden has no code that creates a group |
+| 103 | Created too many groups with people who do not have the account in their address book | WaWarden has no code that creates a group, and an architecture test refuses every call of the protocol library that the gateway does not make |
 | 104 | Sent the same message to too many people | The pacer and the send limits; an agent must never send one text to many chats |
 | 106 | Sent too many messages to a broadcast list | WaWarden has no code that sends to a broadcast list |
 
