@@ -2134,7 +2134,7 @@ The checks run in this order, and the first that fails answers:
 | `403` | `first_contact_refused` | The chat is a direct chat that has never written to the account (no stored message from the other person, of any kind, history included), and the client was created without `allow_first_contact`. Groups are exempt. |
 | `409` | `request_in_progress` | Another request with the same key is still running. `Retry-After` gives 1 to 5 seconds. |
 | `422` | `idempotency_key_reused` | The key was used for another request: another chat, text or reply target. Also while the first is still running. |
-| `429` | `rate_limited` | A send limit or the pacer, or another send that is running; one code whatever the cause, so no client learns which limit another client spent. `Retry-After` gives the whole seconds until the send would be admitted, 1 to 3600. |
+| `429` | `rate_limited` | A send limit or the pacer, or another send that is running; one code whatever the cause, which never names another client. `Retry-After` gives the whole seconds until the send would be admitted, 1 to 3600, so a wait set by the pacer or the global hourly limit follows from other clients' sends too (see the [threat model's residual risks](threat-model.md#residual-risks)). |
 | `503` | `busy` | The archive did not answer within its deadline, or the client list was being republished. `Retry-After: 1`. Usually nothing was sent, but see below. |
 | `503` | `not_connected` | The engine is not connected or not paired; nothing was sent. `Retry-After: 5`. |
 | `502` | `send_rejected` | WhatsApp refused the message, or the recipient cannot be reached (not a member of the group, a missing group, a phone number without a WhatsApp account). Stored, never retried. |
