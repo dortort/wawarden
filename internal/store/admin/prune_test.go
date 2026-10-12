@@ -609,6 +609,18 @@ func TestVerifyPicksEachRowsKeyFromTheSet(t *testing.T) {
 	if rep := verify(t, second, moved, nil); !rep.OK() || rep.Verified != 4 {
 		t.Fatalf("Verify after the anchor moved under the current key = %+v", rep)
 	}
+	if res := prune(t, second, start.Add(4500*time.Millisecond), pruneBatch); res.Through != 4 {
+		t.Fatalf("Prune past a previous-key row from an anchor MACed under the current key = %+v", res)
+	}
+	if rep := verify(t, second, second.copyArchive(t), nil); !rep.OK() || rep.Verified != 3 {
+		t.Fatalf("Verify after the prune past the last previous-key row = %+v", rep)
+	}
+	if res := prune(t, second, start.Add(62500*time.Millisecond), pruneBatch); res.Through != 6 {
+		t.Fatalf("Prune of current-key rows from an anchor on a previous-key row = %+v", res)
+	}
+	if rep := verify(t, second, second.copyArchive(t), nil); !rep.OK() || rep.Verified != 1 {
+		t.Fatalf("Verify after the prune into the current-key rows = %+v", rep)
+	}
 }
 
 func TestAnchorMACMatchesItsLayout(t *testing.T) {
