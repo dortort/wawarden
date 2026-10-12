@@ -501,8 +501,13 @@ entropy of the tokens; the counters exist to alert on.
   row forged under a retired key behind the row before it renamed to that key
   and dated like the newest. Only
   `internal/store/admin/prune.go` holds the statement that deletes audit rows,
-  and only `internal/app`, the admin store and the backup taker may name a
-  `Prune` method; both are architecture tests.
+  comments or a quoted schema name inside it included, only it and the
+  ingest schema hold SQL that writes the audit anchor, and only
+  `internal/app`, the admin store and the backup taker may name a `Prune`
+  method; all three are architecture tests, the first two over string
+  literals and statements assembled from a file's constants. They guard
+  against mistakes: the anchor's MAC, which `audit verify` checks, is what
+  detects a moved anchor.
 - **Anchors.** Triggers refuse an `UPDATE` or a replacing `INSERT` of a row,
   a `DELETE` of a row that the audit anchor does not cover or that is the
   newest row, and moving the anchor back or removing it, but whoever can write
