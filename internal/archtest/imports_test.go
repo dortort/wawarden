@@ -31,7 +31,7 @@ var bannedImports = set("net/http/pprof", "expvar", "net/http/cgi", "net/http/fc
 
 var engineDenied = []string{"go.mau.fi/whatsmeow", "google.golang.org/protobuf", "database/sql", "modernc.org/sqlite"}
 
-var apiDenied = []string{"database/sql", "html/template", "text/template", "modernc.org/sqlite", "go.mau.fi/whatsmeow", module + "/internal/store", module + "/internal/engine"}
+var apiDenied = []string{"database/sql", "html/template", "text/template", "modernc.org/sqlite", "go.mau.fi/whatsmeow", module + "/internal/store", module + "/internal/engine", module + "/" + senderDir}
 
 const apiStore = module + "/" + scopedDir
 
@@ -203,7 +203,7 @@ var fenceRule = rule{
 	name:  "import-fences",
 	check: checkFences,
 	cases: []snippet{
-		{name: "api imports past its fence", rel: "internal/api/x.go", want: 13, src: `package api
+		{name: "api imports past its fence", rel: "internal/api/x.go", want: 14, src: `package api
 
 import (
 	"database/sql"
@@ -219,6 +219,7 @@ import (
 	"github.com/dortort/wawarden/internal/store/ingest"
 	"github.com/dortort/wawarden/internal/engine"
 	"github.com/dortort/wawarden/internal/engine/wa"
+	"github.com/dortort/wawarden/internal/sender"
 )
 `},
 		{name: "api reads through the scoped store only", rel: "internal/api/x.go", want: 5, src: `package api
@@ -575,6 +576,22 @@ func goModProblems(gomod string, importable, indirectOnly []string) []string {
 		out = append(out, fmt.Sprintf("go.mod:%d: %s %s: only module, go, toolchain, requirements on reviewed importable modules and indirect requirements on reviewed indirect-only modules are allowed", i+1, directive, strings.Join(args, " ")))
 	}
 	return out
+}
+
+func TestTheAPIReachesTheArchiveOnlyThroughTheScopedStore(t *testing.T) {
+	out, err := exec.CommandContext(t.Context(), "go", "list", "-deps", module+"/"+apiDir+"/...").Output()
+	if err != nil {
+		t.Fatalf("go list: %v", err)
+	}
+	deps := strings.Fields(string(out))
+	if !slices.Contains(deps, apiStore) {
+		t.Fatalf("go list printed %q, which lacks %s", deps, apiStore)
+	}
+	for _, dep := range deps {
+		if within(dep, module+"/"+storeDir) && dep != apiStore && dep != module+"/"+dbDir || slices.ContainsFunc([]string{"go.mau.fi/whatsmeow", module + "/" + engineDir, module + "/" + senderDir}, func(d string) bool { return within(dep, d) }) {
+			t.Errorf("%s depends on %s, so a handler could reach the archive past the scoped store's grants or reach the engine", apiDir, dep)
+		}
+	}
 }
 
 func TestGoModDirectives(t *testing.T) {
