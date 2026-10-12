@@ -119,9 +119,9 @@ for. Keep the two apart:
   first contact. Do not work around it.
 - **Limits are low on purpose.** By default 10 sends a minute per client, 30 an
   hour for all clients together, shared out among the clients that may write,
-  and one send every 3 to 5 seconds across all of them. `429` `rate_limited`
-  says nothing about which limit; wait `Retry-After` (or `retry_after_seconds`)
-  and send later, or not at all.
+  and at most one send started every 3 to 5 seconds across all of them. `429`
+  `rate_limited` says nothing about which limit; wait `Retry-After` (or
+  `retry_after_seconds`) and send later, or not at all.
 - **What you send is what was written.** Text is refused, never cleaned:
   control characters, bidirectional controls and tag characters answer `400`
   `invalid_text`. Do not try to smuggle formatting through them. Text is 1 to

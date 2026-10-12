@@ -2296,7 +2296,7 @@ them, in sliding windows measured with the service's clock.
 | Each client, per minute | `WAWARDEN_SEND_PER_CLIENT_PER_MINUTE`, 10 | 10 | 60 |
 | All clients, per hour | `WAWARDEN_SEND_GLOBAL_PER_HOUR`, 30 | 60 | 600 |
 | Each client, per hour | the hourly limit divided by the number of clients that may write (active, not all-chats, with a write chat), at least 1 | | |
-| Pacer | one send, then 3 seconds plus a random wait of up to 2 seconds before the next send of any client | | |
+| Pacer | one send at a time, and the next send of any client starts at least 3 seconds plus a random wait of up to 2 seconds after the last one was admitted | | |
 
 A send is counted from the moment it is admitted: the time is read once the
 admitting write holds the archive, so a request that waited for the archive
