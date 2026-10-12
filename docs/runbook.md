@@ -137,8 +137,10 @@ age --decrypt -i backup-identity.txt <UTC time>.age |
   wawarden backup verify --work-dir verify -
 ```
 
-It prints counts and `verified: yes` and exits `0`, or exits `6` for an
-incomplete or damaged backup ([`backup verify`](configuration.md#backup-verify)).
+It prints counts and `verified: yes` and exits `0`. It exits `1` when the
+file cannot be decrypted or read to its end (a damaged or truncated file, or
+the wrong identity), and `6` when the decrypted stream is not a complete,
+sound backup ([`backup verify`](configuration.md#backup-verify)).
 Compare its counts with `admin status` of the live service.
 
 ### Restore drill
