@@ -168,10 +168,20 @@ There is no restore command. Follow
 service, verify the backup with `--extract-to`, replace `archive.db` and
 `session.db` with the two files of one backup (owner the service's user, mode
 `0600`), delete their journals, restore your copies of `keys/master` and
-`keys/retired/`, then start. Before giving agents access again, read the
-`admin_mutation` events since the backup, revoke again the clients revoked
-since, and keep sending clients stopped until you are sure: the record of
-sends rolls back with the archive, so a retried send can go out again.
+`keys/retired/`, note the UTC time, then start. Before giving agents access
+again, read the `admin_mutation` events since the backup, revoke again the
+clients revoked since, and keep sending clients stopped until you are sure:
+the record of sends rolls back with the archive, so a retried send can go out
+again.
+
+The audit rows written between the backup and the restart are lost, and the
+rows written after the restart take their ids with other chain heads, so the
+heads shipped in between can never match. Keep the capture of standard output
+from before the restore, the only record of those requests, and leave those
+heads out of every later `--log` as [Audit chain](#audit-chain) shows;
+otherwise `audit verify` counts them as missing and exits `6` until the
+retention removes the first rows written after the restart, about
+`WAWARDEN_AUDIT_RETENTION_DAYS` later.
 
 ## Audit chain
 
@@ -190,12 +200,24 @@ jq -cR 'fromjson? | select(.event == "audit" and .ts < "2026-10-11T02:59")' \
   captured.log > heads.log
 ```
 
+After a [restore](#restoring), also leave out the heads shipped from a minute
+before the restored backup's time to the time noted just before the restored
+service started, and nothing more, so that rows removed before or after that
+window are still found. For a restore of `20261011T030000Z.age` started at
+09:15 UTC that day, checked against the backup `20261012T030000Z.age`:
+
+```sh
+jq -cR 'fromjson? | select(.event == "audit" and .ts < "2026-10-12T02:59"
+  and (.ts < "2026-10-11T02:59" or .ts >= "2026-10-11T09:15"))' \
+  captured.log > heads.log
+```
+
 | Result | What to do |
 |---|---|
 | `none` | Nothing. |
 | `unknown_key` | A row was written under a key you did not pass: find the copy of that master key, or of the retired keys, and pass it. |
 | `anchor_invalid` | The anchor's key is missing, or the anchor was altered: pass every key; if it still fails, treat it as tampering. |
-| `hmac_mismatch`, `id_gap`, `retired_key`, shipped heads missing from a capture cut at the backup's time | Rows were altered, removed or reordered, or the copy is not what you think: treat it as an incident, keep the files, and compare with older backups. |
+| `hmac_mismatch`, `id_gap`, `retired_key`, shipped heads missing from a capture cut at the backup's time, with the window of every restore left out | Rows were altered, removed or reordered, or the copy is not what you think: treat it as an incident, keep the files, and compare with older backups. |
 
 Rows older than `WAWARDEN_AUDIT_RETENTION_DAYS` are removed each night after
 the backup, behind a signed anchor, and the service logs `audit_pruned`. An

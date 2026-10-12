@@ -928,7 +928,10 @@ These remain after every control above is in place.
   back to the time of the backup: clients revoked after it are active again
   with their old tokens, and the send budgets and the record of sends roll
   back, so a retried send can go out twice, until the operator revokes again
-  from the `admin_mutation` events since the backup. `keys/master` and
+  from the `admin_mutation` events since the backup. The audit rows written
+  between the backup and the restart are lost and their ids reused, so the
+  heads shipped in that window never match again, and `audit verify --log`
+  must be given a capture without them, as the runbook shows. `keys/master` and
   `keys/retired/` are not in a backup, so a restore without the operator's
   copies changes pseudonyms, cursors and references and leaves older audit rows
   `unknown_key`. What

@@ -1188,7 +1188,8 @@ into a stopped service:
    references change, and audit rows written under the old key verify as
    `unknown_key` (see [Master key](#master-key)). `audit verify` of the
    restored archive needs every key whose id its `key ids` line lists.
-5. Start the service.
+5. Note the current UTC time, then start the service. The audit rows written
+   between the backup and this time are lost, as the list below says.
 
 A restore takes the service back to the time of the backup:
 
@@ -1198,6 +1199,16 @@ A restore takes the service back to the time of the backup:
   retried after the restore can go out again. Before giving agents access, check the `admin_mutation` events
   since the backup, revoke again what was revoked, and keep agents that can
   send stopped until you are sure.
+- Audit rows written after the backup are missing, and the rows written after
+  the restart take their ids with other chain heads, so the heads shipped
+  between the backup and the restart can never match. Keep the capture of
+  standard output from before the restore: it is the only record of those
+  requests. Unless a capture given to [`audit verify --log`](#audit-verify)
+  leaves out the heads from a minute before the backup's time to the restart
+  time noted in step 5, and only those, as the
+  [runbook](runbook.md#audit-chain) shows, it counts them as missing and exits
+  `6` until the [retention](#audit-chain) removes the first rows written after
+  the restart, about `WAWARDEN_AUDIT_RETENTION_DAYS` later.
 - Messages received after the backup are missing. The text of messages
   revoked or edited after it comes back, and so does the text of messages
   that expired after it, until the expiry sweep, which runs within a minute of
