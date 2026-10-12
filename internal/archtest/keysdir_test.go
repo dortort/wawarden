@@ -16,11 +16,17 @@ var keysDirectoryRule = rule{
 	name:  "keys-directory",
 	check: checkKeysDirectory,
 	cases: []snippet{
-		{name: "the keys directory named outside internal/keys", rel: "internal/backup/x.go", want: 5, src: `package backup
+		{name: "the keys directory named outside internal/keys", rel: "internal/backup/x.go", want: 8, src: `package backup
 
 import "path/filepath"
 
 const staged = "/data/keys/"
+
+const (
+	ke   = "ke"
+	ys   = "ys"
+	both = ke + ys
+)
 
 func f(dir string) []string {
 	return []string{
@@ -28,7 +34,22 @@ func f(dir string) []string {
 		filepath.Join(dir, "keys/master"),
 		dir + "/keys",
 		filepath.Join(dir, "ke"+"ys"),
+		filepath.Join(dir, ke+ys, "master"),
+		dir + "/" + ke + ys,
 	}
+}
+`},
+		{name: "constants that spell other names", rel: "internal/backup/x.go", src: `package backup
+
+import "path/filepath"
+
+const (
+	ke = "ke"
+	y  = "y"
+)
+
+func f(dir string) []string {
+	return []string{filepath.Join(dir, ke+y), ke + "y_id", dir + "/" + ke + y + "s-dir"}
 }
 `},
 		{name: "the keys directory named in an internal/keys subpackage", rel: "internal/keys/sub/x.go", src: `package sub
@@ -60,14 +81,21 @@ func checkKeysDirectory(f *sourceFile) []string {
 	if f.test || within(f.dir, keysDir) {
 		return nil
 	}
+	names := func(s string) bool { return slices.Contains(strings.Split(s, "/"), keysDirName) }
+	consts := fileConstants(f.file)
 	var out []string
 	for _, decl := range f.file.Decls {
 		if gen, ok := decl.(*ast.GenDecl); ok && gen.Tok == token.IMPORT {
 			continue
 		}
 		literalRuns(decl, func(at ast.Node, s string) {
-			if slices.Contains(strings.Split(s, "/"), keysDirName) {
+			if names(s) {
 				out = append(out, f.at(at, "%q names the keys directory of the data directory, which only %s may read or write", s, keysDir))
+			}
+		})
+		constantRuns(decl, consts, func(at ast.Node, s string, runs []string) {
+			if names(s) && !slices.ContainsFunc(runs, names) {
+				out = append(out, f.at(at, "%q, assembled from constants of this file, names the keys directory of the data directory, which only %s may read or write", s, keysDir))
 			}
 		})
 	}

@@ -234,6 +234,61 @@ func literalRuns(root ast.Node, visit func(at ast.Node, s string)) {
 	ast.Inspect(root, walk)
 }
 
+func constantRuns(root ast.Node, consts map[string]ast.Expr, visit func(at ast.Node, s string, runs []string)) {
+	var walk func(ast.Node) bool
+	walk = func(n ast.Node) bool {
+		b, ok := n.(*ast.BinaryExpr)
+		if !ok || b.Op != token.ADD {
+			return true
+		}
+		var text, lit strings.Builder
+		var runs []string
+		var start ast.Node
+		named := false
+		endLiteral := func() {
+			if lit.Len() > 0 {
+				runs = append(runs, lit.String())
+				lit.Reset()
+			}
+		}
+		flush := func() {
+			endLiteral()
+			if named {
+				visit(start, text.String(), runs)
+			}
+			text.Reset()
+			runs, start, named = nil, nil, false
+		}
+		for _, operand := range addOperands(b) {
+			s, literal := stringLit(operand)
+			var inner []string
+			ok := literal
+			if !literal {
+				s, inner, ok = constantText(operand, consts, map[string]bool{})
+			}
+			if !ok {
+				flush()
+				ast.Inspect(operand, walk)
+				continue
+			}
+			if start == nil {
+				start = operand
+			}
+			text.WriteString(s)
+			if literal {
+				lit.WriteString(s)
+				continue
+			}
+			endLiteral()
+			runs = append(runs, inner...)
+			named = true
+		}
+		flush()
+		return false
+	}
+	ast.Inspect(root, walk)
+}
+
 func constString(e ast.Expr) (string, bool) {
 	if e == nil {
 		return "", false

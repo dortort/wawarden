@@ -17,7 +17,7 @@ var backupsDirectoryRule = rule{
 	name:  "backups-directory",
 	check: checkBackupsDirectory,
 	cases: []snippet{
-		{name: "the backups directory named outside internal/backup", rel: "internal/app/x.go", want: 6, src: `package app
+		{name: "the backups directory named outside internal/backup", rel: "internal/app/x.go", want: 8, src: `package app
 
 import (
 	"path/filepath"
@@ -27,6 +27,8 @@ import (
 
 const staged = "/data/backups/"
 
+const back, ups = "back", "ups"
+
 func f(dir string) []string {
 	return []string{
 		filepath.Join(dir, "backups", "x.age"),
@@ -34,6 +36,8 @@ func f(dir string) []string {
 		filepath.Join(dir, "back"+"ups"),
 		"backups",
 		filepath.Join(dir, backup.Dir, "x.age"),
+		filepath.Join(dir, back+ups),
+		dir + "/" + back + "ups/tmp",
 	}
 }
 `},
@@ -72,14 +76,21 @@ func checkBackupsDirectory(f *sourceFile) []string {
 	if f.test || within(f.dir, backupDir) {
 		return nil
 	}
+	names := func(s string) bool { return slices.Contains(strings.Split(s, "/"), backupDirName) }
+	consts := fileConstants(f.file)
 	var out []string
 	for _, decl := range f.file.Decls {
 		if gen, ok := decl.(*ast.GenDecl); ok && gen.Tok == token.IMPORT {
 			continue
 		}
 		literalRuns(decl, func(at ast.Node, s string) {
-			if slices.Contains(strings.Split(s, "/"), backupDirName) {
+			if names(s) {
 				out = append(out, f.at(at, "%q names the backups directory of the data directory, under which only %s writes", s, backupDir))
+			}
+		})
+		constantRuns(decl, consts, func(at ast.Node, s string, runs []string) {
+			if names(s) && !slices.ContainsFunc(runs, names) {
+				out = append(out, f.at(at, "%q, assembled from constants of this file, names the backups directory of the data directory, under which only %s writes", s, backupDir))
 			}
 		})
 		if f.dir == configDir {
