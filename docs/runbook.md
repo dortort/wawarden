@@ -224,12 +224,12 @@ jq -cR 'fromjson? | select(.event == "audit" and .ts < "2026-10-12T02:59"
 Rows older than `WAWARDEN_AUDIT_RETENTION_DAYS` are removed each night after
 the backup, behind a signed anchor, and the service logs `audit_pruned`. An
 `audit_prune_refused` with `chain_mismatch` means the anchor or a row due for
-removal did not verify under the master key and the retired keys, so nothing
-was removed: run `audit verify` on a fresh backup as above, with the
-service's `keys/master` and `keys/retired/`. `unknown_key` there means a key
-is missing from `keys/retired/`; restore it as in
-[Rotating the master key](#rotating-the-master-key). Treat any other result as
-the table says.
+removal did not verify under the master key and the retired keys, so the
+removal stopped at the anchor before that row: run `audit verify` on a fresh
+backup as above, with the service's `keys/master` and `keys/retired/`.
+`unknown_key` there means a key is missing from `keys/retired/`; restore it as
+in [Rotating the master key](#rotating-the-master-key). Treat any other result
+as the table says.
 
 ## Upgrading
 
