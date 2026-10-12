@@ -17,6 +17,9 @@ var (
 	sentByFiles      = set(ingestDir+"/schema.go", sendsFile, scopedDir+"/messages.go")
 	sentByColumn     = regexp.MustCompile(`(?i)\bsent_by\b`)
 	auditDeleteQuery = regexp.MustCompile(`(?i)\bDELETE` + sqlSpace + `*FROM` + sqlSpace + `*` + sqlSchema + `["'\x60\[]?audit\b`)
+	auditAnchorWrite = regexp.MustCompile(`(?i)\b(?:(?:INSERT|UPDATE)(?:` + sqlSpace + `+OR` + sqlSpace + `+\w+)?|REPLACE|DELETE)(?:` + sqlSpace + `*(?:INTO|FROM))?` +
+		sqlSpace + `*` + sqlSchema + `["'\x60\[]?audit_anchor\b`)
+	auditAnchorFiles = set(auditPrune, ingestDir+"/schema.go")
 )
 
 const (
@@ -242,6 +245,73 @@ func checkAuditDelete(f *sourceFile) []string {
 	})
 	assembledSQL(f.file, auditDeleteQuery, func(at ast.Expr, text, _ string) {
 		out = append(out, f.at(at, "%q, assembled from constants of this file, deletes audit rows outside %s", text, auditPrune))
+	})
+	return out
+}
+
+var auditAnchorRule = rule{
+	name:  "audit-anchor-confinement",
+	check: checkAuditAnchor,
+	cases: []snippet{
+		{name: "the anchor written outside the prune file and the schema", rel: storeDir + "/admin/audit.go", want: 7, src: `package admin
+
+import "context"
+
+type querier interface {
+	ExecContext(context.Context, string, ...any) (any, error)
+}
+
+const (
+	moved    = "UPDATE audit_anchor SET through = ?1"
+	upsert   = "INSERT OR REPLACE INTO \"main\".\"audit_anchor\" (id) VALUES (1)"
+	replaced = "replace into audit_anchor (id) VALUES (1)"
+	removed  = "DELETE/**/FROM audit_anchor"
+	line     = "UPDATE OR IGNORE -- the anchor\n [main] . [audit_anchor] SET ts = 0"
+	inserted = "INSERT INTO main.audit_anchor (id) VALUES (1)"
+	verb     = "UPDATE "
+	table    = "audit_anchor SET through = ?1"
+)
+
+func f(ctx context.Context, q querier) {
+	_, _ = q.ExecContext(ctx, verb+table)
+}
+`},
+		{name: "the anchor written by the prune file", rel: auditPrune, src: `package admin
+
+const upsert = "INSERT INTO audit_anchor (id, through) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET through = excluded.through"
+`},
+		{name: "the anchor's table and triggers in the schema", rel: ingestDir + "/schema.go", src: `package ingest
+
+const ddl = "CREATE TABLE audit_anchor (id INTEGER PRIMARY KEY); CREATE TRIGGER audit_anchor_forward BEFORE UPDATE ON audit_anchor BEGIN SELECT 1; END"
+`},
+		{name: "the anchor read, its triggers named, and audit rows written elsewhere", rel: storeDir + "/admin/audit.go", src: `package admin
+
+const (
+	read    = "SELECT through, ts FROM audit_anchor WHERE id = 1"
+	trigger = "CREATE TRIGGER audit_anchor_keep BEFORE DELETE ON audit_anchor BEGIN SELECT 1; END"
+	audit   = "INSERT INTO audit (ts) VALUES (?1)"
+	words   = "the audit_anchor row moves only forward"
+)
+`},
+		{name: "a test", rel: storeDir + "/admin/x_test.go", src: `package admin
+
+const q = "UPDATE audit_anchor SET through = 3"
+`},
+	},
+}
+
+func checkAuditAnchor(f *sourceFile) []string {
+	if f.test || auditAnchorFiles[f.rel] {
+		return nil
+	}
+	var out []string
+	literalRuns(f.file, func(at ast.Node, s string) {
+		if auditAnchorWrite.MatchString(s) {
+			out = append(out, f.at(at, "%q writes the audit anchor outside %s, which signs it, and the schema that creates it", s, auditPrune))
+		}
+	})
+	assembledSQL(f.file, auditAnchorWrite, func(at ast.Expr, text, _ string) {
+		out = append(out, f.at(at, "%q, assembled from constants of this file, writes the audit anchor outside %s, which signs it, and the schema that creates it", text, auditPrune))
 	})
 	return out
 }
