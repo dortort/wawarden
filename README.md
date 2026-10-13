@@ -1,11 +1,9 @@
-<p align="center">
+<h1 align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero-dark.svg">
     <img alt="WaWarden — a self-hosted WhatsApp gateway for your own AI agents" src="docs/assets/hero-light.svg" width="100%">
   </picture>
-</p>
-
-# WaWarden
+</h1>
 
 <p align="center">
   <a href="https://dortort.github.io/wawarden/">Documentation</a> ·
