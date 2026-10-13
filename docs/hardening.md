@@ -53,7 +53,7 @@ token or a mistake can reach.
 ## Never face the public internet
 
 The three listeners speak plain HTTP, without TLS, and bind `127.0.0.1` by
-default (see [listeners](configuration.md#listeners)). A client or admin
+default (see [listeners](api.md#listeners)). A client or admin
 listener bound to any other address makes the service log
 `listener_not_loopback` at every start, whatever `WAWARDEN_LOG_LEVEL` says; a
 forwarder, sidecar or proxy that exposes a loopback listener makes it log
@@ -126,11 +126,11 @@ access to a certificate, which a bearer token alone is not. The service puts
 these constraints on the proxy:
 
 - **No `Origin` or `Sec-Fetch-Site`.** The service answers `403` to any request
-  that carries either header ([client and admin requests](configuration.md#client-and-admin-requests)),
+  that carries either header ([client and admin requests](api.md#client-and-admin-requests)),
   so the proxy must not add them, and must not answer CORS preflights itself.
 - **Bodies.** The service refuses a body over 16384 bytes, 65536 for the client
   create route and the send route, and 64 KiB for `POST /mcp`
-  ([request bodies](configuration.md#request-bodies)); a proxy limit below
+  ([request bodies](api.md#request-bodies)); a proxy limit below
   64 KiB breaks MCP calls and sends of long or escaped texts.
 - **Timeouts.** A send can take 25 seconds and the service writes a response
   within 30; give the proxy's upstream read timeout at least 30 seconds.
@@ -140,7 +140,7 @@ these constraints on the proxy:
   `GET /v1/search?q=` carries search terms; drop query strings from access
   logs, or keep those logs as private as the archive.
 - **Rate limits.** Each listener has one failure budget shared by every caller
-  ([failed authentication](configuration.md#failed-authentication)); limits
+  ([failed authentication](api.md#failed-authentication)); limits
   per source address belong in the proxy.
 - **Responses** are JSON with `Cache-Control: no-store`; do not cache them.
 
@@ -160,15 +160,15 @@ listener is opened only when `WAWARDEN_ADMIN_TOKEN_SHA256` or
 - When nothing needs administering, a service without an admin token hash
   opens no admin listener at all; setting the hash again needs a restart.
 - Anything that scrapes `GET /metrics` holds the full admin token
-  ([metrics](configuration.md#metrics)). Prefer metrics in embedded metric
+  ([metrics](observability.md#metrics)). Prefer metrics in embedded metric
   format (EMF), turned on with `WAWARDEN_METRICS_EMF=1`, whose lines on
   standard output need no token
-  ([embedded metric format](configuration.md#embedded-metric-format)).
+  ([embedded metric format](observability.md#embedded-metric-format)).
 
 ## Restrict egress
 
 The service makes these outbound connections and no others
-([listeners](configuration.md#listeners)), each directly: `HTTPS_PROXY` and
+([listeners](api.md#listeners)), each directly: `HTTPS_PROXY` and
 `HTTP_PROXY` are ignored, so no forward proxy can sit in the path.
 
 | Destination | When |
@@ -213,11 +213,11 @@ docker exec wawarden /wawarden healthcheck
   uses (<https://docs.docker.com/reference/cli/docker/container/run/>).
 - `--memory`: history sync needs at most 2 times `WAWARDEN_HISTORY_MAX_BYTES`
   plus 1 MiB to decompress a blob, about 65 MiB at the default, plus the
-  memory to decode it ([history sync](configuration.md#history-sync)). 512 MiB
+  memory to decode it ([history sync](internals.md#history-sync)). 512 MiB
   leaves room at the default; raise it with the cap, which allows up to
   256 MiB.
 - `--stop-timeout 15`: the service takes up to 10 seconds to stop, which is
-  Docker's default timeout exactly ([shutdown](configuration.md#shutdown)).
+  Docker's default timeout exactly ([shutdown](cli.md#shutdown)).
 - The health check runs in exec form, `["/wawarden","healthcheck"]`; the image
   has no shell for `--health-cmd` to use.
 - Never run it `--privileged`, never mount the Docker socket into it, and never
@@ -326,7 +326,7 @@ The service holds no secret it could leak to a caller:
 - **The CLI** reads the admin token from a file, standard input or a command,
   never from an argument or the environment.
 - **Client tokens** belong on the agent's host, as `WAWARDEN_TOKEN` or in a
-  secret manager; `serve` refuses `WAWARDEN_TOKEN` in its own environment.
+  secret manager, never in the service's environment.
   `read -rs WAWARDEN_TOKEN` keeps a pasted token out of the shell's history.
 
 ## Token lifecycle
@@ -407,8 +407,8 @@ webhook post can be late or lost, and a dead process sends nothing.
 `PolicyDenials` stays `0`, because a chat outside a client's scope and a
 missing chat are answered alike; probing shows as `not_found` rows in the audit
 chain instead. Events are described under
-[notifications](configuration.md#notifications), log events under
-[logging](configuration.md#logging).
+[notifications](observability.md#notifications), log events under
+[logging](observability.md#logging).
 
 ## Deploy by digest and verify
 

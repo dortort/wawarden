@@ -736,7 +736,7 @@ notifications, refused methods, unknown tools and refused bodies. The reason is
 notification answered `202` is `ok`. A row names a chat only for a successful
 `get_chat` or `get_messages`, and for a `send_message` call once the chat is
 found in the write scope. When the client has left before the answer, the
-library writes none, and the row records the call's own outcome.
+MCP library writes none, and the row records the call's own outcome.
 
 ## Registering with Claude Code
 

@@ -4,7 +4,7 @@ This page is for whoever builds or configures an agent that reads or sends
 WhatsApp messages through WaWarden, and for the agent itself. It says how to
 treat what the service returns, how to page, retry, send and stop, and how to
 scope a token. The exact routes, tools, parameters, limits and codes are in
-[configuration.md](configuration.md#client-api). The threats behind this
+the [API reference](api.md#client-api). The threats behind this
 advice are in the [threat model](threat-model.md).
 
 ## Contents

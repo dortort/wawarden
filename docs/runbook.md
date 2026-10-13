@@ -150,7 +150,7 @@ shell's history file.
 Revoke the old client only once `claude mcp get whatsapp` shows the new
 registration as connected. Until then the old token still works and can be
 registered again. A revocation takes effect on the client's next request.
-[Registering with Claude Code](configuration.md#registering-with-claude-code)
+[Registering with Claude Code](api.md#registering-with-claude-code)
 says what each `--scope` writes, and how to keep the token out of files.
 
 ## Retiring other linked devices
@@ -189,7 +189,7 @@ The admin token never expires. To replace it:
 ## Rotating the master key
 
 `keys rotate` works offline, on a stopped service
-([`keys rotate`](configuration.md#keys-rotate)):
+([`keys rotate`](cli.md#keys-rotate)):
 
 1. Make sure a recent backup exists and you hold a copy of `keys/master`.
 2. Stop the service.
@@ -283,7 +283,7 @@ It prints counts and `verified: yes` and exits `0`. Other results:
 - `1`: the file cannot be decrypted or read to its end. The file is damaged
   or truncated, or the identity is wrong.
 - `6`: the decrypted stream is not a complete, sound backup
-  ([`backup verify`](configuration.md#backup-verify)).
+  ([`backup verify`](cli.md#backup-verify)).
 
 Compare its counts with `admin status --token-file admin.token` of the live
 service.
@@ -384,7 +384,7 @@ Each request's audit line on standard output carries the chain head. Capture
 standard output. From time to time, run `audit verify` on the archive of a
 fresh backup, as in step 2 of the [restore drill](#restore-drill), with `--log`
 pointing at the capture cut at the backup's time
-([`audit verify`](configuration.md#audit-verify)).
+([`audit verify`](cli.md#audit-verify)).
 
 Every head shipped after the backup is missing from its copy. Keep only the
 audit lines whose `ts` is at least a minute earlier than the UTC time in the
@@ -621,7 +621,7 @@ The commands, with their token flag:
 
 `admin reconnect` answers `already_connected` while the engine is connected,
 and `not_paired` when no device is stored. Both exit `5`. See
-[engine states](configuration.md#engine-states) for the engine's behaviour.
+[engine states](internals.md#engine-states) for the engine's behaviour.
 
 ### Owner mismatch
 
@@ -804,7 +804,7 @@ copies it, so a dropped post loses no event from the output.
 
 - **`ingest_paused`** (`free_bytes`, `floor_bytes`): the data directory fell
   below `WAWARDEN_MIN_FREE_BYTES`. Messages that arrive while ingest is paused
-  are lost, not delayed ([delivery](configuration.md#delivery)). Free space or
+  are lost, not delayed ([delivery](internals.md#delivery)). Free space or
   grow the volume. Ingest resumes at 1.25 times the floor and logs
   `ingest_resumed`. The service never deletes backups to make room.
 - **`quarantine`** (`queue`: `inbox` or `history`): an item failed three times

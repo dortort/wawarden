@@ -570,10 +570,10 @@ A line that the regenerated file drops or alters is a breaking change.
       does not exist.
 - [ ] On the commit to release, read the release-state statements:
       `CHANGELOG.md`, [Supported versions](#supported-versions), the Scope
-      section of `SECURITY.md`, the header of the configuration reference and
-      the status columns of the threat model. They name the version being cut
-      for what it introduces, and no sentence says which release is the latest
-      or what is planned.
+      section of `SECURITY.md` and the "Since" fields of the threat model.
+      `CHANGELOG.md` has a section for the version being cut. The "Since"
+      fields name it for each control it introduces, and no sentence says
+      which release is the latest or what is planned.
 - [ ] The build and rebuild jobs list `wawarden_<version>_licenses.tar.gz` in
       identical `SHA256SUMS`, and it holds a directory for the standard
       library of the `go.mod` toolchain, for WaWarden and for every module in

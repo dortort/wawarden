@@ -62,21 +62,17 @@ but `shutdown` also reports the notification event `disconnected`. The gauges
 
 #### Disconnect reason codes
 
-A `disconnected` engine names one of these reasons, in `engine_state`, in the
-`disconnected` event and in `admin status`. What to do for each is in the
-runbook's [Disconnect reasons](runbook.md#disconnect-reasons).
+A `disconnected` engine names its reason in `engine_state`, in the
+`disconnected` event and in `admin status`. The runbook's
+[Disconnect reasons](runbook.md#disconnect-reasons) is the one list of every
+reason, what it means and what to do. The behaviour behind some of them is
+below:
 
-| Reason | Meaning |
-|---|---|
-| `outdated` | WhatsApp reported the client as outdated, or no fetch of the protocol version succeeded; see [Protocol version](#protocol-version). |
-| `replaced` | Another client replaced the session, such as a second service using the same device. |
-| `logged_out` | WhatsApp logged the device out. |
-| `temporary_ban` | WhatsApp banned the account temporarily. |
-| `cat_refresh` | A connection token could not be refreshed. |
-| `connect_failure` | WhatsApp refused the connection. |
-| `restart_budget` | The service started too often in a short time; see [Restart budget](#restart-budget). |
-| `owner_mismatch` | The stored device's number is not the one in `WAWARDEN_OWNER_PHONE`; see [Pairing](#pairing). |
-| `shutdown` | The service is shutting down. |
+- `restart_budget`: [Restart budget](#restart-budget).
+- `outdated`: [Protocol version](#protocol-version).
+- `replaced`, `temporary_ban`, `cat_refresh`, `connect_failure` and
+  `logged_out`: [Stops that wait for the operator](#stops-that-wait-for-the-operator).
+- `owner_mismatch`: [Pairing](#pairing).
 
 #### Restart budget
 

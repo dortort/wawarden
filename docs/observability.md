@@ -283,7 +283,7 @@ the [webhook](#webhook).
 | Event | Level | Other keys | Reported when |
 |---|---|---|---|
 | `unpaired` | `WARN` | | The engine starts without a paired device, so it makes no connection until pairing is requested, also when the [restart budget](internals.md#engine-states) holds the start, or a paired device is lost: WhatsApp logged it out, or a rejected device was logged out. |
-| `disconnected` | `WARN` | `reason` | The engine entered `disconnected` for any reason but `shutdown`; `reason` as under [Engine states](internals.md#engine-states). |
+| `disconnected` | `WARN` | `reason` | The engine entered `disconnected` for any reason but `shutdown`; `reason` is one of the [disconnect reasons](runbook.md#disconnect-reasons). |
 | `pair_rejected` | `WARN` | `stage`: `before_save`, `after_pairing` | Pairing linked or tried to link an account other than the owner's; see [Pairing](internals.md#pairing). |
 | `logout_failed` | `WARN` | `attempt`, `error_type` | Logging out a rejected device failed; the engine tries again. `error_type` is the Go type of the error. |
 | `quarantine` | `WARN` | `queue`: `inbox`, `history`; `attempts` | An inbox row or a history blob was set aside after three failed attempts. |
