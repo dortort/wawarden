@@ -596,13 +596,13 @@ func allocated(t *testing.T, fn func()) uint64 {
 }
 
 func TestHistoryMemoryBoundIsTheDocumentedOne(t *testing.T) {
-	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "configuration.md"))
+	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "internals.md"))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
 	want := fmt.Sprintf("at most %d times `WAWARDEN_HISTORY_MAX_BYTES` plus %d MiB", historyMemoryFactor, historyMemorySlack>>20)
 	if !strings.Contains(strings.Join(strings.Fields(string(doc)), " "), want) {
-		t.Fatalf("docs/configuration.md does not state %q", want)
+		t.Fatalf("docs/internals.md does not state %q", want)
 	}
 }
 

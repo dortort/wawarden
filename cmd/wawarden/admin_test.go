@@ -187,7 +187,7 @@ func TestExitCodesMatchTheDocumentedTable(t *testing.T) {
 		"exitUnverified": {exitUnverified, 6},
 	} {
 		if code[0] != code[1] {
-			t.Errorf("%s = %d, the exit codes table in docs/configuration.md says %d", name, code[0], code[1])
+			t.Errorf("%s = %d, the exit codes table in docs/cli.md says %d", name, code[0], code[1])
 		}
 	}
 }
