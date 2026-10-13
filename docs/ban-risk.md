@@ -12,20 +12,28 @@ library knows about bans, what WaWarden does to lower the risk, what the
 operator must do, and what happens when WhatsApp acts. It describes the code at
 the commit or tag you are reading.
 
+## Contents
+
+- [What WhatsApp's published documents say](#what-whatsapps-published-documents-say)
+- [What the protocol library knows](#what-the-protocol-library-knows)
+- [What WaWarden does to lower the risk](#what-wawarden-does-to-lower-the-risk)
+- [What the operator must do](#what-the-operator-must-do)
+- [What happens on a ban or a logout](#what-happens-on-a-ban-or-a-logout)
+
 ## What WhatsApp's published documents say
 
 The pages below were read on 2026-10-11 and are paraphrased, not quoted; the
 pages themselves are authoritative and can change.
 
 - **Terms of Service** (<https://www.whatsapp.com/legal/terms-of-service>). The
-  section on legal and acceptable use allows only legal, authorized and
+  section on legal and acceptable use allows only legal, authorised and
   acceptable use, and rules out bulk messaging, auto-messaging and
-  auto-dialing, and use that is not personal unless WhatsApp authorizes it. The
+  auto-dialing, and use that is not personal unless WhatsApp authorises it. The
   section on harm to WhatsApp and its users rules out reverse engineering,
-  accessing the service by unauthorized or automated means, making the service
+  accessing the service by unauthorised or automated means, making the service
   available over a network to several devices at once except through
   WhatsApp's own tools, and offering third parties software or interfaces that
-  work substantially like WhatsApp's without authorization. The section on
+  work substantially like WhatsApp's without authorisation. The section on
   availability and termination lets WhatsApp suspend or end access at any time,
   for any reason, including breaking the letter or the spirit of the terms.
 - **Messaging Guidelines** (<https://www.whatsapp.com/legal/messaging-guidelines>).
@@ -41,7 +49,7 @@ pages themselves are authoritative and can change.
 - **Business Messaging Policy** (<https://business.whatsapp.com/policy>). It
   governs the WhatsApp Business Platform, the channel WhatsApp sanctions for
   automated messaging, where contacts must opt in and messaging people at
-  scale without authorization leads to limits or removal. WaWarden is not that
+  scale without authorisation leads to limits or removal. WaWarden is not that
   channel: do not use it for marketing or customer messaging.
 - **Security whitepaper**
   (<https://www.whatsapp.com/security/WhatsApp-Security-Whitepaper.pdf>). Its
@@ -89,7 +97,7 @@ raises the risk is likewise unknown.
 | Measure | Where it is described |
 |---|---|
 | One linked device per service. Pairing is refused while a device is paired, allowed at most 3 times an hour, and only for the number in `WAWARDEN_OWNER_PHONE`; a device that turns out to belong to another account is logged out again and reported as `pair_rejected`. | [Pairing](configuration.md#pairing), [pairing refusals](threat-model.md#pairing-refusals-m1) |
-| It links as a desktop browser companion named `Chrome (Linux)`. | `internal/engine/wa/client.go` |
+| It links as a desktop browser companion named `Chrome (Linux)`. | [`admin pair`](cli.md#admin-status-admin-pair-and-admin-reconnect), [Pairing](internals.md#pairing) |
 | Read-only by default. A client sends only to the chats the operator listed for it with `--write`, and a client that reads every chat can never send. | [Admin clients](configuration.md#admin-clients-and-admin-chats) |
 | No first contact. A send to a direct chat that has never written to the account is refused `403` unless the client was created with `--allow-first-contact`. | [Sending](configuration.md#sending) |
 | Paced and budgeted sends. One send at a time across all clients, and at least 3 seconds plus up to 2 more between the starts of two sends; 10 sends a minute per client; 30 an hour for all clients together, shared out among the clients that may write; caps of 10 and 60 that only `WAWARDEN_UNSAFE_SEND_CAPS` lifts. A send over a limit is refused `429`, never queued. | [Send limits](configuration.md#send-limits) |
@@ -110,7 +118,7 @@ raises the risk is likewise unknown.
 - Run one service per account. A second process started from a copy of
   `session.db` takes over the session of the first, which reports `replaced`.
 - Personal use only: no marketing, customer or bulk messaging.
-- Keep writing clients few and narrow, give each only the chats it must answer,
+- Keep clients with write chats few and narrow, give each only the chats it must answer,
   and leave `--allow-first-contact` off unless the task needs it.
 - Never let an agent send the same text to many chats, and keep its prompt
   from turning one inbound message into several sends
@@ -122,30 +130,38 @@ raises the risk is likewise unknown.
 
 ## What happens on a ban or a logout
 
-The engine stops and waits for the operator; the process keeps running,
-clients keep reading the archive, `/healthz` stays `200`, and list pages,
+The engine stops and waits for the operator. The process keeps running,
+clients keep reading the archive, and `/healthz` stays `200`. List pages,
 `/v1/me` and MCP results carry `session.state` as `disconnected` or
-`unpaired`.
-The events and metrics to alarm on are `unpaired`, `disconnected` with its
+`unpaired`. The events and metrics to alarm on are `unpaired`, `disconnected` with its
 `reason`, `Paired` below 1 and `Connected` at 0
 ([hardening](hardening.md#alarms)).
 
-| `reason` | Meaning | Next step |
-|---|---|---|
-| `temporary_ban` | WhatsApp banned the account for a while. | Wait for the ban to end, as the phone shows, then `wawarden admin reconnect`. |
-| `logged_out` | The device was logged out, by the phone or by WhatsApp; it is deleted and the service is `unpaired`. | Find out why before pairing again (below). |
-| `replaced` | Another client took over the session. | Stop the other one, then `admin reconnect`. |
-| `connect_failure` | WhatsApp refused the connection. | Look at the phone, then `admin reconnect`. |
+Every `reason` and what to do about it is in the runbook under
+[Disconnect reasons](runbook.md#disconnect-reasons). The reasons that bear on
+a ban:
+
+- **`temporary_ban`**: WhatsApp banned the account for a while. Wait for the
+  ban to end, as the phone shows, then reconnect:
+  `wawarden admin reconnect --token-file admin.token`.
+- **`logged_out`**: the device was logged out, by the phone or by WhatsApp. It
+  is deleted and the service is `unpaired`. Find out why before pairing again
+  (below).
+- **`connect_failure`**: WhatsApp refused the connection. Look at the phone
+  before you reconnect.
+- **`replaced`**: another linked device or protocol client took over the
+  session, such as a second service started from a copy of `session.db`. This
+  is not WhatsApp acting on the account: stop the other one, then reconnect.
 
 WhatsApp's reason for a logout is not passed on: a logout from the phone and
 one that WhatsApp imposed, whatever the cause, both arrive as `logged_out`.
 Before pairing again:
 
 1. Look at the owner's phone and in WhatsApp for a notice of a restriction or a
-   ban. Pairing a banned account will not work, and the service allows only 3
+   ban. Pairing a banned account does not work, and the service allows only 3
    pairing attempts an hour.
-2. Revoke the clients that can send while the cause is unknown
-   (`wawarden admin clients revoke --id ID`).
+2. Revoke the clients that can send while the cause is unknown:
+   `wawarden admin clients revoke --id <id> --token-file admin.token`.
 3. Keep a backup of the archive: it holds the history, and stays readable
    whatever happens to the account.
 4. Contact WhatsApp support through the app if the account is restricted or

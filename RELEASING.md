@@ -4,6 +4,19 @@ This document describes the repository settings a release depends on, how
 releases are produced, what each release contains and under which licences, how
 to verify one, and the checklists the maintainer follows.
 
+## Contents
+
+- [Repository settings](#repository-settings)
+- [How a release is produced](#how-a-release-is-produced)
+  - [Build and rebuild](#build-and-rebuild)
+  - [What a release contains](#what-a-release-contains)
+- [Licences](#licences)
+- [Verifying a release](#verifying-a-release)
+- [Versioning](#versioning)
+  - [Supported versions](#supported-versions)
+  - [Compatibility promise](#compatibility-promise)
+- [Maintainer checklists](#maintainer-checklists)
+
 ## Repository settings
 
 The approval gate and the immutability of releases come from repository settings,
@@ -131,11 +144,11 @@ release workflow, by CI and by anyone reproducing a release:
   `wawarden version` prints it.
 - Modules are pinned by `go.sum` and never vendored. The script stops when
   anything named `vendor` exists at the repository root, and builds with
-  `-mod=readonly`, which fails rather than change `go.mod` or `go.sum`. Once the
-  module has dependencies, a build downloads them through the Go module proxy,
-  or whatever `GOPROXY` names, and the go command checks each download against
-  its hash in `go.sum`; with default settings, it checks a new hash against the
-  Go checksum database (`sum.golang.org`) before adding it to `go.sum`. The CI
+  `-mod=readonly`, which fails rather than change `go.mod` or `go.sum`. A
+  build downloads the modules through the Go module proxy, or whatever
+  `GOPROXY` names. The go command checks each download against its hash in
+  `go.sum`. With default settings, it checks a new hash against the Go
+  checksum database (`sum.golang.org`) before adding it to `go.sum`. The CI
   `modules` job and an architecture test also fail when anything named `vendor`
   exists at the repository root. Another architecture test requires every
   workflow that sets up Go to set `GOFLAGS: -mod=readonly` in its top-level
@@ -144,25 +157,27 @@ release workflow, by CI and by anyone reproducing a release:
   written `-mod=readonly`, such as `-mod vendor`, `-mod=vendor` or `--mod=mod`.
   It reads the workflow text only, so it does not see a module mode chosen in a
   script that a workflow calls.
-- Before packaging, the script checks each binary: its embedded build settings
-  must show no `dev` tag, `vcs.revision` equal to the commit, `vcs.modified=false`,
-  `CGO_ENABLED=0` and the right architecture; the binary must not contain the
-  marker string that only dev builds carry, nor the marker string of the
-  development-only fake engine, and `go tool nm` must list no symbol of
-  `internal/engine/fake`; and it must contain the version variable that the
-  link step sets (`go tool nm` lists `internal/buildinfo.Version`). On a Linux host, and only in its `binaries`
-  and `oci` modes, the script also runs the binary built for the host's
-  architecture, with an empty environment (`env -i`): `wawarden version` must
-  print exactly the requested version, the commit and `dev build false`. In the
-  release workflow, the `build` job runs the `amd64` binary on an `amd64` runner
-  and the `rebuild` job runs the `arm64` binary on an `arm64` runner, so both
-  release binaries are run before anything is published. The publishing job
-  runs the script in `push` mode, which runs none of the binaries it builds:
-  that job holds the write permissions, so it runs no code built from the
-  repository. It proves instead that its binaries are byte-identical to the
-  ones the two other jobs ran: the image it pushes must have the `build` job's
-  index digest, and its `SHA256SUMS` must equal the `build` job's, which the
-  `rebuild` job reproduced.
+- Before packaging, the script checks each binary:
+  - its embedded build settings show no `dev` tag, `vcs.revision` equal to the
+    commit, `vcs.modified=false`, `CGO_ENABLED=0` and the right architecture;
+  - it contains neither the marker string that only dev builds carry nor the
+    marker string of the development-only fake engine;
+  - `go tool nm` lists no symbol of `internal/engine/fake`;
+  - it contains the version variable that the link step sets (`go tool nm`
+    lists `internal/buildinfo.Version`).
+- On a Linux host, and only in its `binaries` and `oci` modes, the script also
+  runs the binary built for the host's architecture, with an empty environment
+  (`env -i`). `wawarden version` must print exactly the requested version, the
+  commit and `dev build false`. In the release workflow, the `build` job runs
+  the `amd64` binary on an `amd64` runner, and the `rebuild` job runs the
+  `arm64` binary on an `arm64` runner. Both release binaries are therefore run
+  before anything is published.
+- The publishing job runs the script in `push` mode, which runs none of the
+  binaries it builds: that job holds the write permissions, so it runs no code
+  built from the repository. It proves instead that its binaries are
+  byte-identical to the ones the two other jobs ran. The image it pushes must
+  have the `build` job's index digest, and its `SHA256SUMS` must equal the
+  `build` job's, which the `rebuild` job reproduced.
 - After building the binaries, the script runs `hack/licenses.sh`, which
   collects the licence files of the Go standard library and of every module
   linked into them (see [Licences](#licences)) into `dist/licenses`, and packs that directory into
@@ -216,15 +231,25 @@ The SBOMs list the Go modules and the Go standard library compiled into each
 binary. No SBOM covers the image as a whole, so the packages of the distroless
 base image are not listed; no image-level SBOM is produced.
 
-Sizes, measured with `hack/repro-build.sh` on the code of `v0.2.0`: the
-binaries take about 27.9 MiB (`linux/amd64`) and 26.5 MiB (`linux/arm64`); the
-image's compressed layers add up to about 15.3 MiB and 14.4 MiB, and the
-`linux/arm64` image takes about 29.0 MiB unpacked. An unpaired `serve` left
-idle for two minutes in that image on `linux/arm64`, with no network, a
-read-only root filesystem and a named volume on `/data`, held a resident set of
-about 22.5 MiB: 8.0 MiB of its own memory and 14.5 MiB of the binary's mapped
-pages (`docker stats` reported 9.9 MiB for the container). A paired service needs more, growing with message
-traffic and with history sync, whose blobs `WAWARDEN_HISTORY_MAX_BYTES` caps.
+Binary sizes, measured on 2026-10-13 with
+`CGO_ENABLED=0 go build -trimpath ./cmd/wawarden`: about 31.8 MiB for
+`linux/amd64` and 30.2 MiB for `linux/arm64`. Each release's assets give the
+exact sizes.
+
+Image and memory figures were measured with `hack/repro-build.sh` on the code
+of `v0.2.0`, and have not been measured again since:
+
+- the image's compressed layers added up to about 15.3 MiB (`linux/amd64`) and
+  14.4 MiB (`linux/arm64`), and the `linux/arm64` image took about 29.0 MiB
+  unpacked;
+- an unpaired `serve` left idle for two minutes in that image on
+  `linux/arm64`, with no network, a read-only root filesystem and a named
+  volume on `/data`, held a resident set of about 22.5 MiB. That was 8.0 MiB of
+  its own memory and 14.5 MiB of the binary's mapped pages; `docker stats`
+  reported 9.9 MiB for the container.
+
+A paired service needs more memory. It grows with message traffic and with
+history sync, whose blobs `WAWARDEN_HISTORY_MAX_BYTES` caps.
 
 Signing and attesting use GitHub's OIDC identity for the release workflow on
 `main`. No long-lived signing key exists.
@@ -238,17 +263,21 @@ annotation on the image index, set by `hack/repro-build.sh`, are
 `GPL-3.0-or-later`.
 
 The binaries link the Go standard library, under Go's BSD-style licence and
-patent grant, and from `v0.2.0` on third-party Go modules, each under its own
-licence: the WhatsApp protocol library `go.mau.fi/whatsmeow` and its
-`go.mau.fi/util` under MPL-2.0, the Signal protocol implementation
-`go.mau.fi/libsignal` under GPL-3.0, `github.com/petermattis/goid` and the MCP
-library `github.com/modelcontextprotocol/go-sdk` under Apache-2.0, the MCP
-library's code contributed before its move to Apache-2.0 under MIT unless its
-authors relicensed it (its licence file carries both texts),
-`github.com/coder/websocket` under ISC, ten modules under MIT, and the rest, the
-SQLite driver and its C library translation included, under BSD-3-Clause; [`README.md`](README.md#licence) lists them all. GPL-3.0 is why
-WaWarden itself is GPL-3.0-or-later from `v0.2.0` on. Every release ships their
-licence texts, the GPL-3.0 and MPL-2.0 texts included, and WaWarden's own:
+patent grant. From `v0.2.0` on, they also link third-party Go modules, each
+under its own licence:
+
+| Licence | Modules |
+|---|---|
+| MPL-2.0 | The protocol library `go.mau.fi/whatsmeow` and its `go.mau.fi/util` |
+| GPL-3.0 | The Signal library, `go.mau.fi/libsignal` |
+| Apache-2.0 | `github.com/petermattis/goid`, and the MCP library `github.com/modelcontextprotocol/go-sdk` |
+| MIT | The MCP library's code contributed before its move to Apache-2.0, unless its authors relicensed it (its licence file carries both texts), and several other modules |
+| ISC | `github.com/coder/websocket` |
+| BSD-3-Clause | The rest, the SQLite driver and its C library translation included |
+
+[`README.md`](README.md#licence) lists every module. GPL-3.0 is why WaWarden
+itself is GPL-3.0-or-later from `v0.2.0` on. Every release ships their licence
+texts, the GPL-3.0 and MPL-2.0 texts included, and WaWarden's own:
 
 - `hack/licenses.sh` lists, with `go list -deps`, the modules whose packages are
   compiled into `./cmd/wawarden` for `linux/amd64` and `linux/arm64`, and copies
@@ -283,7 +312,7 @@ licence texts, the GPL-3.0 and MPL-2.0 texts included, and WaWarden's own:
 
 ## Verifying a release
 
-Replace `<version>` with the release (for example `v0.1.0`), `<digest>` with the
+Replace `<version>` with the release (for example `v1.0.0`), `<digest>` with the
 image index digest from the release notes, and `<arch>` with `amd64` or `arm64`.
 Always deploy the image by digest.
 
@@ -387,9 +416,9 @@ You need:
   and Podman have not been tested;
 - `jq` and `tar`. On macOS, the system `touch`, `shasum` and `sha256sum` are
   enough; GNU coreutils are not needed;
-- once the release's `go.mod` requires any module, access to the Go module
-  proxy, or to whatever `GOPROXY` names: modules are not vendored, so the script
-  downloads them and the go command checks them against the release's `go.sum`.
+- access to the Go module proxy, or to whatever `GOPROXY` names. Modules are
+  not vendored, so the script downloads them, and the go command checks them
+  against the release's `go.sum`.
 
 The script builds with its own temporary `docker-container` builder, created from
 the BuildKit image pinned in the script, so the default builder of your Docker
@@ -431,55 +460,100 @@ remains.
 
 ## Versioning
 
-- `v0.1.0`, `v0.2.0` and `v0.3.0` are development releases: each raised the
+- `v0.1.0`, `v0.2.0` and `v0.3.0` were development releases. Each raised the
   minor version, replaced the one before it and promised no compatibility.
-- `v1.0.0` is released when sending, scheduled backups with retention, audit
-  retention and master key rotation are complete and the v1.0 documentation set
-  is complete: the threat model, configuration reference, hardening guide,
-  agent guidance, ban-risk notes, runbook, `SECURITY.md` and this document with
-  the compatibility promise below.
+- `v1.0.0` was the first release under the compatibility promise below. It
+  completed sending, scheduled backups with retention, audit retention and
+  master key rotation. It also completed the documentation set: the threat
+  model, the configuration reference, the hardening guide, the agent guidance,
+  the ban-risk notes, the runbook, `SECURITY.md` and this document.
 - From `v1.0.0` on, a patch release fixes, a minor release adds, and a major
   release is the only one that removes or changes.
-- Only the latest minor release line is supported (see `SECURITY.md`).
 
-The compatibility promise, from `v1.0.0` on: within v1.x, no release removes,
-renames or changes the meaning of the routes of the client, admin and health
-listeners with their parameters, response fields and error codes; the MCP tool
-names and their argument schemas; the environment variable names and the values
-they accept; the subcommands, their flags and the exit codes; the notification
-event names and their fields; and the Prometheus and CloudWatch EMF metric
-names. A minor release may add optional parameters, response fields, tools,
-routes, variables, flags, events and metrics. A removal or other breaking change
-needs `v2.0.0`, announced as a deprecation in the release notes at least one
-minor release ahead. A security fix may tighten behaviour in a patch release,
-with an advisory. Behaviour that depends on WhatsApp, the protocol library or
-the owner's phone is outside the promise. Schema migrations go forward only: a
-release may upgrade the archive and the device store, and refuses to open an
-archive written by a newer release, so a downgrade is not supported; take a
-backup before upgrading (see [the runbook](docs/runbook.md#upgrading)).
+The [changelog](CHANGELOG.md) lists what each release changed.
 
-The names in the compatibility promise are tested by
-`TestV1SurfaceMatchesTheGolden` in `internal/archtest`, and the MCP tools'
-schemas by `TestMCPToolListMatchesTheGoldenFiles` in `internal/api`; the REST
-response fields, the error codes, the values the variables accept and the event
-fields are checked in review. `TestV1SurfaceMatchesTheGolden` derives a sorted
-list of the v1 surface from the source of a release build and the committed MCP
-`tools/list` golden files, and compares it line by line with
-`internal/archtest/testdata/v1-surface.txt`: every route
-of the client, admin and health listeners with its class, every MCP tool with
-its input-schema property and required names for each client class, every
-environment variable that `config` accepts, every subcommand with its flags and
-their types and the command run when none is named, the exit codes, the
-notification event names, and the Prometheus and CloudWatch EMF metric names.
-Any difference fails the test, an addition included. A category whose entry
-count falls below the floor the test records fails even after regeneration, so
-neither a net removal nor a scan that stops seeing entries passes by
-regenerating alone; a rename, or a removal offset by an addition in the same
-category, passes once regenerated and must be caught in review. A change that
-adds to the surface regenerates the file after review with
-`go test ./internal/archtest -run TestV1SurfaceMatchesTheGolden -update-v1-surface`
-and commits it with the change; a line that the regenerated file drops or alters
-is a breaking change.
+### Supported versions
+
+Only the latest minor release line receives security fixes, released as patch
+versions of that line. Nothing is backported to an older line. Minor releases
+within v1 keep the documented interfaces compatible, so upgrading to the latest
+minor release is how you receive a fix. The v0.x releases promised no
+compatibility, and each replaced the one before it.
+
+| Version | Supported |
+|---|---|
+| Latest minor line (`vX.Y.*` of the newest release) | Yes |
+| Anything older | No |
+
+[`SECURITY.md`](SECURITY.md) says how to report a vulnerability.
+
+### Compatibility promise
+
+From `v1.0.0` on, no release within v1.x removes, renames or changes the
+meaning of:
+
+- the routes of the client, admin and health listeners, with their
+  parameters, response fields and error codes;
+- the MCP tool names and their argument schemas;
+- the environment variable names and the values they accept;
+- the subcommands, their flags and the exit codes;
+- the notification event names and their fields;
+- the Prometheus and CloudWatch EMF metric names.
+
+A minor release may add optional parameters, response fields, tools, routes,
+variables, flags, events and metrics. A removal or other breaking change needs
+`v2.0.0`, announced as a deprecation in the release notes at least one minor
+release ahead. A security fix may tighten behaviour in a patch release, with an
+advisory.
+
+Outside the promise:
+
+- Behaviour that depends on WhatsApp, the protocol library or the owner's
+  phone.
+- Downgrades. Schema migrations go forward only: a release may upgrade the
+  archive and the device store, and refuses to open an archive written by a
+  newer release. Take a backup before upgrading (see
+  [the runbook](docs/runbook.md#upgrading)).
+
+#### How the promise is tested
+
+- `TestV1SurfaceMatchesTheGolden` in `internal/archtest` tests the names in
+  the promise.
+- `TestMCPToolListMatchesTheGoldenFiles` in `internal/api` tests the MCP
+  tools' schemas.
+- The REST response fields, the error codes, the values the variables accept
+  and the event fields are checked in review.
+
+`TestV1SurfaceMatchesTheGolden` derives a sorted list of the v1 surface from
+the source of a release build and the committed MCP `tools/list` golden files.
+It compares that list line by line with
+`internal/archtest/testdata/v1-surface.txt`, which holds:
+
+- every route of the client, admin and health listeners, with its class;
+- every MCP tool, with its input-schema property and required names for each
+  client class;
+- every environment variable that `config` accepts;
+- every subcommand, with its flags and their types, and the command run when
+  none is named;
+- the exit codes;
+- the notification event names;
+- the Prometheus and CloudWatch EMF metric names.
+
+Any difference fails the test, an addition included. The test also records a
+floor for each category's entry count. A category that falls below it fails
+even after regeneration, so neither a net removal nor a scan that stops seeing
+entries passes by regenerating alone. A rename, or a removal offset by an
+addition in the same category, passes once regenerated and must be caught in
+review.
+
+A change that adds to the surface regenerates the file after review, and
+commits it with the change:
+
+```sh
+go test ./internal/archtest -run TestV1SurfaceMatchesTheGolden -update-v1-surface
+```
+
+A line that the regenerated file drops or alters is a breaking change.
 
 ## Maintainer checklists
 
@@ -494,11 +568,12 @@ is a breaking change.
       release and dev builds, runs in a container without a network.
 - [ ] Choose the version under [Versioning](#versioning) and check that the tag
       does not exist.
-- [ ] On the commit to release, read the release-state statements: the README
-      Status table, the Supported versions and Scope sections of `SECURITY.md`,
-      the header of the configuration reference and the status columns of the
-      threat model name the version being cut for what it introduces, and no
-      sentence says which release is the latest or what is planned.
+- [ ] On the commit to release, read the release-state statements:
+      `CHANGELOG.md`, [Supported versions](#supported-versions), the Scope
+      section of `SECURITY.md`, the header of the configuration reference and
+      the status columns of the threat model. They name the version being cut
+      for what it introduces, and no sentence says which release is the latest
+      or what is planned.
 - [ ] The build and rebuild jobs list `wawarden_<version>_licenses.tar.gz` in
       identical `SHA256SUMS`, and it holds a directory for the standard
       library of the `go.mod` toolchain, for WaWarden and for every module in
