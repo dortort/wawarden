@@ -9,11 +9,32 @@ in the [runbook](runbook.md). The example configurations for other software
 (Tailscale, WireGuard, Caddy, nginx, systemd, Kubernetes) follow those
 projects' documentation and are starting points, not tested deployments.
 
+## Contents
+
+- [Scope and trust roots](#scope-and-trust-roots)
+- [Never face the public internet](#never-face-the-public-internet)
+- [Network patterns](#network-patterns)
+  - [Mesh or VPN forwarding to loopback](#mesh-or-vpn-forwarding-to-loopback)
+  - [Private subnet](#private-subnet)
+  - [Reverse proxy with TLS](#reverse-proxy-with-tls)
+- [Gate the admin listener separately](#gate-the-admin-listener-separately)
+- [Restrict egress](#restrict-egress)
+- [Container hardening](#container-hardening)
+- [systemd](#systemd)
+- [File modes and umask](#file-modes-and-umask)
+- [Secrets](#secrets)
+- [Token lifecycle](#token-lifecycle)
+- [Backups with age](#backups-with-age)
+- [Unlink other devices](#unlink-other-devices)
+- [Alarms](#alarms)
+- [Deploy by digest and verify](#deploy-by-digest-and-verify)
+- [Checklist](#checklist)
+
 ## Scope and trust roots
 
 WaWarden scopes, budgets and audits what its clients do. It cannot protect the
-account from what reaches around it, and the
-[trust roots](threat-model.md#trust-roots) say which those are:
+account from what reaches around it. The threat model's
+[trust roots](threat-model.md#trust-roots) are the canonical list; in short:
 
 - whoever controls the host, its user ID or the data directory controls the
   account, its archive and its tokens;
@@ -44,8 +65,8 @@ listener has its access, from any address.
   has, because Docker writes its own packet-filter rules (Docker's
   "Packet filtering and firewalls" page,
   <https://docs.docker.com/engine/network/packet-filtering-firewalls/>, section
-  "Docker and ufw"). Publish on the host's loopback only, as the
-  [README example](../README.md#from-the-container-image) does with
+  "Docker and ufw"). Publish on the host's loopback only, as the container
+  example in [getting started](getting-started.md) does with
   `-p 127.0.0.1:8080:8080`, or do not publish at all and let a sidecar reach
   the service (below).
 - **Tailscale Funnel exposes a service to the whole internet.** It is off by
@@ -127,9 +148,11 @@ these constraints on the proxy:
 
 The admin listener is guarded by the admin token alone. With it, a caller can
 request pairing, reconnect the engine, create clients (writing ones included),
-revoke them, list chats and request a history backfill; the pairing code crosses
-the path in its answer. The listener is opened only when
-`WAWARDEN_ADMIN_TOKEN_SHA256` or `WAWARDEN_ADMIN_TOKEN_SHA256_FILE` is set.
+revoke them, list chats and request a history backfill. The pairing code
+crosses the path in its answer. The threat model's
+[admin token](threat-model.md#the-admin-token) section gives the full list. The
+listener is opened only when `WAWARDEN_ADMIN_TOKEN_SHA256` or
+`WAWARDEN_ADMIN_TOKEN_SHA256_FILE` is set.
 
 - Give it its own port and its own access rule, reachable from the operator's
   device only, never from the agent hosts.
@@ -137,8 +160,9 @@ the path in its answer. The listener is opened only when
 - When nothing needs administering, a service without an admin token hash
   opens no admin listener at all; setting the hash again needs a restart.
 - Anything that scrapes `GET /metrics` holds the full admin token
-  ([metrics](configuration.md#metrics)). Prefer `WAWARDEN_METRICS_EMF=1`, whose
-  lines on standard output need no token
+  ([metrics](configuration.md#metrics)). Prefer metrics in embedded metric
+  format (EMF), turned on with `WAWARDEN_METRICS_EMF=1`, whose lines on
+  standard output need no token
   ([embedded metric format](configuration.md#embedded-metric-format)).
 
 ## Restrict egress
@@ -271,13 +295,20 @@ anything it keeps is not private to its user
 
 Because each of these checks is a startup refusal, a wrong mode is found at
 once, not months later. What `backups/` holds is checked when a backup is
-taken or old ones are pruned instead: `serve` removes `backups/tmp/` at start,
-a backup fails unless `backups/tmp/` is a `0700` directory of the service's
-user (`backup_failed` with reason `directory`), and the prune after a backup
-deletes nothing while `backups/` holds a backup that is not a `0600` file of
-that user (`backup_prune_failed` with reason `unexpected_entry`). Mechanisms
-that add group bits, such as Kubernetes `fsGroup` or a setgid parent
-directory, fail the checks.
+taken or old ones are pruned instead:
+
+- `serve` removes `backups/tmp/` at start.
+- A backup fails unless `backups/tmp/` is a `0700` directory of the service's
+  user (`backup_failed` with reason `directory`).
+- The prune after a backup deletes nothing while `backups/` holds any entry
+  other than a `0700` `backups/tmp/` of the service's user and regular `0600`
+  files of that user named like backups (`backup_prune_failed` with reason
+  `unexpected_entry`). A file you put there, a backup of another mode or
+  owner, a symbolic link or another directory all count. Remove the entry, and
+  the next backup prunes again.
+
+Mechanisms that add group bits, such as Kubernetes `fsGroup` or a setgid
+parent directory, fail the checks.
 
 ## Secrets
 
@@ -332,7 +363,7 @@ The service holds no secret it could leak to a caller:
   add a well-formed backup. A backup holds two databases copied one after the
   other, so they are two points in time.
 - Check backups where the identity is kept, with `wawarden backup verify`,
-  and rehearse a restore ([runbook](runbook.md#restore-drill)).
+  and rehearse a restore ([runbook](runbook.md#restoring-a-backup)).
 - No backup holds `keys/master` or `keys/retired/`. Keep a copy of both, as
   private as the identity: without them a restored archive's pseudonyms,
   cursors and references change and older audit rows verify as `unknown_key`.
@@ -363,7 +394,7 @@ webhook post can be late or lost, and a dead process sends nothing.
 | EMF `MessagesIngested` | 0 for longer than the account is normally quiet | Messages are not arriving. |
 | `wawarden_backup_last_success_timestamp_seconds` | older than about a day and a half | Nightly backups have stopped. |
 | Log event `backup_done` | none, nor `backup_skipped`, for about a day and a half while `WAWARDEN_BACKUP_AGE_RECIPIENT` is set | Nightly backups have stopped; the signal to use with EMF alone, which carries no backup metric. |
-| Events `unpaired`, `disconnected` (by `reason`), `pair_rejected`, `logout_failed` | any | The engine needs the operator ([runbook](runbook.md#engine-disconnected)). |
+| Events `unpaired`, `disconnected` (by `reason`), `pair_rejected`, `logout_failed` | any | The engine needs the operator ([disconnect reasons](runbook.md#disconnect-reasons)). |
 | Events `quarantine`, `ingest_paused`, `rekey_conflict` | any | Ingest set something aside or stopped. |
 | Events `backup_failed`, `backup_prune_failed` | any | A backup or its retention failed. |
 | Events `send_outcome_unknown`, `send_unrecorded` | any | A send may have reached WhatsApp without a record of it. |
