@@ -35,45 +35,43 @@ WhatsApp account or a WaWarden deployment that is not yours.
 
 ## Supported versions
 
-Only the latest minor release line receives security fixes. From v1.0.0,
-security fixes are released as patch versions of the latest minor release line
-only. Minor releases within v1 keep the documented interfaces compatible (see
-[`RELEASING.md`](RELEASING.md#versioning)), so upgrading to the latest minor is
-how you receive a fix; nothing is backported to an older line. The v0.x
-releases promised no compatibility, and each replaced the one before it.
-Upgrade to the latest release before reporting, if you can.
+Only the latest minor release line receives security fixes, and nothing is
+backported to an older line. [Supported versions](RELEASING.md#supported-versions)
+in `RELEASING.md` is the canonical statement, with the
+[compatibility promise](RELEASING.md#compatibility-promise) that makes upgrading
+to the latest minor release safe. Upgrade to the latest release before
+reporting, if you can.
 
-| Version | Supported |
-|---|---|
-| Latest minor line (`vX.Y.*` of the newest release) | Yes |
-| Anything older | No |
-
-From `v0.2.0` on, every binary and image links third-party Go modules, among
-them the WhatsApp protocol library, the Signal protocol library, the SQLite
-driver and the age encryption library ([`README.md`](README.md#licence) lists
-them with their licences; [`RELEASING.md`](RELEASING.md#licences) describes how
-releases ship them). They are compiled into the binary, so a fix to one of
-them reaches a deployment only through a new WaWarden release. The
-GPL-3.0-or-later licence also lets you rebuild a release from its corresponding
-source with a fixed module, but the result no longer matches the release's
-checksums, signature and attestations.
+Every binary and image links third-party Go modules, among them the WhatsApp
+protocol library, the Signal protocol library, the SQLite driver and the age
+encryption library. [`README.md`](README.md#licence) lists them with their
+licences, and [`RELEASING.md`](RELEASING.md#licences) describes how releases
+ship them. They are compiled into the binary, so a fix to one of them reaches a
+deployment only through a new WaWarden release. The GPL-3.0-or-later licence
+also lets you rebuild a release from its corresponding source with a fixed
+module. The result then no longer matches the release's checksums, signature
+and attestations.
 
 ## Scope
 
-The security design, its invariants and the release that introduced each
-control are described in [`docs/threat-model.md`](docs/threat-model.md); the
-exact behaviour of the code at a commit or tag is in
-[`docs/configuration.md`](docs/configuration.md) at that commit or tag, and
-[`docs/hardening.md`](docs/hardening.md) describes the deployment the design
-assumes. The [README's Status table](README.md#status) names the release that
-introduced each part. Reports against any supported release, against `main`
-and against the documented design are welcome.
+- [`docs/threat-model.md`](docs/threat-model.md) describes the security
+  design, its invariants and the release that introduced each control.
+- The reference documents describe the exact behaviour of the code at a commit
+  or tag: [configuration](docs/configuration.md), [CLI](docs/cli.md),
+  [API](docs/api.md), [observability](docs/observability.md) and
+  [internals](docs/internals.md).
+- [`docs/hardening.md`](docs/hardening.md) describes the deployment the design
+  assumes.
+- [`CHANGELOG.md`](CHANGELOG.md) names the release that introduced each part.
+
+Reports against any supported release, against `main` and against the
+documented design are welcome.
 
 ### In scope
 
 - Bypass of per-client or per-chat scoping: reading, searching or receiving
   changes from a chat outside a client's read scope, sending to a chat outside its
-  write scope, or learning whether an out-of-scope chat or message exists.
+  write chats, or learning whether an out-of-scope chat or message exists.
 - Bypass of the send controls: a send to a direct chat that has never written
   to the account by a client not allowed first contact, a send past the
   per-client or global send limits or the pacer, one idempotency key causing
@@ -138,12 +136,9 @@ and against the documented design are welcome.
 
 ## Verifying a release
 
-Every release ships with build provenance attestations for the image and the
-binaries, whose Sigstore bundle is also a release asset, a keyless signature on
-the container image, SPDX SBOMs for the binaries and checksums. From `v0.2.0` on, it
-also ships the licence files of every linked module, as a release archive that
-the checksums and the binaries' provenance attestation cover, and under
-`/licenses` in the image. With the toolchain and builder the release pins, it
-can be rebuilt bit for bit from source.
-[`RELEASING.md`](RELEASING.md#verifying-a-release) lists the commands and
-prerequisites.
+Every release ships with build provenance attestations, a keyless signature on
+the container image, SPDX SBOMs and checksums, and can be rebuilt bit for bit
+from source. Releases since `v0.2.0` also ship the licence files of every
+linked module.
+[Verifying a release](RELEASING.md#verifying-a-release) in `RELEASING.md` lists
+what each release contains, the commands and their prerequisites.
