@@ -52,7 +52,7 @@ func TestPayloadKeepsMarkupAsIs(t *testing.T) {
 const messageMemoryBound = 48 << 20
 
 func TestMessageMemoryBoundIsTheDocumentedOne(t *testing.T) {
-	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "configuration.md"))
+	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "internals.md"))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
@@ -62,19 +62,19 @@ func TestMessageMemoryBoundIsTheDocumentedOne(t *testing.T) {
 		fmt.Sprintf("allocates at most %d MiB", messageMemoryBound>>20),
 	} {
 		if !strings.Contains(flat, want) {
-			t.Errorf("docs/configuration.md does not state %q", want)
+			t.Errorf("docs/internals.md does not state %q", want)
 		}
 	}
 }
 
 func TestTheRefusedCounterSaysARefusedEventIsLost(t *testing.T) {
 	const meaning = "refused to write and left unacknowledged, which loses them"
-	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "configuration.md"))
+	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "observability.md"))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
 	if !strings.Contains(string(doc), "| `wawarden_ingest_refused_total` | counter | `reason` | Events the engine "+meaning) {
-		t.Fatal("docs/configuration.md describes wawarden_ingest_refused_total otherwise")
+		t.Fatal("docs/observability.md describes wawarden_ingest_refused_total otherwise")
 	}
 	reg := metrics.NewRegistry()
 	newCounters(reg).refused.With("paused").Inc()
