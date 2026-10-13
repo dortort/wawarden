@@ -269,7 +269,41 @@ same commit.
 
 ## Documentation site
 
-TODO-SITE-PREVIEW
+The site at <https://dortort.github.io/wawarden/> is built by MkDocs with the
+Material theme. Its sources are [`mkdocs.yml`](mkdocs.yml), `docs/` and the
+root Markdown files. The Python packages are pinned with hashes in
+[`website/requirements.txt`](website/requirements.txt).
+
+To preview it, from the repository root, with Python 3.12 or later:
+
+```sh
+python3 -m venv .venv
+.venv/bin/pip install --no-deps --require-hashes -r website/requirements.txt
+.venv/bin/mkdocs serve --strict
+```
+
+Then open <http://127.0.0.1:8000/wawarden/>. `.venv/` and the build output
+`site/` are ignored by Git.
+
+CI runs the strict build on every pull request
+([`.github/workflows/pages.yml`](.github/workflows/pages.yml)), and publishes
+the site on every push to `main`. Any warning fails it, such as a broken link
+or a missing anchor. Run the same build before pushing a documentation change:
+
+```sh
+.venv/bin/mkdocs build --strict
+```
+
+Write links as GitHub resolves them:
+
+- Between `docs/` files, use relative `.md` paths, such as
+  `runbook.md#disconnect-reasons`.
+- To the root files, use paths such as `../README.md`.
+
+[`website/hooks.py`](website/hooks.py) maps the root files to `project/`
+pages on the site, and points links to other repository files at GitHub. To
+update the pins, edit [`website/requirements.in`](website/requirements.in) and
+run the `pip-compile` command at its top.
 
 ## Commits and history
 
@@ -313,4 +347,5 @@ request and every push to `main`:
 | Fuzz | Each fuzz target for 60 seconds |
 | Reproducible build | Two builds, on amd64 and arm64 runners, compared bit for bit |
 
-CodeQL and OpenSSF Scorecard run in their own workflows.
+CodeQL and OpenSSF Scorecard run in their own workflows, and so does the
+[documentation site](#documentation-site)'s strict build.

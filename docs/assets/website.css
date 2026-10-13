@@ -152,3 +152,8 @@
 .md-typeset table:not([class]) {
   border-radius: var(--ww-radius);
 }
+
+/* Keep codes such as `cat_refresh` whole in narrow table columns. */
+.md-typeset table:not([class]) td:first-child code {
+  white-space: nowrap;
+}

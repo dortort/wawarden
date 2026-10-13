@@ -34,6 +34,17 @@ It is not:
   write to, paced and budgeted. It makes no first contact unless a client is
   explicitly allowed it (see [the ban-risk notes](docs/ban-risk.md)).
 
+## Contents
+
+- [Documentation](#documentation)
+- [Security posture](#security-posture)
+- [Getting started](#getting-started)
+- [What it does](#what-it-does)
+- [Releases](#releases)
+- [Running the tests](#running-the-tests)
+- [Verifying a release](#verifying-a-release)
+- [Licence](#licence)
+
 ## Documentation
 
 The documentation is published at **<https://dortort.github.io/wawarden/>**.

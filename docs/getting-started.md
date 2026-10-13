@@ -275,11 +275,9 @@ List the chats the agent may read, then create a client for them:
 - The command prints the client's lines, then `token: ww_...`, once.
 
 Keep the token in a secret manager, or in the agent host's environment as
-`WAWARDEN_TOKEN`, never in a repository.
-
-> **Never put `WAWARDEN_TOKEN` in the service's environment.** `serve`
-> refuses it as `unknown_variable`, like every `WAWARDEN_` variable it does
-> not implement. Set it only on the agent's host.
+`WAWARDEN_TOKEN`. Never put it in a repository or in the service's
+environment (see
+[Registering with Claude Code](api.md#registering-with-claude-code)).
 
 `admin status` now counts the client under `clients active`. Each request it
 makes is written on standard output with its chain head (see

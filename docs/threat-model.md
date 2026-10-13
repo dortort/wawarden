@@ -1967,7 +1967,7 @@ wildcard or a directory walk that reaches `backups/` without naming it.
   pairs, connects, delivers synthetic events and history, and answers sends and
   history requests, offline. A development build runs it in place of WhatsApp
   when `WAWARDEN_DEV_FAKE_ENGINE` selects it (see
-  [the fake engine](configuration.md#fake-engine)).
+  [the fake engine](internals.md#fake-engine)).
 - Every file of the package, and every file that imports it, compiles only
   with the `dev` tag. So a release build has no path to it and always runs the
   WhatsApp engine.
@@ -2902,7 +2902,7 @@ This subsection is the canonical statement of what the protocol library
   Go runtime's crash output does not pass the writer.
 - **XML is recognised by its shape.** The log writer drops a line only when it
   holds one of the XML shapes listed in [row 13](#13-one-log-writer) and
-  [Pseudonyms and dropped lines](configuration.md#pseudonyms-and-dropped-lines).
+  [Pseudonyms and dropped lines](observability.md#pseudonyms-and-dropped-lines).
   An opening tag without attributes followed only by text, such as a cut-off
   `<body>` element, passes. So code must not log message content, even inside
   a tag.

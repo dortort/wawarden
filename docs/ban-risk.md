@@ -68,10 +68,10 @@ pages themselves are authoritative and can change.
 ## What the protocol library knows
 
 WaWarden is built on `go.mau.fi/whatsmeow`. Its README says nothing about bans,
-terms or risk: the library gives no assurance either way.
+terms or risk: the protocol library gives no assurance either way.
 
-The library decodes five reason codes for a temporary ban. They come from the
-library's reverse engineering, not from a WhatsApp policy page, and are listed
+The protocol library decodes five reason codes for a temporary ban. They come
+from its authors' reverse engineering, not from a WhatsApp policy page, and are listed
 here as decoded by whatsmeow:
 
 | Code | Reason, as decoded by whatsmeow | What in WaWarden bears on it |
@@ -86,7 +86,7 @@ WaWarden does not pass the code on: a temporary ban appears as the engine's
 `disconnected` state with reason `temporary_ban`, and the phone shows
 WhatsApp's own notice.
 
-Community reports in the library's issue tracker describe in-app warnings
+Community reports in the protocol library's issue tracker describe in-app warnings
 about third-party tools and bulk messages, bans after a burst of a few sends,
 and bans of virtual or landline numbers. They are reports, not policy, and
 this project has not verified them. Whether running from a datacenter address
@@ -96,18 +96,18 @@ raises the risk is likewise unknown.
 
 | Measure | Where it is described |
 |---|---|
-| One linked device per service. Pairing is refused while a device is paired, allowed at most 3 times an hour, and only for the number in `WAWARDEN_OWNER_PHONE`; a device that turns out to belong to another account is logged out again and reported as `pair_rejected`. | [Pairing](configuration.md#pairing), [pairing refusals](threat-model.md#pairing-refusals-m1) |
+| One linked device per service. Pairing is refused while a device is paired, allowed at most 3 times an hour, and only for the number in `WAWARDEN_OWNER_PHONE`; a device that turns out to belong to another account is logged out again and reported as `pair_rejected`. | [Pairing](internals.md#pairing), [pairing refusals](threat-model.md#pairing-refusals) |
 | It links as a desktop browser companion named `Chrome (Linux)`. | [`admin pair`](cli.md#admin-status-admin-pair-and-admin-reconnect), [Pairing](internals.md#pairing) |
-| Read-only by default. A client sends only to the chats the operator listed for it with `--write`, and a client that reads every chat can never send. | [Admin clients](configuration.md#admin-clients-and-admin-chats) |
-| No first contact. A send to a direct chat that has never written to the account is refused `403` unless the client was created with `--allow-first-contact`. | [Sending](configuration.md#sending) |
-| Paced and budgeted sends. One send at a time across all clients, and at least 3 seconds plus up to 2 more between the starts of two sends; 10 sends a minute per client; 30 an hour for all clients together, shared out among the clients that may write; caps of 10 and 60 that only `WAWARDEN_UNSAFE_SEND_CAPS` lifts. A send over a limit is refused `429`, never queued. | [Send limits](configuration.md#send-limits) |
-| At most once. One idempotency key sends at most one message, and a send whose outcome is unknown is never sent again by the service. | [Sending](configuration.md#sending) |
-| Text only. Sends carry text, optionally as a reply in the same chat: no media, groups, broadcasts or status. | [What a send does on the wire](configuration.md#what-a-send-does-on-the-wire) |
-| Bounded history requests. `admin backfill` is allowed once every 5 minutes and 20 times a UTC day, for at most 50 messages. | [`admin backfill`](configuration.md#admin-backfill) |
-| No read receipts, presence, typing indicators or status updates; an architecture test refuses the library calls that send them. | [Traffic the protocol library sends by itself](configuration.md#traffic-the-protocol-library-sends-by-itself) |
-| Measured reconnection. The library's own reconnection is off; the engine waits 2 seconds, doubling to 5 minutes, and stops for the operator on a replaced session, a ban, a logout or an outdated client. More than 5 starts in 10 minutes keep it from connecting. | [Engine states](configuration.md#engine-states) |
-| A current protocol version, fetched when the engine starts with a paired device and again when WhatsApp reports the client as outdated, with bounded retries; after no fetch succeeded, an explicit reconnect fetches before it connects. | [Engine states](configuration.md#engine-states) |
-| The traffic the library sends by itself, such as acknowledgements and inactive delivery receipts, is listed. | [Traffic the protocol library sends by itself](configuration.md#traffic-the-protocol-library-sends-by-itself) |
+| Read-only by default. A client sends only to the chats the operator listed for it with `--write`, and a client that reads every chat can never send. | [Admin clients](cli.md#admin-clients-and-admin-chats) |
+| No first contact. A send to a direct chat that has never written to the account is refused `403` unless the client was created with `--allow-first-contact`. | [Sending](api.md#sending) |
+| Paced and budgeted sends. One send at a time across all clients, and at least 3 seconds plus up to 2 more between the starts of two sends; 10 sends a minute per client; 30 an hour for all clients together, shared out among the clients that may write; caps of 10 and 60 that only `WAWARDEN_UNSAFE_SEND_CAPS` lifts. A send over a limit is refused `429`, never queued. | [Send limits](api.md#send-limits) |
+| At most once. One idempotency key sends at most one message, and a send whose outcome is unknown is never sent again by the service. | [Sending](api.md#sending) |
+| Text only. Sends carry text, optionally as a reply in the same chat: no media, groups, broadcasts or status. | [What a send does on the wire](internals.md#what-a-send-does-on-the-wire) |
+| Bounded history requests. `admin backfill` is allowed once every 5 minutes and 20 times a UTC day, for at most 50 messages. | [`admin backfill`](cli.md#admin-backfill) |
+| No read receipts, presence, typing indicators or status updates; an architecture test refuses the protocol library calls that send them. | [Traffic the protocol library sends by itself](internals.md#traffic-the-protocol-library-sends-by-itself) |
+| Measured reconnection. The protocol library's own reconnection is off; the engine waits 2 seconds, doubling to 5 minutes, and stops for the operator on a replaced session, a ban, a logout or an outdated client. More than 5 starts in 10 minutes keep it from connecting. | [Engine states](internals.md#engine-states) |
+| A current protocol version, fetched when the engine starts with a paired device and again when WhatsApp reports the client as outdated, with bounded retries; after no fetch succeeded, an explicit reconnect fetches before it connects. | [Engine states](internals.md#engine-states) |
+| The traffic the protocol library sends by itself, such as acknowledgements and inactive delivery receipts, is listed. | [Traffic the protocol library sends by itself](internals.md#traffic-the-protocol-library-sends-by-itself) |
 
 ## What the operator must do
 
