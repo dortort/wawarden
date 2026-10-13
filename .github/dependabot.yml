@@ -32,3 +32,17 @@ updates:
       default-days: 3
     commit-message:
       prefix: "build(deps)"
+
+  # The documentation site's Python packages, pinned with hashes by pip-compile.
+  - package-ecosystem: "pip"
+    directory: "/website"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    cooldown:
+      default-days: 3
+    commit-message:
+      prefix: "docs(deps)"
+    groups:
+      site:
+        patterns: ["*"]

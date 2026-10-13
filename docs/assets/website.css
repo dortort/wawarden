@@ -1,0 +1,154 @@
+/* WaWarden site theme: the "double tick" design guide (proposition 8).
+   Brand colours are the guide's three; the rest are tints and shades of them,
+   chosen so that text meets WCAG AA contrast. */
+:root {
+  /* The guide's palette. */
+  --ww-green: #25d366;          /* WhatsApp green: the mark, accents, fills */
+  --ww-ink: #111b21;            /* dark neutral: wordmark and text on light, background on dark */
+  --ww-white: #ffffff;
+  /* Derived. #25d366 on white is about 2:1, so text uses a darker green of the same hue. */
+  --ww-green-text: #157539;     /* 5.8:1 on white */
+  --ww-green-text-strong: #115f2e; /* 7.8:1 on white */
+  --ww-green-bright: #5be08e;   /* hover on dark */
+  --ww-ink-raised: #1b262d;     /* surfaces on dark */
+  --ww-ink-deep: #0b1014;       /* header on dark */
+  --ww-grey-700: #4a5a64;       /* secondary text on light, 7.2:1 */
+  --ww-grey-500: #667781;       /* tertiary text on light, 4.7:1 */
+  --ww-grey-300: #aebac1;       /* secondary text on dark, 8.8:1 */
+  --ww-grey-100: #e9edef;       /* text on dark, 14.8:1 */
+  --ww-line-light: #dde3e7;
+  --ww-line-dark: #2a3942;
+  --ww-radius: 0.6rem;
+
+  /* Helvetica Neue per the guide, from the system; no web font is downloaded. */
+  --md-text-font: "Helvetica Neue", Helvetica, Arial;
+  --md-code-font: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono";
+}
+
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: var(--ww-ink);
+  --md-primary-fg-color--light: var(--ww-ink-raised);
+  --md-primary-fg-color--dark: var(--ww-ink-deep);
+  --md-primary-bg-color: var(--ww-white);
+  --md-primary-bg-color--light: rgba(255, 255, 255, 0.75);
+  --md-accent-fg-color: var(--ww-green-text-strong);
+  --md-accent-fg-color--transparent: rgba(21, 117, 57, 0.1);
+  --md-accent-bg-color: var(--ww-white);
+  --md-default-fg-color: var(--ww-ink);
+  --md-default-fg-color--light: var(--ww-grey-700);
+  --md-default-fg-color--lighter: var(--ww-grey-500);
+  --md-default-fg-color--lightest: var(--ww-line-light);
+  --md-typeset-color: var(--ww-ink);
+  --md-typeset-a-color: var(--ww-green-text);
+  --md-code-bg-color: #f3f5f6;
+  --md-code-fg-color: var(--ww-ink);
+  --md-footer-bg-color: var(--ww-ink);
+  --md-footer-bg-color--dark: var(--ww-ink-deep);
+}
+
+[data-md-color-scheme="slate"] {
+  --md-hue: 203;
+  --md-primary-fg-color: var(--ww-ink-deep);
+  --md-primary-fg-color--light: var(--ww-ink-raised);
+  --md-primary-fg-color--dark: var(--ww-ink-deep);
+  --md-primary-bg-color: var(--ww-white);
+  --md-primary-bg-color--light: rgba(255, 255, 255, 0.75);
+  --md-accent-fg-color: var(--ww-green-bright);
+  --md-accent-fg-color--transparent: rgba(37, 211, 102, 0.12);
+  --md-accent-bg-color: var(--ww-ink);
+  --md-default-bg-color: var(--ww-ink);
+  --md-default-bg-color--light: var(--ww-ink-raised);
+  --md-default-fg-color: var(--ww-grey-100);
+  --md-default-fg-color--light: var(--ww-grey-300);
+  --md-default-fg-color--lighter: #8696a0;
+  --md-default-fg-color--lightest: var(--ww-line-dark);
+  --md-typeset-color: var(--ww-grey-100);
+  --md-typeset-a-color: var(--ww-green);
+  --md-code-bg-color: var(--ww-ink-raised);
+  --md-code-fg-color: var(--ww-grey-100);
+  --md-footer-bg-color: var(--ww-ink-deep);
+  --md-footer-bg-color--dark: #070b0e;
+}
+
+/* The header lockup: the mark, then the name in bold with -0.025 em tracking. */
+.md-header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.md-header__button.md-logo img {
+  height: 1.4rem;
+}
+.md-header__title {
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+.md-header__topic:first-child {
+  font-weight: 700;
+}
+
+/* Headings in the wordmark face and weight. */
+.md-typeset h1,
+.md-typeset h2 {
+  color: var(--md-default-fg-color);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+.md-typeset h3,
+.md-typeset h4 {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* Visible focus for keyboard users. */
+.md-typeset a:focus-visible,
+.md-nav__link:focus-visible,
+.md-header__button:focus-visible {
+  outline: 2px solid var(--ww-green);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Home page banner (website/hooks.py turns the home page's title into it). */
+.md-typeset h1.ww-hero {
+  margin: 0 0 1.5rem;
+  line-height: 0;
+}
+.md-typeset h1.ww-hero img {
+  width: 100%;
+  height: auto;
+}
+.md-typeset h1.ww-hero .headerlink {
+  display: none;
+}
+
+/* Cards on the home page. */
+.md-typeset .grid.cards > ul > li,
+.md-typeset .grid > .card {
+  border-radius: var(--ww-radius);
+  border-color: var(--md-default-fg-color--lightest);
+}
+.md-typeset .grid.cards > ul > li:hover,
+.md-typeset .grid.cards > ul > li:focus-within {
+  border-color: var(--ww-green);
+  box-shadow: 0 0 0 1px var(--ww-green);
+}
+.md-typeset .grid.cards > ul > li > p:first-child a,
+.md-typeset .grid.cards > ul > li > p:first-child strong {
+  font-weight: 700;
+}
+
+/* Primary buttons: ink on green (8.8:1), as on the avatar. */
+.md-typeset .md-button--primary {
+  background-color: var(--ww-green);
+  border-color: var(--ww-green);
+  color: var(--ww-ink);
+}
+.md-typeset .md-button--primary:hover,
+.md-typeset .md-button--primary:focus {
+  background-color: var(--ww-green-bright);
+  border-color: var(--ww-green-bright);
+  color: var(--ww-ink);
+}
+
+.md-typeset table:not([class]) {
+  border-radius: var(--ww-radius);
+}

@@ -1,0 +1,131 @@
+# The documentation site, published at https://dortort.github.io/wawarden/ by
+# .github/workflows/pages.yml. Preview it locally with:
+#   python3 -m venv .venv && .venv/bin/pip install --require-hashes -r website/requirements.txt
+#   .venv/bin/mkdocs serve --strict
+site_name: WaWarden
+site_url: https://dortort.github.io/wawarden/
+site_description: A self-hosted WhatsApp gateway for your own AI agents, scoped per client and per chat.
+repo_url: https://github.com/dortort/wawarden
+repo_name: dortort/wawarden
+edit_uri: edit/main/docs/
+copyright: WaWarden is not affiliated with WhatsApp or Meta.
+
+docs_dir: docs
+site_dir: site
+strict: true
+
+hooks:
+  - website/hooks.py
+
+theme:
+  name: material
+  language: en
+  logo: assets/logo.svg
+  favicon: assets/favicon.svg
+  # No Google Fonts: the guide's face is Helvetica Neue, set from the system in
+  # website.css, so the site makes no third-party requests.
+  font: false
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+  features:
+    - content.action.edit
+    - content.code.copy
+    - navigation.footer
+    - navigation.indexes
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - search.highlight
+    - search.suggest
+    - toc.follow
+
+extra_css:
+  - assets/website.css
+
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/dortort/wawarden
+      name: WaWarden on GitHub
+
+plugins:
+  - search
+
+validation:
+  omitted_files: warn
+  not_found: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  # GitHub's list rules: a bullet list and a numbered list stay apart, and a
+  # numbered list keeps its first number.
+  - sane_lists
+  - tables
+  - toc:
+      permalink: true
+      # GitHub's heading anchors, so that links work the same on GitHub and here.
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.betterem
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde:
+      subscript: false
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Configuration: configuration.md
+  - CLI: cli.md
+  - API: api.md
+  - Operations:
+      - Runbook: runbook.md
+      - Ban risk: ban-risk.md
+  - Security:
+      - Threat model: threat-model.md
+      - Hardening: hardening.md
+  - For agents: agents.md
+  - Reference:
+      - Glossary: glossary.md
+      - Internals: internals.md
+      - Observability: observability.md
+  - Project:
+      - README: project/readme.md
+      - Contributing: project/contributing.md
+      - Changelog: project/changelog.md
+      - Releasing: project/releasing.md
+      - Security policy: project/security-policy.md
