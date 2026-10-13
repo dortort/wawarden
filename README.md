@@ -1,789 +1,272 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero-dark.svg">
+    <img alt="WaWarden — a self-hosted WhatsApp gateway for your own AI agents" src="docs/assets/hero-light.svg" width="100%">
+  </picture>
+</p>
+
 # WaWarden
+
+<p align="center">
+  <a href="https://dortort.github.io/wawarden/">Documentation</a> ·
+  <a href="docs/getting-started.md">Getting started</a> ·
+  <a href="https://github.com/dortort/wawarden/releases">Releases</a>
+</p>
 
 WaWarden is a self-hosted WhatsApp gateway. It links to one personal WhatsApp
 account as a companion device and keeps that account's messages in a local
 archive. It exposes that archive to your own AI agents and applications, over
-REST and MCP, with access scoped per client and per chat: each client gets a
-token that may read only the chats on its allowlist and write only to the
-chats allowed for it. This document describes the code at the commit or tag
-you are reading; [Status](#status) names the release that introduced each
-part, and the [Releases](https://github.com/dortort/wawarden/releases) page
-lists the releases.
+REST and MCP, with access scoped per client and per chat. Each client gets a
+token that may read only the chats on its allowlist, and write only to the
+chats allowed for it.
 
 It is not:
 
 - **an official WhatsApp API**, and it is not affiliated with WhatsApp or Meta.
-  It is built on an unofficial implementation of WhatsApp's multi-device protocol,
-  and WhatsApp can restrict, log out or ban an account that links an unofficial
-  client;
+  It is built on an unofficial implementation of WhatsApp's multi-device
+  protocol. WhatsApp can restrict, log out or ban an account that links an
+  unofficial client;
 - **a hosted or multi-account service**: one process serves one account for its
   owner;
 - **a network security layer**: it terminates no TLS, keeps no IP allowlist and
   has no user accounts;
 - **a bulk messaging tool**: sending is limited to the chats a client may
-  write to, paced and budgeted, and makes no first contact unless a client is
+  write to, paced and budgeted. It makes no first contact unless a client is
   explicitly allowed it (see [the ban-risk notes](docs/ban-risk.md)).
+
+## Documentation
+
+The documentation is published at **<https://dortort.github.io/wawarden/>**.
+The same pages are in this repository:
+
+| Document | Content |
+|---|---|
+| [Getting started](docs/getting-started.md) | Link a real account: prerequisites, secrets, HTTPS, pairing, the first backup and the first client. |
+| [Configuration](docs/configuration.md) | Environment variables, startup refusals, the data directory, storage, backups and the container image. |
+| [CLI](docs/cli.md) | Every subcommand, its flags and the exit codes. |
+| [API](docs/api.md) | The client API, the admin routes, the MCP tools, registering with Claude Code, and responses. |
+| [Observability](docs/observability.md) | Logs and pseudonyms, events, the webhook, metrics, EMF and the audit chain. |
+| [Internals](docs/internals.md) | The WhatsApp engine, ingest, delivery, history sync, design rationale and byte layouts. |
+| [Agents](docs/agents.md) | How an agent should treat what it reads, page, send, retry and stop, and how to scope its token. |
+| [Hardening](docs/hardening.md) | How to deploy the service: network patterns, egress, containers, systemd, secrets, backups and alarms. |
+| [Ban risk](docs/ban-risk.md) | What WhatsApp says about unofficial clients, what WaWarden does, and what the operator must do. |
+| [Runbook](docs/runbook.md) | Routine operations and incidents: clients, tokens, keys, backups, restores, upgrades and disconnects. |
+| [Threat model](docs/threat-model.md) | Assets, actors, trust boundaries, invariants, the mechanisms that enforce them, and residual risks. |
+| [Glossary](docs/glossary.md) | The terms these documents use. |
+| [`SECURITY.md`](SECURITY.md) | How to report a vulnerability, supported versions and scope. |
+| [`RELEASING.md`](RELEASING.md) | How releases are built, verified and reproduced, and what a version promises. |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Building, testing, linting, the architecture tests and commit style. |
+| [`CHANGELOG.md`](CHANGELOG.md) | What each release introduced. |
 
 ## Security posture
 
 - **Tokens are bearer credentials.** Whoever holds a token and can reach the
-  service has that token's access. Tokens are not bound to a host or a network
-  address.
-- **The service listens on loopback and speaks plain HTTP.** By default the client
-  listener is on `127.0.0.1:8080`, the admin listener on `127.0.0.1:8082` and the
-  health listener on `127.0.0.1:8081`.
-- **Network access control and TLS are your responsibility as the deployer.** Put
-  the service behind something that decides who may reach it and encrypts the
-  path: a VPN or mesh network that forwards to loopback, a private subnet, or a
-  reverse proxy that terminates TLS. **Never expose WaWarden to the public
-  internet.** A listener bound to a non-loopback address makes the service log a
-  warning at every start, whatever `WAWARDEN_LOG_LEVEL` is set to.
-- **The admin listener is guarded by the admin token alone.** It is opened only
-  when the token's SHA-256 is configured; the service never accepts the token
-  itself in its configuration. Restrict who can reach it more tightly than the
-  client listener.
-- **The service refuses to start rather than run misconfigured**: on any
-  `WAWARDEN_` variable it does not implement, a plaintext admin token, a
-  non-loopback health address, running as root, a data directory or anything in
-  it (the master key, the message archive, the device store, their journals,
-  `keys/`, `history/` or `backups/`) that is not private to the service's user,
-  or the default storage profile on a network filesystem.
-- **Browser-originated requests are refused.** Any request to the client or admin
-  listener carrying an `Origin` or `Sec-Fetch-Site` header gets `403`.
-- **Your WhatsApp account is at risk.** See the residual risks in the
-  [threat model](docs/threat-model.md#residual-risks).
-- **The protocol library sends some traffic by itself.** While a device is
-  connected, it sends WhatsApp, with no way to switch any of it off: an
-  acknowledgement of every stanza it receives; a delivery receipt, in its
-  inactive form, for every message it decrypts; retry receipts, at most 4 per
-  message while the process runs, for a message it cannot decrypt, and a
-  request to the owner's phone to send again a message that WhatsApp marks as
-  unavailable; an announcement that the device is active, at every connection;
-  pre-key uploads; application-state fetches; and session telemetry once, after
-  pairing.
-  WaWarden never sends read receipts, presence, typing indicators or status
-  updates (see
-  [the configuration reference](docs/configuration.md#traffic-the-protocol-library-sends-by-itself)).
-- **A message refused or interrupted before it is stored is lost, not
-  redelivered.** The protocol library decrypts a message, which moves its keys
-  on, before WaWarden writes it to its inbox, and acknowledges it only after
-  that write. A message WaWarden refuses (a full inbox, ingest paused for lack
-  of disk space, a failed write), or one cut short by a stop, comes back from
-  WhatsApp in a form the library can no longer decrypt, and never reaches the
-  archive; the owner's phone keeps its own copy. Refusals are counted and
-  reported, so a loss can be alerted on (see
-  [delivery](docs/configuration.md#delivery)).
+  service has that token's access, from any host or address.
+- **Loopback and plain HTTP; TLS and access control are yours.** The listeners
+  bind `127.0.0.1` and speak plain HTTP. Put them behind a VPN, a private
+  subnet or a TLS proxy, and never expose them to the public internet (see
+  [the hardening guide](docs/hardening.md)). The admin listener opens only when
+  the admin token's SHA-256 is configured, and that token alone guards it.
+- **Misconfiguration stops the start.** An unknown `WAWARDEN_` variable, a
+  plaintext admin token, running as root or a data directory that is not
+  private are refused (see
+  [startup refusals](docs/configuration.md#startup-refusals)).
+- **Browser-originated requests are refused.** A request carrying an `Origin`
+  or `Sec-Fetch-Site` header gets `403`.
+- **Your WhatsApp account is at risk.** Read the
+  [residual risks](docs/threat-model.md#residual-risks) and
+  [the ban-risk notes](docs/ban-risk.md) before linking an account.
+- **The protocol library sends some traffic by itself**, such as receipts and
+  pre-key uploads (see [residual risks](docs/threat-model.md#residual-risks)).
+- **A message refused or interrupted before it is stored is lost**, not
+  redelivered (see [residual risks](docs/threat-model.md#residual-risks)).
 
-## Status
+## Getting started
 
-Each release builds on the one before it. The table names the release
-that introduced each part; `wawarden version` prints the version of a binary,
-and the [Releases](https://github.com/dortort/wawarden/releases) page lists
-the releases. The rest of this document describes the code at the commit or
-tag you are reading.
+To link a real WhatsApp account, follow
+[Getting started](docs/getting-started.md). It lists the prerequisites, then
+walks through the secrets, the first start, HTTPS, pairing, the first backup
+and the first client. Read the [residual risks](docs/threat-model.md#residual-risks)
+first: WhatsApp can ban an account that links an unofficial client.
 
-| Version | Introduced |
-|---|---|
-| `v0.1.0` | Configuration checks and startup refusals; the client, admin and health listeners; the admin token; Prometheus metrics; `healthcheck` and `version`; the policy core; the container image and verifiable releases. |
-| `v0.2.0` | The WhatsApp engine: pairing guarded by an account check, history sync, the session and the message archive in SQLite; `admin status`, `pair` and `reconnect`; notification events and a signed webhook; metrics on standard output; one encrypted backup per paired device. |
-| `v0.3.0` | Clients with per-chat read scopes and expiring tokens; the read API over REST (chats, messages, search, change feed) and MCP; owner-saved contact names; the audit chain and `audit verify`; the [guide for agents](docs/agents.md). |
-| `v1.0.0` | Sending over REST and MCP, with idempotency, pacing, per-client budgets and a first-contact rule; `admin backfill` with quotas; nightly encrypted backups with retention and `backup verify`; audit retention; master key rotation with `keys rotate`; client and admin tokens redacted from logs, events and command errors; the [compatibility promise](RELEASING.md#versioning); the [hardening guide](docs/hardening.md), the [ban-risk notes](docs/ban-risk.md) and the [runbook](docs/runbook.md). |
+### Try it without an account
 
-### What it does
+A development build can run a scripted fake engine in place of WhatsApp. It
+pairs, connects and plays synthetic messages and history, offline. You need
+git, curl and Go 1.21 or later, which downloads the toolchain that `go.mod`
+names when the installed one is older.
+Run these steps as a user other than root.
 
-- **Start.** `wawarden serve` validates its configuration and refuses to start
-  on anything it does not implement. It creates a master key in the data
-  directory on first start; opens the message archive, `archive.db`, and the
-  device store, `session.db`, in SQLite, each through one connection that holds
-  an exclusive lock and whose settings it verifies; and opens the client and
-  health listeners, and the admin listener when an admin token hash is
-  configured. `/healthz` answers `200` only while it holds both locks; a second
-  instance waits for them. See
-  [the data directory](docs/configuration.md#data-directory).
-- **Engine.** The WhatsApp engine, through the protocol library
-  `go.mau.fi/whatsmeow`, links the account whose number is
-  `WAWARDEN_OWNER_PHONE`, and no other, by a pairing code. It refreshes the
-  protocol version, reconnects with backoff, and stops for the operator on a
-  logout, a replaced session or a ban. It writes every message to a durable
-  inbox before acknowledging it, applies edits, revocations, reactions and poll
-  votes only inside their own chat, takes the history the phone sends under a
-  size cap (`WAWARDEN_HISTORY_MAX_BYTES`), and removes revoked, edited and
-  expired text from the disk. Without a paired device it makes no connection to
-  WhatsApp until pairing is requested. See
-  [the WhatsApp engine](docs/configuration.md#whatsapp-engine).
-- **Admin.** The admin listener serves `GET /metrics` and the engine's status,
-  pairing and reconnection to the admin token. `wawarden admin status`, `pair`
-  and `reconnect` call them with the token taken from a file, standard input or
-  a command, never from an argument or the environment. See
-  [admin routes](docs/configuration.md#admin-routes).
-- **Clients.** `wawarden admin clients create` makes a client that may read
-  chosen chats, or every chat, and write to chosen chats it reads, for 90 days
-  by default and 365 at most, and prints its token once; `list`, `show` and
-  `revoke` manage it, and `admin chats list` finds the chats to name. With the
-  token, the client reads its chats through the
-  [client API](docs/configuration.md#client-api): `/v1/me`, `/v1/chats`, a
-  chat's messages, search and a change feed, in pages with sealed cursors,
-  within per-client read and search budgets, or through the
-  [MCP tools](docs/configuration.md#mcp) at `POST /mcp` that an MCP client such
-  as Claude Code calls with the same token and budgets: five for a client that
-  only reads, and `send_message` as a sixth for a client with write chats. The
-  names the owner saved for contacts are shown only to a client that may read
-  the contact's direct chat. Each client
-  change, and each client request, is appended to a hash-chained audit table
-  and written on standard output with its chain head, and `wawarden audit
-  verify` checks a copy of the archive against the master key and those heads.
-  Each night, after the backup, and with a backup recipient never before the
-  first backup succeeds, rows older than `WAWARDEN_AUDIT_RETENTION_DAYS` (90 by
-  default) are removed behind an anchor signed under the master key.
-  `wawarden keys rotate` replaces the master key of a stopped service and keeps
-  the old one, which still opens earlier cursors and references and verifies
-  earlier audit rows. See
-  [admin clients](docs/configuration.md#admin-clients-and-admin-chats),
-  [the audit chain](docs/configuration.md#audit-chain) and
-  [the guide for agents](docs/agents.md).
-- **Sending.** A client created with `--write` chats
-  sends text to them with `POST /v1/chats/{ref}/messages` or the MCP tool
-  `send_message`, at most once per idempotency key, within per-client and
-  global send limits behind a pacer, and never to a direct chat that has not
-  written first unless the client may make first contact. A send whose outcome
-  is unknown is never repeated. `wawarden admin backfill` asks the owner's
-  phone for a chat's older history. See
-  [sending](docs/configuration.md#sending) and
-  [send limits](docs/configuration.md#send-limits).
-- **Events and metrics.** Operational events such as `unpaired`,
-  `disconnected`, `quarantine`, `backup_done`, `backup_failed` and
-  `admin_mutation` are written
-  as JSON lines on standard output and, with `WAWARDEN_NOTIFY_URL`, posted with
-  an HMAC signature to a webhook (see
-  [notifications](docs/configuration.md#notifications)). With
-  `WAWARDEN_METRICS_EMF=1`, metrics are also written on standard output in
-  CloudWatch's embedded metric format, which needs no token (see
-  [metrics](docs/configuration.md#embedded-metric-format)).
-- **Backups.** With `WAWARDEN_BACKUP_AGE_RECIPIENT`, an age public key, `serve`
-  writes an encrypted backup of `archive.db` and `session.db` to `backups/`
-  once a paired device's initial history sync has settled, then one each night
-  at `WAWARDEN_BACKUP_TIME` (`03:00` UTC by default), catching up after
-  downtime and retrying failures, and keeps the newest `WAWARDEN_BACKUP_KEEP`
-  (14 by default). It holds only the recipient and cannot read a backup;
-  without it, no backup is taken. `wawarden backup verify` checks a backup that
-  `age` decrypted on another machine; restoring is done by hand (see
-  [backups](docs/configuration.md#backups)).
-- **Logs.** Every log line passes through one writer that redacts client and
-  admin tokens, turns WhatsApp identifiers into pseudonyms keyed by the master
-  key and drops lines carrying XML in the recognised shapes. The protocol library's debug output is
-  discarded unless `WAWARDEN_UNSAFE_DEBUG` opens a window of a few minutes (see
-  [logging](docs/configuration.md#pseudonyms-and-dropped-lines)).
-- **Development builds.** Built with the `dev` tag, WaWarden can run a scripted
-  fake engine in place of WhatsApp (`WAWARDEN_DEV_FAKE_ENGINE=1`) that pairs,
-  connects and plays synthetic messages and history offline. Release builds
-  refuse the variable and contain no part of the fake (see
-  [the fake engine](docs/configuration.md#fake-engine) and
-  [below](#with-the-fake-engine)).
-- **Internally.** The policy core that mints read, write and admin grants;
-  route registration that requires a policy class; the strict normaliser for
-  WhatsApp chat identifiers (phone-number users, LID users and groups), which
-  the engine applies to what it ingests and which is the only source of a chat
-  that a grant can allow, with a fuzz target (see the
-  [threat model](docs/threat-model.md#secure-by-construction), row 4);
-  sanitisers for display text and terminal output; a strict JSON decoder for
-  request bodies; and the architecture tests and lint rules that enforce them.
-
-Not built: sending anything but text, optionally as a reply in the same chat
-(no media, reactions, edits or deletions); a restore command, since a backup
-is restored by hand (see [the runbook](docs/runbook.md#restore-drill)).
-
-## Quick start
-
-These steps start the service without linking an account; to link one, continue
-with [First run with a WhatsApp account](#first-run-with-a-whatsapp-account).
-The commands below use the default ports `8080`, `8081` and `8082` on
-`127.0.0.1`. If one is taken, choose other addresses with `WAWARDEN_LISTEN`,
-`WAWARDEN_HEALTH_LISTEN` or `WAWARDEN_ADMIN_LISTEN` (see the
-[configuration reference](docs/configuration.md)) and apply them to every command,
-not only `serve`: export the variables in the shell, so that `healthcheck` reads
-the same `WAWARDEN_HEALTH_LISTEN`, and change the ports in the `curl` URLs to
-match.
-
-### From source
-
-You need git, curl and Go. The build uses the Go version on the `toolchain` line
-of `go.mod`; with its default settings, the `go` command (1.21 or later) downloads
-that version when the installed one is older. Dependencies are never vendored:
-once the module has any, the `go` command downloads them as well, through the Go
-module proxy by default, and checks each one against `go.sum`.
+Build the development binary and generate an admin token. `mktemp -d` creates
+a directory that only you can read:
 
 ```sh
 git clone https://github.com/dortort/wawarden
 cd wawarden
-go build -trimpath -o wawarden ./cmd/wawarden
-./wawarden version
-```
-
-Generate an admin token. It is printed once, together with its SHA-256; the
-service is configured with the hash only. `mktemp -d` creates a directory that
-only you can read:
-
-```sh
-demo=$(mktemp -d)
-./wawarden admin init > "$demo/admin.txt"
-sed -n 's/^sha256: //p' "$demo/admin.txt" > "$demo/admin.sha256"
-sed -n 's/^token: /Authorization: Bearer /p' "$demo/admin.txt" > "$demo/admin.header"
-```
-
-Run the service with a data directory. It creates the directory with mode `0700`
-and refuses to start as root:
-
-```sh
-WAWARDEN_DATA_DIR="$demo/data" \
-WAWARDEN_ADMIN_TOKEN_SHA256_FILE="$demo/admin.sha256" \
-  ./wawarden serve &
-```
-
-It writes JSON log lines to standard output; wait for the line with
-`"event":"ready"`. Then check its health, send a client request, and read the
-metrics with the admin token:
-
-```sh
-./wawarden healthcheck && echo healthy
-curl -i http://127.0.0.1:8080/v1/me
-curl -H @"$demo/admin.header" http://127.0.0.1:8082/metrics
-```
-
-Without a client token, every client request is refused:
-
-```text
-HTTP/1.1 401 Unauthorized
-Cache-Control: no-store
-Content-Length: 24
-Content-Type: application/json; charset=utf-8
-Www-Authenticate: Bearer
-X-Content-Type-Options: nosniff
-Date: <date>
-
-{"error":"unauthorized"}
-```
-
-The metrics are the failed-authentication counters, the build information and
-the engine's counters and gauges:
-
-```text
-# HELP wawarden_admin_auth_failures_total Failed admin authentications.
-# TYPE wawarden_admin_auth_failures_total counter
-wawarden_admin_auth_failures_total 0
-# HELP wawarden_auth_failures_total Failed client authentications.
-# TYPE wawarden_auth_failures_total counter
-wawarden_auth_failures_total 1
-# HELP wawarden_backup_last_success_timestamp_seconds Unix time at which the newest successful backup began, 0 until one succeeds.
-# TYPE wawarden_backup_last_success_timestamp_seconds gauge
-wawarden_backup_last_success_timestamp_seconds 0
-# HELP wawarden_build_info Build metadata of the running binary.
-# TYPE wawarden_build_info gauge
-wawarden_build_info{version="dev",revision="<commit>",dev="false"} 1
-# HELP wawarden_connected 1 while the engine is connected to WhatsApp, 0 otherwise.
-# TYPE wawarden_connected gauge
-wawarden_connected 0
-# HELP wawarden_messages_ingested_total Messages, reactions and poll updates stored in the archive, live and from history.
-# TYPE wawarden_messages_ingested_total counter
-wawarden_messages_ingested_total 0
-# HELP wawarden_paired 1 while a WhatsApp device is paired, 0 otherwise.
-# TYPE wawarden_paired gauge
-wawarden_paired 0
-# HELP wawarden_policy_denials_total Client requests that the client's grant did not allow.
-# TYPE wawarden_policy_denials_total counter
-wawarden_policy_denials_total 0
-# HELP wawarden_sends_rejected_total Sends refused by a scope, the first-contact rule, a budget or the pacer.
-# TYPE wawarden_sends_rejected_total counter
-wawarden_sends_rejected_total{reason="budget_global"} 0
-wawarden_sends_rejected_total{reason="budget_hour"} 0
-wawarden_sends_rejected_total{reason="budget_minute"} 0
-wawarden_sends_rejected_total{reason="first_contact"} 0
-wawarden_sends_rejected_total{reason="pacer"} 0
-wawarden_sends_rejected_total{reason="scope"} 0
-```
-
-The admin commands call the admin listener with the token from a file; this one
-prints the engine's state and the archive's counts. With no device paired, the
-state is `unpaired` and the service makes no connection to WhatsApp:
-
-```sh
-sed -n 's/^token: //p' "$demo/admin.txt" > "$demo/admin.token"
-./wawarden admin status --token-file "$demo/admin.token"
-```
-
-To read through the client API, create a client; the command prints its token
-once, which you keep as a header file:
-
-```sh
-./wawarden admin clients create --token-file "$demo/admin.token" \
-  --name agent --read 120363000000000001@g.us > "$demo/client.txt"
-sed -n 's/^token: /Authorization: Bearer /p' "$demo/client.txt" > "$demo/client.header"
-curl -H @"$demo/client.header" http://127.0.0.1:8080/v1/me
-curl -H @"$demo/client.header" 'http://127.0.0.1:8080/v1/chats?limit=20'
-curl -H @"$demo/client.header" 'http://127.0.0.1:8080/v1/chats/<id>/messages?limit=50'
-curl -H @"$demo/client.header" -G --data-urlencode 'q=synthetic words' http://127.0.0.1:8080/v1/search
-curl -H @"$demo/client.header" -G --data-urlencode 'since=2026-10-01T00:00:00Z' http://127.0.0.1:8080/v1/changes
-```
-
-`<id>` is a chat's `id` from `/v1/chats`. A page with more items carries a `next`
-cursor to pass back as `cursor` (or, for `/v1/changes`, as `since`). With no
-device paired the archive is empty, and the lists are too. The routes, limits
-and codes are in
-[docs/configuration.md](docs/configuration.md#client-api).
-
-The same client can read through MCP. To register the demo endpoint in Claude
-Code (for a deployment, use the HTTPS address of the proxy in front of the
-client listener, `https://<your-host>/mcp`):
-
-```sh
-export WAWARDEN_TOKEN="$(sed -n 's/^token: //p' "$demo/client.txt")"
-claude mcp add --transport http whatsapp http://127.0.0.1:8080/mcp --header "Authorization: Bearer $WAWARDEN_TOKEN"
-```
-
-`claude mcp list` shows `whatsapp` as connected, and `/mcp` in a Claude Code
-session lists the five tools of a client that only reads: `get_changes`,
-`get_chat`, `get_messages`, `list_chats` and `search_messages`. Claude Code keeps the header, token
-included, in its own configuration; `claude mcp remove whatsapp` deletes it.
-The tools, arguments and codes are in
-[docs/configuration.md](docs/configuration.md#mcp).
-
-Stop the service; it shuts down gracefully and exits `0`. Then clear the
-token from the shell, since `serve` refuses an unknown `WAWARDEN_` variable,
-and delete the temporary directory, which holds the admin token and the data
-directory:
-
-```sh
-kill %1
-wait
-unset WAWARDEN_TOKEN
-rm -rf "$demo"
-```
-
-### With the fake engine
-
-A development build can run a scripted fake in place of WhatsApp, to try
-pairing, ingest and the admin commands without an account and without
-contacting WhatsApp. Build it with the `dev` tag and set up a token as above:
-
-```sh
 go build -trimpath -tags dev -o wawarden-dev ./cmd/wawarden
-fake=$(mktemp -d)
-./wawarden-dev admin init > "$fake/admin.txt"
-sed -n 's/^sha256: //p' "$fake/admin.txt" > "$fake/admin.sha256"
-sed -n 's/^token: //p' "$fake/admin.txt" > "$fake/admin.token"
+
+dir=$(mktemp -d)
+./wawarden-dev admin init > "$dir/admin.txt"
+sed -n 's/^sha256: //p' "$dir/admin.txt" > "$dir/admin.sha256"
+sed -n 's/^token: //p' "$dir/admin.txt" > "$dir/admin.token"
+sed -n 's/^token: /Authorization: Bearer /p' "$dir/admin.txt" > "$dir/admin.header"
 ```
 
-Run it with the fake engine and a synthetic owner number. It logs the warnings
-`dev_build` and `fake_engine`, opens no `session.db`, and starts unpaired:
+Start the service with the fake engine and a synthetic owner number. Its JSON
+log goes to a file; wait for the `ready` line:
 
 ```sh
-WAWARDEN_DATA_DIR="$fake/data" \
-WAWARDEN_ADMIN_TOKEN_SHA256_FILE="$fake/admin.sha256" \
+WAWARDEN_DATA_DIR="$dir/data" \
+WAWARDEN_ADMIN_TOKEN_SHA256_FILE="$dir/admin.sha256" \
 WAWARDEN_OWNER_PHONE=+15550100009 \
 WAWARDEN_DEV_FAKE_ENGINE=1 \
-  ./wawarden-dev serve &
+  ./wawarden-dev serve > "$dir/serve.log" 2>&1 &
+until grep -q '"event":"ready"' "$dir/serve.log"; do sleep 1; done
 ```
 
-Once it logs `"event":"ready"`, pair it. The fake answers with the fixed code
-`FAKE-C0DE`, pairs the owner a moment later, connects, and plays its script:
-live messages that exercise the ingest rules, a dropped connection, and history
-blobs, two of which are built to be quarantined:
+The log warns `fake_engine` and `dev_build`, and the engine starts `unpaired`.
+Pair it. The fake answers with the fixed code `FAKE-C0DE`, pairs the owner,
+connects and plays its script. Two of its history blobs are built to be
+quarantined, so wait for them:
 
 ```sh
-./wawarden-dev admin pair --token-file "$fake/admin.token"
-sleep 15
-./wawarden-dev admin status --token-file "$fake/admin.token"
+./wawarden-dev admin pair --token-file "$dir/admin.token"
+until ./wawarden-dev admin status --token-file "$dir/admin.token" |
+  grep -q 'history blobs quarantined: 2'; do sleep 1; done
+./wawarden-dev admin status --token-file "$dir/admin.token"
 ```
 
-The status then shows `state: connected`, `chats: 3`, `messages: 17` and
-`history blobs quarantined: 2`; the log shows the two `quarantine` events, and
-`/metrics` the drops by reason. `WAWARDEN_DEV_FAKE_ENGINE=wrong_account` pairs
-another number instead, which the engine rejects and logs out. Stop the service
-and remove the directory as above (`kill %1`, `wait`, `rm -rf "$fake"`).
-
-The fake exists only in development builds: release builds refuse
-`WAWARDEN_DEV_FAKE_ENGINE`, and the release build checks that no release binary
-holds the fake's code (see [the fake engine](docs/configuration.md#fake-engine)).
-
-### From the container image
-
-Images are published to `ghcr.io/dortort/wawarden` by the release workflow only.
-Take the image index digest from a release's notes, and verify the image as
-[`RELEASING.md`](RELEASING.md#verifying-a-release) describes.
+The status shows `state: connected`, `chats: 3`, `messages: 17` and
+`history blobs quarantined: 2`. The metrics agree:
 
 ```sh
-image=ghcr.io/dortort/wawarden@sha256:<digest>
-demo=$(mktemp -d)
-docker run --rm "$image" admin init > "$demo/admin.txt"
-sed -n 's/^sha256: //p' "$demo/admin.txt" > "$demo/admin.sha256"
-sed -n 's/^token: /Authorization: Bearer /p' "$demo/admin.txt" > "$demo/admin.header"
-
-docker volume create wawarden-data
-docker run -d --name wawarden --read-only --stop-timeout 15 \
-  --mount type=volume,src=wawarden-data,dst=/data \
-  -e WAWARDEN_ADMIN_TOKEN_SHA256="$(cat "$demo/admin.sha256")" \
-  -e WAWARDEN_LISTEN=0.0.0.0:8080 \
-  -e WAWARDEN_ADMIN_LISTEN=0.0.0.0:8082 \
-  -p 127.0.0.1:8080:8080 -p 127.0.0.1:8082:8082 \
-  "$image"
-
-docker exec wawarden /wawarden healthcheck && echo healthy
-curl -i http://127.0.0.1:8080/v1/me
-curl -H @"$demo/admin.header" http://127.0.0.1:8082/metrics
-docker stop wawarden
-
-docker rm wawarden
-docker volume rm wawarden-data
-rm -rf "$demo"
-```
-
-The last three commands remove the container, its data volume and the temporary
-directory that holds the admin token.
-
-The container contract, in full in
-[the configuration reference](docs/configuration.md#container-image):
-
-- **Binary and user.** The binary is `/wawarden`, the entrypoint, with `serve`
-  as the default command; the image runs as `65532:65532` and has no shell.
-- **Directories.** `/data` is the only path the service writes and the only one
-  that must be writable: a directory owned by `65532:65532` with mode `0700`,
-  which a new named volume mounted there inherits. In it, the service creates
-  `keys/`, `history/` and `backups/` with mode `0700` and every file with mode
-  `0600`, and refuses to start on any that is not private to its user.
-- **Read-only root filesystem.** Run the container with one, as the example
-  does with `--read-only`, so that `/data` is also the only writable path.
-- **Health check.** `["/wawarden","healthcheck"]`, in exec form in Compose or
-  Kubernetes. The image declares none, and `docker run --health-cmd` wraps the
-  command in a shell the image does not have.
-- **Listeners.** Client `8080`, admin `8082` (only with an admin token hash) and
-  health `8081`, plain HTTP and on `127.0.0.1` by default. A listener on
-  `127.0.0.1` cannot be reached through a published port, so the example binds
-  the client and admin listeners to `0.0.0.0` and publishes them on the host's
-  loopback only; the service logs a `listener_not_loopback` warning for each,
-  and other containers on the same Docker network can reach them. The health
-  listener stays on loopback, where the health check reaches it.
-- **Network.** Outbound only: WhatsApp over HTTPS and a WebSocket on port 443,
-  while a device is paired or pairing was requested, and the webhook when one
-  is set. Nothing needs to reach the container from outside but the clients and
-  the operator, and never from the public internet.
-- **Licence.** From `v0.2.0` on, WaWarden is `GPL-3.0-or-later`, as the image's
-  `org.opencontainers.image.licenses` label says; the licence texts of
-  WaWarden, the Go standard library and every linked module are under
-  `/licenses` in the image (see [Licence](#licence)).
-
-## First run with a WhatsApp account
-
-Read the [residual risks](docs/threat-model.md#residual-risks) before linking an
-account: WhatsApp can restrict, log out or ban an account that links an
-unofficial client. These steps link the owner's account with `./wawarden`: the
-binary of a release (the release asset
-`wawarden_<version>_linux_amd64` or `wawarden_<version>_linux_arm64`, verified
-as [Verifying a release](#verifying-a-release) describes and saved as an
-executable `wawarden`), or one built [from source](#from-source). In a
-container, start from
-[the container example](#from-the-container-image): leave `WAWARDEN_DATA_DIR`
-unset, so that the data stays in the `/data` volume, pass the hash itself as
-`WAWARDEN_ADMIN_TOKEN_SHA256` and the other variables with `-e`. Mount the
-webhook's secret file read-only into the container and point
-`WAWARDEN_NOTIFY_SECRET_FILE` at it there: it must be readable by `65532:65532`
-and grant no write permission to its group and no permission to others. Run the
-admin commands inside the container with the token on standard input:
-`docker exec -i wawarden /wawarden admin status --token-stdin < admin.token`.
-
-### 1. Prepare the secrets
-
-In a directory that only you can read, generate the admin token and keep it and
-its hash in separate files. The service is given the hash only; keep a copy of
-the token in a secret manager, from which `--token-command` can also read it:
-
-```sh
-umask 077
-./wawarden admin init > admin.txt
-sed -n 's/^sha256: //p' admin.txt > admin.sha256
-sed -n 's/^token: //p' admin.txt > admin.token
-rm admin.txt
-```
-
-On another machine, create the key pair that backups are encrypted to with the
-[age](https://age-encryption.org) tools, and keep `backup-identity.txt` there.
-The service needs only the public key, `age1...`, that `age-keygen` prints:
-
-```sh
-age-keygen -o backup-identity.txt
-```
-
-For a webhook, also create its signing secret, readable only by the service's
-user: `openssl rand -hex 32 > notify.secret`.
-
-### 2. Configure and start
-
-Set the owner's number in E.164 form, the hash file, the backup recipient and a
-data directory whose parent exists, then start the service under a user other
-than root:
-
-```sh
-export WAWARDEN_DATA_DIR="$HOME/wawarden-data"
-export WAWARDEN_OWNER_PHONE=+15550100001
-export WAWARDEN_ADMIN_TOKEN_SHA256_FILE="$PWD/admin.sha256"
-export WAWARDEN_BACKUP_AGE_RECIPIENT='age1...'
-./wawarden serve
-```
-
-Add `WAWARDEN_NOTIFY_URL` and `WAWARDEN_NOTIFY_SECRET_FILE` for the webhook, and
-`WAWARDEN_METRICS_EMF=1` for metrics on standard output; the
-[configuration reference](docs/configuration.md#environment-variables) lists
-every variable, and any other `WAWARDEN_` variable stops the start. Run the
-service under a supervisor that keeps its standard output, where every event
-is written, and gives it more than 10 seconds to stop.
-
-The start writes JSON lines such as `keys_loaded`, `archive_opened`,
-`session_opened` with `"paired":false`, one `listening` per listener and
-`ready`. With no device stored, the engine reports `unpaired` and makes no
-connection to WhatsApp. Without a backup recipient, every start warns
-`backup_disabled`.
-
-### 3. Pair
-
-```sh
-./wawarden admin pair --token-file admin.token
-```
-
-It prints `pairing code: <code>`, and on standard error where to enter it. On
-the owner's phone, in WhatsApp, open Linked devices, choose Link a device, then
-Link with phone number instead, and enter the code. WaWarden links as a
-`Chrome (Linux)` device. The code goes to you only; it is never logged or kept.
-
-| Refusal | Exit code | What to do |
-|---|---|---|
-| `owner_phone_missing` | `5` | Set `WAWARDEN_OWNER_PHONE` and restart. |
-| `already_paired` | `5` | A device is stored already; see `admin status`. |
-| `rate_limited` | `5` | Three attempts were made in the last hour; wait. |
-| `pair_failed` | `1` | The connection failed or no code came within 25 seconds; check outbound access to `web.whatsapp.com` and try again. |
-
-Only the account whose number is `WAWARDEN_OWNER_PHONE` can be linked. A code
-entered on another account's phone is refused before anything is stored, or,
-should that pairing complete, the new device is logged out again; either way
-the service reports `pair_rejected`.
-
-### 4. Watch the status
-
-```sh
-./wawarden admin status --token-file admin.token
+curl -s -H @"$dir/admin.header" http://127.0.0.1:8082/metrics |
+  grep -E '^wawarden_(connected|messages_ingested_total|ingest_quarantined_total)'
 ```
 
 ```text
-state: connected
-reason: none
-paired: true
-chats: 12
-messages: 3456
-history blobs pending: 0
-history blobs quarantined: 0
-inbox backlog: 0
-inbox quarantined: 0
-clients active: 0
-clients expired: 0
-clients revoked: 0
-all-chats clients active: 0
-last ingest: 2026-10-05T08:00:00Z
-version: <version>
+wawarden_connected 1
+wawarden_ingest_quarantined_total{queue="history"} 2
+wawarden_messages_ingested_total 17
 ```
 
-`state` is `unpaired`, `connecting`, `connected` or `disconnected`, the last with
-a `reason`. Right after pairing, WhatsApp asks the new device to log in again,
-which the engine handles as a dropped connection: expect a short `connecting`
-before `connected`. Each change is logged as `engine_state`, the gauges
-`wawarden_paired` and `wawarden_connected` follow it, and every stop that waits
-for you is reported as a `disconnected` event, on standard output and to the
-webhook.
-
-### 5. The first history sync
-
-Once paired, the owner's phone sends the chat history in blobs.
-`history blobs pending` rises as they are announced and returns to `0` as each
-is downloaded into `history/`, applied to the archive and deleted; `chats`,
-`messages` and `last ingest` grow with it, and so does
-`wawarden_messages_ingested_total`. Blobs are downloaded only while connected,
-and a restart takes up those still waiting. A blob larger than
-`WAWARDEN_HISTORY_MAX_BYTES` (32 MiB by default), or one that fails three
-times, is quarantined: the `quarantine` event reports it with `queue`
-`history`, and `history blobs quarantined` counts it. See
-[history sync](docs/configuration.md#history-sync).
-
-### 6. The first backup
-
-With a backup recipient, the service takes a first backup once no history blob
-is waiting and 10 minutes have passed since the later of the pairing and the
-latest blob's arrival. It writes `backups/<UTC time>.age`, such as
-`backups/20261005T120000Z.age`, and reports `backup_done` with `bytes`,
-`archive_bytes`, `session_bytes` and `duration_ms`, or `backup_failed` with a
-reason; a failed backup is tried again after 15 minutes, then after waits
-that double up to 4 hours. From then on it takes one backup each night at
-`WAWARDEN_BACKUP_TIME`, `03:00` UTC by default, at once after a start that
-missed one, and keeps the newest `WAWARDEN_BACKUP_KEEP`, 14 by default,
-reporting `backup_pruned` when it deletes older ones. Copy a backup off the
-host and check it where the age identity is kept:
+List the chats, then create a client that may read the synthetic group.
+`--read` accepts a raw chat identifier, a `+E.164` number or a chat's `ref`.
+The command prints the client and its token once, and a reminder on standard
+error. A chat the archive has not seen yet is accepted, with a warning on
+standard error:
 
 ```sh
-set -o pipefail
-mkdir -m 700 verify
-age --decrypt -i backup-identity.txt 20261005T120000Z.age |
-  ./wawarden backup verify --work-dir verify -
+./wawarden-dev admin chats list --token-file "$dir/admin.token"
+./wawarden-dev admin clients create --token-file "$dir/admin.token" \
+  --name demo --read 120363000000000021@g.us > "$dir/client.txt"
+sed -n 's/^token: /Authorization: Bearer /p' "$dir/client.txt" > "$dir/client.header"
 ```
 
-It prints counts only and ends with `verified: yes`; see
-[backups](docs/configuration.md#backups) for restoring.
-
-### 7. When the engine disconnects
-
-A disconnection never stops the process, and `/healthz` still answers `200`.
-The engine retries an ordinary drop by itself, waiting up to 5 minutes between
-attempts. It stays `disconnected` for these reasons until you act:
-
-| `reason` | What happened | What to do |
-|---|---|---|
-| `outdated` | No protocol version could be fetched from `web.whatsapp.com` at the start, or WhatsApp reported the client as outdated and no newer version could be fetched. | Check outbound access, then `admin reconnect`, which fetches again, or restart. After WhatsApp reported the client as outdated, only a strictly newer version helps: try again later, or upgrade WaWarden. |
-| `replaced` | Another client took over the session, such as a second service started from a copy of `session.db`. | Stop the other one, then `admin reconnect`. |
-| `logged_out` | The device was logged out, from the phone or by WhatsApp; it is gone and `paired` is `false`. | Pair again, as in step 3. |
-| `temporary_ban` | WhatsApp banned the account temporarily. | Wait for the ban to end, then `admin reconnect`. |
-| `cat_refresh` | A connection token could not be refreshed. | `admin reconnect`. |
-| `connect_failure` | WhatsApp refused the connection. | `admin reconnect`. |
-| `restart_budget` | The service started more than 5 times in 10 minutes, so the engine did not connect. | Find out from the logs why it restarts, then `admin reconnect`, or `admin pair` when no device is stored; or restart once the 10 minutes have passed. |
-| `owner_mismatch` | The stored device's number is not `WAWARDEN_OWNER_PHONE`. | Correct `WAWARDEN_OWNER_PHONE` and restart. When the device belongs to another account, as after a failed logout, stop the service, delete `session.db` and `session.db-journal` from the data directory, remove the device from that account's Linked devices, then start and pair again. |
-| `shutdown` | The service is stopping. | Nothing. |
-
-`admin reconnect` answers `already_connected` while the engine is connected and
-`not_paired` when no device is stored (exit code `5`); see
-[engine states](docs/configuration.md#engine-states).
-
-### 8. Unpairing and pairing again
-
-There is no admin command that unpairs. To unlink WaWarden, log the device out
-on the owner's phone: Linked devices, select the device, Log out. WhatsApp logs
-it out at once while it is connected, or at its next connection: the engine
-reports `disconnected` with reason `logged_out`, then `unpaired`; `admin status`
-shows `paired: false`, and both gauges fall to `0`. The device is deleted from
-`session.db`, the archive keeps everything stored so far, and nothing more
-arrives. After a restart, the engine starts `unpaired`.
-
-To pair again, run `admin pair` as in step 3, for the same account. The new
-device gets its own history sync and, once that has settled, its own backup.
-
-### 9. The first client
-
-List the chats the agent may read, then create a client for them. `--read`
-takes a chat's `id`, a `+E.164` number or the `ref` that `admin chats list`
-prints, and can be repeated; the client expires after 90 days unless
-`--expires-days` says otherwise, 365 at most:
+Read through the REST API. `/v1/chats` lists the group by its reference, which
+the next request takes:
 
 ```sh
-./wawarden admin chats list --match <part of a name> --token-file admin.token
-./wawarden admin clients create --token-file admin.token \
-  --name claude-code --read <id, +E.164 number or ref> --expires-days 90
+curl -s -H @"$dir/client.header" http://127.0.0.1:8080/v1/me
+curl -s -H @"$dir/client.header" http://127.0.0.1:8080/v1/chats
+ref=$(curl -s -H @"$dir/client.header" http://127.0.0.1:8080/v1/chats |
+  grep -o '"id":"[0-9a-f]\{32\}"' | head -n 1 | cut -d '"' -f 4)
+curl -s -H @"$dir/client.header" "http://127.0.0.1:8080/v1/chats/$ref/messages?limit=5"
+curl -s -H @"$dir/client.header" -G --data-urlencode 'q=Alice' http://127.0.0.1:8080/v1/search
 ```
 
-It prints the client's lines, then `token: ww_...`, once. Keep the token in a
-secret manager or in the agent host's environment as `WAWARDEN_TOKEN`, never
-in a repository. `WAWARDEN_TOKEN` is read by the agent's host only; never put
-it in the service's environment, where `serve` refuses it as
-`unknown_variable`. `admin status` now counts the client under `clients active`,
-and each request it makes is written on standard output with its chain head
-(see [the audit chain](docs/configuration.md#audit-chain)).
-
-A client that sends needs `--write` for each chat it may send to, and each
-write chat must also be one of its `--read` chats; an all-chats client cannot
-write. Sending to a direct chat that has never written to the account is
-refused unless the client was created with `--allow-first-contact`, which also
-lets a write chat be a direct chat the archive has not seen; leave it off
-unless the agent must start conversations (see
-[the ban-risk notes](docs/ban-risk.md)):
+Read through MCP with the same token. This call lists the chats:
 
 ```sh
-./wawarden admin clients create --token-file admin.token \
-  --name claude-code-reply --read <chat> --write <chat>
+curl -s -H @"$dir/client.header" -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_chats","arguments":{}}}' \
+  http://127.0.0.1:8080/mcp
 ```
 
-A client created with write chats by a release that could not send becomes a
-live sender when the service is upgraded: read `admin clients list` before
-upgrading (see [the runbook](docs/runbook.md#upgrading)).
-
-On the agent's host, register the endpoint in Claude Code at the HTTPS address
-of the proxy in front of the client listener:
+To try it from Claude Code, register the endpoint. The demo token goes in a
+shell variable whose name does not start with `WAWARDEN_`. Never export a
+`WAWARDEN_TOKEN` in the shell that runs `serve`: the service refuses any
+`WAWARDEN_` variable it does not implement.
 
 ```sh
-claude mcp add --transport http whatsapp https://<your-host>/mcp --header "Authorization: Bearer $WAWARDEN_TOKEN"
+demo_token=$(sed -n 's/^token: //p' "$dir/client.txt")
+claude mcp add --transport http whatsapp-demo http://127.0.0.1:8080/mcp \
+  --header "Authorization: Bearer $demo_token"
 ```
 
-`claude mcp get whatsapp` shows it as connected, and `/mcp` in a Claude Code
-session lists five tools, `get_changes`, `get_chat`, `get_messages`,
-`list_chats` and `search_messages`, and, for a client with write chats,
-`send_message` as well. This form stores
-the token itself in `~/.claude.json`;
-[Registering with Claude Code](docs/configuration.md#registering-with-claude-code)
-says what each `--scope` writes and how to keep the token out of files with
-`.mcp.json` or a `headersHelper`. Before the agent reads anything, read
-[the guide for agents](docs/agents.md): every name and text it returns is
-third-party text.
+`/mcp` in a Claude Code session then lists five tools: `get_changes`,
+`get_chat`, `get_messages`, `list_chats` and `search_messages`.
 
-### 10. Rotating the token and retiring other devices
-
-Before the token expires, create a client with the same chats under a new
-name (a name stays taken after its client is revoked), set `WAWARDEN_TOKEN`
-on the agent's host to the new client's token, register the endpoint again
-with it and check the connection. `read -rs` shows no prompt and echoes
-nothing: paste the `ww_...` value of the new client's `token:` line and press
-Enter, so the token stays out of the shell's history file:
+Clean up. The service stops gracefully and exits `0`:
 
 ```sh
-./wawarden admin clients create --token-file admin.token \
-  --name claude-code-2 --read <id, +E.164 number or ref>
-read -rs WAWARDEN_TOKEN && export WAWARDEN_TOKEN
-claude mcp remove whatsapp
-claude mcp add --transport http whatsapp https://<your-host>/mcp --header "Authorization: Bearer $WAWARDEN_TOKEN"
-claude mcp get whatsapp
-./wawarden admin clients revoke --id <old id> --token-file admin.token
+claude mcp remove whatsapp-demo
+kill %1; wait
+unset demo_token
+rm -rf "$dir"
 ```
 
-Revoke the old client only once `claude mcp get whatsapp` shows the new
-registration as connected; until then the old token still works and can be
-registered again. `admin clients list` shows each client's `id` and
-`expires`. A revocation takes effect on the client's next request.
+`WAWARDEN_DEV_FAKE_ENGINE=wrong_account` pairs another number instead, which
+the engine rejects and logs out. Release builds refuse
+`WAWARDEN_DEV_FAKE_ENGINE` and contain no part of the fake (see
+[the fake engine](docs/internals.md#fake-engine)).
 
-If the agent read WhatsApp through another device linked to the same account
-before, log that device out on the owner's phone (Linked devices, select the
-device, Log out) once the agent works through WaWarden: a linked device has
-the account's full access, outside every scope, budget and audit row of
-WaWarden (see [trust roots](docs/threat-model.md#trust-roots)).
+## What it does
 
-## Documentation
+- **Start.** `wawarden serve` checks its configuration, creates a master key
+  and opens the archive and the device store (see
+  [the data directory](docs/configuration.md#data-directory)).
+- **Engine.** It links only the account whose number is `WAWARDEN_OWNER_PHONE`,
+  by a pairing code, and reconnects by itself (see
+  [the WhatsApp engine](docs/internals.md#whatsapp-engine)).
+- **Ingest.** It stores every message before acknowledging it, and removes
+  revoked, edited and expired text from the disk (see
+  [ingest](docs/internals.md#ingest)).
+- **Clients.** `wawarden admin clients create` makes a scoped, expiring client
+  token (see [admin clients](docs/cli.md#admin-clients-and-admin-chats) and
+  [the runbook](docs/runbook.md#clients)).
+- **Reading.** Clients read their chats over REST or as MCP tools, in sealed
+  pages, within per-client budgets (see [the client API](docs/api.md#client-api)
+  and [MCP](docs/api.md#mcp)).
+- **Sending.** A client with write chats sends text, once per idempotency key,
+  behind a pacer and send budgets (see [sending](docs/api.md#sending) and
+  [ban risk](docs/ban-risk.md)).
+- **Audit.** Every client change and request joins a hash-chained audit table
+  that `wawarden audit verify` checks (see
+  [the audit chain](docs/observability.md#audit-chain)).
+- **Events and metrics.** Events go to standard output and a signed webhook;
+  metrics to Prometheus and, optionally, EMF (see
+  [notifications](docs/observability.md#notifications) and
+  [metrics](docs/observability.md#metrics)).
+- **Backups.** Nightly backups are encrypted to an age recipient and checked
+  with `wawarden backup verify` (see
+  [backups](docs/configuration.md#backups)).
+- **Logs.** One writer redacts tokens and turns WhatsApp identifiers into
+  pseudonyms (see
+  [pseudonyms](docs/observability.md#pseudonyms-and-dropped-lines)).
 
-| Document | Content |
-|---|---|
-| [`docs/configuration.md`](docs/configuration.md) | Every environment variable, flag, subcommand, exit code, startup refusal, listener, route, MCP tool, log event and metric, the audit chain, backups, and the container contract. |
-| [`docs/agents.md`](docs/agents.md) | How an agent should treat what it reads, page, send, retry and stop, and how to scope and rotate its token. |
-| [`docs/hardening.md`](docs/hardening.md) | How to deploy the service: network patterns, the admin listener, egress, container and systemd settings, file modes, secrets, tokens, backups and alarms, with a checklist. |
-| [`docs/ban-risk.md`](docs/ban-risk.md) | What WhatsApp's published documents say about unofficial clients and automation, what WaWarden does to lower the risk, what the operator must do, and what happens on a ban. |
-| [`docs/runbook.md`](docs/runbook.md) | The commands for routine operations and incidents: clients, tokens, keys, backups and restores, upgrades, failed sends, disconnects and a suspected ban. |
-| [`docs/threat-model.md`](docs/threat-model.md) | Assets, actors, trust boundaries, invariants, the mechanisms that enforce them with the release that introduced each, and residual risks. |
-| [`SECURITY.md`](SECURITY.md) | How to report a vulnerability, supported versions and scope. |
-| [`RELEASING.md`](RELEASING.md) | How releases are built, what they contain, how to verify and reproduce one, and what a version promises. |
+Not built: sending anything but text, optionally as a reply in the same chat
+(no media, reactions, edits or deletions); a restore command, since a backup
+is restored by hand (see [the runbook](docs/runbook.md#restoring-a-backup)).
+
+## Releases
+
+See [`CHANGELOG.md`](CHANGELOG.md) for what each release introduced;
+`wawarden version` prints a binary's version.
 
 ## Running the tests
 
-`go test -race ./...` runs the suite, and `go test -race -tags dev ./...` runs it
-against a development build, which adds an end-to-end test that runs `serve`
-with the fake engine and pairs it through the admin CLI. No test contacts WhatsApp: the protocol adapter is
-tested with hand-built events, protobuf fixtures and injected transports, and its
-dialer, like every transport it builds whatever dial function it is handed,
-refuses every connection inside a test binary. `hack/offline-test.sh`
-proves it: it fetches the modules that `go.sum` pins, then runs both suites in a
-container that has no network, so it needs Docker.
+`go test -race ./...` and `go test -race -tags dev ./...` run the suites. No
+test contacts WhatsApp; [`CONTRIBUTING.md`](CONTRIBUTING.md) covers lint, the
+architecture tests, fuzzing and the offline test.
 
 ## Verifying a release
 
 Every release is built from `main` by a workflow that needs the maintainer's
 approval, rebuilt independently and compared bit for bit, attested and signed.
-[`RELEASING.md`](RELEASING.md#verifying-a-release) gives the commands to verify the
-image, the binaries and their SBOMs, and to reproduce a release from source.
+[`RELEASING.md`](RELEASING.md#verifying-a-release) gives the commands to verify
+the image, the binaries and their SBOMs, and to reproduce a release from source.
 
 ## Licence
 
