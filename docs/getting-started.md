@@ -117,7 +117,11 @@ Pull it by the digest in the release's notes,
 `ghcr.io/dortort/wawarden@sha256:<digest>`. Each image is also tagged with its
 version, `ghcr.io/dortort/wawarden:<version>`. No `latest` tag exists, by
 design: a deployment names the release it runs, and the signature and
-attestations cover the digest. Pulling needs no registry login.
+attestations cover the digest. Pulling needs no registry login. Check the
+image's signature and provenance as
+[Verifying a release](../RELEASING.md#verifying-a-release) describes:
+`cosign verify` needs no GitHub account, and the provenance check needs
+`gh auth login`.
 [Running in a container](#running-in-a-container) gives the commands that
 replace the steps below.
 
