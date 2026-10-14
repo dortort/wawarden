@@ -67,6 +67,51 @@ jobs:
       - name: Test with the race detector and the dev tag
         run: go test -race -count=1 -tags dev ./...
 
+  build-and-test-macos:
+    name: Build and test on macOS (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26
+            timeout: 45
+          - runner: macos-26-intel
+            timeout: 90
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Check the Go version
+        run: hack/check-go-version.sh
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with the race detector
+        run: go test -race -count=1 ./...
+
+      - name: Build with the dev tag
+        run: go build -tags dev ./...
+
+      - name: Vet with the dev tag
+        run: go vet -tags dev ./...
+
+      - name: Test with the race detector and the dev tag
+        run: go test -race -count=1 -tags dev ./...
+
   properties:
     name: Property checks and a large archive
     runs-on: ubuntu-24.04
