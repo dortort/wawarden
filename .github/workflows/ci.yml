@@ -241,6 +241,11 @@ jobs:
       - name: Run govulncheck
         run: govulncheck ./...
 
+      - name: Run govulncheck for macOS
+        env:
+          GOOS: darwin
+        run: govulncheck ./...
+
   fuzz-targets:
     name: List fuzz targets
     runs-on: ubuntu-24.04
