@@ -466,13 +466,13 @@ jobs:
           workflow="$GITHUB_REPOSITORY/.github/workflows/release.yml@refs/heads/main"
           identity="$GITHUB_SERVER_URL/$workflow"
           bundle="wawarden_${VERSION}_provenance.sigstore.json"
-          platforms=(linux_amd64 linux_arm64)
+          platforms=(linux_amd64 linux_arm64 darwin_amd64 darwin_arm64)
           {
             echo "Built from commit $GITHUB_SHA with $(go env GOVERSION)."
             echo
             echo "## Install"
             echo
-            echo "The binaries are static executables for Linux, \`wawarden_${VERSION}_linux_amd64\` and \`wawarden_${VERSION}_linux_arm64\`. Download one with \`SHA256SUMS\` and the provenance bundle into an empty directory, check both, and install it. None of these steps needs a GitHub account, and they stop at the first check that fails. For \`amd64\`:"
+            echo "The Linux binaries, \`wawarden_${VERSION}_linux_amd64\` and \`wawarden_${VERSION}_linux_arm64\`, are static executables. The macOS binaries, \`wawarden_${VERSION}_darwin_arm64\` for Apple silicon and \`wawarden_${VERSION}_darwin_amd64\` for Intel, run on macOS 13 Ventura or later and link only the system's own libraries. Download one with \`SHA256SUMS\` and the provenance bundle into an empty directory, check both, and install it. None of these steps needs a GitHub account, and they stop at the first check that fails. For Linux on \`amd64\`:"
             echo
             echo '```sh'
             echo "cd \"\$(mktemp -d)\""
@@ -482,7 +482,7 @@ jobs:
             echo "  sudo install -m 0755 wawarden_${VERSION}_linux_amd64 /usr/local/bin/wawarden"
             echo '```'
             echo
-            echo "For \`arm64\`, replace \`amd64\`. [Install]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/docs/getting-started.md#install) covers the service user, the image and building from source."
+            echo "For \`arm64\`, replace \`amd64\`. On macOS, follow [macOS]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/docs/getting-started.md#macos) instead. [Install]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/docs/getting-started.md#install) also covers the service user, the image and building from source."
             echo
             echo "## Container image"
             echo
@@ -543,10 +543,14 @@ jobs:
             --notes-file "$RUNNER_TEMP/notes.md" \
             "dist/wawarden_${VERSION}_linux_amd64" \
             "dist/wawarden_${VERSION}_linux_arm64" \
+            "dist/wawarden_${VERSION}_darwin_amd64" \
+            "dist/wawarden_${VERSION}_darwin_arm64" \
             "dist/wawarden_${VERSION}_licenses.tar.gz" \
             dist/SHA256SUMS \
             "$BUILD_DIR/wawarden_${VERSION}_linux_amd64.spdx.json" \
             "$BUILD_DIR/wawarden_${VERSION}_linux_arm64.spdx.json" \
+            "$BUILD_DIR/wawarden_${VERSION}_darwin_amd64.spdx.json" \
+            "$BUILD_DIR/wawarden_${VERSION}_darwin_arm64.spdx.json" \
             "$provenance"
 
       - name: Check that the release is immutable
