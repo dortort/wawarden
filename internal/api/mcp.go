@@ -40,13 +40,14 @@ type mcpEndpoint struct {
 }
 
 func newMCPEndpoint(s *reads, w *writes, now func() time.Time, deadline time.Duration) *mcpEndpoint {
-	read := mcp.NewServer(&mcp.Implementation{Name: mcpServerName, Version: buildinfo.Version}, &mcp.ServerOptions{
+	version := buildinfo.Read().Version
+	read := mcp.NewServer(&mcp.Implementation{Name: mcpServerName, Version: version}, &mcp.ServerOptions{
 		Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{}},
 	})
 	readKit := &toolkit{reads: s, writes: w, now: now, deadline: deadline}
 	registerTools(read, readKit)
 	read.AddReceivingMiddleware(allowedMethods(readKit.names))
-	write := mcp.NewServer(&mcp.Implementation{Name: mcpServerName, Version: buildinfo.Version}, &mcp.ServerOptions{
+	write := mcp.NewServer(&mcp.Implementation{Name: mcpServerName, Version: version}, &mcp.ServerOptions{
 		Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{}},
 	})
 	writeKit := &toolkit{reads: s, writes: w, now: now, deadline: deadline}
