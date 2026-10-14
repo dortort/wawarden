@@ -818,7 +818,7 @@ one with. Release images follow this contract:
 | Exposed ports | None declared |
 | Labels | `org.opencontainers.image.source`, `licenses` (`GPL-3.0-or-later`), `version`, `revision` |
 | Licence | WaWarden is `GPL-3.0-or-later`; the image links modules under GPL-3.0, MPL-2.0, Apache-2.0, ISC, MIT and BSD-3-Clause, listed in the [README](../README.md#licence) |
-| Licence texts | `/licenses`: the licence files of the Go standard library (`std@<Go version>`), of WaWarden and of every other Go module linked into `/wawarden`, one directory per module and version; see [`RELEASING.md`](../RELEASING.md#licences) |
+| Licence texts | `/licenses`: the licence files of the Go standard library (`std@<Go version>`), of WaWarden and of every other Go module linked into `/wawarden`, one directory per module and version, and also those of the modules only the macOS binaries link, such as `github.com/ncruces/go-strftime`; see [`RELEASING.md`](../RELEASING.md#licences) |
 
 
 ### Data volume
