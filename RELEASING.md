@@ -640,6 +640,12 @@ A line that the regenerated file drops or alters is a breaking change.
 - [ ] Check that the release is immutable: `gh release view <version> --repo
       dortort/wawarden --json isImmutable`. The workflow's last step fails when it
       is not.
+- [ ] The `wawarden` workflow of the
+      [`dortort/homebrew-tap`](https://github.com/dortort/homebrew-tap) tap
+      publishes the new release's formula within six hours. To publish it
+      sooner, dispatch it: `gh workflow run wawarden.yml --repo
+      dortort/homebrew-tap`. Then, after `brew update`,
+      `brew info dortort/tap/wawarden` shows the new version.
 - [ ] If the run fails before the release is published, delete the draft release,
       if one exists, and dispatch again. If the failed run left a tag, the tag
       ruleset prevents deleting it and the workflow refuses an existing tag:
