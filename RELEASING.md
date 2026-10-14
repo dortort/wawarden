@@ -342,8 +342,9 @@ matches that flag as a prefix, so `...@refs/heads/main` would also accept a run
 on a branch whose name starts with `main`, such as `main-x`. The binary and SBOM
 checks below use the same exact identity.
 
-`gh` reads the registry with your existing registry login; run
-`docker login ghcr.io` first if verification cannot fetch the image.
+The image is public, so neither `gh` nor `cosign` needs a registry login. Both
+use a `ghcr.io` login if your Docker configuration holds one; if a stale one
+makes the fetch fail, run `docker logout ghcr.io`.
 
 Use the index digest. Attestations and the signature are attached to the
 multi-arch index, not to the per-platform manifests.
