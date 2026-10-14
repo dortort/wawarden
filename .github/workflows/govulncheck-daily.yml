@@ -66,21 +66,26 @@ jobs:
         id: scan
         if: steps.latest.outputs.tag != ''
         run: |
-          status=0
-          govulncheck ./... > "$RUNNER_TEMP/report.txt" 2>&1 || status=$?
-          cat "$RUNNER_TEMP/report.txt"
-          case $status in
-            0) echo "status=clean" >> "$GITHUB_OUTPUT" ;;
-            3) echo "status=vulnerable" >> "$GITHUB_OUTPUT" ;;
-            *) echo "::error::govulncheck failed with exit status $status"; exit "$status" ;;
-          esac
+          result=clean
+          for goos in linux darwin; do
+            status=0
+            GOOS=$goos govulncheck ./... > "$RUNNER_TEMP/report-$goos.txt" 2>&1 || status=$?
+            echo "GOOS=$goos"
+            cat "$RUNNER_TEMP/report-$goos.txt"
+            case $status in
+              0) ;;
+              3) result=vulnerable ;;
+              *) echo "::error::govulncheck for GOOS=$goos failed with exit status $status"; exit "$status" ;;
+            esac
+          done
+          echo "status=$result" >> "$GITHUB_OUTPUT"
 
       - name: Upload report
         if: steps.scan.outputs.status != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: govulncheck-report
-          path: ${{ runner.temp }}/report.txt
+          path: ${{ runner.temp }}/report-*.txt
           if-no-files-found: error
           retention-days: 7
 
@@ -122,9 +127,14 @@ jobs:
             echo
             echo "Last checked $(date -u +%FT%TZ): $run_url"
             echo
-            echo '```text'
-            head -c 60000 "$RUNNER_TEMP/report/report.txt"
-            echo '```'
+            for goos in linux darwin; do
+              echo "GOOS=$goos:"
+              echo
+              echo '```text'
+              head -c 30000 "$RUNNER_TEMP/report/report-$goos.txt"
+              echo '```'
+              echo
+            done
           } > "$RUNNER_TEMP/body.md"
           if [ -n "$existing" ]; then
             gh issue edit "$existing" --title "$title" --body-file "$RUNNER_TEMP/body.md"
