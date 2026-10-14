@@ -285,7 +285,7 @@ python3 -m venv .venv
 .venv/bin/mkdocs serve --strict
 ```
 
-Then open <http://127.0.0.1:8000/wawarden/>. `.venv/` and the build output
+Then open <http://127.0.0.1:8000/>. `.venv/` and the build output
 `site/` are ignored by Git.
 
 CI runs the strict build on every pull request
