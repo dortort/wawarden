@@ -659,8 +659,11 @@ A line that the regenerated file drops or alters is a breaking change.
       `gh workflow enable wawarden.yml --repo dortort/homebrew-tap`. To publish
       the formula sooner, dispatch the workflow: `gh workflow run wawarden.yml
       --repo dortort/homebrew-tap`. The run commits the formula only after its
-      checks and install tests pass. Once it has finished
-      (`gh run watch --repo dortort/homebrew-tap`), on a machine with the tap installed
+      checks and install tests pass.
+      `gh run list --workflow wawarden.yml --repo dortort/homebrew-tap --limit 1`
+      shows the latest run and its result; wait for one still in progress with
+      `gh run watch <id> --repo dortort/homebrew-tap --exit-status`. Once a run
+      has succeeded, on a machine with the tap installed
       (`brew tap dortort/tap`, or an earlier `brew install dortort/tap/wawarden`),
       run `brew update`: `brew info dortort/tap/wawarden` shows the new version.
 
