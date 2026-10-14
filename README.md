@@ -93,10 +93,11 @@ The same pages are in this repository:
 
 ## Install
 
-Releases ship static binaries for Linux on `amd64` and `arm64`, and a
-multi-arch container image, `ghcr.io/dortort/wawarden`. To download the latest
-binary, check it and install it, with [`gh`](https://cli.github.com) and no
-GitHub account:
+Releases ship static binaries for Linux on `amd64` and `arm64`, binaries for
+macOS 13 Ventura or later on Apple silicon and Intel from `v1.1.0` on, and a
+multi-arch Linux container image, `ghcr.io/dortort/wawarden`. To download the
+latest Linux binary, check it and install it, with
+[`gh`](https://cli.github.com) and no GitHub account:
 
 ```sh
 cd "$(mktemp -d)"
@@ -113,6 +114,8 @@ gh release download "$version" --repo dortort/wawarden --pattern "$binary" &&
   sudo install -m 0755 "$binary" /usr/local/bin/wawarden &&
   wawarden version
 ```
+
+On macOS, see [macOS](docs/getting-started.md#macos).
 
 With Go, `CGO_ENABLED=0 go install -trimpath github.com/dortort/wawarden/cmd/wawarden@latest`
 builds and installs the latest release; see
@@ -295,8 +298,9 @@ is restored by hand (see [the runbook](docs/runbook.md#restoring-a-backup)).
 ## Releases
 
 Each release on the [Releases](https://github.com/dortort/wawarden/releases)
-page ships Linux binaries for `amd64` and `arm64` with `SHA256SUMS`, SBOMs, a
-provenance bundle and, from `v0.2.0` on, the licence archive, and its notes
+page ships Linux binaries for `amd64` and `arm64`, and from `v1.1.0` on macOS
+binaries for Apple silicon and Intel, with `SHA256SUMS`, SBOMs, a provenance
+bundle and, from `v0.2.0` on, the licence archive, and its notes
 give the container image's digest. See [`CHANGELOG.md`](CHANGELOG.md) for what
 each release introduced; `wawarden version` prints a binary's version.
 
@@ -333,12 +337,13 @@ their own licences:
 | MPL-2.0 | `go.mau.fi/whatsmeow`, `go.mau.fi/util` |
 | Apache-2.0 | `github.com/petermattis/goid`, and the MCP library `github.com/modelcontextprotocol/go-sdk`, whose code contributed before its move to Apache-2.0 stays under MIT unless its authors relicensed it (its licence file carries both texts) |
 | ISC | `github.com/coder/websocket` |
-| MIT | `github.com/beeper/argo-go`, `github.com/dustin/go-humanize`, `github.com/elliotchance/orderedmap/v3`, `github.com/mattn/go-colorable`, `github.com/mattn/go-isatty`, `github.com/rs/zerolog`, `github.com/vektah/gqlparser/v2`, and with the MCP library `github.com/google/jsonschema-go`, `github.com/segmentio/asm`, `github.com/segmentio/encoding` |
+| MIT | `github.com/beeper/argo-go`, `github.com/dustin/go-humanize`, `github.com/elliotchance/orderedmap/v3`, `github.com/mattn/go-colorable`, `github.com/mattn/go-isatty`, `github.com/rs/zerolog`, `github.com/vektah/gqlparser/v2`, and with the MCP library `github.com/google/jsonschema-go`, `github.com/segmentio/asm`, `github.com/segmentio/encoding`, and `github.com/ncruces/go-strftime` (macOS binaries only) |
 | BSD-3-Clause | the Go standard library, the backup encryption `filippo.io/age` with `filippo.io/hpke`, `filippo.io/edwards25519`, `github.com/google/uuid`, `github.com/remyoudompheng/bigfft`, `github.com/yosida95/uritemplate/v3`, `golang.org/x/crypto`, `golang.org/x/exp`, `golang.org/x/net`, `golang.org/x/oauth2`, `golang.org/x/sync`, `golang.org/x/sys`, `golang.org/x/text`, `golang.org/x/time`, `google.golang.org/protobuf`, and the SQLite driver `modernc.org/sqlite` with `modernc.org/libc`, `modernc.org/mathutil` and `modernc.org/memory`, which also carry the licences of the C code they translate, SQLite's public-domain dedication among them |
 
-A build from source for macOS also links `github.com/ncruces/go-strftime`,
-under MIT; the release binaries, built for Linux, do not.
+The macOS binaries also link `github.com/ncruces/go-strftime`, under MIT; the
+Linux binaries do not.
 
 From `v0.2.0` on, every release ships their licence files, and WaWarden's, as
-`wawarden_<version>_licenses.tar.gz` and under `/licenses` in the image;
+`wawarden_<version>_licenses.tar.gz` and under `/licenses` in the image; the
+archive and the image's copy cover every binary of the release.
 [`RELEASING.md`](RELEASING.md#licences) describes how they are collected.
