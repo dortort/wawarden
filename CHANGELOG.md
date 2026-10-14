@@ -16,10 +16,87 @@ its image digest and the commands to verify and reproduce it.
 
 ## Contents
 
+- [1.1.0 - 2026-10-14](#110---2026-10-14)
 - [1.0.0 - 2026-10-12](#100---2026-10-12)
 - [0.3.0 - 2026-10-11](#030---2026-10-11)
 - [0.2.0 - 2026-10-06](#020---2026-10-06)
 - [0.1.0 - 2026-10-04](#010---2026-10-04)
+
+## [1.1.0] - 2026-10-14
+
+### Added
+
+- Binaries for macOS 13 Ventura or later: `wawarden_v1.1.0_darwin_arm64` for
+  Apple silicon and `wawarden_v1.1.0_darwin_amd64` for Intel, with their SPDX
+  SBOMs. `SHA256SUMS` and the provenance bundle cover them, and they are not
+  notarized by Apple. On macOS, WaWarden is supported for the commands run
+  away from the service, such as `backup verify` and `audit verify`, and for
+  trying it; `serve` needs `WAWARDEN_DATA_DIR` there (see
+  [macOS](docs/getting-started.md#macos)).
+- The licence archive and the image's `/licenses` also hold the licence of
+  `github.com/ncruces/go-strftime`, which only the macOS binaries link.
+- `hack/repro-build.sh` builds the darwin binaries and checks them like the
+  Linux ones. On a Mac, `binaries` mode runs the darwin binary for its
+  architecture.
+- Install steps in the README and in
+  [Install](docs/getting-started.md#install): the release binary, checked
+  against `SHA256SUMS` and the release's provenance bundle without a GitHub
+  account, `go install`, the container image and a build from source. The
+  release notes give the binary's steps and say that no `latest` image tag is
+  published.
+- The [documentation site](https://wawarden.dortort.dev/), built from
+  `docs/`, with the [getting-started guide](docs/getting-started.md), the
+  [glossary](docs/glossary.md), [`CONTRIBUTING.md`](CONTRIBUTING.md) and this
+  changelog.
+- Runbook procedures for rotating the backup recipient and the webhook secret,
+  upgrading a container or a binary under systemd, moving to a new host, and
+  the pairing, admin authentication, re-key and notification incidents.
+
+### Security
+
+- The release workflow rebuilds on an Apple silicon and an Intel macOS runner,
+  runs the darwin binary for each, and publishes nothing unless their
+  `SHA256SUMS` equals the build job's. The rebuild job compares the darwin
+  SBOMs with the build job's, and the publishing job attests them to each
+  binary.
+- CI builds and runs the race tests on Apple silicon and Intel macOS, and
+  reproduces the darwin binaries on both. `govulncheck` scans the darwin build
+  as well as the Linux one, in CI and in the daily scan.
+
+### Changed
+
+- The linked device registers as `WaWarden (<OS>)`, such as
+  `WaWarden (Linux)`, so Linked devices on the phone lists it under that name
+  instead of `whatsmeow`. The pairing notification still names
+  `Chrome (Linux)`.
+- The configuration reference is split into
+  [configuration](docs/configuration.md), [CLI](docs/cli.md),
+  [API](docs/api.md), [observability](docs/observability.md) and
+  [internals](docs/internals.md).
+- The threat model gives each secure-by-construction row its own section,
+  with its mechanism, what it protects, what enforces it, its limits and the
+  release that introduced it.
+- [Verifying a release](RELEASING.md#verifying-a-release) checks the binaries
+  without a GitHub account and the image without a registry login, and names
+  the cosign versions that verify the image signature.
+
+### Fixed
+
+- A `go install` of a release, or a `go build` of a clean release tag,
+  reports that release instead of `dev` wherever WaWarden names its version,
+  such as `wawarden version`, the `wawarden_build_info` metric and the MCP
+  servers' `serverInfo`. A version set at link time still takes precedence,
+  and other builds still report `dev`.
+- The verification commands in the release notes download the release's files
+  before checking them, and check the binaries against the release's
+  provenance bundle, so they need no GitHub account.
+- The systemd unit in the [hardening guide](docs/hardening.md) sets
+  `WAWARDEN_BACKUP_AGE_RECIPIENT`, without which the service takes no backups.
+
+### Upgrade notes
+
+- A device paired by an earlier release keeps the name `whatsmeow` under
+  Linked devices until it pairs again.
 
 ## [1.0.0] - 2026-10-12
 
@@ -209,6 +286,7 @@ Built from commit `d0d5514` with go1.27.1. Released under the MIT licence.
 - Release builds prove the `dev` build tag absent. The container image runs
   as a non-root user on a distroless base with a read-only root filesystem.
 
+[1.1.0]: https://github.com/dortort/wawarden/releases/tag/v1.1.0
 [1.0.0]: https://github.com/dortort/wawarden/releases/tag/v1.0.0
 [0.3.0]: https://github.com/dortort/wawarden/releases/tag/v0.3.0
 [0.2.0]: https://github.com/dortort/wawarden/releases/tag/v0.2.0
