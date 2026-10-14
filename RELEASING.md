@@ -473,9 +473,10 @@ BUILDX_VERSION=<buildx version> VERSION=<version> hack/repro-build.sh
 `dist/SHA256SUMS` must be identical to the release's `SHA256SUMS`, and the image
 index digest the script prints last must equal `<digest>`.
 
-`hack/repro-build.sh binaries`, in the same checkout, builds no image: it needs
-only git and the Go toolchain, also on macOS, and reproduces the binaries and
-the licence archive. Its `dist/SHA256SUMS` must be identical to the release's.
+`VERSION=<version> hack/repro-build.sh binaries`, in the same checkout, builds
+no image: it needs only git and the Go toolchain, also on macOS, and reproduces
+the binaries and the licence archive. Its `dist/SHA256SUMS` must be identical to
+the release's.
 
 Three details decide whether the result matches:
 
