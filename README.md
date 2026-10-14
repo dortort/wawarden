@@ -335,7 +335,6 @@ their own licences:
 A build from source for macOS also links `github.com/ncruces/go-strftime`,
 under MIT; the release binaries, built for Linux, do not.
 
-Every release ships their licence files, and WaWarden's, as
-`wawarden_<version>_licenses.tar.gz` and under
-`/licenses` in the image; [`RELEASING.md`](RELEASING.md#licences) describes how
-they are collected.
+From `v0.2.0` on, every release ships their licence files, and WaWarden's, as
+`wawarden_<version>_licenses.tar.gz` and under `/licenses` in the image;
+[`RELEASING.md`](RELEASING.md#licences) describes how they are collected.
