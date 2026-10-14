@@ -95,9 +95,24 @@ The same pages are in this repository:
 
 Releases ship static binaries for Linux on `amd64` and `arm64`, binaries for
 macOS 13 Ventura or later on Apple silicon and Intel from `v1.1.0` on, and a
-multi-arch Linux container image, `ghcr.io/dortort/wawarden`. To download the
-latest Linux binary, check it and install it, with
-[`gh`](https://cli.github.com) and no GitHub account:
+multi-arch Linux container image, `ghcr.io/dortort/wawarden`.
+
+On macOS, and on a Linux machine that does not run the service, install with
+[Homebrew](https://brew.sh):
+
+```sh
+brew install dortort/tap/wawarden
+```
+
+Homebrew checks the release's prebuilt binary against the release's
+`SHA256SUMS`, and the tap publishes the formula for a release only after
+checking the release's provenance. No `xattr` step is needed on macOS, and
+`brew upgrade wawarden` installs newer releases.
+[Homebrew](docs/getting-started.md#homebrew) shows how to check the installed
+file's provenance yourself.
+
+On the host that runs the service, download the latest Linux binary, check
+it and install it, with [`gh`](https://cli.github.com) and no GitHub account:
 
 ```sh
 cd "$(mktemp -d)"
@@ -115,15 +130,15 @@ gh release download "$version" --repo dortort/wawarden --pattern "$binary" &&
   wawarden version
 ```
 
-On macOS, see [macOS](docs/getting-started.md#macos).
+On macOS without Homebrew, see [macOS](docs/getting-started.md#macos).
 
 With Go, `CGO_ENABLED=0 go install -trimpath github.com/dortort/wawarden/cmd/wawarden@latest`
 builds and installs the latest release; see
 [Install](docs/getting-started.md#with-go-install).
 
 [Install](docs/getting-started.md#install) in Getting started covers the
-supported platforms, downloading without `gh`, the image, which has no
-`latest` tag, building from source and the service user.
+supported platforms, Homebrew, downloading without `gh`, the image, which has
+no `latest` tag, building from source and the service user.
 
 ## Getting started
 
