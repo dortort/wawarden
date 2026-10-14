@@ -369,6 +369,9 @@ jobs:
           DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           workflow="$GITHUB_REPOSITORY/.github/workflows/release.yml@refs/heads/main"
+          identity="$GITHUB_SERVER_URL/$workflow"
+          bundle="wawarden_${VERSION}_provenance.sigstore.json"
+          platforms=(linux_amd64 linux_arm64)
           {
             echo "Built from commit $GITHUB_SHA with $(go env GOVERSION)."
             echo
@@ -382,15 +385,22 @@ jobs:
             echo
             echo "## Verify"
             echo
+            echo "To check every binary of the release, download all of its files into an empty directory. These checks need no GitHub account. On macOS, check the checksums with \`shasum -a 256 -c SHA256SUMS\`."
+            echo
             echo '```sh'
-            echo "gh attestation verify oci://$IMAGE@$DIGEST --repo $GITHUB_REPOSITORY --cert-identity $GITHUB_SERVER_URL/$workflow"
-            echo "cosign verify $IMAGE@$DIGEST --certificate-identity $GITHUB_SERVER_URL/$workflow --certificate-oidc-issuer https://token.actions.githubusercontent.com"
             echo "cd \"\$(mktemp -d)\""
             echo "gh release download $VERSION --repo $GITHUB_REPOSITORY"
             echo "sha256sum -c SHA256SUMS"
-            for arch in amd64 arm64; do
-              echo "gh attestation verify wawarden_${VERSION}_linux_$arch --repo $GITHUB_REPOSITORY --cert-identity $GITHUB_SERVER_URL/$workflow"
+            for platform in "${platforms[@]}"; do
+              echo "gh attestation verify wawarden_${VERSION}_$platform --repo $GITHUB_REPOSITORY --bundle $bundle --cert-identity $identity"
             done
+            echo '```'
+            echo
+            echo "The image checks: \`gh attestation verify oci://\` reads GitHub's attestation API and needs \`gh auth login\`; \`cosign verify\` needs cosign v2.6.3 or newer."
+            echo
+            echo '```sh'
+            echo "gh attestation verify oci://$IMAGE@$DIGEST --repo $GITHUB_REPOSITORY --cert-identity $identity"
+            echo "cosign verify $IMAGE@$DIGEST --certificate-identity $identity --certificate-oidc-issuer https://token.actions.githubusercontent.com"
             echo '```'
             echo
             echo "## Licences"
