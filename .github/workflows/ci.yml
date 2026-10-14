@@ -325,7 +325,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        include:
+          - runner: ubuntu-24.04
+            mode: oci
+          - runner: ubuntu-24.04-arm
+            mode: oci
+          - runner: macos-26
+            mode: binaries
+          - runner: macos-26-intel
+            mode: binaries
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -344,16 +352,18 @@ jobs:
         run: hack/check-go-version.sh
 
       - name: Install pinned buildx
+        if: matrix.mode == 'oci'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           version: ${{ env.BUILDX_VERSION }}
           driver: docker
           cache-binary: false
 
-      - name: Build binaries and OCI image
+      - name: Build binaries, and the OCI image on Linux
         env:
           VERSION: ci
-        run: hack/repro-build.sh oci
+          MODE: ${{ matrix.mode }}
+        run: hack/repro-build.sh "$MODE"
 
       - name: Upload checksums and digest
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -381,18 +391,26 @@ jobs:
         run: |
           cd "$RUNNER_TEMP/repro"
           set -- */
-          if [ "$#" -ne 2 ]; then
-            echo "::error::expected two build results, found $#"
+          if [ "$#" -ne 4 ]; then
+            echo "::error::expected four build results, found $#"
             exit 1
           fi
-          diff -u "$1SHA256SUMS" "$2SHA256SUMS"
-          diff -u "$1image-digest" "$2image-digest"
+          for dir in "$@"; do
+            diff -u "$1SHA256SUMS" "${dir}SHA256SUMS"
+          done
+          sums=$1SHA256SUMS
+          set -- */image-digest
+          if [ "$#" -ne 2 ]; then
+            echo "::error::expected two image digests, from the Linux builds, found $#"
+            exit 1
+          fi
+          diff -u "$1" "$2"
           {
             echo "### Reproducible build"
             echo
-            echo "Both builds produced index digest \`$(cat "$1image-digest")\` and these binaries:"
+            echo "The four builds produced these binaries, and the two Linux builds index digest \`$(cat "$1")\`:"
             echo
             echo '```text'
-            cat "$1SHA256SUMS"
+            cat "$sums"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
