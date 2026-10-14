@@ -86,8 +86,8 @@ Do the same for `keys/retired/` after each
 ### Creating a client
 
 ```sh
-./wawarden admin chats list --match <part of a name> --token-file admin.token
-./wawarden admin clients create --token-file admin.token \
+wawarden admin chats list --match <part of a name> --token-file admin.token
+wawarden admin clients create --token-file admin.token \
   --name <name> --read <chat> [--read <chat> ...] [--expires-days 90]
 ```
 
@@ -109,14 +109,14 @@ agent's host and nowhere else.
 ### Revoking a client
 
 ```sh
-./wawarden admin clients revoke --id <id> --token-file admin.token
+wawarden admin clients revoke --id <id> --token-file admin.token
 ```
 
 The revocation takes effect on the client's next request. To see a client's
 chats and state:
 
 ```sh
-./wawarden admin clients show --id <id> --token-file admin.token
+wawarden admin clients show --id <id> --token-file admin.token
 ```
 
 ## Rotating a client token
@@ -134,13 +134,13 @@ and `expires`.
 For Claude Code, with the token in `WAWARDEN_TOKEN` on the agent's host:
 
 ```sh
-./wawarden admin clients create --token-file admin.token \
+wawarden admin clients create --token-file admin.token \
   --name claude-code-2 --read <id, +E.164 number or ref>
 read -rs WAWARDEN_TOKEN && export WAWARDEN_TOKEN
 claude mcp remove whatsapp
 claude mcp add --transport http whatsapp https://<your-host>/mcp --header "Authorization: Bearer $WAWARDEN_TOKEN"
 claude mcp get whatsapp
-./wawarden admin clients revoke --id <old id> --token-file admin.token
+wawarden admin clients revoke --id <old id> --token-file admin.token
 ```
 
 `read -rs` shows no prompt and echoes nothing. Paste the `ww_...` value of the
@@ -174,7 +174,7 @@ The admin token never expires. To replace it:
    ```sh
    (
      umask 077
-     ./wawarden admin init > admin.txt
+     wawarden admin init > admin.txt
      sed -n 's/^sha256: //p' admin.txt > new.sha256
      sed -n 's/^token: //p' admin.txt > new.token
      rm admin.txt
@@ -442,7 +442,7 @@ upgrade into the older release.
    [RELEASING.md](../RELEASING.md#verifying-a-release) describes.
 2. When moving from a release that could not send to one that can, list the
    clients first:
-   `./wawarden admin clients list --token-file admin.token`. A client created
+   `wawarden admin clients list --token-file admin.token`. A client created
    with write chats becomes a live sender on the upgrade. Revoke those that
    should not send.
 3. Make sure a recent backup succeeded (`backup_done`) and is copied off the
@@ -540,7 +540,7 @@ connection. Then:
 To pair again, for the same account:
 
 ```sh
-./wawarden admin pair --token-file admin.token
+wawarden admin pair --token-file admin.token
 ```
 
 Enter the code on the owner's phone as in [Getting started](getting-started.md).
@@ -616,8 +616,8 @@ reason but `shutdown` is also reported as the `disconnected` event.
 The commands, with their token flag:
 
 ```sh
-./wawarden admin reconnect --token-file admin.token
-./wawarden admin pair --token-file admin.token
+wawarden admin reconnect --token-file admin.token
+wawarden admin pair --token-file admin.token
 ```
 
 `admin reconnect` answers `already_connected` while the engine is connected,
@@ -653,7 +653,7 @@ Signs: `disconnected` with `temporary_ban` or `connect_failure`, or a
 `logged_out` that nobody caused from the phone.
 
 1. Revoke every client that can send:
-   `./wawarden admin clients revoke --id <id> --token-file admin.token`.
+   `wawarden admin clients revoke --id <id> --token-file admin.token`.
 2. Look at the owner's phone and in WhatsApp for a notice of a restriction or
    ban. WaWarden does not report WhatsApp's reason.
 3. Check what was sent before:
@@ -664,7 +664,7 @@ Signs: `disconnected` with `temporary_ban` or `connect_failure`, or a
      could not take;
    - the chats themselves on the phone.
 4. For a temporary ban, wait for its end, then
-   `./wawarden admin reconnect --token-file admin.token`. After a logout, pair
+   `wawarden admin reconnect --token-file admin.token`. After a logout, pair
    again only once the phone works normally. Pairing is limited to 3 attempts
    an hour.
 5. Recreate clients with write chats, narrower than before.
@@ -698,7 +698,7 @@ cause means someone else used the admin token: see [Token leak](#token-leak).
 **A client token.**
 
 1. Revoke the client:
-   `./wawarden admin clients revoke --id <id> --token-file admin.token`. It
+   `wawarden admin clients revoke --id <id> --token-file admin.token`. It
    fails from its next request.
 2. Create a replacement with a new name.
 3. Read the client's audit lines since the leak to see what it read. For a
@@ -709,7 +709,7 @@ cause means someone else used the admin token: see [Token leak](#token-leak).
 **The admin token.**
 
 1. Replace it as in [Rotating the admin token](#rotating-the-admin-token).
-2. Run `./wawarden admin clients list --token-file admin.token`, and revoke
+2. Run `wawarden admin clients list --token-file admin.token`, and revoke
    every client you did not create.
 3. Read the `admin_mutation` events since the leak: pairing, reconnects,
    backfills and client changes.
@@ -782,7 +782,7 @@ counts every refusal.
 
 For `scoped_chat`, an expired client counts until it is revoked. Revoke expired
 clients whose chats hold a mapping back
-(`./wawarden admin clients list --token-file admin.token` shows them). See
+(`wawarden admin clients list --token-file admin.token` shows them). See
 [ingest](internals.md#ingest) for the rules.
 
 ### Dropped notifications
@@ -820,7 +820,7 @@ copies it, so a dropped post loses no event from the output.
   the archive holds:
 
   ```sh
-  ./wawarden admin backfill --chat <chat> --count 50 --token-file admin.token
+  wawarden admin backfill --chat <chat> --count 50 --token-file admin.token
   ```
 
   At most one request every 5 minutes and 20 a day. `backfill_quota` and
