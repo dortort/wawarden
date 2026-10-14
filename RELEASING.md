@@ -640,6 +640,15 @@ A line that the regenerated file drops or alters is a breaking change.
 - [ ] Check that the release is immutable: `gh release view <version> --repo
       dortort/wawarden --json isImmutable`. The workflow's last step fails when it
       is not.
+- [ ] If the run fails before the release is published, delete the draft release,
+      if one exists, and dispatch again. If the failed run left a tag, the tag
+      ruleset prevents deleting it and the workflow refuses an existing tag:
+      release the next patch version instead. If the run fails after publishing,
+      do not try to repair the release: fix the cause and release the next patch
+      version.
+- [ ] If the publishing job stops because the pushed digest differs, the registry
+      holds an untagged, unsigned index under that digest. Nothing refers to it;
+      investigate the difference before dispatching again.
 - [ ] The `wawarden` workflow of the
       [`dortort/homebrew-tap`](https://github.com/dortort/homebrew-tap) tap
       publishes the new release's formula within six hours. GitHub disables a
@@ -654,15 +663,6 @@ A line that the regenerated file drops or alters is a breaking change.
       (`gh run watch --repo dortort/homebrew-tap`), on a machine with the tap installed
       (`brew tap dortort/tap`, or an earlier `brew install dortort/tap/wawarden`),
       run `brew update`: `brew info dortort/tap/wawarden` shows the new version.
-- [ ] If the run fails before the release is published, delete the draft release,
-      if one exists, and dispatch again. If the failed run left a tag, the tag
-      ruleset prevents deleting it and the workflow refuses an existing tag:
-      release the next patch version instead. If the run fails after publishing,
-      do not try to repair the release: fix the cause and release the next patch
-      version.
-- [ ] If the publishing job stops because the pushed digest differs, the registry
-      holds an untagged, unsigned index under that digest. Nothing refers to it;
-      investigate the difference before dispatching again.
 
 ### Dependency updates
 
