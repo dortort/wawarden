@@ -83,10 +83,11 @@ above after any change to the repository settings.
 
 - Releases are cut **only from `main`**, by the manually dispatched workflow
   `.github/workflows/release.yml`. Nobody pushes release tags by hand.
-- The workflow has four jobs, which run in this order: `guard` (*Check version,
-  tag, environment and CI*), `build` (*Build*), `rebuild` (*Rebuild and
-  compare*) and `release` (*Publish*), the publishing job. Every job runs only
-  when the workflow was dispatched on `refs/heads/main`.
+- The workflow has five jobs: `guard` (*Check version, tag, environment and
+  CI*), then `build` (*Build*), then `rebuild` (*Rebuild and compare*) and
+  `darwin` (*Rebuild and run on macOS*, once on each of two macOS runners)
+  side by side, and last `release` (*Publish*), the publishing job. Every job
+  runs only when the workflow was dispatched on `refs/heads/main`.
 - The workflow input is the version. The `guard` job accepts only
   `vMAJOR.MINOR.PATCH` with decimal numbers without leading zeros and no suffix
   (`v0.1.0`, not `v0.01.0` or `v1.0.0-rc.1`), and stops when `git ls-remote`
@@ -131,7 +132,8 @@ above after any change to the repository settings.
 The build is reproducible. `hack/repro-build.sh` is the single recipe used by the
 release workflow, by CI and by anyone reproducing a release:
 
-- Go binaries for `linux/amd64` and `linux/arm64`, built with `CGO_ENABLED=0`,
+- Go binaries for `linux/amd64`, `linux/arm64`, `darwin/amd64` and
+  `darwin/arm64`, built with `CGO_ENABLED=0`,
   `-trimpath`, `-buildvcs=true`, `-mod=readonly` and an empty build ID, with the
   toolchain named by the `toolchain` line in `go.mod` (`GOTOOLCHAIN=local`): the
   script stops unless `go env GOVERSION` equals that line. In `ci.yml`,
@@ -159,28 +161,31 @@ release workflow, by CI and by anyone reproducing a release:
   script that a workflow calls.
 - Before packaging, the script checks each binary:
   - its embedded build settings show no `dev` tag, `vcs.revision` equal to the
-    commit, `vcs.modified=false`, `CGO_ENABLED=0` and the right architecture;
+    commit, `vcs.modified=false`, `CGO_ENABLED=0` and the right operating
+    system (`GOOS`) and architecture (`GOARCH`);
   - it contains neither the marker string that only dev builds carry nor the
     marker string of the development-only fake engine;
   - `go tool nm` lists no symbol of `internal/engine/fake`;
   - it contains the version variable that the link step sets (`go tool nm`
     lists `internal/buildinfo.Version`).
-- On a Linux host, and only in its `binaries` and `oci` modes, the script also
-  runs the binary built for the host's architecture, with an empty environment
+- Only in its `binaries` and `oci` modes, the script also runs the binary built
+  for the host's operating system and architecture, with an empty environment
   (`env -i`). `wawarden version` must print exactly the requested version, the
   commit and `dev build false`. In the release workflow, the `build` job runs
-  the `amd64` binary on an `amd64` runner, and the `rebuild` job runs the
-  `arm64` binary on an `arm64` runner. Both release binaries are therefore run
-  before anything is published.
+  `linux/amd64` on an `amd64` runner, the `rebuild` job runs `linux/arm64` on
+  an `arm64` runner, and the `darwin` jobs run `darwin/arm64` on `macos-26`
+  (Apple silicon) and `darwin/amd64` on `macos-26-intel`. All four release
+  binaries are therefore run before anything is published.
 - The publishing job runs the script in `push` mode, which runs none of the
   binaries it builds: that job holds the write permissions, so it runs no code
   built from the repository. It proves instead that its binaries are
-  byte-identical to the ones the two other jobs ran. The image it pushes must
-  have the `build` job's index digest, and its `SHA256SUMS` must equal the
-  `build` job's, which the `rebuild` job reproduced.
+  byte-identical to the ones the `build`, `rebuild` and `darwin` jobs ran. The
+  image it pushes must have the `build` job's index digest, and its
+  `SHA256SUMS` must equal the `build` job's, which the `rebuild` and `darwin`
+  jobs reproduced.
 - After building the binaries, the script runs `hack/licenses.sh`, which
   collects the licence files of the Go standard library and of every module
-  linked into them (see [Licences](#licences)) into `dist/licenses`, and packs that directory into
+  linked into any of them (see [Licences](#licences)) into `dist/licenses`, and packs that directory into
   `wawarden_<version>_licenses.tar.gz` with `hack/tarball.go`. `SHA256SUMS`
   lists this archive next to the binaries, so every comparison of
   `SHA256SUMS` below covers it too.
@@ -215,15 +220,21 @@ creation time. The publishing job builds and
 pushes the image a third time and stops unless the pushed digest equals the one
 both builds produced.
 
+The `darwin` jobs run the script in `binaries` mode, which builds the binaries
+and the licence archive but no image, on `macos-26` and `macos-26-intel`: the
+macOS runners have no Docker. Each runs the darwin binary for its runner, and
+stops unless its `SHA256SUMS` equals the `build` job's. They add a third and a
+fourth independent build of every binary, on another operating system.
+
 ### What a release contains
 
 | Artifact | Where |
 |---|---|
 | Multi-arch image (`linux/amd64`, `linux/arm64`) | `ghcr.io/dortort/wawarden@sha256:<digest>`, also tagged `<version>`; the release notes state the index digest |
-| Binaries `wawarden_<version>_linux_amd64` and `wawarden_<version>_linux_arm64` | Release assets |
-| From `v0.2.0` on, the licence files of the Go standard library, of WaWarden and of every module linked into the binaries, `wawarden_<version>_licenses.tar.gz` | Release asset, and `/licenses` in the image |
+| Binaries `wawarden_<version>_linux_amd64` and `wawarden_<version>_linux_arm64`, static executables, and from `v1.1.0` on `wawarden_<version>_darwin_amd64` and `wawarden_<version>_darwin_arm64`, which run on macOS 13 Ventura or later | Release assets |
+| From `v0.2.0` on, the licence files of the Go standard library, of WaWarden and of every module linked into any of the binaries, `wawarden_<version>_licenses.tar.gz` | Release asset, and `/licenses` in the image |
 | `SHA256SUMS` for the binaries and, from `v0.2.0` on, the licence archive | Release asset |
-| SPDX 2.3 SBOMs for the binaries, `wawarden_<version>_linux_<arch>.spdx.json` | Release assets, and attested to each binary in GitHub's attestation store |
+| SPDX 2.3 SBOMs for the binaries, `wawarden_<version>_<os>_<arch>.spdx.json`, the `darwin` ones from `v1.1.0` on | Release assets, and attested to each binary in GitHub's attestation store |
 | Build provenance attestations (SLSA, via `actions/attest-build-provenance`): one for the image index, and one whose subjects are the files `SHA256SUMS` lists | GitHub's attestation store; the image attestation is also pushed to the registry, and the files' Sigstore bundle is the release asset `wawarden_<version>_provenance.sigstore.json` |
 | Keyless cosign signature on the image index, made with cosign v3.1.3 | Registry, next to the image |
 
@@ -231,10 +242,11 @@ The SBOMs list the Go modules and the Go standard library compiled into each
 binary. No SBOM covers the image as a whole, so the packages of the distroless
 base image are not listed; no image-level SBOM is produced.
 
-Binary sizes, measured on 2026-10-13 with
-`CGO_ENABLED=0 go build -trimpath ./cmd/wawarden`: about 31.8 MiB for
-`linux/amd64` and 30.2 MiB for `linux/arm64`. Each release's assets give the
-exact sizes.
+Binary sizes, measured on 2026-10-14 with
+`CGO_ENABLED=0 go build -trimpath ./cmd/wawarden` and the target's `GOOS` and
+`GOARCH`: about 31.8 MiB for `linux/amd64`, 30.2 MiB for `linux/arm64`,
+32.2 MiB for `darwin/amd64` and 30.8 MiB for `darwin/arm64`. Each release's
+assets give the exact sizes.
 
 Image sizes were measured on 2026-10-14 from the registry manifests of
 `v1.0.0`: the compressed layers add up to about 17.1 MiB (`linux/amd64`) and
@@ -282,7 +294,8 @@ itself is GPL-3.0-or-later from `v0.2.0` on. Every release ships their licence
 texts, the GPL-3.0 and MPL-2.0 texts included, and WaWarden's own:
 
 - `hack/licenses.sh` lists, with `go list -deps`, the modules whose packages are
-  compiled into `./cmd/wawarden` for `linux/amd64` and `linux/arm64`, and copies
+  compiled into `./cmd/wawarden` for `linux` and `darwin`, each on `amd64` and
+  `arm64`, and copies
   every regular file at the root of each module whose name starts with
   `LICENSE`, `LICENCE`, `COPYING`, `NOTICE`, `PATENTS` or `UNLICENSE`, in any
   letter case, to `dist/licenses/<module path>@<version>/`: from the Go module
@@ -301,7 +314,8 @@ texts, the GPL-3.0 and MPL-2.0 texts included, and WaWarden's own:
 - Files get mode `0444`, directories `0755`, and every timestamp is set to the
   commit time. The script can be run on its own; it writes nothing outside
   `dist/licenses`.
-- The image carries that directory as `/licenses`.
+- The image carries that same directory as `/licenses`, so it also holds the
+  licences of the modules that only the macOS binaries link.
 - `hack/tarball.go`, run with `go run`, packs the directory into
   `wawarden_<version>_licenses.tar.gz`: entries in lexical order, mode `0444`
   or `0755`, owner and group `0` without names, the commit time as every
@@ -315,7 +329,8 @@ texts, the GPL-3.0 and MPL-2.0 texts included, and WaWarden's own:
 ## Verifying a release
 
 Replace `<version>` with the release (for example `v1.0.0`), `<digest>` with the
-image index digest from the release notes, and `<arch>` with `amd64` or `arm64`.
+image index digest from the release notes, `<os>` with `linux` or `darwin`
+(the macOS binaries, from `v1.1.0` on), and `<arch>` with `amd64` or `arm64`.
 Always deploy the image by digest.
 
 The binary and licence-archive checks need no GitHub account: `gh release
@@ -380,7 +395,7 @@ shasum -a 256 --ignore-missing -c SHA256SUMS
 Then check the provenance of each binary against the release's bundle:
 
 ```sh
-gh attestation verify wawarden_<version>_linux_<arch> \
+gh attestation verify wawarden_<version>_<os>_<arch> \
   --repo dortort/wawarden \
   --bundle wawarden_<version>_provenance.sigstore.json \
   --cert-identity https://github.com/dortort/wawarden/.github/workflows/release.yml@refs/heads/main
@@ -396,13 +411,13 @@ provenance of the licence archive of a release from `v0.2.0` on.
 `go version -m <binary>` prints the build settings embedded in a binary. A release
 binary shows `CGO_ENABLED=0`, `-trimpath=true`, `vcs.revision` equal to the
 release commit and `vcs.modified=false`, and no `-tags` setting containing `dev`.
-On a Linux host of the same architecture, `wawarden version` prints the release
-version and `dev build false`.
+On a host of that operating system and architecture, `wawarden version` prints
+the release version and `dev build false`.
 
 ### SBOMs
 
 ```sh
-gh attestation verify wawarden_<version>_linux_<arch> \
+gh attestation verify wawarden_<version>_<os>_<arch> \
   --repo dortort/wawarden \
   --cert-identity https://github.com/dortort/wawarden/.github/workflows/release.yml@refs/heads/main \
   --predicate-type https://spdx.dev/Document/v2.3
@@ -457,6 +472,10 @@ BUILDX_VERSION=<buildx version> VERSION=<version> hack/repro-build.sh
 
 `dist/SHA256SUMS` must be identical to the release's `SHA256SUMS`, and the image
 index digest the script prints last must equal `<digest>`.
+
+`hack/repro-build.sh binaries`, in the same checkout, builds no image: it needs
+only git and the Go toolchain, also on macOS, and reproduces the binaries and
+the licence archive. Its `dist/SHA256SUMS` must be identical to the release's.
 
 Three details decide whether the result matches:
 
@@ -594,15 +613,17 @@ A line that the regenerated file drops or alters is a breaking change.
       `CHANGELOG.md` has a section for the version being cut. The "Since"
       fields name it for each control it introduces, and no sentence says
       which release is the latest or what is planned.
-- [ ] The build and rebuild jobs list `wawarden_<version>_licenses.tar.gz` in
-      identical `SHA256SUMS`, and it holds a directory for the standard
-      library of the `go.mod` toolchain, for WaWarden and for every module in
-      `go.mod` that the binaries link (see [Licences](#licences)).
+- [ ] The build, rebuild and darwin jobs list
+      `wawarden_<version>_licenses.tar.gz` in identical `SHA256SUMS`, and it
+      holds a directory for the standard library of the `go.mod` toolchain, for
+      WaWarden and for every module in `go.mod` that any of the binaries link
+      (see [Licences](#licences)).
 - [ ] Dispatch the workflow on `main`:
       `gh workflow run release.yml --ref main -f version=<version>`.
 - [ ] Before approving the `release` environment, read the run: the commit is the
-      intended tip of `main`, the version is right, and the build and rebuild jobs
-      reported identical checksums and an identical index digest.
+      intended tip of `main`, the version is right, the build, rebuild and
+      darwin jobs reported identical checksums, and the build and rebuild jobs
+      an identical index digest.
 - [ ] Approve. Watch the publishing job through signing, attestation and release
       creation.
 - [ ] The `ghcr.io/dortort/wawarden` package is still public, so that anyone
@@ -612,8 +633,9 @@ A line that the regenerated file drops or alters is a breaking change.
       under [Verifying a release](#verifying-a-release) against the new release,
       including a reproduction.
 - [ ] On a Linux host, run the steps under
-      [Release binary](docs/getting-started.md#release-binary): they install the
-      new release, and `wawarden version` prints it.
+      [Release binary](docs/getting-started.md#release-binary), and on a Mac
+      those under [macOS](docs/getting-started.md#macos): each installs the new
+      release, and `wawarden version` prints it.
 - [ ] Check that the release is immutable: `gh release view <version> --repo
       dortort/wawarden --json isImmutable`. The workflow's last step fails when it
       is not.
@@ -680,7 +702,8 @@ For every update:
 - [ ] `govulncheck` is clean.
 - [ ] A bump of Go, the base image, buildx or the BuildKit image changes the
       release digests. The reproducibility job must still produce identical
-      results from two independent builds. For a base image bump, also verify the
+      checksums from four independent builds, and an identical image digest
+      from the two Linux builds. For a base image bump, also verify the
       new digest's signature as documented by the distroless project.
 
 #### The whatsmeow bump workflow
