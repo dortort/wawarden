@@ -611,6 +611,9 @@ A line that the regenerated file drops or alters is a breaking change.
 - [ ] From a machine other than the one used for development, run every command
       under [Verifying a release](#verifying-a-release) against the new release,
       including a reproduction.
+- [ ] On a Linux host, run the steps under
+      [Release binary](docs/getting-started.md#release-binary): they install the
+      new release, and `wawarden version` prints it.
 - [ ] Check that the release is immutable: `gh release view <version> --repo
       dortort/wawarden --json isImmutable`. The workflow's last step fails when it
       is not.
