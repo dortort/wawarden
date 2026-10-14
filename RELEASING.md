@@ -651,7 +651,8 @@ A line that the regenerated file drops or alters is a breaking change.
       investigate the difference before dispatching again.
 - [ ] The `wawarden` workflow of the
       [`dortort/homebrew-tap`](https://github.com/dortort/homebrew-tap) tap
-      publishes the new release's formula within six hours. GitHub disables a
+      checks for a new release every six hours and publishes its formula on
+      the first run that starts after the release is published. GitHub disables a
       public repository's scheduled workflows after 60 days without activity,
       and a disabled workflow cannot be dispatched either: when
       `gh workflow list --all --repo dortort/homebrew-tap` shows `wawarden`
@@ -662,8 +663,10 @@ A line that the regenerated file drops or alters is a breaking change.
       checks and install tests pass.
       `gh run list --workflow wawarden.yml --repo dortort/homebrew-tap --limit 1`
       shows the latest run and its result; wait for one still in progress with
-      `gh run watch <id> --repo dortort/homebrew-tap --exit-status`. Once a run
-      has succeeded, on a machine with the tap installed
+      `gh run watch <id> --repo dortort/homebrew-tap --exit-status`. A run that
+      started before the release was published also succeeds, without
+      publishing anything. Once a run that started after it has succeeded, on a
+      machine with the tap installed
       (`brew tap dortort/tap`, or an earlier `brew install dortort/tap/wawarden`),
       run `brew update`: `brew info dortort/tap/wawarden` shows the new version.
 
