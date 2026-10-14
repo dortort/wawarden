@@ -131,7 +131,8 @@ first: WhatsApp can ban an account that links an unofficial client.
 A development build can run a scripted fake engine in place of WhatsApp. It
 pairs, connects and plays synthetic messages and history, offline. You need
 git, curl and Go 1.21 or later, which downloads the toolchain that `go.mod`
-names when the installed one is older.
+names when the installed one is older; with `GOTOOLCHAIN=local`, as some
+distributions set it, you need Go 1.26.0 or later.
 Run these steps as a user other than root.
 
 Build the development binary and generate an admin token. `mktemp -d` creates

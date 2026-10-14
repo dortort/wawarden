@@ -27,7 +27,10 @@ request.
 
 The build uses the Go version on the `toolchain` line of `go.mod`. With its
 default settings, the `go` command (1.21 or later) downloads that version when
-the installed one is older. CI checks that `go env GOVERSION` matches it:
+the installed one is older. Some distributions' Go packages, such as Fedora's
+and Alpine's, set `GOTOOLCHAIN=local` in their `go.env`, which turns the
+download off; `go env -w GOTOOLCHAIN=auto` turns it back on. CI checks that
+`go env GOVERSION` matches the `toolchain` line:
 
 ```sh
 hack/check-go-version.sh
