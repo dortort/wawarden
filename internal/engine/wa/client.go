@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -45,9 +46,20 @@ var (
 var versionMu sync.Mutex
 
 var configureDevice = sync.OnceFunc(func() {
+	store.DeviceProps.Os = proto.String(deviceName(runtime.GOOS))
 	store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_DESKTOP.Enum()
 	store.DeviceProps.RequireFullSync = proto.Bool(true)
 })
+
+var osNames = map[string]string{"darwin": "macOS", "linux": "Linux", "windows": "Windows"}
+
+func deviceName(goos string) string {
+	name, ok := osNames[goos]
+	if !ok {
+		name = goos
+	}
+	return "WaWarden (" + name + ")"
+}
 
 type Devices interface {
 	NewDevice() *store.Device

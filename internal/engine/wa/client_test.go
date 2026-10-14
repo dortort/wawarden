@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -138,6 +139,9 @@ func TestNewRefusesIncompleteOptions(t *testing.T) {
 
 func TestTheClientIsBuiltForASupervisedDesktopCompanion(t *testing.T) {
 	r := newRig(t, pairedDevice())
+	if got, want := store.DeviceProps.GetOs(), deviceName(runtime.GOOS); got != want {
+		t.Errorf("device name %q, want %q", got, want)
+	}
 	if got := store.DeviceProps.GetPlatformType(); got != waCompanionReg.DeviceProps_DESKTOP {
 		t.Errorf("platform %v, want DESKTOP", got)
 	}
@@ -163,6 +167,19 @@ func TestTheClientIsBuiltForASupervisedDesktopCompanion(t *testing.T) {
 	checkClientSettings(t, "the client of an unpaired device", unpaired.c.current(), unpaired.c.http)
 	if unpaired.c.Paired() || unpaired.c.Account() != "" {
 		t.Fatalf("an unpaired device reports Paired %v, Account %q", unpaired.c.Paired(), unpaired.c.Account())
+	}
+}
+
+func TestTheDeviceIsNamedAfterWaWardenAndTheOS(t *testing.T) {
+	for goos, want := range map[string]string{
+		"linux":   "WaWarden (Linux)",
+		"darwin":  "WaWarden (macOS)",
+		"windows": "WaWarden (Windows)",
+		"freebsd": "WaWarden (freebsd)",
+	} {
+		if got := deviceName(goos); got != want {
+			t.Errorf("deviceName(%q) = %q, want %q", goos, got, want)
+		}
 	}
 }
 
