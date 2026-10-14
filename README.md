@@ -36,6 +36,7 @@ It is not:
 
 - [Documentation](#documentation)
 - [Security posture](#security-posture)
+- [Install](#install)
 - [Getting started](#getting-started)
 - [What it does](#what-it-does)
 - [Releases](#releases)
@@ -89,6 +90,33 @@ The same pages are in this repository:
   pre-key uploads (see [residual risks](docs/threat-model.md#residual-risks)).
 - **A message refused or interrupted before it is stored is lost**, not
   redelivered (see [residual risks](docs/threat-model.md#residual-risks)).
+
+## Install
+
+Releases ship static binaries for Linux on `amd64` and `arm64`, and a
+multi-arch container image, `ghcr.io/dortort/wawarden`. To download the latest
+binary, check it and install it, with [`gh`](https://cli.github.com) and no
+GitHub account:
+
+```sh
+cd "$(mktemp -d)"
+version=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/dortort/wawarden/releases/latest)
+version=${version##*/}
+case $(uname -m) in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; esac
+binary=wawarden_${version}_linux_$arch
+bundle=wawarden_${version}_provenance.sigstore.json
+gh release download "$version" --repo dortort/wawarden --pattern "$binary" &&
+  gh release download "$version" --repo dortort/wawarden --pattern SHA256SUMS --pattern "$bundle" &&
+  sha256sum --ignore-missing -c SHA256SUMS &&
+  gh attestation verify "$binary" --repo dortort/wawarden --bundle "$bundle" \
+    --cert-identity https://github.com/dortort/wawarden/.github/workflows/release.yml@refs/heads/main &&
+  sudo install -m 0755 "$binary" /usr/local/bin/wawarden &&
+  wawarden version
+```
+
+[Install](docs/getting-started.md#install) in Getting started covers the
+supported platforms, downloading without `gh`, the image, which has no
+`latest` tag, building from source and the service user.
 
 ## Getting started
 
@@ -261,8 +289,11 @@ is restored by hand (see [the runbook](docs/runbook.md#restoring-a-backup)).
 
 ## Releases
 
-See [`CHANGELOG.md`](CHANGELOG.md) for what each release introduced;
-`wawarden version` prints a binary's version.
+Each release on the [Releases](https://github.com/dortort/wawarden/releases)
+page ships Linux binaries for `amd64` and `arm64` with `SHA256SUMS`, SBOMs, a
+provenance bundle and, from `v0.2.0` on, the licence archive, and its notes
+give the container image's digest. See [`CHANGELOG.md`](CHANGELOG.md) for what
+each release introduced; `wawarden version` prints a binary's version.
 
 ## Running the tests
 
