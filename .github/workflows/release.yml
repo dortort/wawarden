@@ -385,6 +385,8 @@ jobs:
             echo '```sh'
             echo "gh attestation verify oci://$IMAGE@$DIGEST --repo $GITHUB_REPOSITORY --cert-identity $GITHUB_SERVER_URL/$workflow"
             echo "cosign verify $IMAGE@$DIGEST --certificate-identity $GITHUB_SERVER_URL/$workflow --certificate-oidc-issuer https://token.actions.githubusercontent.com"
+            echo "cd \"\$(mktemp -d)\""
+            echo "gh release download $VERSION --repo $GITHUB_REPOSITORY"
             echo "sha256sum -c SHA256SUMS"
             for arch in amd64 arm64; do
               echo "gh attestation verify wawarden_${VERSION}_linux_$arch --repo $GITHUB_REPOSITORY --cert-identity $GITHUB_SERVER_URL/$workflow"
