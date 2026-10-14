@@ -482,7 +482,7 @@ For the unit in the [hardening guide](hardening.md#systemd), which runs
 5. Start the service: `sudo systemctl start wawarden`.
 6. Check the new release:
    - `wawarden version`
-   - `./wawarden admin status --token-file admin.token`
+   - `wawarden admin status --token-file admin.token`
    - `journalctl -u wawarden` for the first minutes of events
 7. Delete `wawarden.old` once you no longer need it. An older release refuses
    an archive that a newer one brought forward, so a rollback needs the backup
