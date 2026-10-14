@@ -250,6 +250,7 @@ Group=wawarden
 ExecStart=/usr/local/bin/wawarden serve
 Environment=WAWARDEN_DATA_DIR=/var/lib/wawarden
 Environment=WAWARDEN_OWNER_PHONE=+15550100000
+Environment=WAWARDEN_BACKUP_AGE_RECIPIENT=age1...
 LoadCredential=admin-hash:/etc/wawarden/admin.sha256
 Environment=WAWARDEN_ADMIN_TOKEN_SHA256_FILE=%d/admin-hash
 StateDirectory=wawarden
