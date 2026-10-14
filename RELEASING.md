@@ -323,8 +323,9 @@ Sigstore bundle, checks a file without GitHub's attestation API. The image
 provenance and SBOM checks and `gh release verify` read that API, so they need
 an authenticated `gh` (`gh auth login`).
 
-The `cosign` command needs cosign v3.1.3, the release used to sign, or a newer
-one.
+The `cosign` command needs cosign v2.6.3 or newer, any v3 release included; the
+release signs with cosign v3.1.3. cosign v2.6.2 and older do not find the
+signature, which is stored as a Sigstore bundle, and report `no signatures found`.
 
 ### Image provenance
 
