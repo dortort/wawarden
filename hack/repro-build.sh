@@ -3,6 +3,7 @@ set -euo pipefail
 
 readonly module=github.com/dortort/wawarden
 readonly source_url=https://github.com/dortort/wawarden
+readonly oses=(linux darwin)
 readonly arches=(amd64 arm64)
 readonly platforms=linux/amd64,linux/arm64
 
@@ -49,7 +50,7 @@ if [ -n "$tags" ]; then
   die "tags reachable from HEAD change the module version go build stamps; fetch the commit with --no-tags"
 fi
 
-export GOENV=off GOFLAGS='' GOWORK=off GOTOOLCHAIN=local GOEXPERIMENT='' GOFIPS140=off CGO_ENABLED=0 GOOS=linux GOAMD64=v1 GOARM64=v8.0
+export GOENV=off GOFLAGS='' GOWORK=off GOTOOLCHAIN=local GOEXPERIMENT='' GOFIPS140=off CGO_ENABLED=0 GOAMD64=v1 GOARM64=v8.0
 
 toolchain=$(awk '$1 == "toolchain" { print $2 }' go.mod)
 [ -n "$toolchain" ] || die "go.mod has no toolchain directive"
@@ -75,7 +76,7 @@ build_setting() {
 }
 
 check_binary() {
-  local bin=$1 arch=$2 meta tags symbols
+  local bin=$1 os=$2 arch=$3 meta tags symbols
   meta=$(go version -m "$bin")
   tags=$(build_setting -tags "$meta")
   if [[ ,$tags, == *,dev,* ]]; then
@@ -84,6 +85,7 @@ check_binary() {
   [ "$(build_setting vcs.revision "$meta")" = "$revision" ] || die "$bin does not record vcs.revision=$revision"
   [ "$(build_setting vcs.modified "$meta")" = false ] || die "$bin does not record vcs.modified=false"
   [ "$(build_setting CGO_ENABLED "$meta")" = 0 ] || die "$bin does not record CGO_ENABLED=0"
+  [ "$(build_setting GOOS "$meta")" = "$os" ] || die "$bin does not record GOOS=$os"
   [ "$(build_setting GOARCH "$meta")" = "$arch" ] || die "$bin does not record GOARCH=$arch"
   if LC_ALL=C grep -qaF -- "$marker" "$bin"; then
     die "$bin contains the dev build marker"
@@ -101,7 +103,7 @@ check_binary() {
     log "$bin not run: push mode runs no binary it builds"
     return
   fi
-  if [ "$hostos" != linux ] || [ "$arch" != "$hostarch" ]; then
+  if [ "$os" != "$hostos" ] || [ "$arch" != "$hostarch" ]; then
     log "$bin not run: the host is $hostos/$hostarch"
     return
   fi
@@ -123,14 +125,16 @@ sha256() {
 rm -rf dist
 mkdir dist
 names=()
-for arch in "${arches[@]}"; do
-  name=wawarden_${VERSION}_linux_$arch
-  GOARCH=$arch go build -mod=readonly -trimpath -buildvcs=true \
-    -ldflags="-buildid= -X $module/internal/buildinfo.Version=$VERSION" \
-    -o "dist/$name" ./cmd/wawarden
-  check_binary "dist/$name" "$arch"
-  touch -d "$stamp" "dist/$name"
-  names+=("$name")
+for os in "${oses[@]}"; do
+  for arch in "${arches[@]}"; do
+    name=wawarden_${VERSION}_${os}_$arch
+    GOOS=$os GOARCH=$arch go build -mod=readonly -trimpath -buildvcs=true \
+      -ldflags="-buildid= -X $module/internal/buildinfo.Version=$VERSION" \
+      -o "dist/$name" ./cmd/wawarden
+    check_binary "dist/$name" "$os" "$arch"
+    touch -d "$stamp" "dist/$name"
+    names+=("$name")
+  done
 done
 hack/licenses.sh
 licenses=wawarden_${VERSION}_licenses.tar.gz

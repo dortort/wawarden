@@ -154,6 +154,8 @@ jobs:
           path: |
             dist/wawarden_*_linux_amd64
             dist/wawarden_*_linux_arm64
+            dist/wawarden_*_darwin_amd64
+            dist/wawarden_*_darwin_arm64
             dist/wawarden_*_licenses.tar.gz
             dist/wawarden_*.spdx.json
             dist/SHA256SUMS
