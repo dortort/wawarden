@@ -110,6 +110,22 @@ The binaries' names carry the version. Only `SHA256SUMS` has a URL that
 always names the latest release:
 `https://github.com/dortort/wawarden/releases/latest/download/SHA256SUMS`.
 
+### With go install
+
+```sh
+CGO_ENABLED=0 go install -trimpath github.com/dortort/wawarden/cmd/wawarden@latest
+```
+
+This builds the latest release from the Go module proxy and installs it as
+`wawarden` in `$(go env GOPATH)/bin`, or in `GOBIN` when that is set; that
+directory must be on your `PATH`, or copy the binary to `/usr/local/bin` with
+`sudo install -m 0755`. It needs Go 1.26.0 or later; with `GOTOOLCHAIN=auto`,
+an older Go downloads a newer one. It builds with that Go rather than the
+toolchain the releases use, so the binary is not byte-identical to a release
+binary and has no provenance attestation. `go version -m "$(command -v wawarden)"`
+shows the release it was built from. `wawarden version` shows it too, except
+for `v1.0.0` and earlier, which print `dev`.
+
 ### Container image
 
 Each release publishes a multi-arch image for `linux/amd64` and `linux/arm64`.
@@ -146,8 +162,9 @@ needs Go 1.26.0 or later, the `go` line of `go.mod`, and uses the installed Go.
 `go env GOTOOLCHAIN` shows the setting, and `GOTOOLCHAIN=auto` in front of the
 build command turns the download back on.
 
-`wawarden version` of such a build prints `dev`. `go version -m wawarden`
-shows the module version, which is the tag for a clean checkout of one. The
+`wawarden version` of a clean checkout of a release tag prints that release,
+except for `v1.0.0` and earlier, which print `dev`; any other source build
+prints `dev`. `go version -m wawarden` shows the module version. The
 binary is not byte-identical to the release's;
 [Reproducing a release](../RELEASING.md#reproducing-a-release) gives the
 procedure that is.

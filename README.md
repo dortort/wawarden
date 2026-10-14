@@ -114,6 +114,10 @@ gh release download "$version" --repo dortort/wawarden --pattern "$binary" &&
   wawarden version
 ```
 
+With Go, `CGO_ENABLED=0 go install -trimpath github.com/dortort/wawarden/cmd/wawarden@latest`
+builds and installs the latest release; see
+[Install](docs/getting-started.md#with-go-install).
+
 [Install](docs/getting-started.md#install) in Getting started covers the
 supported platforms, downloading without `gh`, the image, which has no
 `latest` tag, building from source and the service user.
