@@ -1,9 +1,16 @@
 // Package buildinfo reports the version, VCS state and flavour of the running binary.
 package buildinfo
 
-import "runtime/debug"
+import (
+	"regexp"
+	"runtime/debug"
+)
 
-var Version = "dev"
+const unreleased = "dev"
+
+var Version = unreleased
+
+var releaseVersion = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 
 type Info struct {
 	Version  string
@@ -14,13 +21,16 @@ type Info struct {
 
 func Read() Info {
 	bi, _ := debug.ReadBuildInfo()
-	return fromBuildInfo(bi)
+	return fromBuildInfo(Version, bi)
 }
 
-func fromBuildInfo(bi *debug.BuildInfo) Info {
-	info := Info{Version: Version, Dev: Dev}
+func fromBuildInfo(version string, bi *debug.BuildInfo) Info {
+	info := Info{Version: version, Dev: Dev}
 	if bi == nil {
 		return info
+	}
+	if version == unreleased && releaseVersion.MatchString(bi.Main.Version) {
+		info.Version = bi.Main.Version
 	}
 	for _, s := range bi.Settings {
 		switch s.Key {
