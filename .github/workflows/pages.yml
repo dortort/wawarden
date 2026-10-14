@@ -1,7 +1,7 @@
 name: pages
 
 # Builds the documentation site on every pull request, and publishes it to
-# GitHub Pages (https://dortort.github.io/wawarden/) on every push to main.
+# GitHub Pages (https://wawarden.dortort.dev/) on every push to main.
 # The site is mkdocs.yml over docs/ plus the root Markdown files; see website/.
 
 on:

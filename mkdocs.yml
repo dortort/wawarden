@@ -1,9 +1,9 @@
-# The documentation site, published at https://dortort.github.io/wawarden/ by
+# The documentation site, published at https://wawarden.dortort.dev/ by
 # .github/workflows/pages.yml. Preview it locally with:
 #   python3 -m venv .venv && .venv/bin/pip install --no-deps --require-hashes -r website/requirements.txt
 #   .venv/bin/mkdocs serve --strict
 site_name: WaWarden
-site_url: https://dortort.github.io/wawarden/
+site_url: https://wawarden.dortort.dev/
 site_description: A self-hosted WhatsApp gateway for your own AI agents, scoped per client and per chat.
 repo_url: https://github.com/dortort/wawarden
 repo_name: dortort/wawarden

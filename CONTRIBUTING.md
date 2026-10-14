@@ -269,7 +269,7 @@ same commit.
 
 ## Documentation site
 
-The site at <https://dortort.github.io/wawarden/> is built by MkDocs with the
+The site at <https://wawarden.dortort.dev/> is built by MkDocs with the
 Material theme. Its sources are [`mkdocs.yml`](mkdocs.yml), `docs/` and the
 root Markdown files. The Python packages are pinned with hashes in
 [`website/requirements.txt`](website/requirements.txt).

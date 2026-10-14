@@ -6,7 +6,7 @@
 </h1>
 
 <p align="center">
-  <a href="https://dortort.github.io/wawarden/">Documentation</a> ·
+  <a href="https://wawarden.dortort.dev/">Documentation</a> ·
   <a href="docs/getting-started.md">Getting started</a> ·
   <a href="https://github.com/dortort/wawarden/releases">Releases</a>
 </p>
@@ -45,7 +45,7 @@ It is not:
 
 ## Documentation
 
-The documentation is published at **<https://dortort.github.io/wawarden/>**.
+The documentation is published at **<https://wawarden.dortort.dev/>**.
 The same pages are in this repository:
 
 | Document | Content |
