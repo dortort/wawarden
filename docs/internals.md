@@ -141,10 +141,13 @@ Pairing links a new device by a code that the owner enters on the phone.
 (`rate_limited`); a refused or failed request counts as an attempt once it
 passed the first two checks. The engine connects, waits up to 30 seconds for
 WhatsApp to offer a login session, and asks for a code for the number in
-`WAWARDEN_OWNER_PHONE` and no other, as a `Chrome (Linux)` device with a
-notification on the phone. The route gives the engine 25 seconds in all, so
-that its answer leaves before the listener's 30-second write timeout; a code
-that does not arrive in time fails the request with `pair_failed`. WhatsApp
+`WAWARDEN_OWNER_PHONE` and no other, with a notification on the phone that
+names a `Chrome (Linux)` device. The device registers as `WaWarden` followed
+by the operating system it runs on, such as `WaWarden (Linux)`, and Linked
+devices lists it under that name; the name is fixed when the device pairs.
+The route gives the engine 25 seconds in all, so that its answer leaves
+before the listener's 30-second write timeout; a code that does not arrive in
+time fails the request with `pair_failed`. WhatsApp
 also sends login QR codes, which the adapter drops at once without keeping
 them. The pairing code goes to the caller only: it is never logged, counted,
 kept or put into an event. Before the protocol library saves anything, the

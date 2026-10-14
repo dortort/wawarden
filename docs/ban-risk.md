@@ -97,7 +97,7 @@ raises the risk is likewise unknown.
 | Measure | Where it is described |
 |---|---|
 | One linked device per service. Pairing is refused while a device is paired, allowed at most 3 times an hour, and only for the number in `WAWARDEN_OWNER_PHONE`; a device that turns out to belong to another account is logged out again and reported as `pair_rejected`. | [Pairing](internals.md#pairing), [pairing refusals](threat-model.md#pairing-refusals) |
-| It links as a desktop browser companion named `Chrome (Linux)`. | [`admin pair`](cli.md#admin-status-admin-pair-and-admin-reconnect), [Pairing](internals.md#pairing) |
+| It links as a desktop browser companion through the phone-number pairing of a `Chrome (Linux)` client, and Linked devices lists it as `WaWarden (Linux)`. | [`admin pair`](cli.md#admin-status-admin-pair-and-admin-reconnect), [Pairing](internals.md#pairing) |
 | Read-only by default. A client sends only to the chats the operator listed for it with `--write`, and a client that reads every chat can never send. | [Admin clients](cli.md#admin-clients-and-admin-chats) |
 | No first contact. A send to a direct chat that has never written to the account is refused `403` unless the client was created with `--allow-first-contact`. | [Sending](api.md#sending) |
 | Paced and budgeted sends. One send at a time across all clients, and at least 3 seconds plus up to 2 more between the starts of two sends; 10 sends a minute per client; 30 an hour for all clients together, shared out among the clients that may write; caps of 10 and 60 that only `WAWARDEN_UNSAFE_SEND_CAPS` lifts. A send over a limit is refused `429`, never queued. | [Send limits](api.md#send-limits) |
