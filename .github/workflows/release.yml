@@ -375,13 +375,27 @@ jobs:
           {
             echo "Built from commit $GITHUB_SHA with $(go env GOVERSION)."
             echo
+            echo "## Install"
+            echo
+            echo "The binaries are static executables for Linux, \`wawarden_${VERSION}_linux_amd64\` and \`wawarden_${VERSION}_linux_arm64\`. Download one with \`SHA256SUMS\` and the provenance bundle into an empty directory, check both, and install it. None of these steps needs a GitHub account, and they stop at the first check that fails. For \`amd64\`:"
+            echo
+            echo '```sh'
+            echo "cd \"\$(mktemp -d)\""
+            echo "gh release download $VERSION --repo $GITHUB_REPOSITORY --pattern wawarden_${VERSION}_linux_amd64 --pattern SHA256SUMS --pattern $bundle &&"
+            echo "  sha256sum --ignore-missing -c SHA256SUMS &&"
+            echo "  gh attestation verify wawarden_${VERSION}_linux_amd64 --repo $GITHUB_REPOSITORY --bundle $bundle --cert-identity $identity &&"
+            echo "  sudo install -m 0755 wawarden_${VERSION}_linux_amd64 /usr/local/bin/wawarden"
+            echo '```'
+            echo
+            echo "For \`arm64\`, replace \`amd64\`. [Install]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/docs/getting-started.md#install) covers the service user, the image and building from source."
+            echo
             echo "## Container image"
             echo
             echo '```text'
             echo "$IMAGE@$DIGEST"
             echo '```'
             echo
-            echo "The image is also tagged \`$VERSION\`. Deploy it by digest: the signature and the attestations cover the index digest above."
+            echo "The image is also tagged \`$VERSION\`; no \`latest\` tag is published. Deploy it by digest: the signature and the attestations cover the index digest above."
             echo
             echo "## Verify"
             echo
