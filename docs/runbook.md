@@ -465,8 +465,9 @@ upgrade into the older release.
 For the unit in the [hardening guide](hardening.md#systemd), which runs
 `/usr/local/bin/wawarden` and gives it `TimeoutStopSec=15`:
 
-1. Download `wawarden_<version>_linux_<arch>` and `SHA256SUMS` from the
-   release, and verify both as
+1. Download `wawarden_<version>_linux_<arch>`, `SHA256SUMS` and
+   `wawarden_<version>_provenance.sigstore.json` into an empty directory, as
+   [Release binary](getting-started.md#release-binary) shows, and check them as
    [RELEASING.md](../RELEASING.md#verifying-a-release) describes.
 2. Install the new binary next to the old one:
    `sudo install -m 0755 wawarden_<version>_linux_<arch> /usr/local/bin/wawarden.new`.
