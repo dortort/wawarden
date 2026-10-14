@@ -98,8 +98,12 @@ revision <commit>
 dev build <true|false>
 ```
 
-`<version>` is the release version for release binaries and `dev` for any other
-build. `<commit>` is the VCS revision recorded by `go build`, followed by
+`<version>` is the version set at link time, as release binaries have it. A build
+without one reports the main module's version when that is a release version,
+`vMAJOR.MINOR.PATCH`: a `go install github.com/dortort/wawarden/cmd/wawarden@<version>`
+build, or a `go build` from a clean checkout of a release tag. Any other build
+reports `dev`, such as one from a commit after a tag, from a modified tree, or with
+`-buildvcs=false`. `<commit>` is the VCS revision recorded by `go build`, followed by
 `(modified)` when the working tree was dirty, or `unknown` when the build recorded
 none. `dev build` is `true` only for binaries built with the `dev` build tag.
 
