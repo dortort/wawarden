@@ -37,10 +37,36 @@ func TestFromBuildInfo(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := fromBuildInfo(tt.bi)
+			got := fromBuildInfo(Version, tt.bi)
 			want := Info{Version: Version, Revision: tt.wantRevision, Modified: tt.wantModified, Dev: Dev}
 			if got != want {
 				t.Fatalf("fromBuildInfo() = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestVersionFromTheModule(t *testing.T) {
+	tests := []struct {
+		name, linked, module, want string
+	}{
+		{name: "go install of a release", linked: "dev", module: "v1.2.3", want: "v1.2.3"},
+		{name: "a release with a zero minor and patch", linked: "dev", module: "v1.0.0", want: "v1.0.0"},
+		{name: "a build outside version control", linked: "dev", module: "(devel)", want: "dev"},
+		{name: "no module version", linked: "dev", module: "", want: "dev"},
+		{name: "a commit after a tag", linked: "dev", module: "v1.2.4-0.20261014010000-f7d12a47976a", want: "dev"},
+		{name: "a modified tree at a tag", linked: "dev", module: "v1.2.3+dirty", want: "dev"},
+		{name: "a pre-release", linked: "dev", module: "v1.2.3-rc.1", want: "dev"},
+		{name: "a leading zero", linked: "dev", module: "v1.02.3", want: "dev"},
+		{name: "no v prefix", linked: "dev", module: "1.2.3", want: "dev"},
+		{name: "a version set at link time", linked: "v1.3.0", module: "v1.2.3", want: "v1.3.0"},
+		{name: "the CI version set at link time", linked: "ci", module: "v1.2.3", want: "ci"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bi := &debug.BuildInfo{Main: debug.Module{Path: "github.com/dortort/wawarden", Version: tt.module}}
+			if got := fromBuildInfo(tt.linked, bi).Version; got != tt.want {
+				t.Fatalf("version linked %q, module %q: got %q, want %q", tt.linked, tt.module, got, tt.want)
 			}
 		})
 	}
