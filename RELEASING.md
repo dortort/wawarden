@@ -316,8 +316,15 @@ Replace `<version>` with the release (for example `v1.0.0`), `<digest>` with the
 image index digest from the release notes, and `<arch>` with `amd64` or `arm64`.
 Always deploy the image by digest.
 
-Every `gh` command below needs an authenticated `gh` (`gh auth login`). The
-`cosign` command needs cosign v3.1.3, the release used to sign, or a newer one.
+The binary and licence-archive checks need no GitHub account: `gh release
+download` fetches a release's files without one, and `gh attestation verify`
+given `--bundle wawarden_<version>_provenance.sigstore.json`, the release's own
+Sigstore bundle, checks a file without GitHub's attestation API. The image
+provenance and SBOM checks and `gh release verify` read that API, so they need
+an authenticated `gh` (`gh auth login`).
+
+The `cosign` command needs cosign v3.1.3, the release used to sign, or a newer
+one.
 
 ### Image provenance
 
@@ -350,8 +357,11 @@ cosign verify ghcr.io/dortort/wawarden@sha256:<digest> \
 
 ### Binaries
 
-Download the binaries and `SHA256SUMS` from the release, then check the
-checksums. On Linux:
+Download the binaries, `SHA256SUMS` and
+`wawarden_<version>_provenance.sigstore.json` from the release, as
+[Install](docs/getting-started.md#install) shows, then check the checksums.
+`--ignore-missing` skips the files of the release you did not download. On
+Linux:
 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
@@ -363,13 +373,18 @@ On macOS:
 shasum -a 256 --ignore-missing -c SHA256SUMS
 ```
 
-Then check the provenance of each binary:
+Then check the provenance of each binary against the release's bundle:
 
 ```sh
 gh attestation verify wawarden_<version>_linux_<arch> \
   --repo dortort/wawarden \
+  --bundle wawarden_<version>_provenance.sigstore.json \
   --cert-identity https://github.com/dortort/wawarden/.github/workflows/release.yml@refs/heads/main
 ```
+
+The bundle holds the attestation whose subjects are the files `SHA256SUMS`
+lists. Without `--bundle`, the same command fetches the attestation from
+GitHub's attestation API instead, which needs `gh auth login`.
 
 The same command, given `wawarden_<version>_licenses.tar.gz`, checks the
 provenance of the licence archive of a release from `v0.2.0` on.
@@ -391,7 +406,8 @@ gh attestation verify wawarden_<version>_linux_<arch> \
 
 `gh attestation verify` checks SLSA provenance unless `--predicate-type` names
 another type. This command checks that the release workflow attested an SPDX 2.3
-SBOM for that binary.
+SBOM for that binary. The release ships no bundle of the SBOM attestations, so
+this command reads GitHub's attestation API and needs `gh auth login`.
 
 ### The release record
 
@@ -401,7 +417,7 @@ gh release verify-asset <version> SHA256SUMS --repo dortort/wawarden
 ```
 
 These check the attestation GitHub creates when an immutable release is
-published.
+published. Both need an authenticated `gh`.
 
 ### Reproducing a release
 
