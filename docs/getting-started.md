@@ -53,8 +53,8 @@ the default addresses on `127.0.0.1`. To run in a container instead, read
 
 | Platform | Release artifacts | From source |
 |---|---|---|
-| Linux on `amd64` (`x86_64`) and `arm64` (`aarch64`) | Binaries and the container image | Supported |
-| macOS 13 Ventura or later, Apple silicon and Intel | Binaries, from `v1.1.0` on | Supported; CI runs the tests and the release build on Apple silicon and Intel |
+| Linux on `amd64` (`x86_64`) and `arm64` (`aarch64`) | Binaries, directly or through [Homebrew](#homebrew), and the container image | Supported |
+| macOS 13 Ventura or later, Apple silicon and Intel | Binaries, directly or through [Homebrew](#homebrew), from `v1.1.0` on | Supported; CI runs the tests and the release build on Apple silicon and Intel |
 | Linux on other architectures | None | May build; not tested |
 | Windows, FreeBSD, OpenBSD and other systems | None | Does not build |
 
@@ -117,7 +117,55 @@ The binaries' names carry the version. Only `SHA256SUMS` has a URL that
 always names the latest release:
 `https://github.com/dortort/wawarden/releases/latest/download/SHA256SUMS`.
 
+### Homebrew
+
+On macOS, and on a Linux machine that does not run the service, install with
+[Homebrew](https://brew.sh):
+
+```sh
+brew install dortort/tap/wawarden
+```
+
+The formula, in the [`dortort/homebrew-tap`](https://github.com/dortort/homebrew-tap)
+tap, installs this system's prebuilt binary from the newest release the tap has
+published, as `wawarden` in `$(brew --prefix)/bin`. The formula records each
+binary's checksum from the release's `SHA256SUMS`, and Homebrew checks the
+download against it. The tap publishes the formula for a release only after
+checking the release's provenance. Homebrew does not quarantine the files a
+formula downloads, so on macOS the binary runs without the `xattr` step that
+[macOS](#macos) describes for a browser download. `brew upgrade wawarden`
+installs a newer release once the tap has published it.
+
+If you installed `wawarden` by hand before, remove that copy with
+`sudo rm /usr/local/bin/wawarden`, so that `wawarden` runs the one Homebrew
+manages. On an Intel Mac, remove it before `brew install`: Homebrew links into
+`/usr/local/bin` there and cannot link over a file that already exists.
+
+Homebrew installs the release's binary unchanged, so you can check the
+installed file's provenance yourself against the release's Sigstore bundle.
+These commands download the bundle of the installed version into a new empty
+directory and check the file that `wawarden` runs. They need
+[`gh`](https://cli.github.com) but no GitHub account:
+
+```sh
+cd "$(mktemp -d)"
+version=$(wawarden version | sed -n 's/^wawarden //p')
+bundle=wawarden_${version}_provenance.sigstore.json
+gh release download "$version" --repo dortort/wawarden --pattern "$bundle" &&
+  gh attestation verify "$(command -v wawarden)" --repo dortort/wawarden --bundle "$bundle" \
+    --cert-identity https://github.com/dortort/wawarden/.github/workflows/release.yml@refs/heads/main
+```
+
+On macOS, `serve` needs `WAWARDEN_DATA_DIR`, as [macOS](#macos) describes. On
+Linux, install the service's own binary as [Release binary](#release-binary)
+describes instead: the [systemd unit](hardening.md#systemd) runs
+`/usr/local/bin/wawarden`, and Homebrew's prefix belongs to the user who
+installed Homebrew, who could replace the binary the service runs.
+
 ### macOS
+
+On a Mac, [Homebrew](#homebrew) is the shortest route. This section installs
+without it.
 
 From `v1.1.0` on, releases also ship `wawarden_<version>_darwin_arm64`, for
 Apple silicon, and `wawarden_<version>_darwin_amd64`, for Intel Macs. They run
