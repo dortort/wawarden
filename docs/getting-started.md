@@ -16,6 +16,7 @@ alongside each step.
 ## Contents
 
 - [Prerequisites](#prerequisites)
+- [Install](#install)
 - [1. Prepare the secrets](#1-prepare-the-secrets)
 - [2. Configure and start](#2-configure-and-start)
 - [3. Put it behind HTTPS](#3-put-it-behind-https)
@@ -30,16 +31,8 @@ alongside each step.
 
 ## Prerequisites
 
-- [ ] **The binary or the image.** One of:
-  - a release binary, `wawarden_<version>_linux_amd64` or
-    `wawarden_<version>_linux_arm64`, verified as
-    [`RELEASING.md`](../RELEASING.md#verifying-a-release) describes and saved
-    as an executable `wawarden`;
-  - the image `ghcr.io/dortort/wawarden`, pulled by the digest in a release's
-    notes and verified the same way;
-  - a build from source with git and Go 1.21 or later, which downloads the
-    toolchain that `go.mod` names:
-    `go build -trimpath -o wawarden ./cmd/wawarden`.
+- [ ] **WaWarden**, installed as [Install](#install) describes: a release
+  binary, the image, or a build from source.
 - [ ] **A user other than root** to run the service. `serve` refuses to start
   as root.
 - [ ] **The [age](https://age-encryption.org) tools on a second machine**, to
@@ -53,6 +46,121 @@ alongside each step.
   VPN such as Tailscale, a private subnet with TLS, or a reverse proxy with TLS
   (see [network patterns](hardening.md#network-patterns)).
 - [ ] **Claude Code**, or another MCP client, on the agent's host.
+
+## Install
+
+### Supported platforms
+
+| Platform | Release artifacts | From source |
+|---|---|---|
+| Linux on `amd64` (`x86_64`) and `arm64` (`aarch64`) | Binaries and the container image | Supported |
+| macOS 13 Ventura or later, Apple silicon and Intel | None | Builds; CI does not test it |
+| Linux on other architectures | None | May build; not tested |
+| Windows, FreeBSD, OpenBSD and other systems | None | Does not build |
+
+Deploy the service on Linux, under [systemd](hardening.md#systemd) or as a
+[container](configuration.md#container-image). On Windows, use a Linux
+virtual machine; WSL2 and Docker Desktop have not been tested.
+
+### Release binary
+
+Each release ships a static binary per platform,
+`wawarden_<version>_linux_<arch>`, with `SHA256SUMS` and a Sigstore bundle of
+their build provenance, `wawarden_<version>_provenance.sigstore.json`. These
+commands download the latest release's binary for this host into a new empty
+directory, check its checksum and provenance, and install it as
+`/usr/local/bin/wawarden`. They stop at the first step that fails, so nothing
+is installed unless both checks pass. They need [`gh`](https://cli.github.com)
+but no GitHub account:
+
+```sh
+cd "$(mktemp -d)"
+version=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/dortort/wawarden/releases/latest)
+version=${version##*/}
+case $(uname -m) in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; esac
+binary=wawarden_${version}_linux_$arch
+bundle=wawarden_${version}_provenance.sigstore.json
+gh release download "$version" --repo dortort/wawarden --pattern "$binary" &&
+  gh release download "$version" --repo dortort/wawarden --pattern SHA256SUMS --pattern "$bundle" &&
+  sha256sum --ignore-missing -c SHA256SUMS &&
+  gh attestation verify "$binary" --repo dortort/wawarden --bundle "$bundle" \
+    --cert-identity https://github.com/dortort/wawarden/.github/workflows/release.yml@refs/heads/main &&
+  sudo install -m 0755 "$binary" /usr/local/bin/wawarden &&
+  wawarden version
+```
+
+To install another release, set `version` to its tag. The binary is
+downloaded on its own, so on a machine whose architecture has no binary `gh`
+stops with `no assets match the file pattern`. `--ignore-missing` checks only
+the files you downloaded; without it, the check fails on the other files
+`SHA256SUMS` lists. `gh attestation verify` checks the binary against the
+release's own bundle: that the release workflow on `main` of this repository
+built it. [Verifying a release](../RELEASING.md#verifying-a-release)
+describes these checks and the others.
+
+Without `gh`, download the same files with curl, in place of the two
+`gh release download` commands. The provenance check still needs `gh`:
+
+```sh
+base=https://github.com/dortort/wawarden/releases/download/$version
+curl -fL --remote-name-all "$base/$binary" "$base/SHA256SUMS" "$base/$bundle"
+```
+
+The binaries' names carry the version. Only `SHA256SUMS` has a URL that
+always names the latest release:
+`https://github.com/dortort/wawarden/releases/latest/download/SHA256SUMS`.
+
+### Container image
+
+Each release publishes a multi-arch image for `linux/amd64` and `linux/arm64`.
+Pull it by the digest in the release's notes,
+`ghcr.io/dortort/wawarden@sha256:<digest>`. Each image is also tagged with its
+version, `ghcr.io/dortort/wawarden:<version>`. No `latest` tag exists, by
+design: a deployment names the release it runs, and the signature and
+attestations cover the digest. Pulling needs no registry login.
+[Running in a container](#running-in-a-container) gives the commands that
+replace the steps below.
+
+### Build from source
+
+You need git and Go. Build a release tag, not `main`:
+
+```sh
+git clone https://github.com/dortort/wawarden
+cd wawarden
+git checkout "$(git tag --list 'v*' --sort=-v:refname | head -n 1)"
+CGO_ENABLED=0 go build -trimpath -o wawarden ./cmd/wawarden
+sudo install -m 0755 wawarden /usr/local/bin/wawarden
+```
+
+`CGO_ENABLED=0` builds without cgo, like the release; on Linux that makes a
+static binary. The `go` command, 1.21 or later, downloads the Go version on the
+`toolchain` line of `go.mod` when the installed one is older. Some
+distributions' Go packages, such as Fedora's and Alpine's, set
+`GOTOOLCHAIN=local` in their `go.env`, which turns that off. The build then
+needs Go 1.26.0 or later, the `go` line of `go.mod`, and uses the installed Go.
+`go env GOTOOLCHAIN` shows the setting, and `GOTOOLCHAIN=auto` in front of the
+build command turns the download back on.
+
+`wawarden version` of such a build prints `dev`. `go version -m wawarden`
+shows the module version, which is the tag for a clean checkout of one. The
+binary is not byte-identical to the release's;
+[Reproducing a release](../RELEASING.md#reproducing-a-release) gives the
+procedure that is.
+
+### The service user
+
+The [systemd unit](hardening.md#systemd) runs `/usr/local/bin/wawarden` as the
+system user and group `wawarden`, and creates the data directory,
+`/var/lib/wawarden`. Create the user without a login shell; its home is that
+directory:
+
+```sh
+sudo useradd --system --user-group --home-dir /var/lib/wawarden --no-create-home --shell /usr/sbin/nologin wawarden
+```
+
+The rest of this guide runs `wawarden` as your own user, in the foreground.
+The unit takes over for a lasting deployment.
 
 ## 1. Prepare the secrets
 
