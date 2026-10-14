@@ -169,12 +169,14 @@ CGO_ENABLED=0 go install -trimpath github.com/dortort/wawarden/cmd/wawarden@late
 This builds the latest release from the Go module proxy and installs it as
 `wawarden` in `$(go env GOPATH)/bin`, or in `GOBIN` when that is set; that
 directory must be on your `PATH`, or copy the binary to `/usr/local/bin` with
-`sudo install -m 0755`. It needs Go 1.26.0 or later; with `GOTOOLCHAIN=auto`,
-an older Go downloads a newer one. It builds with that Go rather than the
-toolchain the releases use, so the binary is not byte-identical to a release
-binary and has no provenance attestation. `go version -m "$(command -v wawarden)"`
-shows the release it was built from. `wawarden version` shows it too, except
-for `v1.0.0` and earlier, which print `dev`.
+`sudo install -m 0755`. A new Apple silicon Mac has no `/usr/local/bin`; create
+it first with `sudo mkdir -p /usr/local/bin`. It needs Go 1.26.0 or later; with
+`GOTOOLCHAIN=auto`, an older Go downloads a newer one. It builds with that Go
+rather than the toolchain the releases use, so the binary is not byte-identical
+to a release binary and has no provenance attestation.
+`go version -m "$(command -v wawarden)"` shows the release it was built from.
+`wawarden version` shows it too, except for `v1.0.0` and earlier, which print
+`dev`.
 
 ### Container image
 
@@ -200,6 +202,7 @@ git clone https://github.com/dortort/wawarden
 cd wawarden
 git checkout "$(git tag --list 'v*' --sort=-v:refname | head -n 1)"
 CGO_ENABLED=0 go build -trimpath -o wawarden ./cmd/wawarden
+sudo mkdir -p /usr/local/bin
 sudo install -m 0755 wawarden /usr/local/bin/wawarden
 ```
 
