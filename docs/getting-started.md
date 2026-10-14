@@ -54,7 +54,7 @@ the default addresses on `127.0.0.1`. To run in a container instead, read
 | Platform | Release artifacts | From source |
 |---|---|---|
 | Linux on `amd64` (`x86_64`) and `arm64` (`aarch64`) | Binaries and the container image | Supported |
-| macOS 13 Ventura or later, Apple silicon and Intel | None | Builds; CI does not test it |
+| macOS 13 Ventura or later, Apple silicon and Intel | Binaries, from `v1.1.0` on | Supported; CI runs the tests and the release build on Apple silicon and Intel |
 | Linux on other architectures | None | May build; not tested |
 | Windows, FreeBSD, OpenBSD and other systems | None | Does not build |
 
@@ -62,9 +62,16 @@ Deploy the service on Linux, under [systemd](hardening.md#systemd) or as a
 [container](configuration.md#container-image). On Windows, use a Linux
 virtual machine; WSL2 and Docker Desktop have not been tested.
 
+On macOS, WaWarden is supported for the commands you run away from the
+service, such as `backup verify` and `audit verify` on the machine that holds
+the backup identity, and `admin init`, and for trying it. `serve` runs on macOS
+and CI runs its tests there, but this documentation deploys the service on
+Linux only: the systemd unit and the container image are for Linux, and no
+launchd unit is provided.
+
 ### Release binary
 
-Each release ships a static binary per platform,
+Each release ships a static Linux binary per architecture,
 `wawarden_<version>_linux_<arch>`, with `SHA256SUMS` and a Sigstore bundle of
 their build provenance, `wawarden_<version>_provenance.sigstore.json`. These
 commands download the latest release's binary for this host into a new empty
@@ -109,6 +116,49 @@ curl -fL --remote-name-all "$base/$binary" "$base/SHA256SUMS" "$base/$bundle"
 The binaries' names carry the version. Only `SHA256SUMS` has a URL that
 always names the latest release:
 `https://github.com/dortort/wawarden/releases/latest/download/SHA256SUMS`.
+
+### macOS
+
+From `v1.1.0` on, releases also ship `wawarden_<version>_darwin_arm64`, for
+Apple silicon, and `wawarden_<version>_darwin_amd64`, for Intel Macs. They run
+on macOS 13 Ventura or later and link only the system's own libraries.
+`v1.0.0` and earlier have none, and the commands below stop at their first
+step for such a release: `gh` reports `no assets match the file pattern`. For
+those, use [go install](#with-go-install) or
+[build from source](#build-from-source).
+
+```sh
+cd "$(mktemp -d)"
+version=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/dortort/wawarden/releases/latest)
+version=${version##*/}
+case $(uname -m) in x86_64) arch=amd64 ;; arm64) arch=arm64 ;; esac
+binary=wawarden_${version}_darwin_$arch
+bundle=wawarden_${version}_provenance.sigstore.json
+gh release download "$version" --repo dortort/wawarden --pattern "$binary" &&
+  gh release download "$version" --repo dortort/wawarden --pattern SHA256SUMS --pattern "$bundle" &&
+  shasum -a 256 --ignore-missing -c SHA256SUMS &&
+  gh attestation verify "$binary" --repo dortort/wawarden --bundle "$bundle" \
+    --cert-identity https://github.com/dortort/wawarden/.github/workflows/release.yml@refs/heads/main &&
+  sudo mkdir -p /usr/local/bin &&
+  sudo install -m 0755 "$binary" /usr/local/bin/wawarden &&
+  wawarden version
+```
+
+The macOS binaries are not notarized by Apple. Files that `gh` and `curl`
+download carry no quarantine attribute, so they run. A browser marks its
+downloads as quarantined, and macOS then refuses to run the file because it
+cannot check it for malware. For a browser download, run the checks above,
+then remove the attribute before `sudo install`, which copies it to the
+installed file: `xattr -d com.apple.quarantine wawarden_<version>_darwin_<arch>`.
+If you installed it already, remove it there too:
+`sudo xattr -d com.apple.quarantine /usr/local/bin/wawarden`. The Apple
+silicon binary carries the ad-hoc signature that Go's linker writes, which
+Apple silicon requires before it runs any code; it names no developer. The
+Intel binary is unsigned.
+
+`serve` needs `WAWARDEN_DATA_DIR`: its default, `/data`, does not exist on
+macOS and cannot be created there. The other commands read no data directory;
+`keys rotate` takes it as `--data-dir`.
 
 ### With go install
 
