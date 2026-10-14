@@ -9,9 +9,9 @@ registered in Claude Code. To try WaWarden without an account first, use
 > [ban-risk notes](ban-risk.md) before linking an account.** WhatsApp can
 > restrict, log out or ban an account that links an unofficial client.
 
-The commands use `./wawarden` and the default addresses on `127.0.0.1`. To run
-in a container instead, read [Running in a container](#running-in-a-container)
-alongside each step.
+The commands use `wawarden`, installed as [Install](#install) describes, and
+the default addresses on `127.0.0.1`. To run in a container instead, read
+[Running in a container](#running-in-a-container) alongside each step.
 
 ## Contents
 
@@ -171,7 +171,7 @@ also read it:
 
 ```sh
 umask 077
-./wawarden admin init > admin.txt
+wawarden admin init > admin.txt
 sed -n 's/^sha256: //p' admin.txt > admin.sha256
 sed -n 's/^token: //p' admin.txt > admin.token
 rm admin.txt
@@ -202,7 +202,7 @@ export WAWARDEN_DATA_DIR="$HOME/wawarden-data"
 export WAWARDEN_OWNER_PHONE=+15550100001
 export WAWARDEN_ADMIN_TOKEN_SHA256_FILE="$PWD/admin.sha256"
 export WAWARDEN_BACKUP_AGE_RECIPIENT='age1...'
-./wawarden serve
+wawarden serve
 ```
 
 `serve` runs in the foreground, so run the admin commands of the next steps
@@ -264,7 +264,7 @@ curl -i https://<your-host>/v1/me
 ## 4. Pair
 
 ```sh
-./wawarden admin pair --token-file admin.token
+wawarden admin pair --token-file admin.token
 ```
 
 It prints `pairing code: <code>`, and on standard error where to enter it. On
@@ -288,7 +288,7 @@ service reports `pair_rejected`.
 ## 5. Watch the status
 
 ```sh
-./wawarden admin status --token-file admin.token
+wawarden admin status --token-file admin.token
 ```
 
 ```text
@@ -359,7 +359,7 @@ identity:
 set -o pipefail
 mkdir -m 700 verify
 age --decrypt -i backup-identity.txt 20261005T120000Z.age |
-  ./wawarden backup verify --work-dir verify -
+  wawarden backup verify --work-dir verify -
 ```
 
 It prints counts only and ends with `verified: yes`.
@@ -371,8 +371,8 @@ procedure.
 List the chats the agent may read, then create a client for them:
 
 ```sh
-./wawarden admin chats list --match <part of a name> --token-file admin.token
-./wawarden admin clients create --token-file admin.token \
+wawarden admin chats list --match <part of a name> --token-file admin.token
+wawarden admin clients create --token-file admin.token \
   --name claude-code --read <id, +E.164 number or ref> --expires-days 90
 ```
 
@@ -398,7 +398,7 @@ chat must also be one of its `--read` chats, and an all-chats client cannot
 write:
 
 ```sh
-./wawarden admin clients create --token-file admin.token \
+wawarden admin clients create --token-file admin.token \
   --name claude-code-reply --read <chat> --write <chat>
 ```
 
@@ -511,9 +511,9 @@ Each item has a command that confirms it. In a container, run the
 `wawarden` commands with `docker exec -i wawarden /wawarden ... --token-stdin < admin.token`.
 
 - [ ] **A healthy service under a supervisor.**
-  `./wawarden healthcheck && echo healthy` prints `healthy`.
+  `wawarden healthcheck && echo healthy` prints `healthy`.
 - [ ] **A paired, connected account.**
-  `./wawarden admin status --token-file admin.token | grep -E '^(state|paired):'`
+  `wawarden admin status --token-file admin.token | grep -E '^(state|paired):'`
   prints `state: connected` and `paired: true`.
 - [ ] **A settled history sync.** The same status shows
   `history blobs pending: 0`.
@@ -526,7 +526,7 @@ Each item has a command that confirms it. In a container, run the
   `curl -i https://<your-host>/v1/me` from the agent's host answers
   `401 Unauthorized`.
 - [ ] **A scoped client.**
-  `./wawarden admin clients list --token-file admin.token` shows it as
+  `wawarden admin clients list --token-file admin.token` shows it as
   `state: active`, with its `expires` date.
 - [ ] **The MCP endpoint registered.** `claude mcp get whatsapp` shows it as
   connected.
