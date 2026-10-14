@@ -236,12 +236,14 @@ Binary sizes, measured on 2026-10-13 with
 `linux/amd64` and 30.2 MiB for `linux/arm64`. Each release's assets give the
 exact sizes.
 
-Image and memory figures were measured with `hack/repro-build.sh` on the code
-of `v0.2.0`, and have not been measured again since:
+Image sizes were measured on 2026-10-14 from the registry manifests of
+`v1.0.0`: the compressed layers add up to about 17.1 MiB (`linux/amd64`) and
+16.1 MiB (`linux/arm64`), and the uncompressed layers of `linux/arm64` to about
+33.8 MiB.
 
-- the image's compressed layers added up to about 15.3 MiB (`linux/amd64`) and
-  14.4 MiB (`linux/arm64`), and the `linux/arm64` image took about 29.0 MiB
-  unpacked;
+Memory was measured with `hack/repro-build.sh` on the code of `v0.2.0`, and has
+not been measured again since:
+
 - an unpaired `serve` left idle for two minutes in that image on
   `linux/arm64`, with no network, a read-only root filesystem and a named
   volume on `/data`, held a resident set of about 22.5 MiB. That was 8.0 MiB of
