@@ -70,15 +70,11 @@ jobs:
   build-and-test-macos:
     name: Build and test on macOS (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ matrix.timeout }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: macos-26
-            timeout: 45
-          - runner: macos-26-intel
-            timeout: 90
+        runner: [macos-26, macos-26-intel]
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
