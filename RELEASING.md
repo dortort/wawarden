@@ -644,8 +644,9 @@ A line that the regenerated file drops or alters is a breaking change.
       [`dortort/homebrew-tap`](https://github.com/dortort/homebrew-tap) tap
       publishes the new release's formula within six hours. To publish it
       sooner, dispatch it: `gh workflow run wawarden.yml --repo
-      dortort/homebrew-tap`. Then, after `brew update`,
-      `brew info dortort/tap/wawarden` shows the new version.
+      dortort/homebrew-tap`. Then, on a machine with the tap installed
+      (`brew tap dortort/tap`, or an earlier `brew install dortort/tap/wawarden`),
+      run `brew update`: `brew info dortort/tap/wawarden` shows the new version.
 - [ ] If the run fails before the release is published, delete the draft release,
       if one exists, and dispatch again. If the failed run left a tag, the tag
       ruleset prevents deleting it and the workflow refuses an existing tag:
