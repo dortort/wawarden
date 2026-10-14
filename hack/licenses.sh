@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+readonly oses=(linux darwin)
 readonly arches=(amd64 arm64)
 readonly out=dist/licenses
 
@@ -28,9 +29,11 @@ for name in LICENSE PATENTS; do
 done
 
 modules=$(
-  for arch in "${arches[@]}"; do
-    GOOS=linux GOARCH=$arch CGO_ENABLED=0 go list -mod=readonly -deps \
-      -f '{{with .Module}}{{.Path}}{{if not .Main}}@{{.Version}}{{end}} {{.Dir}}{{end}}' ./cmd/wawarden
+  for os in "${oses[@]}"; do
+    for arch in "${arches[@]}"; do
+      GOOS=$os GOARCH=$arch CGO_ENABLED=0 go list -mod=readonly -deps \
+        -f '{{with .Module}}{{.Path}}{{if not .Main}}@{{.Version}}{{end}} {{.Dir}}{{end}}' ./cmd/wawarden
+    done
   done | LC_ALL=C sort -u
 )
 
