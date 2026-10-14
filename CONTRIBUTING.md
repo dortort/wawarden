@@ -146,7 +146,8 @@ go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
 govulncheck ./...
 ```
 
-CI runs it on every change, and a separate workflow runs it daily.
+CI runs it for Linux and, with `GOOS=darwin`, for macOS on every change, and
+a separate workflow runs both daily.
 
 ## Fuzzing
 
@@ -248,8 +249,10 @@ VERSION=dev hack/repro-build.sh binaries
 
 It needs a clean working tree and a commit fetched without tags, so that
 `go build` stamps the same version information as a release. CI builds the
-binaries and the OCI image (`oci` mode, which also needs Docker) on two
-runners and compares their checksums and image digests. [Reproducing a release](RELEASING.md#reproducing-a-release)
+binaries and the OCI image (`oci` mode, which also needs Docker) on two Linux
+runners, amd64 and arm64, and the binaries alone on two macOS runners, Apple
+silicon and Intel. It compares all four checksums files, and the image
+digests of the two Linux builds. [Reproducing a release](RELEASING.md#reproducing-a-release)
 describes the full procedure.
 
 ## Documentation
@@ -343,12 +346,13 @@ request and every push to `main`:
 | Job | Runs |
 |---|---|
 | Build and test | Go version check, `gofmt`, build, vet and `go test -race`, each without and with `-tags dev` |
+| Build and test on macOS | The same as Build and test, without `gofmt`, on an Apple silicon and an Intel runner |
 | Property checks and a large archive | The two longer tests under [Test](#test) |
 | Lint | golangci-lint `v2.14.0`, without and with `--build-tags=dev` |
 | Modules | No `vendor`, `go mod tidy -diff`, `go mod verify`, read-only builds |
-| govulncheck | `govulncheck ./...` |
+| govulncheck | `govulncheck ./...` for Linux and macOS |
 | Fuzz | Each fuzz target for 60 seconds |
-| Reproducible build | Two builds, on amd64 and arm64 runners, compared bit for bit |
+| Reproducible build | Four builds: binaries and image on Linux amd64 and arm64, binaries on macOS Apple silicon and Intel; checksums compared bit for bit, image digests between the Linux builds; each build runs the binary for its own platform |
 
 CodeQL and OpenSSF Scorecard run in their own workflows, and so does the
 [documentation site](#documentation-site)'s strict build.
