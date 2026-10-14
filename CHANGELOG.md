@@ -87,9 +87,10 @@ its image digest and the commands to verify and reproduce it.
   such as `wawarden version`, the `wawarden_build_info` metric and the MCP
   servers' `serverInfo`. A version set at link time still takes precedence,
   and other builds still report `dev`.
-- The verification commands in the release notes download the release's files
-  before checking them, and check the binaries against the release's
-  provenance bundle, so they need no GitHub account.
+- The binary checks in the release notes download the release's files before
+  checking them, and check the binaries against the release's provenance
+  bundle, so they need no GitHub account. The image's provenance check still
+  needs `gh auth login`.
 - The systemd unit in the [hardening guide](docs/hardening.md) sets
   `WAWARDEN_BACKUP_AGE_RECIPIENT`, without which the service takes no backups.
 
