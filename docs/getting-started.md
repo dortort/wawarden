@@ -161,9 +161,9 @@ curl -i https://<your-host>/v1/me
 
 It prints `pairing code: <code>`, and on standard error where to enter it. On
 the owner's phone, in WhatsApp, open Linked devices, choose Link a device,
-then Link with phone number instead, and enter the code. WaWarden links as a
-`Chrome (Linux)` device. The code goes to you only; it is never logged or
-kept.
+then Link with phone number instead, and enter the code. The phone's
+notification names a `Chrome (Linux)` device; Linked devices then lists it as
+`WaWarden (Linux)`. The code goes to you only; it is never logged or kept.
 
 | Refusal | Exit code | What to do |
 |---|---|---|

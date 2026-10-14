@@ -198,7 +198,7 @@ history sync, and then [re-keys](#re-key) the chat.
 ## Linked device
 
 A device linked to the owner's WhatsApp account, such as WhatsApp Web or
-WaWarden itself, which links as `Chrome (Linux)`. Another linked device has the
+WaWarden itself, which links as `WaWarden (Linux)`. Another linked device has the
 account's full access, outside every scope and audit row of WaWarden. See
 [retiring other linked devices](runbook.md#retiring-other-linked-devices).
 
