@@ -100,7 +100,7 @@ check_binary() {
   go tool nm "$bin" | grep -E "[[:space:]]$module/internal/buildinfo\.Version\$" > /dev/null ||
     die "$bin lacks $module/internal/buildinfo.Version, the -X target symbol"
   if [ "$mode" = push ]; then
-    log "$bin not run: push mode runs no binary it builds"
+    log "$bin not run: push mode runs none of the wawarden binaries"
     return
   fi
   if [ "$os" != "$hostos" ] || [ "$arch" != "$hostarch" ]; then
