@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -321,8 +322,9 @@ func TestABackupTakenWhileIngestWrites(t *testing.T) {
 	archive, sess := stores(t, dir)
 	seedBlobs(t, archive, "seed", 1200, 4000)
 	id := identity(t)
-	var written atomic.Int64
+	var started, written atomic.Int64
 	stop := make(chan struct{})
+	first := make(chan struct{})
 	failed := make(chan error, 1)
 	go func() {
 		defer close(failed)
@@ -332,6 +334,7 @@ func TestABackupTakenWhileIngestWrites(t *testing.T) {
 				return
 			default:
 			}
+			started.Add(1)
 			err := archive.Write(context.Background(), "test.ingest", func(tx *ingest.Tx) error {
 				_, err := tx.RecordBlob(fmt.Sprintf("live-%d", i), []byte("ref"), epoch)
 				return err
@@ -341,18 +344,21 @@ func TestABackupTakenWhileIngestWrites(t *testing.T) {
 				return
 			}
 			written.Add(1)
+			if i == 0 {
+				close(first)
+			}
 		}
 	}()
-	for written.Load() == 0 {
-		time.Sleep(time.Millisecond)
+	select {
+	case <-first:
+	case err := <-failed:
+		t.Fatalf("the first ingest write failed: %v", err)
 	}
-	var before, copied int64
+	var begun, completed int64
 	watch := func(string) {
-		if copied == 0 {
-			copied = written.Load()
-		}
+		begun, completed = started.Load(), written.Load()
 	}
-	before = written.Load()
+	before := written.Load()
 	tk, rec := taker(t, dir, id.Recipient().String(), observed{archive, watch}, sess)
 	_, err := tk.Take(t.Context())
 	close(stop)
@@ -362,17 +368,52 @@ func TestABackupTakenWhileIngestWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Take: %v", err)
 	}
-	if copied <= before {
-		t.Fatalf("no ingest write completed between the start of the backup and the end of the archive copy (%d before, %d when copied)", before, copied)
+	if completed <= before {
+		t.Fatalf("no ingest write completed between the start of the backup and the end of the archive copy (%d before, %d when copied)", before, completed)
 	}
 	members := decrypt(t, filepath.Join(dir, Dir, backupName), id)
-	got := scalar(t, openCopy(t, members[0].body), "SELECT count(*) FROM history_blobs WHERE id LIKE 'live-%'")
-	if got < before || got > copied {
-		t.Fatalf("the copy holds %d live writes, want between %d and %d: a consistent point in time", got, before, copied)
+	copied := openCopy(t, members[0].body)
+	if n := scalar(t, copied, "SELECT count(*) FROM history_blobs WHERE id LIKE 'seed-%'"); n != 1200 {
+		t.Fatalf("the copy holds %d seeded blobs, want 1200", n)
+	}
+	live := liveWrites(t, copied)
+	for i, n := range live {
+		if n != i {
+			t.Fatalf("the copy holds live-%d where live-%d belongs: want the first writes with none missing, a consistent point in time", n, i)
+		}
+	}
+	if k := int64(len(live)); k < before || k > begun {
+		t.Fatalf("the copy holds the first %d live writes, want at least the %d completed before the backup began and at most the %d begun before the archive copy was handed over", k, before, begun)
 	}
 	if len(rec.done) != 1 {
 		t.Fatalf("backup_done events %v", rec.done)
 	}
+}
+
+func liveWrites(t *testing.T, db *sql.DB) []int {
+	t.Helper()
+	rows, err := db.QueryContext(t.Context(), "SELECT id FROM history_blobs WHERE id LIKE 'live-%'")
+	if err != nil {
+		t.Fatalf("list the live writes: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []int
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("read a live write: %v", err)
+		}
+		n, err := strconv.Atoi(strings.TrimPrefix(id, "live-"))
+		if err != nil || id != fmt.Sprintf("live-%d", n) {
+			t.Fatalf("the copy holds a blob %q that no write made", id)
+		}
+		out = append(out, n)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("list the live writes: %v", err)
+	}
+	slices.Sort(out)
+	return out
 }
 
 func mkdirMode(t *testing.T, path string, mode fs.FileMode) {
