@@ -104,16 +104,23 @@ above after any change to the repository settings.
   `packages: write`, `attestations: write`) and the OIDC token used for signing
   (`id-token: write`) are granted only to that job, so they exist only after
   approval.
-- Outside the release workflow, one job holds `id-token: write`: the OpenSSF
-  Scorecard job (`.github/workflows/scorecard.yml`), which needs it to publish its
-  results. It runs on pushes to `main` and on a schedule, does not build or run the
-  repository's code, and holds no `contents`, `packages` or `attestations` write
-  permission. The other write permissions outside the release workflow are
+- Outside the release workflow, two jobs hold `id-token: write`. The OpenSSF
+  Scorecard job (`.github/workflows/scorecard.yml`) needs it to publish its
+  results; it runs on pushes to `main` and on a schedule, and does not build or
+  run the repository's code. The Pages deploy job
+  (`.github/workflows/pages.yml`) needs it, with `pages: write`, to publish the
+  documentation site; it runs on pushes to `main` in the `github-pages`
+  environment, checks out nothing and runs only `actions/deploy-pages` on the
+  site the build job uploaded. Neither holds a `contents`, `packages` or
+  `attestations` write permission, and a token either requests names its own
+  workflow, which the verification commands, pinned to
+  `release.yml@refs/heads/main`, refuse. The other write permissions outside the
+  release workflow are `pages: write` (the Pages deploy job),
   `security-events: write` (Scorecard and CodeQL upload code-scanning results),
   `issues: write` (the daily `govulncheck` job manages one issue), and
   `contents: write` and `pull-requests: write`, held by the job of the
-  [whatsmeow bump workflow](#the-whatsmeow-bump-workflow) that pushes the
-  branch `bump/whatsmeow` and opens its pull request, and runs no Go code.
+  [whatsmeow bump workflow](#the-whatsmeow-bump-workflow) that pushes the branch
+  `bump/whatsmeow` and opens its pull request, and runs no Go code.
 - The publishing job pushes the image by digest, without a tag. Only after the
   pushed digest matches the build job's, and the index is signed and attested,
   does it add the version tag.
