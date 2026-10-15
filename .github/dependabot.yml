@@ -22,6 +22,14 @@ updates:
       default-days: 3
     commit-message:
       prefix: "ci(deps)"
+    # A CodeQL run fails unless init and analyze are the same version, so every codeql-action action moves together.
+    groups:
+      codeql-action:
+        applies-to: version-updates
+        patterns: ["github/codeql-action", "github/codeql-action/*"]
+      codeql-action-security:
+        applies-to: security-updates
+        patterns: ["github/codeql-action", "github/codeql-action/*"]
 
   - package-ecosystem: "docker"
     directory: "/"

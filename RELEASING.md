@@ -687,6 +687,13 @@ names, so libc moves only when a driver update raises it. An architecture test
 fails when the libc version in `go.mod` differs from the one the driver's
 `go.mod` requires.
 
+Dependabot proposes the `github/codeql-action` actions (`init`, `analyze`,
+`upload-sarif`) together in one pull request, for version and security updates
+alike, because a CodeQL run fails when `init` and `analyze` are at different
+versions. A security update changes only the actions that have an alert; if it
+leaves them at different versions, bring the others level in the same pull
+request.
+
 Dependabot does not update the following, so they are bumped by hand:
 
 | Item | Where it is pinned |
