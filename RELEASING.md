@@ -250,12 +250,15 @@ jobs built, and runs code from that commit:
     instruction: it copies the `linux` binaries and the licence files onto the
     digest-pinned base. BuildKit pushes the image to `ghcr.io` by digest.
 
-The *Log in to ghcr.io* step stores the job's token in the runner's Docker
-configuration (`~/.docker/config.json`), and the steps that call `gh` receive
-it as `GH_TOKEN`. Every step after the login, `hack/repro-build.sh` and all it
-runs included, can therefore use that token and its write permissions. Every
-step of the job, `hack/check-go-version.sh` included, can also request the
-job's OIDC token, the identity that signs and attests the release.
+The job's token, with its write permissions, is within reach of every step of
+the job, not only of the steps after the login. The runner holds it in the
+memory of its worker process from the start of the job, and GitHub-hosted
+runners give every step passwordless `sudo`, so any step, from the checkout
+on and `hack/check-go-version.sh` included, can read it there. The
+*Log in to ghcr.io* step also writes it to the runner's Docker configuration
+(`~/.docker/config.json`), and the steps that call `gh` receive it as
+`GH_TOKEN`. Every step can also request the job's OIDC token, the identity
+that signs and attests the release.
 
 The job does not run:
 
