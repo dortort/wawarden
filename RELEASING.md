@@ -9,6 +9,7 @@ to verify one, and the checklists the maintainer follows.
 - [Repository settings](#repository-settings)
 - [How a release is produced](#how-a-release-is-produced)
   - [Build and rebuild](#build-and-rebuild)
+  - [What the publishing job runs](#what-the-publishing-job-runs)
   - [What a release contains](#what-a-release-contains)
 - [Licences](#licences)
 - [Verifying a release](#verifying-a-release)
@@ -177,12 +178,13 @@ release workflow, by CI and by anyone reproducing a release:
   (Apple silicon) and `darwin/amd64` on `macos-26-intel`. All four release
   binaries are therefore run before anything is published.
 - The publishing job runs the script in `push` mode, which runs none of the
-  binaries it builds: that job holds the write permissions, so it runs no code
-  built from the repository. It proves instead that its binaries are
-  byte-identical to the ones the `build`, `rebuild` and `darwin` jobs ran. The
-  image it pushes must have the `build` job's index digest, and its
-  `SHA256SUMS` must equal the `build` job's, which the `rebuild` and `darwin`
-  jobs reproduced.
+  binaries it builds. It proves instead that its binaries are byte-identical
+  to the ones the `build`, `rebuild` and `darwin` jobs ran. The image it
+  pushes must have the `build` job's index digest, and its `SHA256SUMS` must
+  equal the `build` job's, which the `rebuild` and `darwin` jobs reproduced.
+  The script itself and the other repository code that job runs do run with
+  its write permissions:
+  [What the publishing job runs](#what-the-publishing-job-runs) lists them.
 - After building the binaries, the script runs `hack/licenses.sh`, which
   collects the licence files of the Go standard library and of every module
   linked into any of them (see [Licences](#licences)) into `dist/licenses`, and packs that directory into
@@ -225,6 +227,76 @@ and the licence archive but no image, on `macos-26` and `macos-26-intel`: the
 macOS runners have no Docker. Each runs the darwin binary for its runner, and
 stops unless its `SHA256SUMS` equals the `build` job's. They add a third and a
 fourth independent build of every binary, on another operating system.
+
+### What the publishing job runs
+
+The publishing job, `release` (*Publish*), is the only job of the release
+workflow that holds `contents: write`, `packages: write`,
+`attestations: write` and `id-token: write`. It checks out the commit the
+workflow was dispatched on, the commit the `build`, `rebuild` and `darwin`
+jobs built, and runs code from that commit:
+
+- the `run` steps of `.github/workflows/release.yml` as that commit defines
+  them, among them the release notes and `gh release create`;
+- `hack/check-go-version.sh`;
+- `hack/repro-build.sh push`, and through it:
+  - `go build` of `./cmd/wawarden` for the four platforms, then
+    `go version -m` and `go tool nm` on each binary;
+  - `hack/licenses.sh`, which lists the linked modules with `go list` and
+    copies their licence files;
+  - `hack/tarball.go`, compiled and run with `go run`, which packs the licence
+    archive;
+  - a BuildKit build of the repository's `Dockerfile`, which has no `RUN`
+    instruction: it copies the `linux` binaries and the licence files onto the
+    digest-pinned base. BuildKit pushes the image to `ghcr.io` by digest.
+
+The *Log in to ghcr.io* step stores the job's token in the runner's Docker
+configuration (`~/.docker/config.json`), and the steps that call `gh` receive
+it as `GH_TOKEN`. Every step after the login, `hack/repro-build.sh` and all it
+runs included, can therefore use that token and its write permissions. Every
+step of the job, `hack/check-go-version.sh` included, can also request the
+job's OIDC token, the identity that signs and attests the release.
+
+The job does not run:
+
+- any binary it builds: `push` mode skips the `wawarden version` check, which
+  the `build`, `rebuild` and `darwin` jobs make holding only `contents: read`;
+- code from the Go modules the binaries link: `go build` compiles it and
+  `go list` lists it without running it, and `hack/tarball.go` imports only
+  the standard library;
+- the tests, `go generate`, or a shell inside the image build.
+
+Besides the repository's code, it runs the Go toolchain that the `toolchain`
+line of `go.mod` names, the buildx release that `BUILDX_VERSION` names, the
+BuildKit image pinned by digest in `hack/repro-build.sh`, cosign v3.1.3,
+GitHub Actions pinned by commit SHA, and tools of the runner image such as
+`docker`, `gh`, `git` and `jq`.
+
+What bounds the risk:
+
+- The code is the code being released. The workflow file that grants the
+  permissions is read from the same commit, so source on `main` that wanted to
+  misuse them from a script could as well do it from a step of the workflow:
+  running the scripts gives that commit nothing its workflow file does not
+  already have. The threat model's
+  [trust roots](docs/threat-model.md#trust-roots) already assume that the
+  maintainer's account controls releases and that a release built from
+  malicious source on `main` passes every verification.
+- The job starts only after the maintainer approves the `release`
+  environment, which administrators cannot bypass and which accepts
+  deployments only from `main`, and every job runs only on a dispatch on
+  `refs/heads/main`. The `guard` job checks these environment settings and
+  requires a successful `ci.yml` push run on `main` for the commit, and the
+  [checklist](#cutting-a-release) has the maintainer confirm, before
+  approving, that the commit is the intended tip of `main`.
+- By the time the job starts, the `build`, `rebuild` and `darwin` jobs have
+  built the same commit independently, holding only `contents: read`, and
+  agreed. The publishing job signs, attests and releases nothing unless the
+  digest it pushed equals the `build` job's and its `SHA256SUMS` equals the
+  `build` job's. That comparison bounds what the job signs, attests, tags and
+  releases, not what its steps can do with the token before it: when it runs,
+  the image is already in the registry, untagged.
+- Every action is pinned by commit SHA, which the repository requires.
 
 ### What a release contains
 
