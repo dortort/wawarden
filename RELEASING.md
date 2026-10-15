@@ -178,10 +178,11 @@ release workflow, by CI and by anyone reproducing a release:
   (Apple silicon) and `darwin/amd64` on `macos-26-intel`. All four release
   binaries are therefore run before anything is published.
 - The publishing job runs the script in `push` mode, which runs none of the
-  binaries it builds. It proves instead that its binaries are byte-identical
-  to the ones the `build`, `rebuild` and `darwin` jobs ran. The image it
-  pushes must have the `build` job's index digest, and its `SHA256SUMS` must
-  equal the `build` job's, which the `rebuild` and `darwin` jobs reproduced.
+  four `wawarden` binaries it builds. It proves instead that they are
+  byte-identical to the ones the `build`, `rebuild` and `darwin` jobs ran.
+  The image it pushes must have the `build` job's index digest, and its
+  `SHA256SUMS` must equal the `build` job's, which the `rebuild` and `darwin`
+  jobs reproduced.
   The script itself and the other repository code that job runs do run with
   its write permissions:
   [What the publishing job runs](#what-the-publishing-job-runs) lists them.
@@ -262,8 +263,10 @@ that signs and attests the release.
 
 The job does not run:
 
-- any binary it builds: `push` mode skips the `wawarden version` check, which
-  the `build`, `rebuild` and `darwin` jobs make holding only `contents: read`;
+- any of the four `wawarden` binaries it builds: `push` mode skips the
+  `wawarden version` check, which the `build`, `rebuild` and `darwin` jobs
+  make holding only `contents: read`. The only program the job builds and
+  runs is `hack/tarball.go`, listed above;
 - code from the Go modules the binaries link: `go build` compiles it and
   `go list` lists it without running it, and `hack/tarball.go` imports only
   the standard library;
