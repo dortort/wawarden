@@ -265,8 +265,8 @@ The job does not run:
 
 - any of the four `wawarden` binaries it builds: `push` mode skips the
   `wawarden version` check, which the `build`, `rebuild` and `darwin` jobs
-  make holding only `contents: read`. The only program the job builds and
-  runs is `hack/tarball.go`, listed above;
+  make holding only `contents: read`. The only program built from the
+  repository that the job runs is `hack/tarball.go`, listed above;
 - code from the Go modules the binaries link: `go build` compiles it and
   `go list` lists it without running it, and `hack/tarball.go` imports only
   the standard library;
@@ -276,7 +276,8 @@ Besides the repository's code, it runs the Go toolchain that the `toolchain`
 line of `go.mod` names, the buildx release that `BUILDX_VERSION` names, the
 BuildKit image pinned by digest in `hack/repro-build.sh`, cosign v3.1.3,
 GitHub Actions pinned by commit SHA, and tools of the runner image such as
-`docker`, `gh`, `git` and `jq`.
+`docker`, `gh`, `git` and `jq`. The toolchain ships no prebuilt `nm`, so
+`go tool nm` builds it from the toolchain's own source and then runs it.
 
 What bounds the risk:
 
