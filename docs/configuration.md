@@ -544,8 +544,11 @@ Outside that guarantee are:
   held elsewhere in the archive: by another message, a message waiting in the
   inbox, a push name, a chat name or group subject, an identifier or the
   schema;
-- a revocation or edit that arrives before history sync has stored its
-  target (see [Ingest](internals.md#ingest)).
+- an edit, or a revocation the archive would have refused for a stored
+  target, that arrives before history sync has stored its target, and a late
+  copy of a revoked message whose tombstone has lapsed or was dropped, or whose
+  sender's canonical identifier changed in between (see
+  [Ingest](internals.md#ingest)).
 
 To keep removed text out of the full-text index, a deletion can make the
 service rewrite the whole index right after it commits. A rewrite holds the
