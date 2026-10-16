@@ -3,7 +3,11 @@ package stage
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"math"
 	"os"
@@ -142,6 +146,66 @@ func TestRandomnessFailuresFailClosed(t *testing.T) {
 	if _, err := newAEAD(make([]byte, 7)); err == nil {
 		t.Fatal("a seven-byte key set up a cipher")
 	}
+}
+
+func TestSectorsAreSealedUnderTheRandomKeyAndTheirOwnNonce(t *testing.T) {
+	seed := make([]byte, keyBytes+nameBytes)
+	for i := range seed {
+		seed[i] = byte(3 + 7*i)
+	}
+	s := testSpool(t, t.TempDir(), false, 0, math.MaxUint64)
+	s.random = bytes.NewReader(seed)
+	f, _ := testAdmit(t, s, 3*sectorSize)
+	if want := namePrefix + hex.EncodeToString(seed[keyBytes:]); f.name != want {
+		t.Fatalf("the spool file is named %q, want %q from the random bytes after the key", f.name, want)
+	}
+	plain := bytes.Repeat([]byte{0x5a}, 2*sectorSize)
+	disk := sealedOnDisk(t, s, f, plain)
+	if bytes.Equal(disk[:sectorSize], disk[sectorSize:]) {
+		t.Fatal("two sectors of equal plaintext hold equal ciphertext on disk")
+	}
+	block, err := aes.NewCipher(seed[:keyBytes])
+	if err != nil {
+		t.Fatalf("aes.NewCipher: %v", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatalf("cipher.NewGCM: %v", err)
+	}
+	for sector := range uint64(2) {
+		if f.gens[sector] != 1 {
+			t.Fatalf("sector %d is at generation %d after one write, want 1", sector, f.gens[sector])
+		}
+		var nonce [12]byte
+		binary.BigEndian.PutUint64(nonce[:8], sector)
+		binary.BigEndian.PutUint32(nonce[8:], 1)
+		sealed := append(bytes.Clone(disk[sector*sectorSize:(sector+1)*sectorSize]), f.tags[sector*tagSize:(sector+1)*tagSize]...)
+		got, err := gcm.Open(nil, nonce[:], sealed, nil)
+		if err != nil || !bytes.Equal(got, plain[sector*sectorSize:(sector+1)*sectorSize]) {
+			t.Fatalf("sector %d does not open under the random key and the nonce of its index and generation: %v", sector, err)
+		}
+	}
+	f.Erase()
+	s.random = rand.Reader
+	g, _ := testAdmit(t, s, 3*sectorSize)
+	if bytes.Equal(sealedOnDisk(t, s, g, plain), disk) {
+		t.Fatal("two spools of equal plaintext hold equal ciphertext on disk")
+	}
+}
+
+func sealedOnDisk(t testing.TB, s *Spool, f *Sealed, plain []byte) []byte {
+	t.Helper()
+	if _, err := f.Write(plain); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	disk, err := os.ReadFile(filepath.Clean(filepath.Join(s.dir, f.name)))
+	if err != nil {
+		t.Fatalf("the spool file could not be read from disk: %v", err)
+	}
+	if len(disk) != len(plain) {
+		t.Fatalf("the disk holds %d bytes for %d written", len(disk), len(plain))
+	}
+	return disk
 }
 
 func TestGenerationOverflowIsRefused(t *testing.T) {
