@@ -88,7 +88,7 @@ type engineParts struct {
 	session  deviceStore
 }
 
-type engineSource func(ctx context.Context, cfg config.Config, out *logx.Writer, logger, alerts *slog.Logger) (engineParts, error)
+type engineSource func(ctx context.Context, cfg config.Config, media mediaParts, out *logx.Writer, logger, alerts *slog.Logger) (engineParts, error)
 
 func New(ctx context.Context, cfg config.Config, out *logx.Writer, master *keys.Master) (*App, error) {
 	if master == nil {
@@ -154,7 +154,12 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 	if err := backup.RemoveStaging(cfg.DataDir); err != nil {
 		return nil, errors.Join(fmt.Errorf("app: remove the staging of an interrupted backup: %w", err), archive.Close())
 	}
-	if _, err := purgeSpool(cfg.DataDir); err != nil {
+	data, err := purgeSpool(cfg.DataDir)
+	if err != nil {
+		return nil, errors.Join(err, archive.Close())
+	}
+	media, err := newMediaParts(cfg, data, master)
+	if err != nil {
 		return nil, errors.Join(err, archive.Close())
 	}
 	logger.Info("archive opened", slog.String("event", "archive_opened"),
@@ -166,7 +171,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 		a.emf = metrics.NewEMF(reg, out, time.Now)
 	}
 	unpairs := &unpairCounter{Notifier: notifier}
-	parts, err := source(ctx, cfg, out, logger, alerts)
+	parts, err := source(ctx, cfg, media, out, logger, alerts)
 	if err != nil {
 		return nil, errors.Join(err, archive.Close())
 	}
@@ -174,6 +179,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 	if a.engine, err = engine.New(engine.Options{
 		Client: parts.client, Versions: parts.versions, Decoder: parts.decoder, Archive: archive, DataDir: cfg.DataDir,
 		OwnerPhone: cfg.OwnerPhone, HistoryMaxBytes: cfg.HistoryMaxBytes, Logger: logger, Notify: unpairs, Metrics: reg,
+		MediaOn: media.maxBytes > 0, MediaRefRetention: media.retention,
 	}); err != nil {
 		return nil, errors.Join(err, a.closeStores())
 	}

@@ -18,7 +18,7 @@ func engineFor(cfg config.Config) engineSource {
 	return openWhatsApp
 }
 
-func openFake(_ context.Context, cfg config.Config, _ *logx.Writer, _, alerts *slog.Logger) (engineParts, error) {
+func openFake(_ context.Context, cfg config.Config, _ mediaParts, _ *logx.Writer, _, alerts *slog.Logger) (engineParts, error) {
 	client, err := fake.New(fake.Options{OwnerPhone: cfg.OwnerPhone, WrongAccount: cfg.Dev.FakeWrongAccount, HistoryMaxBytes: cfg.HistoryMaxBytes})
 	if err != nil {
 		return engineParts{}, err
