@@ -29,7 +29,7 @@ func (s adminService) Status(ctx context.Context) (api.AdminStatus, error) {
 	if err != nil {
 		return api.AdminStatus{}, err
 	}
-	media, err := s.archive.Clients().MediaWriters(ctx, s.now())
+	media, err := s.archive.Clients().MediaWriters(ctx)
 	if err != nil {
 		return api.AdminStatus{}, err
 	}
@@ -51,7 +51,7 @@ func (s adminService) Status(ctx context.Context) (api.AdminStatus, error) {
 		InboxBacklog:     c.InboxBacklog,
 		InboxQuarantined: c.InboxQuarantined,
 		BackfillsToday:   int64(backfills),
-		Clients:          api.ClientCounts{Active: n.Active, Expired: n.Expired, Revoked: n.Revoked, AllChatsActive: n.AllChatsActive, MediaWriteActive: int64(media)},
+		Clients:          api.ClientCounts{Active: n.Active, Expired: n.Expired, Revoked: n.Revoked, AllChatsActive: n.AllChatsActive, MediaWriteActive: media},
 		LastIngest:       c.LastIngest,
 		Version:          s.version,
 	}, nil
