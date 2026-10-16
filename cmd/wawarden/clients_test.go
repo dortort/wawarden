@@ -64,8 +64,8 @@ func (f *routedListener) seen() ([]string, []string) {
 
 const (
 	groupRef     = "0123456789abcdef0123456789abcdef"
-	clientJSON   = `{"id":"aaaqeaye","name":"agent","state":"active","created_at":"2026-10-06T12:00:00Z","expires_at":"2027-01-04T12:00:00Z","revoked_at":null,"all_chats":false,"allow_first_contact":false,"read_chats":[{"id":"120363000000000001@g.us","kind":"group","known":true,"name":"Synthetic Group"},{"id":"15550100001@s.whatsapp.net","kind":"phone","known":false,"name":null}],"write_chats":[{"id":"120363000000000001@g.us","kind":"group","known":true,"name":"Synthetic Group"}]}`
-	clientOutput = "id: aaaqeaye\nname: agent\nstate: active\ncreated: 2026-10-06T12:00:00Z\nexpires: 2027-01-04T12:00:00Z\nrevoked: never\nall chats: false\nallow first contact: false\n" +
+	clientJSON   = `{"id":"aaaqeaye","name":"agent","state":"active","created_at":"2026-10-06T12:00:00Z","expires_at":"2027-01-04T12:00:00Z","revoked_at":null,"all_chats":false,"allow_first_contact":false,"allow_media":false,"read_chats":[{"id":"120363000000000001@g.us","kind":"group","known":true,"name":"Synthetic Group"},{"id":"15550100001@s.whatsapp.net","kind":"phone","known":false,"name":null}],"write_chats":[{"id":"120363000000000001@g.us","kind":"group","known":true,"name":"Synthetic Group"}]}`
+	clientOutput = "id: aaaqeaye\nname: agent\nstate: active\ncreated: 2026-10-06T12:00:00Z\nexpires: 2027-01-04T12:00:00Z\nrevoked: never\nall chats: false\nallow first contact: false\nallow media: false\n" +
 		"read chat: 120363000000000001@g.us (group, seen) Synthetic Group\nread chat: 15550100001@s.whatsapp.net (phone, not yet seen)\n" +
 		"write chat: 120363000000000001@g.us (group, seen) Synthetic Group\n"
 )
@@ -98,10 +98,45 @@ func TestClientsCreatePrintsTheTokenOnce(t *testing.T) {
 	if err := json.Unmarshal([]byte(bodies[2]), &sent); err != nil {
 		t.Fatalf("the create body %q is not JSON", bodies[2])
 	}
-	want := `{"all_chats":false,"allow_first_contact":false,"expires_in_days":30,"name":"agent",` +
+	want := `{"all_chats":false,"allow_first_contact":false,"allow_media":false,"expires_in_days":30,"name":"agent",` +
 		`"read_chats":["120363000000000001@g.us","15550100001@s.whatsapp.net","15550100002@s.whatsapp.net"],"write_chats":["120363000000000001@g.us"]}`
 	if got, _ := json.Marshal(sent); string(got) != want {
 		t.Fatalf("the create body %s, want %s", got, want)
+	}
+}
+
+func TestClientsCreateSendsAllowMedia(t *testing.T) {
+	secret := token.NewAdmin()
+	_, credential := token.NewClient()
+	granted := strings.Replace(clientJSON, `"allow_media":false`, `"allow_media":true`, 1)
+	f, addr := newRoutedListener(t, map[string][2]string{
+		"POST /admin/v1/clients": {"200", `{"client":` + granted + `,"credential":"` + credential + `"}`},
+	})
+	code, stdout, stderr := invokeWith(t, []string{
+		"admin", "clients", "create", "--addr", addr, "--token-stdin", "--name", "agent", "--read", "120363000000000001@g.us", "--allow-media",
+	}, nil, strings.NewReader(secret))
+	want := strings.Replace(clientOutput, "allow media: false\n", "allow media: true\n", 1) + "token: " + credential + "\n"
+	if code != 0 || stdout != want {
+		t.Fatalf("admin clients create --allow-media = %d\n%s\nstderr %q", code, stdout, stderr)
+	}
+	_, bodies := f.seen()
+	if len(bodies) != 1 || !strings.Contains(bodies[0], `"allow_first_contact":false,"allow_media":true,"expires_in_days":0}`) {
+		t.Fatalf("the create bodies %q, want one asking for allow_media", bodies)
+	}
+}
+
+func TestClientAnswersWithoutAllowMediaAreRefused(t *testing.T) {
+	secret := token.NewAdmin()
+	_, addr := newRoutedListener(t, map[string][2]string{
+		"GET /admin/v1/clients/aaaqeaye": {"200", strings.Replace(clientJSON, `"allow_media":false,`, "", 1)},
+		"GET /admin/v1/clients": {"200", `{"clients":[{"id":"aaaqeaye","name":"agent","state":"active","created_at":"2026-10-06T12:00:00Z","expires_at":"2027-01-04T12:00:00Z",` +
+			`"revoked_at":null,"all_chats":true,"allow_first_contact":false,"read_chat_count":0,"write_chat_count":0}]}`},
+	})
+	for _, args := range [][]string{{"clients", "show", "--id", "aaaqeaye"}, {"clients", "list"}} {
+		code, stdout, stderr := invokeWith(t, append(append([]string{"admin"}, args...), "--addr", addr, "--token-stdin"), nil, strings.NewReader(secret))
+		if code != exitFailed || stdout != "" || !strings.Contains(stderr, "not what the admin listener sends") {
+			t.Fatalf("admin %q without allow_media = %d %q %q, want a refused answer", args, code, stdout, stderr)
+		}
 	}
 }
 
@@ -137,9 +172,9 @@ func TestClientsCommandsAndExitCodes(t *testing.T) {
 	revoked := strings.Replace(strings.Replace(clientJSON, `"state":"active"`, `"state":"revoked"`, 1), `"revoked_at":null`, `"revoked_at":"2026-10-07T08:00:00Z"`, 1)
 	f, addr := newRoutedListener(t, map[string][2]string{
 		"GET /admin/v1/clients": {"200", `{"clients":[{"id":"aaaqeaye","name":"agent\u001b[2J","state":"active","created_at":"2026-10-06T12:00:00Z","expires_at":"2027-01-04T12:00:00Z",` +
-			`"revoked_at":null,"all_chats":true,"allow_first_contact":false,"read_chat_count":0,"write_chat_count":0},` +
+			`"revoked_at":null,"all_chats":true,"allow_first_contact":false,"allow_media":true,"read_chat_count":0,"write_chat_count":0},` +
 			`{"id":"bbbbbbbb","name":"other","state":"expired","created_at":"2026-10-06T12:00:00Z","expires_at":"2026-10-07T12:00:00Z",` +
-			`"revoked_at":null,"all_chats":false,"allow_first_contact":true,"read_chat_count":2,"write_chat_count":1}]}`},
+			`"revoked_at":null,"all_chats":false,"allow_first_contact":true,"allow_media":false,"read_chat_count":2,"write_chat_count":1}]}`},
 		"GET /admin/v1/clients/aaaqeaye":         {"200", clientJSON},
 		"POST /admin/v1/clients/aaaqeaye/revoke": {"200", revoked},
 		"POST /admin/v1/clients":                 {"422", `{"error":"write_not_readable"}`},
@@ -150,8 +185,8 @@ func TestClientsCommandsAndExitCodes(t *testing.T) {
 		code           int
 		stdout, stderr string
 	}{
-		{args: []string{"clients", "list"}, stdout: "id: aaaqeaye\nname: agent�[2J\nstate: active\ncreated: 2026-10-06T12:00:00Z\nexpires: 2027-01-04T12:00:00Z\nrevoked: never\nall chats: true\nallow first contact: false\nread chats: 0\nwrite chats: 0\n\n" +
-			"id: bbbbbbbb\nname: other\nstate: expired\ncreated: 2026-10-06T12:00:00Z\nexpires: 2026-10-07T12:00:00Z\nrevoked: never\nall chats: false\nallow first contact: true\nread chats: 2\nwrite chats: 1\n"},
+		{args: []string{"clients", "list"}, stdout: "id: aaaqeaye\nname: agent�[2J\nstate: active\ncreated: 2026-10-06T12:00:00Z\nexpires: 2027-01-04T12:00:00Z\nrevoked: never\nall chats: true\nallow first contact: false\nallow media: true\nread chats: 0\nwrite chats: 0\n\n" +
+			"id: bbbbbbbb\nname: other\nstate: expired\ncreated: 2026-10-06T12:00:00Z\nexpires: 2026-10-07T12:00:00Z\nrevoked: never\nall chats: false\nallow first contact: true\nallow media: false\nread chats: 2\nwrite chats: 1\n"},
 		{args: []string{"clients", "show", "--id", "aaaqeaye"}, stdout: clientOutput},
 		{args: []string{"clients", "revoke", "--id", "aaaqeaye"}, stdout: strings.Replace(strings.Replace(clientOutput, "state: active", "state: revoked", 1), "revoked: never", "revoked: 2026-10-07T08:00:00Z", 1)},
 		{args: []string{"clients", "show", "--id", "zzzzzzzz"}, code: exitRefused, stderr: "admin clients show: refused with not_found (HTTP 404)"},

@@ -34,7 +34,8 @@ wawarden version                 print the version and build flavour
 wawarden admin init              generate an admin token and its SHA-256
 wawarden admin status|pair|reconnect ADMIN
 wawarden admin clients create --name NAME (--read CHAT... | --all-chats) [--write CHAT...]
-                              [--allow-first-contact] [--expires-days DAYS] ADMIN
+                              [--allow-first-contact] [--allow-media] [--expires-days DAYS]
+                              ADMIN
 wawarden admin clients list ADMIN
 wawarden admin clients show|revoke --id ID ADMIN
 wawarden admin chats list [--match TEXT] ADMIN
@@ -199,17 +200,21 @@ the [admin route](api.md#admin-routes) named here:
 
 | Command | Request | Prints on standard output |
 |---|---|---|
-| `admin clients create --name NAME (--read CHAT... \| --all-chats) [--write CHAT...] [--allow-first-contact] [--expires-days DAYS]` | `POST /admin/v1/clients` | The client's lines, then `token: ww_...` |
-| `admin clients list` | `GET /admin/v1/clients` | For each client, its lines from `id` to `allow first contact`, then `read chats` and `write chats` with the number of each; a blank line separates two clients. |
+| `admin clients create --name NAME (--read CHAT... \| --all-chats) [--write CHAT...] [--allow-first-contact] [--allow-media] [--expires-days DAYS]` | `POST /admin/v1/clients` | The client's lines, then `token: ww_...` |
+| `admin clients list` | `GET /admin/v1/clients` | For each client, its lines from `id` to `allow media`, then `read chats` and `write chats` with the number of each; a blank line separates two clients. |
 | `admin clients show --id ID` | `GET /admin/v1/clients/ID` | The client's lines. |
 | `admin clients revoke --id ID` | `POST /admin/v1/clients/ID/revoke` with the body `{}` | The revoked client's lines. |
 | `admin chats list [--match TEXT]` | `GET /admin/v1/chats`, with `?match=TEXT` when `--match` is given | For each chat, `id`, `kind`, `ref` and `name` (`none` when the chat has none); a blank line separates two chats. |
 
 A client's lines are `id`, `name`, `state`, `created`, `expires`, `revoked`
-(`never` until it is revoked), `all chats`, `allow first contact`, then one
-`read chat` line per read chat and one `write chat` line per write chat, each
-with the chat's identifier, its kind, `seen` or `not yet seen`, and its name
-when the archive knows one.
+(`never` until it is revoked), `all chats`, `allow first contact`,
+`allow media`, then one `read chat` line per read chat and one `write chat`
+line per write chat, each with the chat's identifier, its kind, `seen` or
+`not yet seen`, and its name when the archive knows one.
+
+`--allow-media` asks for the client's
+[`allow_media`](api.md#creating-a-client); the flag is stored and printed, but
+grants nothing in this build.
 
 `--read` and `--write` can be repeated, and `--expires-days` defaults to 90.
 Each chat value is one of:

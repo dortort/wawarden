@@ -26,7 +26,8 @@ const usage = `usage:
   wawarden admin init              generate an admin token and its SHA-256
   wawarden admin status|pair|reconnect ADMIN
   wawarden admin clients create --name NAME (--read CHAT... | --all-chats) [--write CHAT...]
-                                [--allow-first-contact] [--expires-days DAYS] ADMIN
+                                [--allow-first-contact] [--allow-media] [--expires-days DAYS]
+                                ADMIN
   wawarden admin clients list ADMIN
   wawarden admin clients show|revoke --id ID ADMIN
   wawarden admin chats list [--match TEXT] ADMIN

@@ -85,6 +85,7 @@ flag wawarden admin chats list --token-stdin bool
 flag wawarden admin clients create --addr string
 flag wawarden admin clients create --all-chats bool
 flag wawarden admin clients create --allow-first-contact bool
+flag wawarden admin clients create --allow-media bool
 flag wawarden admin clients create --expires-days int
 flag wawarden admin clients create --name string
 flag wawarden admin clients create --read value

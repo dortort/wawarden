@@ -44,6 +44,7 @@ type clientAnswer struct {
 	RevokedAt         *string             `json:"revoked_at"`
 	AllChats          *bool               `json:"all_chats"`
 	AllowFirstContact *bool               `json:"allow_first_contact"`
+	AllowMedia        *bool               `json:"allow_media"`
 	ReadChats         *[]clientChatAnswer `json:"read_chats"`
 	WriteChats        *[]clientChatAnswer `json:"write_chats"`
 	ReadChatCount     *int64              `json:"read_chat_count"`
@@ -104,6 +105,7 @@ func clientCreate(ctx context.Context, flags *flag.FlagSet, src adminSource, arg
 	flags.Var(&write, "write", "a chat the client may write to; repeat for more")
 	allChats := flags.Bool("all-chats", false, "let the client read every chat")
 	firstContact := flags.Bool("allow-first-contact", false, "let the client write to a direct chat the archive has not seen")
+	media := flags.Bool("allow-media", false, "let the client download attachments once downloads are on")
 	days := flags.Int("expires-days", 0, "days until the client expires, 90 by default")
 	if !parseAdminFlags(flags, args, stderr) {
 		return usageError(stderr)
@@ -139,8 +141,9 @@ func clientCreate(ctx context.Context, flags *flag.FlagSet, src adminSource, arg
 		WriteChats        []string `json:"write_chats"`
 		AllChats          bool     `json:"all_chats"`
 		AllowFirstContact bool     `json:"allow_first_contact"`
+		AllowMedia        bool     `json:"allow_media"`
 		ExpiresInDays     int      `json:"expires_in_days"`
-	}{*name, nonNil(resolved["read"]), nonNil(resolved["write"]), *allChats, *firstContact, *days})
+	}{*name, nonNil(resolved["read"]), nonNil(resolved["write"]), *allChats, *firstContact, *media, *days})
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "admin clients create: the request cannot be encoded")
 		return exitFailed
@@ -223,7 +226,7 @@ func printClient(answer []byte, stdout, stderr io.Writer) error {
 
 func writeClient(out *bytes.Buffer, stderr io.Writer, a clientAnswer) error {
 	if a.ID == nil || a.Name == nil || a.State == nil || a.CreatedAt == nil || a.ExpiresAt == nil || a.AllChats == nil ||
-		a.AllowFirstContact == nil || a.ReadChats == nil || a.WriteChats == nil {
+		a.AllowFirstContact == nil || a.AllowMedia == nil || a.ReadChats == nil || a.WriteChats == nil {
 		return errBadAnswer
 	}
 	writeClientHead(out, a)
@@ -264,6 +267,7 @@ func writeClientHead(out *bytes.Buffer, a clientAnswer) {
 		{"revoked", revoked},
 		{"all chats", strconv.FormatBool(*a.AllChats)},
 		{"allow first contact", strconv.FormatBool(*a.AllowFirstContact)},
+		{"allow media", strconv.FormatBool(*a.AllowMedia)},
 	} {
 		fmt.Fprintf(out, "%s: %s\n", line[0], sanitize.Terminal(line[1]))
 	}
@@ -279,7 +283,7 @@ func printClientList(answer []byte, stdout, _ io.Writer) error {
 	var out bytes.Buffer
 	for i, c := range *a.Clients {
 		if c.ID == nil || c.Name == nil || c.State == nil || c.CreatedAt == nil || c.ExpiresAt == nil || c.AllChats == nil ||
-			c.AllowFirstContact == nil || c.ReadChatCount == nil || c.WriteChatCount == nil {
+			c.AllowFirstContact == nil || c.AllowMedia == nil || c.ReadChatCount == nil || c.WriteChatCount == nil {
 			return errBadAnswer
 		}
 		if i > 0 {
