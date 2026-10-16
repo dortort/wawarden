@@ -637,7 +637,7 @@ of its package.
 
 ## Archive schema
 
-The schema is at version 4. Besides chats, messages and their full-text index,
+The schema is at version 5. Besides chats, messages and their full-text index,
 identity mappings, push names, group members, the inbox and the history-sync
 queue, it holds:
 
@@ -655,6 +655,31 @@ queue, it holds:
   it;
 - `self` as the source of an identity mapping, for the pair of the owner's own
   phone number and LID;
+- at most one media reference per message, in a table beside the messages: the
+  sealed reference of 1 to 2,048 printable ASCII characters, the kind
+  (`image`, `video`, `audio`, `document` or `sticker`), a variant that only
+  its kind may carry (`gif` or `video_note` for a video, `voice_note` for
+  audio, `animated` or `lottie` for a sticker), the declared size of 0 to 2
+  GiB, and when the reference expires and when it was added. It expires at the
+  earlier of the message's time plus the reference retention and the message's
+  own expiry. It is written only with a new media message, or later by a copy
+  of a stored media message that has no reference, is not revoked and has not
+  expired, and never when that expiry has already passed as the message is
+  stored. The transaction that revokes a message deletes its reference, and so
+  does the one that purges an expired message. A purge of references, at most
+  a given number per call, removes those past their expiry, those added longer
+  ago than the retention, and, while downloads are off, every one. Marking a
+  reference expired moves its expiry to the given time, never later;
+- no media type on a revoked message, nor on an expired one once the expiry
+  purge reaches it: the revoke or purge clears it, and the migration to
+  version 5 clears it on messages revoked before. The purge also reaches media
+  without a caption, which keeps no text;
+- revoke tombstones: a chat, message id and canonical original sender, each
+  kept 7 days. While one lives, a copy of that message from that sender is
+  stored already revoked, without text, media type or reference, and removes
+  the tombstone; a copy from any other sender is stored as usual. The purge of
+  references also removes tombstones past their expiry and, beyond 100,000,
+  the oldest first, whether downloads are on or off;
 - the idempotency ledger: per client and idempotency key, the send's state
   (`pending`, `done` or `failed`), a 32-byte SHA-256 fingerprint of the request,
   the message id, when it was reserved, the earliest time the next send may
@@ -673,11 +698,14 @@ queue, it holds:
   room for a 32-byte digest of its token, not for the token; its expiry must be
   at most 366 days after its creation, and triggers refuse a write chat for a
   client that reads every chat, and an `INSERT OR REPLACE` or `REPLACE` that
-  would swap a client row under its chats. A client's chats are canonical identifiers, not references to stored
+  would swap a client row under its chats. A client's `allow_media` flag is
+  off unless set. A client's chats are canonical identifiers, not references to stored
   chats, so they may name a chat the archive has not seen yet, and a re-key
   moves them from the phone number to the LID (see [Ingest](#ingest));
 - the audit table, whose rows triggers refuse to update or replace, and to
   delete unless the audit anchor covers the row and it is not the newest row.
+  Two columns, `message_hmac`, 16 to 32 bytes, and `bytes`, a count of 0 or
+  more, are empty on rows written before version 5.
   Only the nightly [audit retention](observability.md#audit-retention) moves the anchor and
   deletes rows.
 
