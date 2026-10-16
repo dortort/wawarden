@@ -105,15 +105,38 @@ func TestEveryExportedStructIsCheckedByTheFirewall(t *testing.T) {
 	}
 }
 
+var internalColumns = []string{"raw", "alt", "media_meta", "mediameta", "origin", "media_key", "mediakey", "direct_path", "directpath",
+	"file_enc_sha256", "fileencsha256", "file_sha256", "filesha256", "media_ref", "mediaref"}
+
+func internalFields(typ reflect.Type) []string {
+	var out []string
+	for i := range typ.NumField() {
+		name := strings.ToLower(typ.Field(i).Name)
+		if slices.ContainsFunc(internalColumns, func(banned string) bool { return strings.Contains(name, banned) }) {
+			out = append(out, typ.Field(i).Name)
+		}
+	}
+	return out
+}
+
 func TestRowsCarryNoInternalColumn(t *testing.T) {
 	for _, typ := range rowTypes {
-		for i := range typ.NumField() {
-			name := strings.ToLower(typ.Field(i).Name)
-			for _, banned := range []string{"raw", "alt", "media_meta", "mediameta", "origin"} {
-				if strings.Contains(name, banned) {
-					t.Errorf("%s.%s exposes a column that no response carries", typ, typ.Field(i).Name)
-				}
-			}
+		if fields := internalFields(typ); len(fields) != 0 {
+			t.Errorf("%s exposes the fields %q, columns that no response carries", typ, fields)
+		}
+	}
+}
+
+func TestTheColumnCheckCatchesMediaKeyMaterial(t *testing.T) {
+	for _, typ := range []reflect.Type{
+		reflect.TypeFor[struct{ MediaKey []byte }](),
+		reflect.TypeFor[struct{ DirectPath string }](),
+		reflect.TypeFor[struct{ FileEncSHA256 []byte }](),
+		reflect.TypeFor[struct{ FileSHA256 []byte }](),
+		reflect.TypeFor[struct{ MediaRef string }](),
+	} {
+		if fields := internalFields(typ); len(fields) != 1 {
+			t.Errorf("the column check passed %s", typ)
 		}
 	}
 }

@@ -16,7 +16,7 @@ import (
 	"github.com/dortort/wawarden/internal/metrics"
 )
 
-var forbiddenKeys = []string{"raw", "media_meta", "sender_alt", "seq", "token", "sent_by"}
+var forbiddenKeys = []string{"raw", "media_meta", "sender_alt", "seq", "token", "sent_by", "media_key", "direct_path", "file_enc_sha256", "file_sha256", "media_ref"}
 
 func samples() []dto.Response {
 	last, next := "2026-10-05T12:00:00Z", "AQoLDA0OSYNTHETICCURSOR"
@@ -320,6 +320,21 @@ func TestFirewallCatchesForbiddenShapes(t *testing.T) {
 		}]()},
 		{name: "tag naming a forbidden key in another case", typ: reflect.TypeFor[struct {
 			Meta string `json:"Media_Meta"`
+		}]()},
+		{name: "tag naming the media key", typ: reflect.TypeFor[struct {
+			Key []byte `json:"Media_Key"`
+		}]()},
+		{name: "tag naming the direct path", typ: reflect.TypeFor[struct {
+			Path string `json:"direct_path,omitempty"`
+		}]()},
+		{name: "tag naming the encrypted file hash", typ: reflect.TypeFor[struct {
+			Hash []byte `json:"file_enc_sha256"`
+		}]()},
+		{name: "tag naming the file hash", typ: reflect.TypeFor[struct {
+			Hash []byte `json:"FILE_SHA256"`
+		}]()},
+		{name: "tag naming the media reference", typ: reflect.TypeFor[struct {
+			Ref string `json:"media_ref"`
 		}]()},
 		{name: "nested in a slice of pointers", typ: reflect.TypeFor[struct{ Items []*nested }]()},
 		{name: "promoted from an embedded struct", typ: reflect.TypeFor[struct{ embedded }]()},
