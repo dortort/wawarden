@@ -28,11 +28,12 @@ import (
 )
 
 const (
-	pairDisplayName  = "Chrome (Linux)"
-	pairWait         = 30 * time.Second
-	maxHistoryLength = engine.MaxHistoryMaxBytes
-	websocketTimeout = 30 * time.Second
-	mediaTimeout     = 2 * time.Minute
+	pairDisplayName   = "Chrome (Linux)"
+	pairWait          = 30 * time.Second
+	maxHistoryLength  = engine.MaxHistoryMaxBytes
+	websocketTimeout  = 30 * time.Second
+	mediaBackstop     = 40 * time.Minute
+	mediaRequestBound = 2 * time.Minute
 )
 
 var (
@@ -456,6 +457,6 @@ type httpClients struct {
 func newHTTPClients(dial dialFunc, mediaMax int64) httpClients {
 	return httpClients{
 		websocket: &http.Client{Transport: newTransport(dial), Timeout: websocketTimeout, CheckRedirect: refuseRedirects},
-		media:     &http.Client{Transport: capped{next: newTransport(dial), max: mediaMax}, Timeout: mediaTimeout, CheckRedirect: refuseRedirects},
+		media:     &http.Client{Transport: mediaTransport{next: newTransport(dial), max: mediaMax, bound: mediaRequestBound}, Timeout: mediaBackstop, CheckRedirect: refuseRedirects},
 	}
 }

@@ -27,6 +27,22 @@ var (
 	errRedirect         = errors.New("wa: a redirect to another host or scheme is refused")
 )
 
+var (
+	errRequestBound = &mediaTimeoutError{msg: "wa: the media request outlived its bound", deadline: true}
+)
+
+type mediaTimeoutError struct {
+	msg      string
+	deadline bool
+}
+
+func (e *mediaTimeoutError) Error() string   { return e.msg }
+func (e *mediaTimeoutError) Timeout() bool   { return true }
+func (e *mediaTimeoutError) Temporary() bool { return true }
+func (e *mediaTimeoutError) Is(target error) bool {
+	return e.deadline && target == context.DeadlineExceeded
+}
+
 type dialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
 func guarded(dial dialFunc) dialFunc {
@@ -101,4 +117,48 @@ func sameHostRedirects(req *http.Request, via []*http.Request) error {
 		return errRedirect
 	}
 	return nil
+}
+
+type mediaTransport struct {
+	next  http.RoundTripper
+	max   int64
+	bound time.Duration
+}
+
+func (t mediaTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	ctx, cancel := context.WithTimeout(req.Context(), t.bound)
+	resp, err := capped{next: t.next, max: t.max}.RoundTrip(req.WithContext(ctx))
+	if err != nil {
+		cancel()
+		return nil, bounded(ctx, err)
+	}
+	resp.Body = &boundBody{ctx: ctx, cancel: cancel, body: resp.Body}
+	return resp, nil
+}
+
+func bounded(ctx context.Context, err error) error {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return errRequestBound
+	}
+	return err
+}
+
+type boundBody struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	body   io.ReadCloser
+}
+
+func (b *boundBody) Read(p []byte) (int, error) {
+	n, err := b.body.Read(p)
+	if err != nil && err != io.EOF {
+		err = bounded(b.ctx, err)
+	}
+	return n, err
+}
+
+func (b *boundBody) Close() error {
+	err := b.body.Close()
+	b.cancel()
+	return err
 }
