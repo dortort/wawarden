@@ -466,7 +466,8 @@ caller gave up, `wa.keepalive`, which closes a connection whose keepalives
 failed or that WhatsApp asked to log in again, `wa.event` for a panic while
 it translates one of the protocol library's events or the engine handles it,
 which refuses the event, and `wa.media.watchdog` for a panic in the watchdog
-that times one attachment download, which ends that download. Other code on
+of an attachment job, which ends the job; no code path in this build starts
+that watchdog (see [Media transport](internals.md#media-transport)). Other code on
 goroutines that the protocol library starts itself is not covered: a panic there ends the process. The notifier adds
 `notify.flush` and `notify.webhook`, the EMF writer
 `metrics.emf`, the [backup](configuration.md#backups) scheduler `backup.schedule`, and each
