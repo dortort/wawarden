@@ -18,6 +18,7 @@ such as LID and re-key are explained in the [glossary](glossary.md).
   - [Ingest](#ingest)
   - [Delivery](#delivery)
   - [History sync](#history-sync)
+  - [Media transport](#media-transport)
   - [Traffic the protocol library sends by itself](#traffic-the-protocol-library-sends-by-itself)
   - [What a send does on the wire](#what-a-send-does-on-the-wire)
   - [Fake engine](#fake-engine)
@@ -391,7 +392,9 @@ The download goes through the protocol library, which asks WhatsApp for the
 media hosts, fetches the encrypted blob over an HTTP client of the adapter's,
 with timeouts, no proxy, no redirect and a response cap of
 `WAWARDEN_HISTORY_MAX_BYTES` plus 32 bytes for the encryption's padding and
-tag, checks its hashes and decrypts it. The adapter holds it in memory, at most
+tag, checks its hashes and decrypts it. Each request for the blob ends after
+2 minutes, inside the client's 40-minute backstop, as the
+[media transport](#media-transport) describes. The adapter holds it in memory, at most
 `WAWARDEN_HISTORY_MAX_BYTES` plus 32 bytes, through a buffer that refuses every
 write past that cap, before the engine writes it to `history/<id>.part`. The
 history receipt goes out through the protocol library only when the engine asks for it;
@@ -432,6 +435,43 @@ an edit of its target; and it passes the blob's phone-number-to-LID mappings and
 push names to the engine, which applies them by the rules above. A message that
 the owner's phone sends again on request, which the protocol library builds the
 same way, keeps an edit's own identifier too.
+
+### Media transport
+
+Every download the protocol library makes, such as one of a history or
+application-state blob, goes over the adapter's media HTTP client, whose own
+timeout of 40 minutes is only a backstop. A request that carries no attachment
+job ends after 2 minutes and is cut at `WAWARDEN_HISTORY_MAX_BYTES` plus
+32 bytes; its timeout gives the same kind of error as the client's own timeout,
+which the protocol library retries.
+
+An attachment download carries a job on its request context, made from the
+attachment's declared length and a deadline. The client's transport holds every
+request of the job to these limits:
+
+- a response may declare, and deliver, at most the declared length plus
+  32 bytes;
+- at most twice that many bytes pass through over all the job's requests, and
+  the job makes at most 6 requests;
+- no request follows a body read to its end, so a body that then fails its hash
+  or authentication check is not fetched again from the next media host;
+- a request that receives nothing for 60 seconds ends with a timeout, which
+  the protocol library may retry within the limits above;
+- an answer of 429 or any 5xx status ends the job and reports the answer's
+  `Retry-After`, given in seconds or as a date; a missing or unreadable one is
+  reported as 0;
+- the job ends at its deadline. The transport defines 20 seconds for an
+  attachment held in memory, and for one staged on disk 30 seconds plus one
+  second for each MiB declared, at most 40 minutes.
+
+Every limit but the 60-second stall ends the whole job as a cancellation, so
+the protocol library stops at once: it neither retries the request nor tries
+the next media host. The transport counts the bytes that pass through it and
+buffers none. A declared length below 0 or above 2 GiB ends the job before its
+first request. One watchdog goroutine per job, started through the same panic
+recovery as the service's other goroutines, runs the deadline and stall timers
+and exits when the job ends; a panic in it is counted as `wa.media.watchdog`
+and ends the job.
 
 ### Traffic the protocol library sends by itself
 
