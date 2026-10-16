@@ -231,18 +231,25 @@ func (a *applier) sameChat(rawRemote string, chat policy.CanonicalChat, fromMe b
 	return err == nil && remote == owner, err
 }
 
-func (a *applier) target(m Message, chat, sender policy.CanonicalChat) (ingest.Found, bool, error) {
+type targeted struct {
+	found    ingest.Found
+	original policy.CanonicalChat
+	stored   bool
+	absent   bool
+}
+
+func (a *applier) target(m Message, chat, sender policy.CanonicalChat) (targeted, error) {
 	key := m.Target
 	if key == nil || key.ID == "" {
 		a.drop(dropNoTarget)
-		return ingest.Found{}, false, nil
+		return targeted{}, nil
 	}
 	same, err := a.sameChat(key.RemoteJID, chat, m.FromMe)
 	if err != nil || !same {
 		if err == nil {
 			a.drop(dropForeign)
 		}
-		return ingest.Found{}, false, err
+		return targeted{}, err
 	}
 	var original policy.CanonicalChat
 	switch {
@@ -251,7 +258,7 @@ func (a *applier) target(m Message, chat, sender policy.CanonicalChat) (ingest.F
 	case chat.Kind() == policy.GroupChat:
 		if original, same = normalizeUser(key.Participant); !same {
 			a.drop(dropNoTarget)
-			return ingest.Found{}, false, nil
+			return targeted{}, nil
 		}
 	case m.FromMe:
 		original = chat
@@ -259,28 +266,33 @@ func (a *applier) target(m Message, chat, sender policy.CanonicalChat) (ingest.F
 		original = a.owner
 	default:
 		a.drop(dropOwnerUnknown)
-		return ingest.Found{}, false, nil
+		return targeted{}, nil
 	}
 	found, ok, err := a.resolve(chat, key.ID, original)
-	if err == nil && !ok {
-		a.drop(dropTargetAbsent)
+	switch {
+	case err != nil:
+		return targeted{}, err
+	case ok:
+		return targeted{found: found, original: found.Sender, stored: true}, nil
 	}
-	return found, ok, err
+	a.drop(dropTargetAbsent)
+	original, err = a.tx.Canonical(original)
+	return targeted{original: original, absent: err == nil}, err
 }
 
 func (a *applier) react(m Message, chat, sender policy.CanonicalChat, origin ingest.Origin) error {
-	found, ok, err := a.target(m, chat, sender)
-	if err != nil || !ok {
+	t, err := a.target(m, chat, sender)
+	if err != nil || !t.stored {
 		return err
 	}
 	row := a.row(m, chat, sender, origin)
-	row.Quote = &ingest.Quote{Ref: found.Ref, Verified: true}
+	row.Quote = &ingest.Quote{Ref: t.found.Ref, Verified: true}
 	return a.store(row)
 }
 
-func (a *applier) original(found ingest.Found, sender policy.CanonicalChat) (bool, error) {
+func (a *applier) original(original, sender policy.CanonicalChat) (bool, error) {
 	sender, err := a.tx.Canonical(sender)
-	return err == nil && sender == found.Sender, err
+	return err == nil && sender == original, err
 }
 
 func modifiable(k ingest.Kind) bool {
@@ -292,15 +304,16 @@ func (a *applier) edit(m Message, chat, sender policy.CanonicalChat) error {
 		a.drop(dropInvalid)
 		return nil
 	}
-	found, ok, err := a.target(m, chat, sender)
-	if err != nil || !ok {
+	t, err := a.target(m, chat, sender)
+	if err != nil || !t.stored {
 		return err
 	}
+	found := t.found
 	if found.Revoked || !modifiable(found.Kind) {
 		a.drop(dropTargetKind)
 		return nil
 	}
-	if same, err := a.original(found, sender); err != nil || !same {
+	if same, err := a.original(t.original, sender); err != nil || !same {
 		if err == nil {
 			a.drop(dropNotOriginal)
 		}
@@ -314,32 +327,44 @@ func (a *applier) edit(m Message, chat, sender policy.CanonicalChat) error {
 }
 
 func (a *applier) revoke(m Message, chat, sender policy.CanonicalChat) error {
-	found, ok, err := a.target(m, chat, sender)
-	if err != nil || !ok {
+	t, err := a.target(m, chat, sender)
+	if err != nil || !t.stored && !t.absent {
 		return err
 	}
-	same, err := a.original(found, sender)
-	if err != nil {
+	if allowed, err := a.mayRevoke(chat, sender, t.original); err != nil || !allowed {
 		return err
 	}
-	if !same {
-		if chat.Kind() != policy.GroupChat {
-			a.drop(dropNotOriginal)
-			return nil
-		}
-		admin, known, err := a.tx.ParticipantAdmin(chat, sender)
-		switch {
-		case err != nil:
-			return err
-		case !known:
-			a.drop(dropAdminUnknown)
-			return nil
-		case !admin:
-			a.drop(dropNotAdmin)
-			return nil
-		}
+	if t.stored {
+		return a.tx.ApplyRevoke(t.found.Ref)
 	}
-	return a.tx.ApplyRevoke(found.Ref)
+	err = a.tx.PutRevokeTombstone(chat, m.Target.ID, t.original, a.now)
+	if errors.Is(err, ingest.ErrInvalid) {
+		return nil
+	}
+	return err
+}
+
+func (a *applier) mayRevoke(chat, sender, original policy.CanonicalChat) (bool, error) {
+	same, err := a.original(original, sender)
+	if err != nil || same {
+		return same, err
+	}
+	if chat.Kind() != policy.GroupChat {
+		a.drop(dropNotOriginal)
+		return false, nil
+	}
+	admin, known, err := a.tx.ParticipantAdmin(chat, sender)
+	switch {
+	case err != nil:
+		return false, err
+	case !known:
+		a.drop(dropAdminUnknown)
+		return false, nil
+	case !admin:
+		a.drop(dropNotAdmin)
+		return false, nil
+	}
+	return true, nil
 }
 
 func (a *applier) group(g Group, origin ingest.Origin) error {
