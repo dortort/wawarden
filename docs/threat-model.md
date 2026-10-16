@@ -804,9 +804,9 @@ file, test files included:
   change a grant.
 - The scoped store, `internal/store/scoped`, is how `internal/api` reads the
   archive. Every exported method of its exported types takes a
-  `policy.ReadGrant` value as its first parameter, except `Query.Expression`,
-  which reads nothing. Its constructor takes the database handle, which no
-  package outside `internal/store` can name.
+  `policy.ReadGrant` value as its first parameter, except `Query.Expression`
+  and `SealedRef.Sealed`, which read nothing. Its constructor takes the
+  database handle, which no package outside `internal/store` can name.
 - Only such a method may call `Reader.read`, the package's one way to the
   database ([row 3a](#3a-one-database-handle)). It calls it only on its
   receiver, with its own first parameter as the grant. It may otherwise use that
@@ -1240,9 +1240,13 @@ one connection.
   response interface has an unexported method, so a type declared elsewhere
   cannot be returned. The encoder also checks this at run time.
 - Every field of a database row struct carries `json:"-"`. The scoped store's
-  rows carry no `raw`, `sender_alt`, `media_meta` or `origin` field.
+  rows carry no `raw`, `sender_alt`, `media_meta`, `origin`, `media_key`,
+  `direct_path`, `file_enc_sha256`, `file_sha256` or `media_ref` field. The
+  attachment row holds the sealed media reference only in a
+  `scoped.SealedRef`, which has no exported field and encodes to `{}`.
 - No response type can produce the keys `raw`, `media_meta`, `sender_alt`,
-  `seq` or `token`. Only the client create answer may declare or reach the key
+  `seq`, `token`, `media_key`, `direct_path`, `file_enc_sha256`, `file_sha256`
+  or `media_ref`. Only the client create answer may declare or reach the key
   `credential`.
 - The read API builds each chat and message body field by field from a scoped
   row:
@@ -1252,7 +1256,10 @@ one connection.
     `peer` otherwise;
   - `sender.name` is the owner-saved name only when the scoped read returned
     it, which it does only when the contact's direct chat is in the grant, and
-    otherwise the push name.
+    otherwise the push name;
+  - `text`, `text_display` and `media_type` are null for a revoked message.
+    The scoped read returns none of them for a row marked revoked, and the
+    builder drops them again.
 
 **Protects.** I-5.
 
@@ -1263,13 +1270,16 @@ one connection.
   and embedded structs, for the forbidden keys and the `credential` key
   (`internal/api/dto/dto_test.go`).
 - A reflection test over the rows, pages and positions of the scoped store:
-  every exported field, nested ones included, carries `json:"-"`, and each type
-  encodes to `{}` (`internal/store/scoped/firewall_test.go`). A source test
-  keeps it complete by requiring it to list every exported struct of the
-  package.
+  every exported field, nested ones included, carries `json:"-"`, each type
+  encodes to `{}`, and no field is named after a forbidden column
+  (`internal/store/scoped/firewall_test.go`). A source test keeps it complete
+  by requiring it to list every exported struct of the package.
+- Store tests that a row marked revoked by raw SQL, its text and media type
+  still stored, reads back without them (`internal/store/scoped/reads_test.go`,
+  `media_test.go`).
 - API tests that every message body carries `untrusted: true`, the `origin` of
-  its row, the saved or the push name, and null text when revoked
-  (`internal/api/reads_test.go`).
+  its row, the saved or the push name, and null text and media type when
+  revoked (`internal/api/reads_test.go`).
 
 **Since.** v0.1.0.
 
