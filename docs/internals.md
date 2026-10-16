@@ -446,9 +446,10 @@ job ends after 2 minutes and is cut at `WAWARDEN_HISTORY_MAX_BYTES` plus
 32 bytes; its timeout gives the same kind of error as the client's own timeout,
 which the protocol library retries.
 
-An attachment download carries a job on its request context, made from the
-attachment's declared length and a deadline. The client's transport holds every
-request of the job to these limits:
+Nothing in this build starts an attachment job, so only the paragraph above
+applies to the traffic it sends. When a request's context carries a job, made
+from an attachment's declared length and a deadline, the client's transport
+holds every request of the job to these limits:
 
 - a response may declare, and deliver, at most the declared length plus
   32 bytes;
@@ -661,27 +662,30 @@ queue, it holds:
   (`image`, `video`, `audio`, `document` or `sticker`), a variant that only
   its kind may carry (`gif` or `video_note` for a video, `voice_note` for
   audio, `animated` or `lottie` for a sticker), the declared size of 0 to 2
-  GiB, and when the reference expires and when it was added. It expires at the
-  earlier of the message's time plus the reference retention and the message's
-  own expiry. It is written only with a new media message that has a media type,
-  or later by a copy of a stored media message that has a media type and no
-  reference, is not revoked and has not expired, and never when that expiry has
-  already passed as the message is stored. The transaction that revokes a
-  message deletes its reference, and so does the one that purges an expired
-  message. A purge of references, at most a given number per call, removes those
-  past their expiry, those added longer ago than the retention, and, while
-  downloads are off, every one. Marking a reference expired moves its expiry to
-  the given time, never later;
+  GiB, and when the reference expires and when it was added. Nothing in this
+  build stores a reference with a message, runs the purge of references or
+  marks one expired; the archive's operations on the table are these. A
+  reference stored with a message expires at the earlier of the message's
+  time plus the retention given with it and the message's own expiry.
+  It is written only with a new media message that has a media type, or later
+  by a copy of a stored media message that has a media type and no reference,
+  is not revoked and has not expired, and never when that expiry has already
+  passed as the message is stored. The transaction that revokes a message
+  deletes its reference, and so does the one that purges an expired message. A
+  purge of references, at most a given number per call, takes a retention and
+  a flag: with the flag set, it removes the references past their expiry and
+  those added longer ago than the retention, and without it, every one.
+  Marking a reference expired moves its expiry to the given time, never later;
 - no media type on a revoked message, nor on an expired one once the expiry
   purge reaches it: the revoke or purge clears it, and the migration to
   version 5 clears it on messages revoked before. The purge also reaches media
   without a caption, which keeps no text;
 - revoke tombstones: a chat, message id and canonical original sender, each
-  kept 7 days. While one lives, a copy of that message from that sender is
-  stored already revoked, without text, media type or reference, and removes
-  the tombstone; a copy from any other sender is stored as usual. The purge of
-  references also removes tombstones past their expiry and, beyond 100,000,
-  the oldest first, whether downloads are on or off;
+  kept 7 days. Nothing in this build writes one. While one lives, a copy of
+  that message from that sender is stored already revoked, without text, media
+  type or reference, and removes the tombstone; a copy from any other sender is
+  stored as usual. The purge of references also removes tombstones past their
+  expiry and, beyond 100,000, the oldest first, with or without its flag;
 - the idempotency ledger: per client and idempotency key, the send's state
   (`pending`, `done` or `failed`), a 32-byte SHA-256 fingerprint of the request,
   the message id, when it was reserved, the earliest time the next send may
@@ -783,9 +787,9 @@ The [audit anchor](observability.md#audit-retention)'s HMAC is HMAC-SHA256 under
 
 ### Media reference
 
-A media reference is the WhatsApp adapter's attachment descriptor sealed with
-AES-256-GCM under the `media-ref` key derived from the
-[master key](configuration.md#master-key). Its text is strict unpadded
+A media reference is an attachment descriptor sealed with AES-256-GCM under
+the `media-ref` key derived from the [master key](configuration.md#master-key).
+Nothing in this build seals or opens one. Its text is strict unpadded
 base64url, at most 2048 characters, of, in this order:
 
 1. the version byte `0x01` and the 4-byte id of the sealing key;
