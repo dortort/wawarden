@@ -15,7 +15,7 @@ func DecideRead(c *Client, now time.Time) (ReadGrant, bool) {
 	if !c.ReadAll {
 		chats = validChats(c.Read)
 	}
-	return seal.NewReadGrant(c.ID, c.ReadAll, chats), true
+	return seal.NewReadGrant(c.ID, c.ReadAll, chats, c.AllowMedia), true
 }
 
 func DecideWrite(c *Client, now time.Time) (WriteGrant, bool) {

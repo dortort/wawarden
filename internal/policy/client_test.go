@@ -83,12 +83,19 @@ func TestValidateClientSpecAccepts(t *testing.T) {
 		{name: "one day", spec: ClientSpec{Name: "r", Read: []string{specPhone}, ExpiresInDays: 1}, read: set(chatA), days: 1},
 		{name: "longest expiry", spec: ClientSpec{Name: strings.Repeat("é", 64), Read: []string{specPhone}, ExpiresInDays: 365}, read: set(chatA), days: 365},
 		{name: "all chats", spec: ClientSpec{Name: "all", AllChats: true}, all: true, days: 90},
+		{name: "all chats with media", spec: ClientSpec{Name: "all-media", AllChats: true, AllowMedia: true}, all: true, days: 90},
+		{name: "read set with media", spec: ClientSpec{Name: "media", Read: []string{specPhone}, AllowMedia: true}, read: set(chatA), days: 90},
 		{
 			name: "write subset of read, forms normalised and repeated",
 			spec: ClientSpec{Name: "writer", Read: []string{specPhone, "15550100001:3@c.us", specLID, specGroup}, Write: []string{"15550100001@c.us", specGroup}, AllowFirstContact: true},
 			read: set(chatA, chatB, chatC), write: set(chatA, chatC), days: 90,
 		},
 		{name: "256 chats in each set", spec: ClientSpec{Name: "many", Read: manyChats(256), Write: manyChats(256)}, days: 90},
+		{
+			name: "writer with media",
+			spec: ClientSpec{Name: "writer-media", Read: []string{specPhone, specGroup}, Write: []string{specGroup}, AllowFirstContact: true, AllowMedia: true},
+			read: set(chatA, chatC), write: set(chatC), days: 90,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -96,7 +103,7 @@ func TestValidateClientSpecAccepts(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ValidateClientSpec(): %v", err)
 			}
-			if c.ID != "" || c.Name != tt.spec.Name || c.ReadAll != tt.all || c.Revoked || c.AllowFirstContact != tt.spec.AllowFirstContact {
+			if c.ID != "" || c.Name != tt.spec.Name || c.ReadAll != tt.all || c.Revoked || c.AllowFirstContact != tt.spec.AllowFirstContact || c.AllowMedia != tt.spec.AllowMedia {
 				t.Fatalf("client %+v does not reflect the spec %+v", c, tt.spec)
 			}
 			if want := now.Add(time.Duration(tt.days) * 24 * time.Hour); !c.ExpiresAt.Equal(want) {
@@ -108,8 +115,12 @@ func TestValidateClientSpecAccepts(t *testing.T) {
 			if tt.name == "256 chats in each set" && (len(c.Read) != 256 || len(c.Write) != 256) {
 				t.Fatalf("%d read and %d write chats, want 256 each", len(c.Read), len(c.Write))
 			}
-			if _, ok := DecideRead(&c, now); !ok {
+			g, ok := DecideRead(&c, now)
+			if !ok {
 				t.Fatal("an accepted client is not live")
+			}
+			if g.Media() != tt.spec.AllowMedia {
+				t.Fatalf("Media() = %v for an accepted client, want %v", g.Media(), tt.spec.AllowMedia)
 			}
 			if _, ok := DecideRead(&c, c.ExpiresAt); ok {
 				t.Fatal("an accepted client is live at its expiry")

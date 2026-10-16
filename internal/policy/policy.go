@@ -18,4 +18,5 @@ type Client struct {
 	ExpiresAt         time.Time
 	Revoked           bool
 	AllowFirstContact bool
+	AllowMedia        bool
 }
