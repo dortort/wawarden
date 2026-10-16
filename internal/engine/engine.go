@@ -158,6 +158,10 @@ type Message struct {
 	Kind         Kind          `json:"kind,omitempty"`
 	Text         string        `json:"text,omitempty"`
 	MediaType    string        `json:"media_type,omitempty"`
+	MediaRef     string        `json:"media_ref,omitempty"`
+	MediaKind    MediaKind     `json:"media_kind,omitempty"`
+	MediaVariant string        `json:"media_variant,omitempty"`
+	MediaBytes   int64         `json:"media_bytes,omitempty"`
 	Target       *Key          `json:"target,omitempty"`
 	Reply        *Reply        `json:"reply,omitempty"`
 	Expiration   time.Duration `json:"expiration,omitempty"`

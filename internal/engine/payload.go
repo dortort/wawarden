@@ -7,7 +7,10 @@ import (
 	"io"
 )
 
-const payloadVersion = 1
+const (
+	payloadVersion   = 2
+	payloadVersionV1 = 1
+)
 
 var errPayload = errors.New("engine: the inbox payload is not one event of a known version")
 
@@ -41,7 +44,7 @@ func encodePayload(ev Event) ([]byte, error) {
 
 func (m Message) size() int {
 	n := len(m.Chat) + len(m.ID) + len(m.Sender) + len(m.SenderAlt) + len(m.RecipientAlt) + len(m.Addressing) +
-		len(m.PushName) + len(m.Kind) + len(m.Text) + len(m.MediaType)
+		len(m.PushName) + len(m.Kind) + len(m.Text) + len(m.MediaType) + len(m.MediaRef) + len(m.MediaKind) + len(m.MediaVariant)
 	if m.Target != nil {
 		n += len(m.Target.RemoteJID) + len(m.Target.ID) + len(m.Target.Participant)
 	}
@@ -51,6 +54,10 @@ func (m Message) size() int {
 	return n
 }
 
+func (m Message) hasMedia() bool {
+	return m.MediaRef != "" || m.MediaKind != "" || m.MediaVariant != "" || m.MediaBytes != 0
+}
+
 func decodePayload(b []byte) (Event, error) {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
@@ -58,7 +65,16 @@ func decodePayload(b []byte) (Event, error) {
 	if err := dec.Decode(&env); err != nil {
 		return nil, errPayload
 	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) || env.V != payloadVersion {
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, errPayload
+	}
+	switch env.V {
+	case payloadVersion:
+	case payloadVersionV1:
+		if env.Message != nil && env.Message.hasMedia() {
+			return nil, errPayload
+		}
+	default:
 		return nil, errPayload
 	}
 	switch {
