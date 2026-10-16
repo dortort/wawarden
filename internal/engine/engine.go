@@ -12,23 +12,26 @@ import (
 )
 
 const (
-	DefaultHistoryMaxBytes = 32 << 20
-	MaxHistoryMaxBytes     = 256 << 20
+	DefaultHistoryMaxBytes   = 32 << 20
+	MaxHistoryMaxBytes       = 256 << 20
+	DefaultMediaRefRetention = 30 * 24 * time.Hour
 )
 
 type Options struct {
-	Client          Client
-	Versions        VersionSource
-	Decoder         HistoryDecoder
-	Archive         *ingest.Store
-	DataDir         string
-	OwnerPhone      string
-	HistoryMaxBytes int64
-	Logger          *slog.Logger
-	Notify          Notifier
-	Metrics         *metrics.Registry
-	Clock           Clock
-	Jitter          func(time.Duration) time.Duration
+	Client            Client
+	Versions          VersionSource
+	Decoder           HistoryDecoder
+	Archive           *ingest.Store
+	DataDir           string
+	OwnerPhone        string
+	HistoryMaxBytes   int64
+	MediaOn           bool
+	MediaRefRetention time.Duration
+	Logger            *slog.Logger
+	Notify            Notifier
+	Metrics           *metrics.Registry
+	Clock             Clock
+	Jitter            func(time.Duration) time.Duration
 }
 
 type Notifier interface {

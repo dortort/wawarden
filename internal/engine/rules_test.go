@@ -667,3 +667,7 @@ func TestFixtureDirectChatKeysNeedTheOwner(t *testing.T) {
 		t.Fatalf("drops: owner unknown %v, foreign %v", r.dropped(dropOwnerUnknown), r.dropped(dropForeign))
 	}
 }
+
+func withDownloads(on bool, retention time.Duration) option {
+	return func(o *Options) { o.MediaOn, o.MediaRefRetention = on, retention }
+}

@@ -20,10 +20,12 @@ type conflict struct {
 }
 
 type applier struct {
-	tx    *ingest.Tx
-	owner policy.CanonicalChat
-	now   time.Time
-	out   outcome
+	tx        *ingest.Tx
+	owner     policy.CanonicalChat
+	now       time.Time
+	mediaOn   bool
+	retention time.Duration
+	out       outcome
 }
 
 func (a *applier) drop(reason string) { a.out.dropped = append(a.out.dropped, reason) }
@@ -167,7 +169,20 @@ func (a *applier) insert(m Message, chat, sender policy.CanonicalChat, origin in
 		}
 		row.Quote = quote
 	}
-	return a.store(row)
+	row.Media = a.media(m)
+	err := a.store(row)
+	if errors.Is(err, ingest.ErrInvalid) && row.Media != nil {
+		row.Media = nil
+		return a.store(row)
+	}
+	return err
+}
+
+func (a *applier) media(m Message) *ingest.Media {
+	if !a.mediaOn || m.Kind != KindMedia || m.MediaType == "" || m.MediaRef == "" {
+		return nil
+	}
+	return &ingest.Media{Ref: m.MediaRef, Kind: ingest.MediaKind(m.MediaKind), Variant: m.MediaVariant, Declared: m.MediaBytes, Retention: a.retention}
 }
 
 func (a *applier) quote(m Message, chat policy.CanonicalChat) (*ingest.Quote, error) {

@@ -543,3 +543,61 @@ func TestRefusedMappingsAreRememberedWithinABound(t *testing.T) {
 		t.Fatalf("%d alerts with %d mappings remembered, want the memory emptied once full", n, remembered)
 	}
 }
+
+func TestALiveMediaMessageCarriesItsReference(t *testing.T) {
+	r := newHistRig(t, withDownloads(true, 30*24*time.Hour))
+	gif := withMedia(dm("M1", alice, "caption"), MediaVideo, VariantGIF, 5<<20)
+	timed := withMedia(dm("M2", alice, ""), MediaImage, "", 1234)
+	timed.Expiration = time.Hour
+	stale := withMedia(dm("M3", alice, "older than the retention"), MediaImage, "", 1234)
+	stale.Timestamp = epoch.Add(-31 * 24 * time.Hour)
+	spaced := withMedia(dm("M4", alice, "a malformed reference"), MediaImage, "", 1234)
+	spaced.MediaRef = "SYNTHETIC REFERENCE WITH SPACES"
+	variant := withMedia(dm("M5", alice, "a variant the kind does not have"), MediaImage, VariantGIF, 1234)
+	plain := dm("M6", alice, "a text message naming a reference")
+	plain.MediaRef = syntheticRef
+	r.ingest(gif, timed, stale, spaced, variant, plain)
+	history := withMedia(text(alice, "H1", alice, "from history"), MediaDocument, "", 99)
+	if err := r.h.apply(t.Context(), History{Conversations: []Conversation{{Chat: alice, Messages: []Message{history}}}}, epoch); err != nil {
+		t.Fatalf("applying history: %v", err)
+	}
+	for _, id := range []string{"M1", "M2", "M3", "M4", "M5", "M6", "H1"} {
+		r.must(alice, id, alice)
+	}
+	if r.dropped(dropInvalid) != 0 {
+		t.Fatalf("%v messages were dropped for their attachment metadata", r.dropped(dropInvalid))
+	}
+	db := r.inspect()
+	got := query[string](t, db, `SELECT group_concat(id || ' ' || ref || ' ' || kind || ' ' || coalesce(variant, '-') || ' ' || declared || ' ' || r.expires_at || ' ' || added_at, ';')
+		FROM (SELECT m.id, r.* FROM media_refs r JOIN messages m USING (seq) ORDER BY m.id) r`)
+	want := strings.Join([]string{
+		fmt.Sprintf("H1 %s document - 99 %d %d", syntheticRef, epoch.Add(30*24*time.Hour).UnixMilli(), epoch.UnixMilli()),
+		fmt.Sprintf("M1 %s video gif %d %d %d", syntheticRef, 5<<20, epoch.Add(30*24*time.Hour).UnixMilli(), epoch.UnixMilli()),
+		fmt.Sprintf("M2 %s image - 1234 %d %d", syntheticRef, epoch.Add(time.Hour).UnixMilli(), epoch.UnixMilli()),
+	}, ";")
+	if got != want {
+		t.Fatalf("media references:\n%s\nwant\n%s", got, want)
+	}
+	if got := query[string](t, db, "SELECT group_concat(id || ' ' || coalesce(text, '-'), ';') FROM (SELECT id, text FROM messages WHERE id IN ('M4', 'M5') ORDER BY id)"); got != "M4 a malformed reference;M5 a variant the kind does not have" {
+		t.Fatalf("messages with malformed attachment metadata = %q", got)
+	}
+}
+
+func TestNoReferenceIsCapturedWhileDownloadsAreOff(t *testing.T) {
+	r := newPipeRig(t)
+	if r.p.mediaOn || r.p.retention != DefaultMediaRefRetention {
+		t.Fatalf("an engine left at its zero options has downloads %v and a retention of %v", r.p.mediaOn, r.p.retention)
+	}
+	r.ingest(withMedia(dm("M1", alice, "caption"), MediaImage, "", 1234))
+	r.p.sweep(t.Context())
+	if e := r.logs.events("expiry_sweep_failed"); len(e) != 0 {
+		t.Fatalf("the sweep failed with the default retention: %v", e)
+	}
+	db := r.inspect()
+	if n := query[int](t, db, "SELECT count(*) FROM media_refs"); n != 0 {
+		t.Fatalf("%d media references captured while downloads are off", n)
+	}
+	if got := query[string](t, db, "SELECT media_type FROM messages WHERE id = 'M1'"); got != "application/octet-stream" {
+		t.Fatalf("media type = %q", got)
+	}
+}

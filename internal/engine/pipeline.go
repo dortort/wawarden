@@ -25,15 +25,17 @@ const (
 )
 
 type pipeline struct {
-	archive *ingest.Store
-	clock   Clock
-	owner   policy.CanonicalChat
-	logger  *slog.Logger
-	notify  Notifier
-	counts  *counters
-	kick    chan struct{}
-	paused  atomic.Bool
-	ctx     context.Context
+	archive   *ingest.Store
+	clock     Clock
+	owner     policy.CanonicalChat
+	mediaOn   bool
+	retention time.Duration
+	logger    *slog.Logger
+	notify    Notifier
+	counts    *counters
+	kick      chan struct{}
+	paused    atomic.Bool
+	ctx       context.Context
 
 	nextSpace time.Time
 	nextSweep time.Time
@@ -49,10 +51,18 @@ func newPipeline(o Options) *pipeline {
 	if digits := ownerDigits(o.OwnerPhone); digits != "" {
 		owner, _ = policy.Normalize(digits + "@s.whatsapp.net")
 	}
+	retention := o.MediaRefRetention
+	if retention <= 0 {
+		retention = DefaultMediaRefRetention
+	}
 	return &pipeline{
-		archive: o.Archive, clock: o.Clock, owner: owner, logger: o.Logger, notify: o.Notify,
+		archive: o.Archive, clock: o.Clock, owner: owner, mediaOn: o.MediaOn, retention: retention, logger: o.Logger, notify: o.Notify,
 		counts: newCounters(o.Metrics), kick: make(chan struct{}, 1), alerted: map[conflict]bool{},
 	}
+}
+
+func (p *pipeline) applier(tx *ingest.Tx) *applier {
+	return &applier{tx: tx, owner: p.owner, now: p.clock.Now(), mediaOn: p.mediaOn, retention: p.retention}
 }
 
 func (p *pipeline) wake() {
@@ -242,7 +252,7 @@ func (p *pipeline) apply(ctx context.Context, item ingest.InboxItem) (outcome, e
 	}
 	var out outcome
 	err = p.write(ctx, "engine.ingest", func(tx *ingest.Tx) error {
-		a := &applier{tx: tx, owner: p.owner, now: p.clock.Now()}
+		a := p.applier(tx)
 		var err error
 		switch e := ev.(type) {
 		case Message:
