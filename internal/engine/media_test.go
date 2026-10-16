@@ -298,3 +298,73 @@ func TestNoBoundaryMethodIsNamedForADownloadOrAnUpload(t *testing.T) {
 		}
 	}
 }
+
+func TestAnExpiredFetchLeadsToTheReferenceBeingSwept(t *testing.T) {
+	r := newHistRig(t, withDownloads(true, DefaultMediaRefRetention))
+	e := newEngine(t, r)
+	e.Start(t.Context(), 1)
+	t.Cleanup(func() { _ = e.Stop(context.Background()) })
+	r.client.waitFor(t, "connect")
+	r.client.emit(Connected{})
+	eventually(t, "the engine is ready", e.Ready)
+	now := time.Now()
+	for _, id := range []string{"M1", "M2"} {
+		m := withMedia(dm(id, alice, ""), MediaImage, "", 1234)
+		m.Timestamp = now
+		if !r.client.emit(m) {
+			t.Fatalf("%s was not acknowledged", id)
+		}
+	}
+	eventually(t, "both media messages are stored", func() bool {
+		_, one := r.find(alice, "M1", alice)
+		_, two := r.find(alice, "M2", alice)
+		return one && two
+	})
+	request := func(id string) MediaRequest {
+		req := mediaRequest(id)
+		req.Kind, req.Declared, req.Chat, req.Sender = MediaImage, 1234, chat(t, alice), chat(t, alice)
+		return req
+	}
+	var got MediaRequest
+	r.client.onFetching(func(req MediaRequest) { got = req })
+	r.client.stage(nil, ErrMediaFailed)
+	if _, err := e.FetchMedia(t.Context(), request("M2")); !errors.Is(err, ErrMediaFailed) || err.Error() != ErrMediaFailed.Error() {
+		t.Fatalf("a failed fetch = %v", err)
+	}
+	if got != request("M2") {
+		t.Fatalf("the client was asked for %+v", got)
+	}
+	r.client.stage(nil, fmt.Errorf("synthetic: %w", ErrMediaExpired))
+	if _, err := e.FetchMedia(t.Context(), request("M1")); !errors.Is(err, ErrMediaExpired) || err.Error() != ErrMediaExpired.Error() {
+		t.Fatalf("an expired fetch = %v", err)
+	}
+	e.pipe.sweep(t.Context())
+	if err := e.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if len(r.logs.events("media_expire_failed")) != 0 {
+		t.Fatalf("marking the reference failed: %s", r.logs)
+	}
+	db := r.inspect()
+	if got := query[string](t, db, "SELECT group_concat(m.id) FROM media_refs JOIN messages m USING (seq)"); got != "M2" {
+		t.Fatalf("media references left: %q, want only the one whose fetch failed", got)
+	}
+}
+
+func TestAFailedExpiryMarkIsLoggedWithoutContent(t *testing.T) {
+	r, e := readyEngine(t)
+	req := mediaRequest("not a message id")
+	req.Chat, req.Sender = chat(t, alice), chat(t, alice)
+	r.client.stage(nil, ErrMediaExpired)
+	if _, err := e.FetchMedia(t.Context(), req); !errors.Is(err, ErrMediaExpired) || err.Error() != ErrMediaExpired.Error() {
+		t.Fatalf("an expired fetch whose mark failed = %v", err)
+	}
+	if n := len(r.logs.events("media_expire_failed")); n != 1 {
+		t.Fatalf("%d media_expire_failed events, want 1: %s", n, r.logs)
+	}
+	for _, secret := range []string{"15550100001", "not a message id", syntheticRef} {
+		if strings.Contains(r.logs.String(), secret) {
+			t.Fatalf("%q reached the logs:\n%s", secret, r.logs)
+		}
+	}
+}

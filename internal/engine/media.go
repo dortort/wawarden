@@ -4,8 +4,13 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
+
+	"github.com/dortort/wawarden/internal/policy"
+	"github.com/dortort/wawarden/internal/store/ingest"
 )
 
 type MediaKind string
@@ -58,6 +63,8 @@ type MediaRequest struct {
 	Kind     MediaKind
 	Declared int64
 	Deadline time.Time
+	Chat     policy.CanonicalChat
+	Sender   policy.CanonicalChat
 }
 
 type Staged interface {
@@ -85,9 +92,25 @@ func (e *Engine) FetchMedia(ctx context.Context, req MediaRequest) (Staged, erro
 		return cmp.Or(err, ErrMediaFailed)
 	})
 	if err != nil {
-		return nil, mediaError(err)
+		err = mediaError(err)
+		if errors.Is(err, ErrMediaExpired) {
+			e.expireMediaRef(ctx, req)
+		}
+		return nil, err
 	}
 	return staged, nil
+}
+
+func (e *Engine) expireMediaRef(ctx context.Context, req MediaRequest) {
+	if !req.Chat.Valid() || !req.Sender.Valid() {
+		return
+	}
+	p := e.pipe
+	if err := p.write(context.WithoutCancel(ctx), "engine.media_expire", func(tx *ingest.Tx) error {
+		return tx.ExpireMediaRef(req.Chat, req.ID, req.Sender, p.clock.Now())
+	}); err != nil {
+		p.logger.Warn("marking an expired attachment's reference failed", slog.String("event", "media_expire_failed"), slog.String("error_type", fmt.Sprintf("%T", err)))
+	}
 }
 
 func mediaError(err error) error {
