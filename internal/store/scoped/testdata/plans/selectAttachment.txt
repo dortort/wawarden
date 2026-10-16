@@ -1,0 +1,12 @@
+== all
+SEARCH m USING INDEX sqlite_autoindex_messages_1 (chat_jid=? AND id=? AND sender_jid=?)
+SEARCH r USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN
+== none
+SCAN m
+SEARCH r USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN
+== one
+SEARCH m USING INDEX sqlite_autoindex_messages_1 (chat_jid=? AND id=? AND sender_jid=?)
+SEARCH r USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN
+== three
+SEARCH m USING INDEX sqlite_autoindex_messages_1 (chat_jid=? AND id=? AND sender_jid=?)
+SEARCH r USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN

@@ -29,6 +29,7 @@ type contextTB interface {
 type sentMessage struct {
 	chat, id, sender string
 	canary           string
+	media            bool
 }
 
 type propClient struct {
@@ -111,11 +112,15 @@ func scopeOfClient(t contextTB, s *ingest.Store, c propClient) scopeSet {
 }
 
 func grantOf(t *rapid.T, c propClient, set scopeSet) policy.ReadGrant {
+	return mediaGrantOf(t, c, set, false)
+}
+
+func mediaGrantOf(t *rapid.T, c propClient, set scopeSet, media bool) policy.ReadGrant {
 	read := map[policy.CanonicalChat]struct{}{}
 	for jid := range set.chats {
 		read[chat(t, jid)] = struct{}{}
 	}
-	g, _ := policy.DecideRead(&policy.Client{ID: c.id, ReadAll: c.all, Revoked: c.revoked, Read: read, ExpiresAt: epoch.Add(24 * time.Hour)}, epoch)
+	g, _ := policy.DecideRead(&policy.Client{ID: c.id, ReadAll: c.all, Revoked: c.revoked, Read: read, AllowMedia: media, ExpiresAt: epoch.Add(24 * time.Hour)}, epoch)
 	return g
 }
 
@@ -238,10 +243,14 @@ func buildArchive(t *rapid.T, dir string) *archive {
 				sender, fromMe = c, false
 			}
 			k++
-			m := sentMessage{chat: c, id: "m" + strconv.Itoa(i), sender: sender, canary: canary(k)}
+			m := sentMessage{chat: c, id: "m" + strconv.Itoa(i), sender: sender, canary: canary(k), media: rapid.Bool().Draw(t, "media")}
 			a.sent, a.live[m.canary] = append(a.sent, m), true
 			msg := message(t, c, m.id, sender, "text "+m.canary+" end", epoch.Add(time.Duration(rapid.IntRange(0, 4).Draw(t, "minute"))*time.Minute))
 			msg.FromMe = fromMe
+			if m.media {
+				msg.Kind, msg.MediaType = ingest.KindMedia, "image/jpeg"
+				msg.Media = &ingest.Media{Ref: "SYNTHETIC-SEALED-" + m.id, Kind: ingest.MediaImage, Declared: 4096, Retention: time.Hour}
+			}
 			batch = append(batch, func(tx *ingest.Tx) error { _, _, err := tx.InsertMessage(msg); return err })
 		case op <= 6 && len(a.sent) > 0:
 			idx := rapid.IntRange(0, len(a.sent)-1).Draw(t, "target")
@@ -413,13 +422,14 @@ func TestPropertyScopedReadsMatchTheOracle(t *testing.T) {
 			}
 			checkSearch(t, a, g, set, messages)
 			checkMessage(t, a, g, set, messages)
+			checkAttachment(t, a, c, set, messages)
 		}
 		checkReplay(t, a, chats, messages)
 		cov.add(a.seen)
 	})
 	cov.require(t, "re-key moved a scope", "a client sees some messages and not others", "revoke", "edit", "dead canary",
 		"changes from a time skipped a change", "changes from a time kept a later change dated before it", "saved name shown", "saved name hidden",
-		"a position replayed under another grant")
+		"a position replayed under another grant", "an attachment found usable", "an attachment refused without media")
 }
 
 func replay[P any](t *rapid.T, pos P, next func(P) ([]int64, P, bool, error)) []int64 {
@@ -783,5 +793,38 @@ func checkMessage(t *rapid.T, a *archive, g policy.ReadGrant, set scopeSet, mess
 		if found && (row.Position.Seq != messages[i].Seq || row.Text != messages[i].Text && !row.Revoked) {
 			t.Fatalf("Message(%s) = %+v, want %+v", m.id, row, messages[i])
 		}
+	}
+}
+
+func checkAttachment(t *rapid.T, a *archive, c propClient, set scopeSet, messages []scoped.DumpMessage) {
+	if len(a.sent) == 0 {
+		return
+	}
+	media := rapid.Bool().Draw(t, "media grant")
+	g := mediaGrantOf(t, c, set, media)
+	for range 3 {
+		m := rapid.SampledFrom(a.sent).Draw(t, "attachment")
+		i := slices.IndexFunc(messages, func(d scoped.DumpMessage) bool { return d.ID == m.id })
+		if i < 0 {
+			t.Fatalf("message %s is not in the archive", m.id)
+		}
+		d := messages[i]
+		row, found, err := a.store.Scoped().Attachment(g, t.Context(), chat(t, m.chat), m.id, chat(t, m.sender), epoch)
+		if want := media && set.has(d.Chat); err != nil || found != want {
+			t.Fatalf("Attachment(%s) = %v, %v, want found %v", m.id, found, err, want)
+		}
+		if !found {
+			a.seen["an attachment refused without media"] = a.seen["an attachment refused without media"] || !media && set.has(d.Chat)
+			if row != (scoped.Attachment{}) {
+				t.Fatalf("a refused Attachment(%s) = %+v", m.id, row)
+			}
+			continue
+		}
+		usable := m.media && !d.Revoked
+		if row.Chat.JID() != d.Chat || row.ID != d.ID || row.Sender.JID() != d.Sender || row.Usable != usable ||
+			usable && row.Ref.Sealed() != "SYNTHETIC-SEALED-"+m.id || !usable && row.Ref != (scoped.SealedRef{}) {
+			t.Fatalf("Attachment(%s) = %+v, want %+v with usable %v", m.id, row, d, usable)
+		}
+		a.seen["an attachment found usable"] = a.seen["an attachment found usable"] || usable
 	}
 }
