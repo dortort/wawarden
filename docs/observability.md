@@ -117,7 +117,8 @@ lines have none of the four keys.
 | `emf_failed` | `WARN` | `error_type` | Writing the [EMF](#embedded-metric-format) lines failed. |
 | `backup_disabled` | `WARN`, at every log level | | `WAWARDEN_BACKUP_AGE_RECIPIENT` is not set, or the [fake engine](internals.md#fake-engine) runs and opens no device store, so no [backup](configuration.md#backups) is ever taken. Logged once per start. |
 | `backup_check_failed` | `WARN` | `error_type` | A step of the [backup](configuration.md#backups) scheduler failed: reading or recording whether a backup is due, the prune of old backups (also reported as `backup_prune_failed`), the [audit retention](#audit-retention) or the prune of history blob rows; the scheduler runs again 30 seconds later. |
-| `audit` | none, written at every log level | `ts`, `client`, `action`, `chat_hmac`, `ok`, `reason`, `key_id`, `chain_head` | An [audit row](#audit-chain) was committed; the line has no `time`, `level` or `msg`. |
+| `audit_failed` | `WARN`, at every log level | `action`, `error_type` | An [audit row](#audit-chain) written after its response had begun, such as a completion row, could not be written; the response was not changed. Counted in `wawarden_audit_failures_total`. |
+| `audit` | none, written at every log level | `ts`, `client`, `action`, `chat_hmac`, `message_hmac`, `bytes`, `ok`, `reason`, `key_id`, `chain_head` | An [audit row](#audit-chain) was committed; the line has no `time`, `level` or `msg`. |
 
 What is never logged: requests (there is no access log), request bodies, header
 values, tokens, failed authentications other than the count in
@@ -424,6 +425,7 @@ in [EMF](#embedded-metric-format), which needs no token.
 |---|---|---|---|
 | `wawarden_auth_failures_total` | counter | | Failed authentications on the client listener, including those answered `429`. |
 | `wawarden_admin_auth_failures_total` | counter | | Failed authentications on the admin listener, including those answered `429`. |
+| `wawarden_audit_failures_total` | counter | | [Audit rows](#audit-chain) that could not be written once their response had begun, such as a [completion row](api.md#read-audit); each is also logged as `audit_failed`. A row that cannot be written before the answer is answered `500` or `503` instead, and is not counted. |
 | `wawarden_policy_denials_total` | counter | | Client requests that the client's grant did not allow. Always `0` in this build: the client API resolves a chat outside the scope and a missing chat by the same query, so it cannot count one apart from the other; a send to a chat the client reads but may not write to is counted in `wawarden_sends_rejected_total` as `scope`. |
 | `wawarden_sends_rejected_total` | counter | `reason` | [Sends](api.md#sending) refused: `scope` (a chat the client reads but may not write to), `first_contact`, `budget_minute`, `budget_hour`, `budget_global`, `pacer` (the pacer, or another send that was running). Every reason is present from the start, at `0`. Other refusals, such as a malformed text or key, are not counted. |
 | `wawarden_panics_total` | counter | `name` | Panics recovered, by handler or goroutine name. Absent until the first panic. |
@@ -528,6 +530,8 @@ Failed authentications are not recorded. A row holds:
 - an id one more than the previous row's, and the time in milliseconds;
 - the client id, the action, the chat (none for client changes) and its
   `chat-hmac` value;
+- for a row about one message, the message's keyed `message_hmac` and a byte
+  count, which may be `0`; both are empty on every other row;
 - whether the action was allowed, and a reason code (`ok` for client
   changes);
 - the peer address when one is known;
@@ -543,7 +547,9 @@ change, so a change whose row cannot be written does not happen. A client
 request's row is appended in a write transaction of its own before the answer
 is sent, waiting at most 2 seconds for the connection. A request whose row
 cannot be written is answered `503` (`busy`) when that wait ran out and `500`
-(`internal_error`) otherwise. Triggers refuse to update a row, to delete one
+(`internal_error`) otherwise. A response that streams a body can append a
+[completion row](api.md#read-audit) once the body is sent; one that cannot be
+written is logged as `audit_failed` and counted. Triggers refuse to update a row, to delete one
 that the audit anchor does not cover or that is the newest row, or to insert
 one with the id of an existing row, which an `INSERT OR REPLACE` or a
 `REPLACE` would otherwise overwrite.
@@ -552,11 +558,15 @@ After the transaction commits, the service writes one line on standard output,
 through the same scrubbing writer as every log line:
 
 ```json
-{"event":"audit","ts":"2026-10-06T12:00:00.000Z","client":"aaaqeaye","action":"client_create","chat_hmac":null,"ok":true,"reason":"ok","key_id":"6a53922c","chain_head":"3fa8c2d14be0917a5c6e2b8f0d4a7c19"}
+{"event":"audit","ts":"2026-10-06T12:00:00.000Z","client":"aaaqeaye","action":"client_create","chat_hmac":null,"message_hmac":null,"bytes":null,"ok":true,"reason":"ok","key_id":"6a53922c","chain_head":"3fa8c2d14be0917a5c6e2b8f0d4a7c19"}
 ```
 
 - `chat_hmac` is the first 16 bytes, in hexadecimal, of HMAC-SHA256 under the
   `chat-hmac` key over the chat's canonical identifier, or `null`.
+- `message_hmac` is the first 16 bytes, in hexadecimal, of HMAC-SHA256 under
+  the `chat-hmac` key over the message's chat, id and sender, in the layout
+  under [Audit row HMAC](internals.md#audit-row-hmac), or `null`.
+- `bytes` is the row's byte count, or `null` when `message_hmac` is.
 - `key_id` is the id of the key the row was written under.
 - `chain_head` is the row's chain head: the first 16 bytes of its HMAC. A
   chain head that reaches a log store off the host is a shipped head.

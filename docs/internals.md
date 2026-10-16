@@ -786,10 +786,26 @@ above this figure when raising the cap.
 An [audit row](observability.md#audit-chain)'s HMAC is HMAC-SHA256 under the `audit-chain`
 key derived from the [master key](configuration.md#master-key), over, in this order:
 
-1. the domain string `wawarden/audit-row/v1` and a zero byte;
+1. the domain string `wawarden/audit-row/v1` and a zero byte, or
+   `wawarden/audit-row/v2` and a zero byte for a row whose `message_hmac` or
+   `bytes` is set;
 2. the id and the time, as 8-byte big-endian integers;
-3. each other field of the row, with a presence byte and its length;
+3. each other field of the row, with a presence byte and its length: the
+   client id, the action, the chat, its `chat-hmac` value, whether the action
+   was allowed (the presence byte alone), the reason and the peer; in a
+   version 2 row, then the raw `message_hmac` and the byte count in decimal
+   digits; last the key id;
 4. the previous row's HMAC, or 32 zero bytes before the first row.
+
+A row that names no message keeps the version 1 layout byte for byte, so a
+chain written before the two columns existed verifies unchanged, and setting,
+clearing or editing either value on any row changes its HMAC.
+
+A row's `message_hmac` is the first 16 bytes of HMAC-SHA256 under the
+`chat-hmac` key over the domain string `wawarden/audit-message/v1`, a zero
+byte, and the message's canonical chat identifier, its id and its sender's
+canonical identifier, each with a presence byte and its length. The domain
+keeps it apart from every `chat_hmac`, which covers a bare identifier.
 
 ### Audit anchor HMAC
 

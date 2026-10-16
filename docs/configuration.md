@@ -420,7 +420,7 @@ only the derived keys, of the master key and of each retired key:
 |---|---|---|
 | `key-id` | 4 bytes | The key id: logged as 8 hexadecimal digits in the `keys_loaded` event, so that log lines can be grouped by the key their pseudonyms were made with, and in each [audit line](observability.md#audit-chain). It names a retired key's file, and the key of each audit row, of the audit anchor, and of each cursor and message reference. |
 | `log-redact` | 32 bytes | The key of the [log pseudonyms](observability.md#pseudonyms-and-dropped-lines). |
-| `chat-hmac` | 32 bytes | The `chat_hmac` of [audit lines](observability.md#audit-chain): the first 16 bytes of HMAC-SHA256 under this key over the chat's canonical identifier. No [notification event](observability.md#notifications) names a chat. |
+| `chat-hmac` | 32 bytes | The `chat_hmac` of [audit lines](observability.md#audit-chain): the first 16 bytes of HMAC-SHA256 under this key over the chat's canonical identifier. It also keys their `message_hmac`, over a separate domain (see [Audit row HMAC](internals.md#audit-row-hmac)). No [notification event](observability.md#notifications) names a chat. |
 | `cursor-seal` | 32 bytes | Seals the `next` cursors of the [client API](api.md#cursors-and-message-references). |
 | `mref` | 32 bytes | Seals the [message references](api.md#cursors-and-message-references) of the client API. |
 | `media-ref` | 32 bytes | Reserved for sealing [media references](internals.md#media-reference); derived and kept, but nothing uses it in this build. |
