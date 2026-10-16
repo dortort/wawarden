@@ -210,15 +210,15 @@ func TestCounterAddIsAtomic(t *testing.T) {
 	byName := r.CounterVec("wawarden_bytes_by_name_total", "Bytes by name.", "name")
 
 	var want uint64
-	for w := range workers {
-		want += perWorker * (1<<28 + uint64(w) + 1)
+	for w := range uint64(workers) {
+		want += perWorker * (1<<28 + w + 1)
 	}
 	var wg sync.WaitGroup
-	for w := range workers {
+	for w := range uint64(workers) {
 		wg.Go(func() {
 			name := fmt.Sprintf("w%d", w%2)
 			for range perWorker {
-				fetched.Add(1<<28 + uint64(w))
+				fetched.Add(1<<28 + w)
 				fetched.Inc()
 				byName.With(name).Add(1 << 28)
 				fetched.Add(0)
