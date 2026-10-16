@@ -440,9 +440,6 @@ func TestExpiredTextIsGoneFromDisk(t *testing.T) {
 		if err == nil && n != 2 {
 			err = fmt.Errorf("purged %d messages, want the canary and the captionless media", n)
 		}
-		if err == nil {
-			_, err = tx.PurgeMediaRefs(epoch.Add(2*time.Hour), refRetention, true, 10)
-		}
 		return err
 	})
 	p.rewritten()
@@ -659,6 +656,29 @@ func TestTheDeletionProofDetectsAWeakerProcedure(t *testing.T) {
 				})
 			},
 			want: "the raw bytes keep the captionless media type",
+		},
+		{
+			name: "an expiry that keeps the captionless reference",
+			revoke: func(t *testing.T, p *proof, ref Ref) {
+				p.plantCaptionless()
+				write(t, p.s, func(tx *Tx) error {
+					c, err := tx.load(ref)
+					if err == nil {
+						err = tx.forget(ref.seq, c.text)
+					}
+					if err == nil {
+						_, err = tx.q.ExecContext(tx.ctx, insertFTS, ref.seq, nil)
+					}
+					if err == nil {
+						err = tx.forgetMedia(ref.seq)
+					}
+					if err == nil {
+						_, err = tx.q.ExecContext(tx.ctx, "UPDATE messages SET media_type = NULL WHERE id = 'CAPTIONLESS'")
+					}
+					return err
+				})
+			},
+			want: "the raw bytes keep the captionless reference",
 		},
 		{
 			name: "without the index rewrite",
