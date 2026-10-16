@@ -433,7 +433,7 @@ func (h *historian) batch(ctx context.Context, fn func(*applier) error) error {
 	}
 	var out outcome
 	err := h.p.write(context.WithoutCancel(ctx), "engine.history_ingest", func(tx *ingest.Tx) error {
-		a := &applier{tx: tx, owner: h.p.owner, now: h.p.clock.Now()}
+		a := h.p.applier(tx)
 		if err := fn(a); err != nil {
 			return err
 		}
