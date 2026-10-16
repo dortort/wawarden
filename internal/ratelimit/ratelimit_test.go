@@ -144,3 +144,58 @@ func TestPropertyAdmissionsNeverExceedBurstPlusRate(t *testing.T) {
 		}
 	})
 }
+
+func TestPeekNeverConsumes(t *testing.T) {
+	c := &clock{t: start}
+	l := ratelimit.New(6, 2, c.now)
+	for i := range 100 {
+		if wait, ok := l.Peek("alpha"); !ok || wait != 0 {
+			t.Fatalf("Peek %d on a full bucket = %v, %v, want an admission", i+1, wait, ok)
+		}
+	}
+	if n := l.Len(); n != 0 {
+		t.Fatalf("Len after peeking = %d, want 0", n)
+	}
+	for i := range 2 {
+		if _, ok := l.Allow("alpha"); !ok {
+			t.Fatalf("Allow %d of the burst was refused after peeking", i+1)
+		}
+	}
+	for range 100 {
+		if wait, ok := l.Peek("alpha"); ok || wait != 10*time.Second {
+			t.Fatalf("Peek on an empty bucket = %v, %v, want a refusal for 10s", wait, ok)
+		}
+	}
+	c.advance(10 * time.Second)
+	if _, ok := l.Allow("alpha"); !ok {
+		t.Fatal("refused peeks consumed the refill")
+	}
+}
+
+func TestPropertyPeekAnswersWhatAllowWould(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		perMinute := rapid.IntRange(1, 1200).Draw(t, "per_minute")
+		burst := rapid.IntRange(1, 10).Draw(t, "burst")
+		c := &clock{t: start}
+		l := ratelimit.New(perMinute, burst, c.now)
+		interval := time.Minute / time.Duration(perMinute)
+		keys := []string{"alpha", "bravo"}
+		steps := rapid.IntRange(1, 200).Draw(t, "steps")
+		for range steps {
+			c.advance(time.Duration(rapid.Int64Range(0, int64(2*interval)).Draw(t, "gap")))
+			key := rapid.SampledFrom(keys).Draw(t, "key")
+			peeks := rapid.IntRange(1, 3).Draw(t, "peeks")
+			var peekWait time.Duration
+			var peekOK bool
+			for range peeks {
+				peekWait, peekOK = l.Peek(key)
+			}
+			if !rapid.Bool().Draw(t, "allow") {
+				continue
+			}
+			if wait, ok := l.Allow(key); wait != peekWait || ok != peekOK {
+				t.Fatalf("Peek answered %v, %v but Allow then answered %v, %v", peekWait, peekOK, wait, ok)
+			}
+		}
+	})
+}
