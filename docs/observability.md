@@ -58,7 +58,7 @@ lines have none of the four keys.
 | `archive_opened` | `INFO` | `schema_version`, `profile`, `ofd_locking`, `recent_starts` | The [archive](configuration.md#message-archive) is open and locked. `ofd_locking` is `true` when open-file-description locks are in use, and `recent_starts` counts the starts of the last ten minutes, this one included, at most 64. |
 | `session_opened` | `INFO` | `paired` | The [device store](configuration.md#device-store) is open, locked and up to date; `paired` is `true` when it holds a linked device. |
 | `fake_engine` | `WARN`, at every log level | `wrong_account` | A development build runs the [fake engine](internals.md#fake-engine) in place of WhatsApp and opens no device store; `wrong_account` is `true` when the fake pairs a number that is not the owner's. |
-| `startup_failed` | `ERROR` | `error` | The archive or the device store cannot be opened or its lock was not acquired in time, the device store cannot be brought up to date, or a listener cannot be opened, for example because its address is in use; exit `1`. |
+| `startup_failed` | `ERROR` | `error` | The archive or the device store cannot be opened or its lock was not acquired in time, the device store cannot be brought up to date, the files an earlier run left in `spool/` cannot be removed, or a listener cannot be opened, for example because its address is in use; exit `1`. |
 | `starting` | `INFO` | `version`, `revision`, `modified`, `dev` | The listeners are open. |
 | `dev_build` | `WARN`, at every log level | | The binary was built with the `dev` tag. |
 | `listening` | `INFO` | `listener`, `address` | Once per open listener. |

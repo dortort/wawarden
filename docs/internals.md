@@ -676,8 +676,8 @@ queue, it holds:
   its kind may carry (`gif` or `video_note` for a video, `voice_note` for
   audio, `animated` or `lottie` for a sticker), the declared size of 0 to 2
   GiB, and when the reference expires and when it was added. The engine stores
-  a message's reference only while its downloads switch is on, and nothing in
-  this build turns that switch on, so no reference is stored yet; its minute
+  a message's reference only while its downloads switch is on, which it is
+  exactly while `WAWARDEN_MEDIA_MAX_BYTES` is above 0; its minute
   sweep runs the purge of references, and a fetch that answers that the
   attachment has expired marks that message's reference expired. A
   reference stored with a message expires at the earlier of the message's
@@ -822,7 +822,9 @@ The [audit anchor](observability.md#audit-retention)'s HMAC is HMAC-SHA256 under
 
 A media reference is an attachment descriptor sealed with AES-256-GCM under
 the `media-ref` key derived from the [master key](configuration.md#master-key).
-Nothing in this build seals or opens one. Its text is strict unpadded
+The adapter seals one for each attachment it captures while
+`WAWARDEN_MEDIA_MAX_BYTES` is above 0; nothing in this build fetches an
+attachment, so none is opened yet. Its text is strict unpadded
 base64url, at most 2048 characters, of, in this order:
 
 1. the version byte `0x01` and the 4-byte id of the sealing key;
