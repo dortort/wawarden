@@ -58,6 +58,16 @@ func (m Message) hasMedia() bool {
 	return m.MediaRef != "" || m.MediaKind != "" || m.MediaVariant != "" || m.MediaBytes != 0
 }
 
+func (env envelope) known() bool {
+	switch env.V {
+	case payloadVersion:
+		return true
+	case payloadVersionV1:
+		return env.Message == nil || !env.Message.hasMedia()
+	}
+	return false
+}
+
 func decodePayload(b []byte) (Event, error) {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
@@ -65,16 +75,7 @@ func decodePayload(b []byte) (Event, error) {
 	if err := dec.Decode(&env); err != nil {
 		return nil, errPayload
 	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return nil, errPayload
-	}
-	switch env.V {
-	case payloadVersion:
-	case payloadVersionV1:
-		if env.Message != nil && env.Message.hasMedia() {
-			return nil, errPayload
-		}
-	default:
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) || !env.known() {
 		return nil, errPayload
 	}
 	switch {
