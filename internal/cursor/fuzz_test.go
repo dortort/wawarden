@@ -1,6 +1,7 @@
 package cursor_test
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/dortort/wawarden/internal/cursor"
@@ -69,6 +70,37 @@ func FuzzOpenRef(f *testing.F) {
 		}
 		if back, err := current.OpenRef(binding.Client, again); err != nil || back != r {
 			t.Fatalf("the re-sealed reference opened to %+v, %v under the current key alone, want %+v", back, err, r)
+		}
+	})
+}
+
+func FuzzOpenMedia(f *testing.F) {
+	s := sealer(f, key, keyID, cursor.Retired{Key: otherKey, ID: otherKeyID})
+	current := sealer(f, key, keyID)
+	for _, sealing := range []*cursor.Sealer{s, sealer(f, otherKey, otherKeyID)} {
+		for _, pt := range [][]byte{nil, descriptor} {
+			text := mustSealMedia(f, sealing, mediaID, pt)
+			f.Add(text)
+			f.Add(text + "\n")
+			f.Add(text[:len(text)-1])
+		}
+	}
+	f.Add("")
+	f.Add(cursor.RefPrefix)
+	f.Fuzz(func(t *testing.T, text string) {
+		pt, err := s.OpenMedia(mediaID, text)
+		if err != nil {
+			requireInvalid(t, err)
+			return
+		}
+		_, err = s.OpenMedia("3EB0SYNTHETIC0002", text)
+		requireInvalid(t, err)
+		again, err := s.SealMedia(mediaID, pt)
+		if err != nil || len(again) != len(text) {
+			t.Fatalf("an accepted media reference of %d characters re-sealed to %d, %v", len(text), len(again), err)
+		}
+		if back, err := current.OpenMedia(mediaID, again); err != nil || !bytes.Equal(back, pt) {
+			t.Fatalf("the re-sealed media reference opened to %d bytes, %v under the current key alone, want %d", len(back), err, len(pt))
 		}
 	})
 }

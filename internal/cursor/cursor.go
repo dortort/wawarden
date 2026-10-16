@@ -1,4 +1,4 @@
-// Package cursor seals pagination positions and message references to one client and one request shape, so a caller can hand them back but never read, forge or reuse them elsewhere.
+// Package cursor seals pagination positions and message references to one client and one request shape, so a caller can hand them back but never read, forge or reuse them elsewhere, and seals media references to one message.
 package cursor
 
 import (
@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	MaxCursor = 256
-	MaxRef    = 640
-	RefPrefix = "m1_"
+	MaxCursor   = 256
+	MaxRef      = 640
+	MaxMediaRef = 2048
+	RefPrefix   = "m1_"
 
 	version      = 0x01
 	idSize       = 4
@@ -27,14 +28,16 @@ const (
 	refFields    = 3
 	cursorLabel  = "cursor"
 	refLabel     = "mref"
+	mediaLabel   = "media"
 	nonceLabel   = "wawarden/mref-nonce/v1"
 )
 
 var (
-	ErrInvalid  = errors.New("invalid cursor")
-	errKey      = errors.New("cursor: the key is not 32 bytes with an 8-hex-digit key id")
-	errRefSize  = errors.New("cursor: the message reference would exceed its length cap")
-	errNoRefKey = errors.New("cursor: this sealer has no reference nonce key")
+	ErrInvalid   = errors.New("invalid cursor")
+	errKey       = errors.New("cursor: the key is not 32 bytes with an 8-hex-digit key id")
+	errRefSize   = errors.New("cursor: the message reference would exceed its length cap")
+	errMediaSize = errors.New("cursor: the media reference would exceed its length cap")
+	errNoRefKey  = errors.New("cursor: this sealer has no reference nonce key")
 )
 
 var encoding = base64.RawURLEncoding.Strict()
@@ -187,6 +190,28 @@ func (s *Sealer) OpenRef(client, text string) (Ref, error) {
 	}
 	return Ref{Chat: f[0], ID: f[1], Sender: f[2]}, nil
 }
+
+func (s *Sealer) SealMedia(id string, pt []byte) (string, error) {
+	text, err := s.seal(pt, mediaFields(id))
+	if err != nil {
+		return "", err
+	}
+	if len(text) > MaxMediaRef {
+		return "", errMediaSize
+	}
+	return text, nil
+}
+
+func (s *Sealer) OpenMedia(id, text string) ([]byte, error) {
+	pt, err := s.open(text, MaxMediaRef, mediaFields(id))
+	if err != nil {
+		return nil, ErrInvalid
+	}
+	return pt, nil
+}
+
+// The label comes last, as in a message reference, so no message id and client name can make the two additional data equal.
+func mediaFields(id string) []string { return []string{id, mediaLabel} }
 
 func (b Binding) fields() []string {
 	query := ""
