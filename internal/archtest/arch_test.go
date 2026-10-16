@@ -54,7 +54,7 @@ var rules = []rule{
 	goroutineRule, netHTTPRule, dotImportRule, socketRule, muxRule, serverRule, handlerRule,
 	inListRule, bannedImportRule, reflectionRule, fenceRule, chatMethodRule, thirdPartyRule, hiddenPackageRule, nolintRule, generatedRule, wildcardRule, imageDecoderRule,
 	credentialRule, preludeRule, secretComparisonRule, formRule, shadowRule, sealRule, keysDirectoryRule, standardLibraryOnlyRule, logHandlerRule, logOutputRule,
-	confinementRule, databaseFileRule, constantSQLRule, sqliteStatementRule, protocolCallRule, protocolClientCallRule, offlineTestRule, rawHandleRule,
+	confinementRule, databaseFileRule, constantSQLRule, sqliteStatementRule, protocolCallRule, protocolClientCallRule, mediaDownloadRule, offlineTestRule, rawHandleRule,
 	notifyEventRule, execRule, ageRecipientOnlyRule, backupsDirectoryRule, spoolDirectoryRule, devOnlyRule, fakeImportRule, scopedGrantRule, scopedReadPathRule, analyzeRule,
 	mcpLoggerRule, mcpRegistrationRule, grantDecisionRule, sendGrantRule, sentByRule, auditDeleteRule, auditAnchorRule, auditPruneCallerRule, verifierFenceRule, buildVersionRule,
 }
@@ -396,6 +396,7 @@ func TestArchitecture(t *testing.T) {
 		"internal/engine/engine.go",
 		"internal/engine/fake/fake.go",
 		"internal/engine/wa/client.go",
+		"internal/engine/wa/internal/mediasrc/source.go",
 		"internal/keys/keys.go",
 		"internal/listeners/listeners.go",
 		"internal/logx/logx.go",
