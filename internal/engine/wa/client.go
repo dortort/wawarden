@@ -75,6 +75,10 @@ type Options struct {
 	LogLevel        slog.Level
 	Alerts          *slog.Logger
 	UnsafeDebug     time.Duration
+
+	MediaMaxBytes     int64
+	MediaRefRetention time.Duration
+	MediaSealer       MediaSealer
 }
 
 type downloader func(ctx context.Context, cli *whatsmeow.Client, notif *waE2E.HistorySyncNotification, dst whatsmeow.File) error
@@ -90,6 +94,7 @@ type Client struct {
 	log          logger
 	http         httpClients
 	download     downloader
+	capture      capture
 	transmit     transmitter
 	transmitPeer peerTransmitter
 	online       func(socketState) bool
@@ -122,6 +127,10 @@ func newClient(opts Options, dial dialFunc, download downloader, now func() time
 		opts.HistoryMaxBytes <= 0 || opts.HistoryMaxBytes > engine.MaxHistoryMaxBytes {
 		return nil, errOptions
 	}
+	if opts.MediaMaxBytes < 0 || opts.MediaMaxBytes > mediaMaxDeclared || opts.MediaMaxBytes > 0 &&
+		(opts.MediaSealer == nil || opts.MediaRefRetention <= 0) {
+		return nil, errMediaOptions
+	}
 	configureDevice()
 	owner, _ := policy.OwnerDigits(opts.OwnerPhone)
 	gate := newDebugGate(opts.UnsafeDebug, now, opts.Alerts)
@@ -132,6 +141,7 @@ func newClient(opts Options, dial dialFunc, download downloader, now func() time
 		log:          newLibraryLogger(opts.Writer, opts.LogLevel, "whatsmeow", gate),
 		http:         newHTTPClients(dial, opts.HistoryMaxBytes+mediaOverhead),
 		download:     download,
+		capture:      capture{max: opts.MediaMaxBytes, retention: opts.MediaRefRetention, sealer: opts.MediaSealer, now: now},
 		transmit:     transmitMessage,
 		transmitPeer: transmitPeerMessage,
 		online:       usable,
@@ -217,7 +227,7 @@ func (c *Client) dispatch(gen uint64, evt any) (handled bool) {
 	case *events.LoggedOut:
 		c.update(gen, func() { c.paired, c.account, c.stale = false, "", true })
 	}
-	ev, ok := translate(evt)
+	ev, ok := translate(evt, c.capture)
 	if !ok {
 		return true
 	}
@@ -444,7 +454,7 @@ func (c *Client) DownloadHistory(ctx context.Context, ref engine.HistoryRef, dst
 }
 
 func (c *Client) Decode(blob []byte) (engine.History, error) {
-	return decodeHistory(c.current(), blob)
+	return decodeHistory(c.current(), blob, c.capture)
 }
 
 func refuseRedirects(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }

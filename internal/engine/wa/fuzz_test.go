@@ -1,7 +1,11 @@
 package wa
 
 import (
+	"bytes"
+	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
@@ -34,6 +38,10 @@ func FuzzMessageBytes(f *testing.F) {
 		}}),
 		live(f, group, victim, "3EB0X1", &waE2E.Message{ReactionMessage: &waE2E.ReactionMessage{Key: msgKey(group, false, "3EB0G9", &admin), Text: proto.String("+")}}),
 		live(f, peer, peer, "3EB0Z1", &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{Key: msgKey(peer, false, "3EB0A1", nil)}}),
+		live(f, peer, peer, "3EB0M1", mediaFixtures[0].build(syntheticMedia(4096))),
+		live(f, peer, peer, "3EB0M2", mediaFixtures[3].build(syntheticMedia(1<<20))),
+		live(f, peer, peer, "3EB0M3", mediaFixtures[9].build(syntheticMedia(512))),
+		live(f, peer, peer, "3EB0M4", viewOnceWrapped(mediaFixtures[6].build(syntheticMedia(64)))),
 	} {
 		b, err := proto.Marshal(evt.RawMessage)
 		if err != nil {
@@ -46,6 +54,7 @@ func FuzzMessageBytes(f *testing.F) {
 		{MessageSource: types.MessageSource{Chat: group, Sender: types.JID{User: victim.User, Device: 2, Server: types.DefaultUserServer}, IsGroup: true}, ID: "3EB0F2", Timestamp: epoch},
 		{MessageSource: types.MessageSource{Chat: owner, Sender: owner, IsFromMe: true}, ID: "3EB0F3", Timestamp: epoch},
 	}
+	on := capture{max: 100 << 20, retention: time.Hour, sealer: fakeSealer{}, now: func() time.Time { return epoch }}
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > maxFuzzMessage {
 			return
@@ -56,9 +65,18 @@ func FuzzMessageBytes(f *testing.F) {
 		}
 		for _, info := range infos {
 			evt := (&events.Message{Info: info, RawMessage: &m}).UnwrapRaw()
-			ev, ok := translate(evt)
+			ev, ok := translate(evt, capture{})
+			sealed, captured := translate(evt, on)
+			if ok != captured {
+				t.Fatalf("translated %v without the capture and %v with it", ok, captured)
+			}
 			if !ok {
 				continue
+			}
+			if msg, isMessage := sealed.(engine.Message); isMessage {
+				checkCapturedMessage(t, ev.(engine.Message), msg)
+			} else if !reflect.DeepEqual(ev, sealed) {
+				t.Fatalf("the capture changed %+v into %+v", ev, sealed)
 			}
 			switch e := ev.(type) {
 			case engine.Message:
@@ -96,6 +114,51 @@ func checkFuzzedMessage(t *testing.T, info types.MessageInfo, evt *events.Messag
 	if e.Expiration < 0 {
 		t.Fatalf("negative expiration %v", e.Expiration)
 	}
+}
+
+func checkCapturedMessage(t *testing.T, plain, sealed engine.Message) {
+	t.Helper()
+	if !reflect.DeepEqual(withoutReference(sealed), plain) || plain.MediaRef != "" || plain.MediaKind != "" || plain.MediaVariant != "" || plain.MediaBytes != 0 {
+		t.Fatalf("the capture changed more than the reference and its plain values: %+v without, %+v with", plain, sealed)
+	}
+	if sealed.MediaRef == "" {
+		if sealed.MediaKind != "" || sealed.MediaVariant != "" || sealed.MediaBytes != 0 {
+			t.Fatalf("plain media values without a reference: %+v", sealed)
+		}
+		return
+	}
+	pt, err := fakeSealer{}.OpenMedia(sealed.ID, sealed.MediaRef)
+	if err != nil {
+		t.Fatalf("the reference does not open for its message: %v", err)
+	}
+	d, ok := parseDescriptor(pt)
+	declared, valid := d.declared()
+	if !ok || !valid || sealed.Kind != engine.KindMedia || d.kind != sealed.MediaKind || d.variant != sealed.MediaVariant || declared != sealed.MediaBytes ||
+		d.chat != sealed.Chat || d.sender != sealed.Sender || d.fromMe != sealed.FromMe {
+		t.Fatalf("message %+v carries a reference to %+v", sealed, d)
+	}
+}
+
+func FuzzMediaDescriptor(f *testing.F) {
+	for _, fx := range mediaFixtures {
+		media := syntheticMedia(4096)
+		part, _ := mediaOf(fx.build(media))
+		f.Add(descriptor{directPath: media.path, mediaKey: media.key, fileSHA256: media.sha, fileEncSHA256: media.enc, length: *media.fileLength(),
+			kind: part.kind, variant: part.variant, chat: group.String(), sender: victim.String()}.marshal())
+	}
+	f.Add([]byte{descriptorVersion})
+	f.Fuzz(func(t *testing.T, data []byte) {
+		d, ok := parseDescriptor(data)
+		if !ok {
+			return
+		}
+		if !bytes.Equal(d.marshal(), data) {
+			t.Fatalf("parseDescriptor accepted %x, which is not the encoding of %+v", data, d)
+		}
+		if declared, valid := d.declared(); valid && (declared < 0 || declared > mediaMaxDeclared || !strings.HasPrefix(d.directPath, "/")) {
+			t.Fatalf("a valid descriptor %+v declares %d bytes", d, declared)
+		}
+	})
 }
 
 func FuzzNormalizeAgainstParseJID(f *testing.F) {
