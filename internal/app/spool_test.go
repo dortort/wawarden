@@ -1,15 +1,19 @@
 package app
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dortort/wawarden/internal/config"
 	"github.com/dortort/wawarden/internal/logx"
@@ -67,6 +71,9 @@ func TestStartRemovesEveryStagedFileWhateverTheCap(t *testing.T) {
 			t.Cleanup(func() { _ = run(t, a)() })
 			if got := names(t, dir); !slices.Equal(got, []string{"kept"}) {
 				t.Fatalf("spool/ holds %v after the start, want only the subdirectory kept", got)
+			}
+			if (a.spool != nil) != (maxBytes > 0) {
+				t.Fatalf("spool = %v with a cap of %d bytes", a.spool, maxBytes)
 			}
 		})
 	}
@@ -127,4 +134,98 @@ func TestARelativeDataDirectoryStartsAndPurges(t *testing.T) {
 	if got := names(t, dir); !slices.Equal(got, []string{"kept"}) {
 		t.Fatalf("spool/ holds %v after the start, want only the subdirectory kept", got)
 	}
+}
+
+func sweepOnce(t *testing.T, a *App) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	tick := make(chan time.Time)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.sweepOn(ctx, tick)
+	}()
+	tick <- time.Now()
+	cancel()
+	<-done
+}
+
+func TestTheSweepRemovesStrayStagedFilesButNotTheLiveOne(t *testing.T) {
+	data := t.TempDir()
+	spool, err := stage.New(stage.Options{Data: data, UID: os.Geteuid()})
+	if err != nil {
+		t.Fatalf("stage.New: %v", err)
+	}
+	_, cancel := context.WithCancelCause(t.Context())
+	defer cancel(nil)
+	live, err := spool.Admit(1024, cancel)
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	defer live.Erase()
+	dir := filepath.Join(data, stage.Dir)
+	held := names(t, dir)
+	if len(held) != 1 || !strings.HasPrefix(held[0], "sealed-") {
+		t.Fatalf("spool/ holds %v while a job stages on disk, want one staged file", held)
+	}
+	for _, name := range []string{strayStaged, "synthetic-notes"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("synthetic"), 0o600); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	logs := &syncBuffer{}
+	a := &App{logger: logx.New(logx.NewWriter(logs), slog.LevelInfo), spool: spool}
+	sweepOnce(t, a)
+	if got, want := names(t, dir), slices.Sorted(slices.Values([]string{held[0], "synthetic-notes"})); !slices.Equal(got, want) {
+		t.Fatalf("spool/ holds %v after the sweep, want %v", got, want)
+	}
+	if failed := logs.find("spool_sweep_failed"); len(failed) != 0 {
+		t.Fatalf("spool_sweep_failed events %v", failed)
+	}
+}
+
+func TestAFailedSweepIsLoggedWithoutAPath(t *testing.T) {
+	data := t.TempDir()
+	if err := os.Symlink(t.TempDir(), filepath.Join(data, stage.Dir)); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+	spool, err := stage.New(stage.Options{Data: data, Local: true, UID: os.Geteuid()})
+	if err != nil {
+		t.Fatalf("stage.New: %v", err)
+	}
+	logs := &syncBuffer{}
+	a := &App{logger: logx.New(logx.NewWriter(logs), slog.LevelInfo), spool: spool}
+	sweepOnce(t, a)
+	failed := logs.find("spool_sweep_failed")
+	if len(failed) != 1 || failed[0]["level"] != "WARN" || failed[0]["error_type"] == "" {
+		t.Fatalf("spool_sweep_failed events %v, want one warning with an error type", failed)
+	}
+	if strings.Contains(fmt.Sprint(logs.events()), data) {
+		t.Fatal("the sweep failure names the data directory")
+	}
+}
+
+func TestRunSweepsTheSpoolOnItsIntervalAndStops(t *testing.T) {
+	cfg := mediaConfig(t, 32<<20)
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), nil, noClients{}, idle())
+	if err != nil {
+		t.Fatalf("newAppWith: %v", err)
+	}
+	if a.spool == nil || a.sweepEvery != time.Hour {
+		t.Fatalf("spool %v swept every %v, want a spool swept hourly for a cap above 16 MiB", a.spool, a.sweepEvery)
+	}
+	a.sweepEvery = time.Millisecond
+	dir := strayFiles(t, cfg.DataDir)
+	stop := run(t, a)
+	waitUntil(t, "the stray staged file swept", func() bool {
+		_, err := os.Lstat(filepath.Join(dir, strayStaged))
+		return errors.Is(err, fs.ErrNotExist)
+	})
+	if err := stop(); err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	if got := names(t, dir); !slices.Equal(got, []string{"kept", "synthetic-leftover"}) {
+		t.Fatalf("spool/ holds %v after the sweeps, want the subdirectory and the file not named like a staged one", got)
+	}
+	requireReleased(t, cfg.DataDir)
 }

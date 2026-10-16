@@ -101,6 +101,7 @@ lines have none of the four keys.
 | `history_file_kept` | `WARN` | `error_type` | A history file could not be deleted, or the directory could not be flushed after a deletion. The engine deletes a file whose blob is no longer waiting at its next start and once an hour while it runs. |
 | `expiry_sweep_failed` | `WARN` | `error_type` | Removing the text, media type and media reference of expired messages, or purging media references and revoke tombstones, failed; the sweep runs again a minute later. |
 | `media_expire_failed` | `WARN` | `error_type` | A fetch answered that the attachment has expired, but marking its media reference expired failed; the reference stays until the sweep reaches its expiry or retention. |
+| `spool_sweep_failed` | `WARN` | `error_type` | While `WAWARDEN_MEDIA_MAX_BYTES` is above 0, the hourly removal of stray staged attachment files in [`spool/`](configuration.md#data-directory), those no running job holds, failed; it runs again an hour later. |
 | `whatsmeow_log` | the line's own: `ERROR`, `WARN`, `INFO`, or `DEBUG` in a debug window | `module`, `detail` | A log line of the protocol library; see [Protocol library logs](#protocol-library-logs). |
 | `unsafe_debug` | `WARN`, at every log level | `minutes`, `until` | `WAWARDEN_UNSAFE_DEBUG` opened a debug window at the start. |
 | `unsafe_rate_caps` | `WARN`, at every log level | `read_per_minute`, `search_per_minute` | `WAWARDEN_UNSAFE_RATE_CAPS=1` lifted the upper caps of the [read budgets](api.md#read-rate-limits). Logged once per start. |
