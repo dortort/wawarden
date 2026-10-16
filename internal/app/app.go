@@ -22,6 +22,7 @@ import (
 	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/notify"
 	"github.com/dortort/wawarden/internal/safego"
+	"github.com/dortort/wawarden/internal/stage"
 	"github.com/dortort/wawarden/internal/store/ingest"
 )
 
@@ -63,6 +64,8 @@ type App struct {
 	emfEvery    time.Duration
 	backup      *scheduler
 	backupEvery time.Duration
+	spool       *stage.Spool
+	sweepEvery  time.Duration
 	starts      int
 	recovered   int
 	serving     listenerSet
@@ -175,7 +178,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 	if err != nil {
 		return nil, errors.Join(err, archive.Close())
 	}
-	a.session = parts.session
+	a.session, a.spool, a.sweepEvery = parts.session, media.spool, spoolSweepInterval
 	if a.engine, err = engine.New(engine.Options{
 		Client: parts.client, Versions: parts.versions, Decoder: parts.decoder, Archive: archive, DataDir: cfg.DataDir,
 		OwnerPhone: cfg.OwnerPhone, HistoryMaxBytes: cfg.HistoryMaxBytes, Logger: logger, Notify: unpairs, Metrics: reg,
@@ -332,6 +335,8 @@ func (a *App) Run(ctx context.Context) error {
 		defer close(backedUp)
 		a.backup.run(backingUp, a.backupEvery)
 	})
+	stopSweeping := a.sweepSpool(ctx)
+	defer stopSweeping()
 	a.ready.Store(true)
 	a.serving.Serve()
 	a.health.Serve()
@@ -365,6 +370,7 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	stopEmitting()
 	<-emitted
+	stopSweeping()
 	if a.emf != nil {
 		a.emit()
 	}
