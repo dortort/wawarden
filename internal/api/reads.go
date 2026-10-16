@@ -462,7 +462,7 @@ func (s *reads) messageItem(client string, m scoped.Message) (dto.Message, error
 	display, displayCut := capText(m.TextDisplay)
 	out := dto.Message{
 		Ref: ref, Chat: m.ChatRef, Sender: dto.Sender{ID: m.Sender.JID(), Name: optional(cmp.Or(m.SavedName, m.PushName))},
-		FromMe: m.FromMe, TS: readTime(m.At), Kind: m.Kind, MediaType: optional(m.MediaType), ReplyTo: reply,
+		FromMe: m.FromMe, TS: readTime(m.At), Kind: m.Kind, ReplyTo: reply,
 		QuoteVerified: m.QuoteVerified, EditedAt: optionalReadTime(m.EditedAt), Revoked: m.Revoked, Origin: originPeer, Untrusted: true,
 	}
 	switch {
@@ -473,6 +473,7 @@ func (s *reads) messageItem(client string, m scoped.Message) (dto.Message, error
 	}
 	if !m.Revoked {
 		out.Text, out.TextDisplay, out.TextTruncated = optional(text), optional(display), textCut || displayCut
+		out.MediaType = optional(m.MediaType)
 	}
 	return out, nil
 }
