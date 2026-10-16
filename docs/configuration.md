@@ -413,6 +413,7 @@ only the derived keys, of the master key and of each retired key:
 | `chat-hmac` | 32 bytes | The `chat_hmac` of [audit lines](observability.md#audit-chain): the first 16 bytes of HMAC-SHA256 under this key over the chat's canonical identifier. No [notification event](observability.md#notifications) names a chat. |
 | `cursor-seal` | 32 bytes | Seals the `next` cursors of the [client API](api.md#cursors-and-message-references). |
 | `mref` | 32 bytes | Seals the [message references](api.md#cursors-and-message-references) of the client API. |
+| `media-ref` | 32 bytes | Reserved for sealing [media references](internals.md#media-reference); derived and kept, but nothing uses it in this build. |
 | `audit-chain` | 32 bytes | The key of the [audit chain](observability.md#audit-chain)'s row HMACs. |
 
 What leaves the service:
