@@ -288,7 +288,7 @@ func fetchError(err, cause error) error {
 		return engine.ErrMediaFailed
 	case errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith403), errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith404), errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith410):
 		return engine.ErrMediaExpired
-	case errors.Is(err, whatsmeow.ErrNotConnected):
+	case errors.Is(err, whatsmeow.ErrNotConnected), errors.Is(err, whatsmeow.ErrClientIsNil):
 		return engine.ErrNotConnected
 	}
 	return engine.ErrMediaFailed
