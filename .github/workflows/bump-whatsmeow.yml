@@ -113,7 +113,7 @@ jobs:
         run: |
           module=go.mau.fi/whatsmeow
           upstream=https://github.com/tulir/whatsmeow
-          watched=(socket store send.go download.go upload.go message.go 'pair*.go' handshake.go msgsecret.go 'appstate*')
+          watched=(socket store send.go download.go download-to-file.go mediaconn.go mediaretry.go upload.go message.go 'pair*.go' handshake.go msgsecret.go 'appstate*')
           limit=60000
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           work=$RUNNER_TEMP/describe
@@ -193,7 +193,7 @@ jobs:
             block text "$work/stat.txt"
             printf '\n### go.mod\n\n'
             block diff "$work/gomod.diff"
-            printf "\n### Watched paths\n\nThe full diff between the module sources of the two versions under \`socket/\`, \`store/\`, \`send.go\`, \`download.go\`, \`upload.go\`, \`message.go\`, \`pair*.go\`, \`handshake.go\`, \`msgsecret.go\` and \`appstate*\`.\n\n"
+            printf "\n### Watched paths\n\nThe full diff between the module sources of the two versions under \`socket/\`, \`store/\`, \`send.go\`, \`download.go\`, \`download-to-file.go\`, \`mediaconn.go\`, \`mediaretry.go\`, \`upload.go\`, \`message.go\`, \`pair*.go\`, \`handshake.go\`, \`msgsecret.go\` and \`appstate*\`.\n\n"
           } > "$work/head.md"
 
           size=$(($(wc -c < "$out/watched-paths.diff")))

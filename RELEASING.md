@@ -856,17 +856,19 @@ merges, tags or releases. It runs two jobs:
    main only, no workflow-wide permission, no Go and no `hack/` script in the
    job that can write, credentials never persisted by a checkout, the Go version
    check right after setup-go and before any Go command, no step that says
-   checks passed before the tests run, and the lookup by this repository's owner
-   and branch, which skips pull requests from forks however many there are.
+   checks passed before the tests run, each watched path below both diffed and
+   named in the description, and the lookup by this repository's owner and
+   branch, which skips pull requests from forks however many there are.
 
 The description carries the old and new pseudo-versions, the upstream compare
 link, whether the new commit descends from the pinned one (and if not, the
 commits it drops), the upstream commit log between them, a diffstat between the
 two module versions' sources as the module proxy serves them, the `go.mod`
 diff, and the full diff between those sources of the watched paths: `socket/`,
-`store/`, `send.go`, `download.go`, `upload.go`, `message.go`, `pair*.go`,
-`handshake.go`, `msgsecret.go` and `appstate*`. Upstream text is fenced so that
-it cannot end its code block. When the description would exceed GitHub's limit,
+`store/`, `send.go`, `download.go`, `download-to-file.go`, `mediaconn.go`,
+`mediaretry.go`, `upload.go`, `message.go`, `pair*.go`, `handshake.go`,
+`msgsecret.go` and `appstate*`. Upstream text is fenced so that it cannot end
+its code block. When the description would exceed GitHub's limit,
 the diff is cut at a line with a note, and the complete diff is
 `watched-paths.diff` in the run's `whatsmeow-bump` artifact.
 
