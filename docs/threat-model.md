@@ -499,6 +499,10 @@ alert on.
 - **All-chats clients.** A client that reads every chat is created only by
   asking for it explicitly. The CLI warns. The admin status reports the number
   of active ones, and the `all_chats_client` warning while one is active.
+- **Media and write clients.** A client's `allow_media` flag grants nothing in
+  this build. The admin status gives the `media_write_client` warning while an
+  active client holds it and at least one write chat; tested in
+  `internal/store/admin/writers_test.go` and `internal/app/admin_test.go`.
 - **Rotation.** A token is never renewed or shown again. Rotating it means
   creating a client with the same scope under a new name, switching the agent
   to the new token, and revoking the old client; see

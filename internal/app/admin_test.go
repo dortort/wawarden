@@ -213,11 +213,14 @@ func TestClientsAreCreatedAuthenticatedAuditedAndRevoked(t *testing.T) {
 	if r := mustDo(t, http.MethodGet, client, "/v1/anything", bearer(other)); r.status != http.StatusUnauthorized {
 		t.Fatalf("an unknown client token = %d, want 401", r.status)
 	}
-	if r := mustDo(t, http.MethodGet, admin, "/admin/v1/status", bearer(adminToken)); !strings.Contains(r.body, `"clients":{"active":1,"expired":0,"revoked":0,"all_chats_active":0}`) {
-		t.Fatalf("status = %s", r.body)
+	if r := mustDo(t, http.MethodGet, admin, "/admin/v1/status", bearer(adminToken)); !strings.Contains(r.body, `"clients":{"active":1,"expired":0,"revoked":0,"all_chats_active":0},"warnings":["media_write_client"]`) {
+		t.Fatalf("status = %s, want the media_write_client warning while the client holds media and a write chat", r.body)
 	}
 	if r := post(t, admin, "/admin/v1/clients/"+body.Client.ID+"/revoke", bearer(adminToken), "{}"); r.status != http.StatusOK || !strings.Contains(r.body, `"state":"revoked"`) {
 		t.Fatalf("revoke = %d %s", r.status, r.body)
+	}
+	if r := mustDo(t, http.MethodGet, admin, "/admin/v1/status", bearer(adminToken)); !strings.Contains(r.body, `"revoked":1,"all_chats_active":0},"warnings":[]`) {
+		t.Fatalf("status after the revoke = %s, want no warning", r.body)
 	}
 	if r := mustDo(t, http.MethodGet, client, "/v1/anything", bearer(body.Credential)); r.status != http.StatusUnauthorized {
 		t.Fatalf("a revoked client's request = %d, want 401 on the next request", r.status)

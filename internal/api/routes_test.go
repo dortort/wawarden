@@ -205,6 +205,16 @@ func TestStatusAnswersAFixedShape(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"clients":{"active":3,"expired":1,"revoked":2,"all_chats_active":1},"warnings":["all_chats_client"]`) {
 		t.Fatalf("status with an all-chats client = %s, want its counts and the all_chats_client warning", rec.Body)
 	}
+	f.service.status.Clients = ClientCounts{Active: 1, MediaWriteActive: 1}
+	rec = adminRequest(t, f, http.MethodGet, "/admin/v1/status", "", "")
+	if !strings.Contains(rec.Body.String(), `"clients":{"active":1,"expired":0,"revoked":0,"all_chats_active":0},"warnings":["media_write_client"]`) {
+		t.Fatalf("status with a client that holds media and write chats = %s, want the media_write_client warning", rec.Body)
+	}
+	f.service.status.Clients = ClientCounts{Active: 2, AllChatsActive: 1, MediaWriteActive: 1}
+	rec = adminRequest(t, f, http.MethodGet, "/admin/v1/status", "", "")
+	if !strings.Contains(rec.Body.String(), `"warnings":["all_chats_client","media_write_client"]`) {
+		t.Fatalf("status with both kinds of client = %s, want both warnings", rec.Body)
+	}
 	if got := f.events.recorded(); len(got) != 0 {
 		t.Fatalf("status emitted admin_mutation events %v: it changes nothing", got)
 	}

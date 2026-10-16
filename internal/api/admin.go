@@ -19,6 +19,7 @@ const (
 	maxBackfillCount = 50
 	outcomeOK        = "ok"
 	warningAllChats  = "all_chats_client"
+	warningMedia     = "media_write_client"
 
 	// The listeners' 30-second write timeout would cut off a slower answer and lose the code.
 	pairTimeout = 25 * time.Second
@@ -57,10 +58,11 @@ type AdminStatus struct {
 }
 
 type ClientCounts struct {
-	Active         int64
-	Expired        int64
-	Revoked        int64
-	AllChatsActive int64
+	Active           int64
+	Expired          int64
+	Revoked          int64
+	AllChatsActive   int64
+	MediaWriteActive int64
 }
 
 type AdminService interface {
@@ -179,6 +181,9 @@ func statusResponse(s AdminStatus) dto.Status {
 	warnings := []string{}
 	if s.Clients.AllChatsActive > 0 {
 		warnings = append(warnings, warningAllChats)
+	}
+	if s.Clients.MediaWriteActive > 0 {
+		warnings = append(warnings, warningMedia)
 	}
 	var last *string
 	if !s.LastIngest.IsZero() {

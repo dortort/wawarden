@@ -860,7 +860,7 @@ optional:
 | `write_chats` | The chats the client may [send](#sending) to: at most 256, each also in `read_chats`. |
 | `all_chats` | `true` lets the client read every chat, including chats that appear later; then `read_chats` and `write_chats` must be empty. |
 | `allow_first_contact` | `true` lets a write chat be a direct chat the archive has not seen yet. |
-| `allow_media` | `true` marks the client as one that may download attachments; no key means `false`. The flag is stored and reported, but grants nothing in this build: no route or tool serves an attachment yet. |
+| `allow_media` | `true` marks the client as one that may download attachments; no key means `false`. The flag is stored and reported, but grants nothing in this build: no route or tool serves an attachment yet. While an active client holds it and at least one write chat, the [status](#status-object) carries the `media_write_client` warning. |
 | `expires_in_days` | 1 to 365; `0` or no key means 90. A client never lives longer than 365 days, so a token cannot be made that never expires. |
 
 ### Backfill requests
@@ -910,7 +910,7 @@ The status object carries no identifier, name or text:
 | `paired` | Whether a device is stored. |
 | `counts` | Chats and messages in the archive; history blobs waiting to be processed and quarantined; inbox rows waiting to be applied and quarantined; backfills requested since midnight UTC. |
 | `clients` | Clients that are active, expired and not revoked, and revoked; and active clients that read every chat. |
-| `warnings` | Fixed codes, empty when nothing needs attention: `all_chats_client` while a client that reads every chat is active. |
+| `warnings` | Fixed codes, empty when nothing needs attention: `all_chats_client` while a client that reads every chat is active, and `media_write_client` while an active client holds `allow_media` and at least one write chat. |
 | `last_ingest_at` | When the engine last stored a message, in UTC to the second, or `null` before the first. |
 | `version` | The build's version, as `wawarden version` prints it. |
 
