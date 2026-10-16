@@ -32,9 +32,9 @@ linters:
             - pkg: mime/multipart
               desc: internal/api reads JSON bodies only
             - pkg: html/template
-              desc: internal/api writes JSON only, and a template can call a Request method by name
+              desc: internal/api writes dto types only (JSON, the metrics text and verified attachment bytes), and a template can call a Request method by name
             - pkg: text/template
-              desc: internal/api writes JSON only, and a template can call a Request method by name
+              desc: internal/api writes dto types only (JSON, the metrics text and verified attachment bytes), and a template can call a Request method by name
             - pkg: modernc.org/sqlite
               desc: the raw database handle lives in internal/store/internal/db
             - pkg: go.mau.fi/whatsmeow
