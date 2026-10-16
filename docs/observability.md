@@ -462,10 +462,11 @@ version fetch, connection attempt, or pairing's dial or code request
 reconnect closes the connection being dialled also counts as
 `engine.supervisor`, and the reconnect goes ahead. Its adapter adds `wa.connect`, which ends a connection attempt whose
 caller gave up, `wa.keepalive`, which closes a connection whose keepalives
-failed or that WhatsApp asked to log in again, and `wa.event` for a panic while
+failed or that WhatsApp asked to log in again, `wa.event` for a panic while
 it translates one of the protocol library's events or the engine handles it,
-which refuses the event. Other code on goroutines that the protocol library
-starts itself is not covered: a panic there ends the process. The notifier adds
+which refuses the event, and `wa.media.watchdog` for a panic in the watchdog
+that times one attachment download, which ends that download. Other code on
+goroutines that the protocol library starts itself is not covered: a panic there ends the process. The notifier adds
 `notify.flush` and `notify.webhook`, the EMF writer
 `metrics.emf`, the [backup](configuration.md#backups) scheduler `backup.schedule`, and each
 database call the watcher `db.deadline`, which logs a call that runs past its
