@@ -644,3 +644,17 @@ func TestAnchorMACMatchesItsLayout(t *testing.T) {
 		t.Fatalf("the anchor MAC is %x, the recorded vector is %s: a change breaks every anchor already written", got, vector)
 	}
 }
+
+func TestPruneAuthenticatesRowsNamingAMessage(t *testing.T) {
+	f, heads := mediaChainFixture(t)
+	if res := prune(t, f, start.Add(3500*time.Millisecond), pruneBatch); res.Rows != 4 || res.Through != 4 {
+		t.Fatalf("Prune = %+v, want rows 1 to 4 removed", res)
+	}
+	if rep := verify(t, f, f.copyArchive(t), heads); !rep.OK() || rep.Rows != 2 || rep.Verified != 2 || rep.PrunedThrough != 4 || rep.HeadsMissing != 0 {
+		t.Fatalf("Verify after the prune = %+v", rep)
+	}
+	f = tamperStopped(t, f, f.master, func(d *sql.DB) { exec(t, d, unlock, "UPDATE audit SET bytes = bytes + 1 WHERE id = 5") })
+	if res, err := f.store.Audit().Prune(t.Context(), start.Add(time.Hour), f.clock.Now(), pruneBatch); !errors.Is(err, admin.ErrChainMismatch) {
+		t.Fatalf("Prune over an edited byte count = %+v, %v; want %v", res, err, admin.ErrChainMismatch)
+	}
+}

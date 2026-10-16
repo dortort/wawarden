@@ -32,7 +32,7 @@ pruned_at = excluded.pruned_at, mac_key_id = excluded.mac_key_id, mac = excluded
 	deleteAuditThrough = `DELETE FROM audit WHERE id <= ?`
 	selectAnchorTable  = `SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = 'audit_anchor'`
 	selectAnchor       = `SELECT through, ts, key_id, row_hmac, pruned_at, mac_key_id, mac FROM audit_anchor WHERE id = 1`
-	selectRowsThrough  = `SELECT id, ts, client_id, action, chat, chat_hmac, ok, reason, peer, key_id, row_hmac FROM audit WHERE id <= ? ORDER BY id`
+	selectRowsThrough  = `SELECT id, ts, client_id, action, chat, chat_hmac, ok, reason, peer, key_id, message_hmac, bytes, row_hmac FROM audit WHERE id <= ? ORDER BY id`
 )
 
 var ErrChainMismatch = errors.New("admin: the audit rows due for removal, or the anchor before them, do not verify")

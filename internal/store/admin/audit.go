@@ -12,9 +12,11 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/dortort/wawarden/internal/cursor"
 	"github.com/dortort/wawarden/internal/keys"
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/store/internal/db"
@@ -22,11 +24,14 @@ import (
 )
 
 const (
-	rowDomain   = "wawarden/audit-row/v1\x00"
-	headBytes   = 16
-	maxPeer     = 64
-	auditEvent  = "audit"
-	verifyLimit = 30 * time.Minute
+	rowDomain     = "wawarden/audit-row/v1\x00"
+	rowDomainV2   = "wawarden/audit-row/v2\x00"
+	messageDomain = "wawarden/audit-message/v1\x00"
+	headBytes     = 16
+	maxPeer       = 64
+	maxMessageID  = 256
+	auditEvent    = "audit"
+	verifyLimit   = 30 * time.Minute
 
 	ReasonIDGap        = "id_gap"
 	ReasonHMACMismatch = "hmac_mismatch"
@@ -61,54 +66,63 @@ func NewAudit(d *db.DB, master *keys.Master, out io.Writer) *Audit {
 }
 
 type Event struct {
-	At     time.Time
-	Client string
-	Action string
-	Chat   policy.CanonicalChat
-	OK     bool
-	Reason string
-	Peer   string
+	At      time.Time
+	Client  string
+	Action  string
+	Chat    policy.CanonicalChat
+	OK      bool
+	Reason  string
+	Peer    string
+	Message cursor.Ref
+	Bytes   int64
 }
 
 type Line struct{ text []byte }
 
 type auditLine struct {
-	Event     string  `json:"event"`
-	TS        string  `json:"ts"`
-	Client    string  `json:"client"`
-	Action    string  `json:"action"`
-	ChatHMAC  *string `json:"chat_hmac"`
-	OK        bool    `json:"ok"`
-	Reason    string  `json:"reason"`
-	KeyID     string  `json:"key_id"`
-	ChainHead string  `json:"chain_head"`
+	Event       string  `json:"event"`
+	TS          string  `json:"ts"`
+	Client      string  `json:"client"`
+	Action      string  `json:"action"`
+	ChatHMAC    *string `json:"chat_hmac"`
+	MessageHMAC *string `json:"message_hmac"`
+	Bytes       *int64  `json:"bytes"`
+	OK          bool    `json:"ok"`
+	Reason      string  `json:"reason"`
+	KeyID       string  `json:"key_id"`
+	ChainHead   string  `json:"chain_head"`
 }
 
 type row struct {
-	id       int64
-	ts       int64
-	client   string
-	action   string
-	chat     sql.NullString
-	chatHMAC sql.NullString
-	ok       bool
-	reason   string
-	peer     sql.NullString
-	keyID    string
+	id          int64
+	ts          int64
+	client      string
+	action      string
+	chat        sql.NullString
+	chatHMAC    sql.NullString
+	ok          bool
+	reason      string
+	peer        sql.NullString
+	keyID       string
+	messageHMAC []byte
+	bytes       sql.NullInt64
 }
 
 const (
-	selectAuditTail = `SELECT id, row_hmac FROM audit ORDER BY id DESC LIMIT 1`
-	insertAudit     = `INSERT INTO audit (id, ts, client_id, action, chat, chat_hmac, ok, reason, peer, key_id, row_hmac) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	selectAuditRows = `SELECT id, ts, client_id, action, chat, chat_hmac, ok, reason, peer, key_id, row_hmac FROM audit ORDER BY id`
-	selectNewestKey = `SELECT key_id FROM audit ORDER BY id DESC LIMIT 1`
+	selectAuditTail    = `SELECT id, row_hmac FROM audit ORDER BY id DESC LIMIT 1`
+	insertAudit        = `INSERT INTO audit (id, ts, client_id, action, chat, chat_hmac, ok, reason, peer, key_id, row_hmac) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	insertMessageAudit = `INSERT INTO audit (id, ts, client_id, action, chat, chat_hmac, ok, reason, peer, key_id, message_hmac, bytes, row_hmac) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	selectAuditRows    = `SELECT id, ts, client_id, action, chat, chat_hmac, ok, reason, peer, key_id, message_hmac, bytes, row_hmac FROM audit ORDER BY id`
+	selectRowsBeforeV5 = `SELECT id, ts, client_id, action, chat, chat_hmac, ok, reason, peer, key_id, NULL, NULL, row_hmac FROM audit ORDER BY id`
+	countMessageColumn = `SELECT count(*) FROM pragma_table_info('audit') WHERE name = 'message_hmac'`
+	selectNewestKey    = `SELECT key_id FROM audit ORDER BY id DESC LIMIT 1`
 )
 
 func (a *Audit) Append(ctx context.Context, q db.Querier, e Event) (Line, error) {
 	if a == nil || a.chain == nil {
 		return Line{}, errAuditUnkeyed
 	}
-	if e.At.IsZero() || !token.WellFormedClientID(e.Client) || !auditCode.MatchString(e.Action) || !auditCode.MatchString(e.Reason) || len(e.Peer) > maxPeer {
+	if e.At.IsZero() || !token.WellFormedClientID(e.Client) || !auditCode.MatchString(e.Action) || !auditCode.MatchString(e.Reason) || len(e.Peer) > maxPeer || !wellFormedMessage(e) {
 		return Line{}, errAuditEvent
 	}
 	var last int64
@@ -128,13 +142,27 @@ func (a *Audit) Append(ctx context.Context, q db.Querier, e Event) (Line, error)
 	if e.Peer != "" {
 		r.peer = sql.NullString{String: e.Peer, Valid: true}
 	}
+	var messageHMAC *string
+	var count *int64
+	if e.Message.ID != "" {
+		h, n := a.messageHMAC(e.Message), e.Bytes
+		r.messageHMAC, r.bytes = h, sql.NullInt64{Int64: n, Valid: true}
+		hexed := hex.EncodeToString(h)
+		messageHMAC, count = &hexed, &n
+	}
 	mac := rowMAC([]byte(*a.chain), r, prev)
-	if _, err := q.ExecContext(ctx, insertAudit, r.id, r.ts, r.client, r.action, r.chat, r.chatHMAC, boolInt(r.ok), r.reason, r.peer, r.keyID, mac); err != nil {
+	var err error
+	if r.messageHMAC == nil {
+		_, err = q.ExecContext(ctx, insertAudit, r.id, r.ts, r.client, r.action, r.chat, r.chatHMAC, boolInt(r.ok), r.reason, r.peer, r.keyID, mac)
+	} else {
+		_, err = q.ExecContext(ctx, insertMessageAudit, r.id, r.ts, r.client, r.action, r.chat, r.chatHMAC, boolInt(r.ok), r.reason, r.peer, r.keyID, r.messageHMAC, r.bytes, mac)
+	}
+	if err != nil {
 		return Line{}, err
 	}
 	text, err := json.Marshal(auditLine{
 		Event: auditEvent, TS: e.At.UTC().Format("2006-01-02T15:04:05.000Z07:00"), Client: r.client, Action: r.action, ChatHMAC: chatHMAC,
-		OK: r.ok, Reason: r.reason, KeyID: r.keyID, ChainHead: hex.EncodeToString(mac[:headBytes]),
+		MessageHMAC: messageHMAC, Bytes: count, OK: r.ok, Reason: r.reason, KeyID: r.keyID, ChainHead: hex.EncodeToString(mac[:headBytes]),
 	})
 	if err != nil {
 		return Line{}, err
@@ -190,8 +218,32 @@ func (a *Audit) ChatHMAC(chat policy.CanonicalChat) string {
 	return hex.EncodeToString(m.Sum(nil)[:headBytes])
 }
 
+func wellFormedMessage(e Event) bool {
+	if e.Message.ID == "" {
+		return e.Message == cursor.Ref{} && e.Bytes == 0
+	}
+	chat, chatOK := policy.Normalize(e.Message.Chat)
+	_, senderOK := policy.Normalize(e.Message.Sender)
+	return chatOK && senderOK && e.Chat.Valid() && chat.JID() == e.Chat.JID() && len(e.Message.ID) <= maxMessageID && e.Bytes >= 0
+}
+
+func (a *Audit) messageHMAC(ref cursor.Ref) []byte {
+	chat, _ := policy.Normalize(ref.Chat)
+	sender, _ := policy.Normalize(ref.Sender)
+	b := field([]byte(messageDomain), true, chat.JID())
+	b = field(b, true, ref.ID)
+	b = field(b, true, sender.JID())
+	m := hmac.New(sha256.New, []byte(*a.chat))
+	m.Write(b)
+	return m.Sum(nil)[:headBytes]
+}
+
 func rowMAC(key []byte, r row, prev []byte) []byte {
+	v2 := r.messageHMAC != nil || r.bytes.Valid
 	b := []byte(rowDomain)
+	if v2 {
+		b = []byte(rowDomainV2)
+	}
 	b, _ = binary.Append(b, binary.BigEndian, [2]int64{r.id, r.ts})
 	b = field(b, true, r.client)
 	b = field(b, true, r.action)
@@ -200,6 +252,10 @@ func rowMAC(key []byte, r row, prev []byte) []byte {
 	b = field(b, r.ok, "")
 	b = field(b, true, r.reason)
 	b = field(b, r.peer.Valid, r.peer.String)
+	if v2 {
+		b = field(b, r.messageHMAC != nil, string(r.messageHMAC))
+		b = field(b, r.bytes.Valid, strconv.FormatInt(r.bytes.Int64, 10))
+	}
 	b = field(b, true, r.keyID)
 	b = append(b, prev...)
 	m := hmac.New(sha256.New, key)
@@ -259,7 +315,7 @@ func scanRow(rows *sql.Rows) (row, []byte, error) {
 	var r row
 	var stored []byte
 	var ok int64
-	err := rows.Scan(&r.id, &r.ts, &r.client, &r.action, &r.chat, &r.chatHMAC, &ok, &r.reason, &r.peer, &r.keyID, &stored)
+	err := rows.Scan(&r.id, &r.ts, &r.client, &r.action, &r.chat, &r.chatHMAC, &ok, &r.reason, &r.peer, &r.keyID, &r.messageHMAC, &r.bytes, &stored)
 	r.ok = ok == 1
 	return r, stored, err
 }
@@ -323,7 +379,16 @@ func Verify(ctx context.Context, path string, master *keys.Master, heads []Head)
 			retiredAnchor = rep.Bad == 0 && !masterAnchor
 			w.prev, w.prevID, w.after = an.rowHMAC, an.through, an.keyID == master.ID()
 		}
-		rows, err := q.QueryContext(ctx, selectAuditRows)
+		var columns int
+		if err := q.QueryRowContext(ctx, countMessageColumn).Scan(&columns); err != nil {
+			return err
+		}
+		var rows *sql.Rows
+		if columns == 0 {
+			rows, err = q.QueryContext(ctx, selectRowsBeforeV5)
+		} else {
+			rows, err = q.QueryContext(ctx, selectAuditRows)
+		}
 		if err != nil {
 			return err
 		}
