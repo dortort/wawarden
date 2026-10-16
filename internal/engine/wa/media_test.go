@@ -253,12 +253,18 @@ func TestCaptureRefusesInvalidOrOversizedAttachments(t *testing.T) {
 		}
 	}
 	for name, configure := range map[string]func(*Options){
-		"downloads off":     func(o *Options) { o.MediaMaxBytes = 0 },
-		"a refusing sealer": func(o *Options) { o.MediaSealer = fakeSealer{refuse: true} },
+		"downloads off":               func(o *Options) { o.MediaMaxBytes, o.MediaSealer, o.MediaSpool = 0, nil, nil },
+		"downloads off with a sealer": func(o *Options) { o.MediaMaxBytes = 0 },
+		"a refusing sealer":           func(o *Options) { o.MediaSealer = fakeSealer{refuse: true} },
 	} {
 		off := mediaClient(t, epoch.Add(time.Hour), configure)
-		for _, path := range receiptPaths {
-			uncaptured(t, path.name+" with "+name, path.read(t, off, "3EB0L5", byKind["document"].build(syntheticMedia(1))))
+		for _, fx := range mediaFixtures {
+			for declared, length := range map[string]int64{"one byte": 1, "zero bytes": 0, "no length": -1} {
+				for _, path := range receiptPaths {
+					where := fmt.Sprintf("%s %s declaring %s with %s", path.name, fx.name, declared, name)
+					uncaptured(t, where, path.read(t, off, "3EB0L5", fx.build(syntheticMedia(length))))
+				}
+			}
 		}
 	}
 }
