@@ -556,7 +556,7 @@ func TestDataDirectoryRefusals(t *testing.T) {
 }
 
 func TestDataSubdirectoryRefusals(t *testing.T) {
-	for _, name := range []string{"history", "backups"} {
+	for _, name := range []string{"history", "backups", "spool"} {
 		tests := []struct {
 			name   string
 			setup  func(t *testing.T, path string)
@@ -606,13 +606,40 @@ func TestDataSubdirectoryRefusals(t *testing.T) {
 	t.Run("private or absent", func(t *testing.T) {
 		data := dirWithMode(t, 0o700)
 		mkdirMode(0o700)(t, filepath.Join(data, "history"))
-		if _, r := Load(environ(map[string]string{envDataDir: data}), testOptions()); r != nil {
-			t.Fatalf("Load refused a private history/ and an absent backups/: %v", r)
+		if _, r := Load(environ(map[string]string{envDataDir: data, envMediaMax: "2147483648"}), testOptions()); r != nil {
+			t.Fatalf("Load refused a private history/ and an absent backups/ and spool/: %v", r)
 		}
-		if _, err := os.Lstat(filepath.Join(data, "backups")); !errors.Is(err, fs.ErrNotExist) {
-			t.Fatalf("Load created backups/: %v", err)
+		for _, name := range []string{"backups", "spool"} {
+			if _, err := os.Lstat(filepath.Join(data, name)); !errors.Is(err, fs.ErrNotExist) {
+				t.Fatalf("Load created %s/: %v", name, err)
+			}
 		}
 	})
+	t.Run("private spool", func(t *testing.T) {
+		data := dirWithMode(t, 0o700)
+		mkdirMode(0o700)(t, filepath.Join(data, "spool"))
+		if _, r := Load(environ(map[string]string{envDataDir: data}), testOptions()); r != nil {
+			t.Fatalf("Load refused a private spool/: %v", r)
+		}
+	})
+	for _, name := range dataSubdirectories {
+		t.Run(name+" that cannot be inspected", func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), "file")
+			if err := os.WriteFile(file, nil, 0o600); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+			r := checkSubdirectory(file, name, testUID, owned(testUID))
+			if r == nil || r.Reason != name+"_dir_unusable" || r.Variable != "" {
+				t.Fatalf("checkSubdirectory = %v, want %s_dir_unusable naming no variable", r, name)
+			}
+			if strings.Contains(r.Error(), file) || !strings.Contains(r.Error(), name+"/") {
+				t.Fatalf("refusal %q names the path, or not %s/", r.Error(), name)
+			}
+		})
+	}
+	if want := []string{"history", "backups", "spool"}; !slices.Equal(dataSubdirectories, want) {
+		t.Fatalf("data subdirectories = %v, want %v in that order", dataSubdirectories, want)
+	}
 }
 
 func mkdirMode(mode fs.FileMode) func(*testing.T, string) {
