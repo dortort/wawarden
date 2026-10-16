@@ -3,9 +3,13 @@ package app
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"math"
+	"os"
+	"os/exec"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -14,6 +18,31 @@ import (
 
 	"github.com/dortort/wawarden/internal/logx"
 )
+
+const (
+	memoryProbeEnv   = "APPTEST_MEMORY_PROBE"
+	probeEnvLimit    = "987654321"
+	probeSoftLimit   = 123 << 20
+	probeOutputShape = "%q %t %d\n"
+)
+
+var productionMemory = processMemory
+
+func TestMain(m *testing.M) {
+	if os.Getenv(memoryProbeEnv) != "" {
+		os.Exit(memoryProbe())
+	}
+	os.Exit(m.Run())
+}
+
+func memoryProbe() int {
+	value, set := productionMemory.lookupEnv(memoryLimitEnv)
+	productionMemory.limit(probeSoftLimit)
+	if _, err := fmt.Fprintf(os.Stdout, probeOutputShape, value, set, debug.SetMemoryLimit(-1)); err != nil {
+		return 1
+	}
+	return 0
+}
 
 func init() {
 	processMemory = hostMemory{
@@ -188,5 +217,26 @@ func TestMemoryLimitIsSetAtStart(t *testing.T) {
 	events := logs.find("memory_limit")
 	if len(events) != 1 || events[0]["source"] != memorySourceCgroup || events[0]["soft_limit_bytes"] != float64(429496730) {
 		t.Fatalf("memory_limit events = %v, want one from the cgroup of 429496730 bytes", events)
+	}
+}
+
+func TestTheProcessUsesTheRuntimesMemoryLimitAndTheHostsCgroupFiles(t *testing.T) {
+	if productionMemory.sys != os.DirFS("/sys") {
+		t.Fatalf("the cgroup files are read from %v, want os.DirFS(\"/sys\")", productionMemory.sys)
+	}
+
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("Executable: %v", err)
+	}
+	cmd := exec.CommandContext(t.Context(), executable, "-test.run=^$") //nolint:gosec // G204: the command is the running test binary, from os.Executable
+	cmd.Env = append(os.Environ(), memoryProbeEnv+"=1", memoryLimitEnv+"="+probeEnvLimit)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("run the probe process: %v", err)
+	}
+
+	if want := fmt.Sprintf(probeOutputShape, probeEnvLimit, true, probeSoftLimit); string(out) != want {
+		t.Fatalf("the probe process saw %q, want %q: GOMEMLIMIT read from its environment and the soft limit set in its runtime", out, want)
 	}
 }
