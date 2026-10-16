@@ -835,6 +835,15 @@ reference opens only for the message id it was sealed for, under the current
 key or a retired one; only the current key seals. The cap leaves room for a
 descriptor of at most 1503 bytes.
 
+The descriptor is the version byte `0x01`, then ten fields, each preceded by
+its length as an unsigned varint: the attachment's download path, its media
+key, the SHA-256 of its plaintext, the SHA-256 of its ciphertext, its declared
+length as 8 big-endian bytes, its kind, its variant (empty when it has none),
+the chat, the sender, and one byte that is 1 when the owner sent the message.
+Opening accepts only this exact encoding: an unknown version, a truncated or
+trailing field, a length written in more bytes than it needs, or a declared
+length or direction byte of another size refuses the reference.
+
 ## Design rationale
 
 ### Write chats must be readable
