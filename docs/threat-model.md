@@ -709,11 +709,14 @@ enforce them.
 - **I-8 Deletions are honoured on disk.** Once the write that revokes, edits or
   expires a message has returned without error:
   - the message's row no longer holds its old text;
+  - after a revoke or an expiry, the row no longer holds the message's media
+    type, and the archive no longer holds its media reference;
   - the full-text index, page keys included, keeps only those of its trigrams
     (the three-character runs the index stores) that a remaining message
     holds;
-  - neither that text nor any of its trigrams is in the database or its
-    journal, unless the archive still holds the same text or trigram
+  - neither that text nor any of its trigrams, nor, after a revoke or an
+    expiry, that media type or media reference, is in the database or its
+    journal, unless the archive still holds the same text, trigram or value
     elsewhere. Elsewhere means a remaining message, a message waiting in the
     inbox, a stored name (a push name, saved contact name, chat name or group
     subject), an identifier or another stored value, or the schema.
@@ -1616,7 +1619,10 @@ on `*/master` under the data directory.
 - **Deletion.** The full-text index is created with its `secure-delete`
   option. A revoke, an edit or an expiry, in one transaction, issues the
   index's `delete` command with the exact old text, nulls `text` and
-  `text_display`, and writes a new or empty index row.
+  `text_display`, and writes a new or empty index row. A revoke or an expiry
+  also deletes the message's media reference and nulls its media type in that
+  transaction, and an expiry does so for media without a caption as well. A
+  reference is stored only on a message with a media type.
 - **Page keys.** That transaction also tokenises the old text in a contentless
   full-text table of the in-memory temporary database. Secure delete removes a
   term but keeps its page key. When a trigram of the old text that no
@@ -1643,7 +1649,9 @@ on `*/master` under the data directory.
 - A canary deletion test with negative controls. It byte-scans `archive.db`
   and its journal, open and closed, and checks the index's vocabulary, page
   keys and `MATCH` after a revocation, an expiry and an edit, including a
-  rewrite cut short or run out of time (`internal/store/ingest/deletion_test.go`).
+  rewrite cut short or run out of time. It also byte-scans for a canary media
+  type and media reference after a revocation and after an expiry, the expiry
+  of media without a caption included (`internal/store/ingest/deletion_test.go`).
 
 **Since.** v0.2.0.
 
@@ -2295,7 +2303,8 @@ Other tests that guard the invariants:
 
 - A byte scan of `archive.db` and its journal, the full-text index's
   vocabulary and page keys, and a `MATCH` query for a revoked, an expired and
-  an edited canary, with negative controls (I-8;
+  an edited canary, and a byte scan for the media type and media reference of
+  a revoked and an expired canary, with negative controls (I-8;
   [row 15](#15-verified-storage-and-deletion-on-disk)).
 - Tests that a startup refusal never repeats the configured value, and that the
   token `admin init` prints appears exactly once in its output (I-5, I-7).
