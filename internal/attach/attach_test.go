@@ -536,11 +536,17 @@ func TestRefusedImagesStayRawDocuments(t *testing.T) {
 	webpBytes := webpFile(riffChunk("VP8L", vp8lSolid(64, 48, color.NRGBA{B: 0xff, A: 0xff})))
 	tight := production
 	tight.output = 64
+	capped := production
+	capped.pixels = 64*48 - 1
+	poor := production
+	poor.budget = int64(poor.output) + 64*48*4
 	for _, tt := range []struct {
 		name string
 		data []byte
 		lim  limits
 	}{
+		{"decodable jpeg over the pixel cap", base, capped},
+		{"decodable jpeg over the memory budget", base, poor},
 		{"jpeg over 50 MP", patchSOF(t, base, 10000, 5001, false), production},
 		{"progressive jpeg over the budget under 50 MP", patchSOF(t, base, 4800, 3600, true), production},
 		{"truncated jpeg", base[:len(base)/2], production},
@@ -722,6 +728,8 @@ func TestBudgetArithmetic(t *testing.T) {
 		{"baseline 4:4:4 at 48 MP", jpegInfoFor(8000, 6000, false, s444, s444, s444), 3 * 8000 * 6000, false},
 		{"baseline greyscale at 50 MP", jpegInfoFor(10000, 5000, false, s444), 10000 * 5000, true},
 		{"progressive greyscale at 50 MP", jpegInfoFor(10000, 5000, true, s444), 10000*5000 + 1250*625*256, false},
+		{"baseline four-component 4:4:4 at 12 MP", jpegInfoFor(4000, 3000, false, s444, s444, s444, s444), 3*4000*3000 + 4000*3000 + 4*4000*3000, true},
+		{"baseline four-component 4:4:4 at 14 MP", jpegInfoFor(4320, 3240, false, s444, s444, s444, s444), 3*4320*3240 + 4320*3240 + 4*4320*3240, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.info.memory(); got != tt.memory {
@@ -778,6 +786,29 @@ func TestPixelCap(t *testing.T) {
 		if got := (plan{canvas: tt.canvas, memory: free}).within(production); got != tt.fits {
 			t.Errorf("within(%v) = %v, want %v", tt.canvas, got, tt.fits)
 		}
+	}
+}
+
+func TestOversizedJPEGsFailThePlan(t *testing.T) {
+	base := encodeJPEG(t, filled(64, 48, red))
+	for _, tt := range []struct {
+		name string
+		data []byte
+		fits bool
+	}{
+		{"baseline at 17 MP", patchSOF(t, base, 4800, 3600, false), true},
+		{"progressive at 17 MP", patchSOF(t, base, 4800, 3600, true), false},
+		{"baseline over 50 MP", patchSOF(t, base, 10000, 5001, false), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := planJPEG(&source{ctx: t.Context(), s: newSpool(tt.data)})
+			if err != nil {
+				t.Fatalf("planJPEG: %v", err)
+			}
+			if got := p.within(production); got != tt.fits {
+				t.Fatalf("within = %v, want %v", got, tt.fits)
+			}
+		})
 	}
 }
 
@@ -859,6 +890,30 @@ func TestWebPFrameStream(t *testing.T) {
 			got, err := io.ReadAll(f.stream(src))
 			if err != nil || !bytes.Equal(got, tt.want) || f.alpha != tt.alpha {
 				t.Fatalf("stream = %q, %v, alpha %d, want %q, alpha %d", got, err, f.alpha, tt.want, tt.alpha)
+			}
+		})
+	}
+}
+
+func TestWebPBitstreamMustMatchTheDeclaredSize(t *testing.T) {
+	big := riffChunk("VP8L", vp8lSolid(3000, 3000, color.NRGBA{R: 0xff, A: 0xff}))
+	for _, tt := range []struct {
+		name string
+		data []byte
+		err  error
+	}{
+		{"extended still", webpFile(vp8xChunk(0, 3000, 3000), big), nil},
+		{"extended still over a 1x1 header", webpFile(vp8xChunk(0, 1, 1), big), errMalformed},
+		{"animated frame", animatedWebP(3000, 3000, anmfChunk(0, 0, 3000, 3000, big)), nil},
+		{"animated frame over a 1x1 header", animatedWebP(1, 1, anmfChunk(0, 0, 1, 1, big)), errMalformed},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := planWebP(&source{ctx: t.Context(), s: newSpool(tt.data)}, production)
+			if !errors.Is(err, tt.err) {
+				t.Fatalf("planWebP error = %v, want %v", err, tt.err)
+			}
+			if tt.err == nil && p.canvas != image.Rect(0, 0, 3000, 3000) {
+				t.Fatalf("canvas = %v, want the 3000x3000 bitstream", p.canvas)
 			}
 		})
 	}
