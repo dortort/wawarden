@@ -34,6 +34,7 @@ func NewRegistry() *Registry {
 type Counter struct{ n atomic.Uint64 }
 
 func (c *Counter) Inc()           { c.n.Add(1) }
+func (c *Counter) Add(n uint64)   { c.n.Add(n) }
 func (c *Counter) Value() uint64  { return c.n.Load() }
 func (c *Counter) format() string { return strconv.FormatUint(c.Value(), 10) }
 func (c *Counter) value() float64 { return float64(c.Value()) }
