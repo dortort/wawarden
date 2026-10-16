@@ -1501,9 +1501,16 @@ This is the canonical statement of the log writer's rules.
 - Text that code formats into a message is only redacted, pseudonymised and
   checked for XML.
 - **Protocol library.** Its logger feeds the writer through an adapter. The
-  adapter also redacts tokens, then masks runs of six or more digits outside
-  the `user@server` form, cuts each line at a word boundary after 1 KiB, and
-  discards debug output outside a `WAWARDEN_UNSAFE_DEBUG` window.
+  adapter first replaces every `http`, `https`, `ws` or `wss` URL with `[url]`,
+  every media direct path with `[path]`, and the value of any `hash`,
+  `mms-type`, `oh`, `oe`, `__wa-mms` or `_nc_`-prefixed query parameter left
+  over with `[param]`. A direct path is a path of the media servers'
+  `/v/t<digit>`, `/o1/v/t<digit>` or `/m1/v/t<digit>` shape, a slash-led word
+  that carries a query, or the rest of a line after the protocol library's
+  error for a path that does not start with a slash. The adapter then redacts
+  tokens, masks runs of six or more digits outside the `user@server` form, cuts
+  each line at a word boundary after 1 KiB, and discards debug output outside a
+  `WAWARDEN_UNSAFE_DEBUG` window.
 - **Signal library.** The Signal library that the protocol library links for
   its encryption prints its log lines to standard output unless it is given a
   logger. The adapter gives it one when it is built. That logger discards its
@@ -1532,8 +1539,10 @@ This is the canonical statement of the log writer's rules.
   (`internal/archtest/logging_test.go`).
 - Canary tests: a canary identifier or token passed as every kind of value,
   through every logger path and split across writes, never reaches the output;
-  every XML shape drops its line; lines stay valid JSON; and the Signal
-  library's lines reach standard output only through the writer
+  a media URL, direct path or encrypted-file hash in the protocol library's
+  download warnings never reaches the output, and lines without one are left
+  unchanged; every XML shape drops its line; lines stay valid JSON; and the
+  Signal library's lines reach standard output only through the writer
   (`internal/logx/logx_test.go`, `redact_test.go`,
   `internal/engine/wa/log_test.go`).
 
@@ -1547,8 +1556,8 @@ This is the canonical statement of the log writer's rules.
   the Signal library's default logger, which a test covers, and the printing
   functions of the SQLite runtime's C library, such as its assertion-failure
   handler.
-- The writer recognises identifiers, tokens and XML by their shape; see
-  [Logging](#logging).
+- The writer recognises identifiers, tokens and XML, and the protocol-library
+  adapter media locations, by their shape; see [Logging](#logging).
 
 **Since.** v0.2.0.
 
@@ -1753,6 +1762,8 @@ those packages (`internal/archtest/imports_test.go`), and `depguard`.
   - Only `transmitMessage` calls `SendMessage`, and only
     `transmitPeerMessage` calls `SendPeerMessage`, each directly and outside
     any function literal.
+  - Only `downloadToFile`, the history download seam that `New` passes to the
+    client, calls `DownloadToFile`, directly and outside any function literal.
   - A protocol library update that adds a method finds it refused.
 
 **Protects.** I-5, I-6, account standing.
@@ -1812,9 +1823,9 @@ those packages (`internal/archtest/imports_test.go`), and `depguard`.
     (`socket.NewFrameSocket` and `socket.FrameSocket`), its setters for the
     client's transports, or its version fetch;
   - the network calls of its client that no method of the adapter shares a
-    name with: connecting with a context, downloads, uploads,
-    application-state fetches and sends, to a contact or to the owner's own
-    devices.
+    name with: connecting with a context, downloads, sticker-pack fetches,
+    uploads, application-state fetches, media retry receipts and sends, to a
+    contact or to the owner's own devices.
 - [Row 17](#17-the-protocol-library-behind-one-adapter) also refuses, in every
   file, a client built by a literal, `new` or a zero value, and the proxy
   setters. Outside test files it refuses the client constructor anywhere but
@@ -2906,6 +2917,12 @@ This subsection is the canonical statement of what the protocol library
   An opening tag without attributes followed only by text, such as a cut-off
   `<body>` element, passes. So code must not log message content, even inside
   a tag.
+- **Media locations are recognised by their shape.** Only the
+  protocol-library adapter replaces media URLs, direct paths and their query
+  parameters, as [row 13](#13-one-log-writer) lists; the log writer itself
+  does not. A URL with another scheme, a direct path of another shape that
+  carries no query or is run into the preceding word, and a parameter with
+  another name pass that adapter unchanged, so code must not log one.
 - **Notifications can be late, lost or read by their receiver.**
   - Failed admin authentications after the first are reported up to about 70
     seconds later, together.
