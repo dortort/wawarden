@@ -98,13 +98,13 @@ Most sensitive first.
 These keys are derived from `keys/master` with HKDF-SHA256:
 
 - the key of the log pseudonyms;
-- the audit chain's key, and the key of the chat HMACs in audit lines;
+- the audit chain's key, and the key of the chat and message HMACs in audit lines;
 - the keys that seal the read API's cursors and message references.
 
 Whoever holds the master key can:
 
 - test a guessed identifier against the pseudonyms in the logs and the chat
-  HMACs in audit lines;
+  and message HMACs in audit lines;
 - recompute the audit chain and sign its audit anchor;
 - open and forge cursors and message references, which still never widen a
   client's scope.
@@ -580,6 +580,11 @@ Keep the admin listener reachable from fewer places than the client listener.
   is still connected. Hanging up while a send waits for its acknowledgement
   therefore does not keep the send out of the chain. A send that went out
   before its row failed is a residual risk (see [Sends](#sends)).
+- **Completion rows.** A response that streams a body can append a second row
+  once the body is sent, with the bytes the connection accepted, only after
+  its first row committed. The answer is already out by then, so a completion
+  row that cannot be written is logged as `audit_failed` and counted, and the
+  chain lacks it. No route of this build writes one.
 - **What it does not record.** Failed authentications and requests refused by
   the read budget write no row. Guessing and flooding therefore cannot grow
   the table faster than the budget allows.
@@ -587,7 +592,8 @@ Keep the admin listener reachable from fewer places than the client listener.
   key, covers its fields and the previous row's HMAC.
 - **The chain head.** After the commit, one line on standard output carries
   the client identifier, the action, the outcome, an HMAC of the chat (never
-  the chat), the key id, and the first 16 bytes of the row HMAC: the chain
+  the chat), an HMAC of the message (never its id) and a byte count when the
+  row names one, the key id, and the first 16 bytes of the row HMAC: the chain
   head.
 
 #### What verification shows

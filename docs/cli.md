@@ -474,7 +474,7 @@ current key in `keys/retired/` too, which `serve` refuses with
 
 After a rotation, the next start loads the retired key (see
 [Master key](configuration.md#master-key)) and logs `audit_key_changed` until the first audit
-row under the new key. Log pseudonyms, the `chat_hmac` of new audit lines and
+row under the new key. Log pseudonyms, the `chat_hmac` and `message_hmac` of new audit lines and
 the text of a new message reference for the same message change; cursors and
 references issued before still open while their key stays in
 `keys/retired/`. Keep `keys/retired/`, and a copy of it with the copy of

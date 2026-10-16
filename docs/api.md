@@ -597,6 +597,21 @@ a send whose client left during the acknowledgement wait is recorded with the
 send's own result. A request refused by the read budget, and a failed
 authentication, write no row.
 
+A row can also name one message and a byte count. The message appears only as
+its keyed `message_hmac`, never as its id (see
+[Audit chain](observability.md#audit-chain)), and only on a row that names the
+message's chat, so a row that names no chat, such as a `404`, names no message
+either. A response that streams a body can
+write a second, completion row once the body is sent: it repeats the first
+row's client, chat, message and peer, with its own action and reason and the
+number of bytes the connection accepted. It is written at most once, only after
+the first row committed, and also when the client has left. A completion row
+that cannot be written does not change the answer, which is already out: it is
+counted in `wawarden_audit_failures_total` and logged as `audit_failed` (see
+[Logging](observability.md#logging)). A `206` is recorded as `ok` and a `416`
+as `range_not_satisfiable`. No route of this build names a message, records a
+byte count, writes a completion row, or answers `206` or `416`.
+
 ## MCP
 
 The client listener also serves the client API as [Model Context
