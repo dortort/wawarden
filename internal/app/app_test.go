@@ -309,9 +309,9 @@ func TestHealthTurnsUnavailableWhenShutdownBegins(t *testing.T) {
 	if _, err := do(t, http.MethodGet, health, "/healthz", nil); err == nil {
 		t.Fatal("the health listener still answers after Run returned")
 	}
-	want := []string{"archive_opened", "backup_disabled", "starting", "listening", "listening", "unpaired", "ready", "shutdown_started", "engine_state", "stopped"}
+	want := []string{"memory_limit", "archive_opened", "backup_disabled", "starting", "listening", "listening", "unpaired", "ready", "shutdown_started", "engine_state", "stopped"}
 	if buildinfo.Dev {
-		want = slices.Insert(want, 3, "dev_build")
+		want = slices.Insert(want, 4, "dev_build")
 	}
 	var got []string
 	for _, rec := range logs.events() {

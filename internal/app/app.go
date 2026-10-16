@@ -103,6 +103,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 	}
 	logger := logx.New(out, cfg.LogLevel)
 	alerts := logx.New(out, slog.LevelWarn)
+	processMemory.apply(logger)
 	reg := metrics.NewRegistry()
 	safego.Install(logger, reg)
 	info := buildinfo.Read()
