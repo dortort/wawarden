@@ -1286,9 +1286,9 @@ one connection.
 ### 7. Property tests
 
 **Mechanism.** Random archives are built with the real store: phone-number and
-LID pairs, messages in chats and groups, edits, revokes, re-keys, and chats
-without messages. They are crossed with random clients (all chats, a set,
-revoked). Three properties drive them, and compare every answer with a pure
+LID pairs, text and media messages in chats and groups, edits, revokes,
+re-keys, and chats without messages. They are crossed with random clients (all
+chats, a set, revoked), with and without media. Three properties drive them, and compare every answer with a pure
 model over an unscoped copy of the archive:
 
 - **The scoped store.** Every read returns exactly the rows in scope, in
@@ -1297,7 +1297,9 @@ model over an unscoped copy of the archive:
   out-of-scope chat and a missing chat return the same result through the same
   SQL. A re-key never lets a client see a message, stored before it, that the
   client could not see. A sender's saved contact name appears exactly when that
-  sender's own chat is in the scope.
+  sender's own chat is in the scope. The attachment read finds a message
+  exactly when the grant allows media and covers its chat, and reports a
+  usable reference exactly for a media message that is not revoked.
 - **The REST read API**, through its real handler and pipeline. Listings,
   messages, the change feed and searches equal the model. A chat outside the
   scope answers the same bytes and headers, through the same SQL, as a missing
@@ -1312,8 +1314,9 @@ model over an unscoped copy of the archive:
   checks hold here too.
 
 A tally fails the test when the random cases do not cover re-keys, revokes,
-edits, partly visible archives, change feeds from a time, and saved names both
-shown and withheld.
+edits, partly visible archives, change feeds from a time, saved names both
+shown and withheld, and attachments both found usable and refused for want of
+media.
 
 **Protects.** I-1, I-3, I-4, I-8.
 
