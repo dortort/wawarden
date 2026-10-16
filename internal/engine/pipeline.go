@@ -282,22 +282,25 @@ func (p *pipeline) quarantine(ctx context.Context, seq int64, attempts int) {
 
 func (p *pipeline) sweep(ctx context.Context) {
 	for ctx.Err() == nil {
-		var purged int
+		var purged, refs int
 		if err := p.write(ctx, "engine.expiry_sweep", func(tx *ingest.Tx) error {
 			now := p.clock.Now()
 			if _, err := tx.SweepSends(now); err != nil {
 				return err
 			}
 			var err error
-			purged, err = tx.PurgeExpired(now, sweepBatch)
+			if purged, err = tx.PurgeExpired(now, sweepBatch); err != nil {
+				return err
+			}
+			refs, err = tx.PurgeMediaRefs(now, p.retention, p.mediaOn, sweepBatch)
 			return err
 		}); err != nil {
 			if ctx.Err() == nil {
-				p.logger.Warn("purging expired messages failed", slog.String("event", "expiry_sweep_failed"), slog.String("error_type", fmt.Sprintf("%T", err)))
+				p.logger.Warn("purging expired messages, media references or revoke tombstones failed", slog.String("event", "expiry_sweep_failed"), slog.String("error_type", fmt.Sprintf("%T", err)))
 			}
 			return
 		}
-		if purged < sweepBatch {
+		if purged < sweepBatch && refs < sweepBatch {
 			return
 		}
 	}

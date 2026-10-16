@@ -601,3 +601,78 @@ func TestNoReferenceIsCapturedWhileDownloadsAreOff(t *testing.T) {
 		t.Fatalf("media type = %q", got)
 	}
 }
+
+func TestTheSweepPurgesReferencesPastTheirExpiry(t *testing.T) {
+	r := newPipeRig(t, withDownloads(true, 30*24*time.Hour))
+	old := withMedia(dm("M1", alice, ""), MediaImage, "", 1234)
+	old.Timestamp = epoch.Add(-29 * 24 * time.Hour)
+	r.ingest(old, withMedia(dm("M2", alice, "caption"), MediaImage, "", 1234))
+	r.clock.advance(24*time.Hour - time.Second)
+	r.p.sweep(t.Context())
+	if n := r.peek("SELECT count(*) FROM media_refs"); n != 2 {
+		t.Fatalf("%d media references before the first expiry, want 2", n)
+	}
+	r.clock.advance(time.Second)
+	r.p.sweep(t.Context())
+	r.must(alice, "M1", alice)
+	db := r.inspect()
+	if got := query[string](t, db, "SELECT group_concat(m.id) FROM media_refs JOIN messages m USING (seq)"); got != "M2" {
+		t.Fatalf("media references left: %q, want only M2's", got)
+	}
+}
+
+func TestTheSweepPurgesReferencesOlderThanTheRetention(t *testing.T) {
+	r := newPipeRig(t, withDownloads(true, 30*24*time.Hour))
+	r.ingest(withMedia(dm("M1", alice, "caption"), MediaImage, "", 1234))
+	r.opts.MediaRefRetention = 24 * time.Hour
+	r.restart()
+	r.clock.advance(24*time.Hour - time.Second)
+	r.p.sweep(t.Context())
+	if n := r.peek("SELECT count(*) FROM media_refs"); n != 1 {
+		t.Fatalf("%d media references within the shortened retention, want 1", n)
+	}
+	r.clock.advance(time.Second)
+	r.p.sweep(t.Context())
+	if n := r.peek("SELECT count(*) FROM media_refs"); n != 0 {
+		t.Fatalf("%d media references past the shortened retention", n)
+	}
+}
+
+func TestTheSweepPurgesEveryReferenceWhileDownloadsAreOff(t *testing.T) {
+	r := newPipeRig(t, withDownloads(true, 30*24*time.Hour))
+	for i := range 2*sweepBatch + 1 {
+		r.deliver(withMedia(dm("M"+strconv.Itoa(i), alice, ""), MediaImage, "", 1234))
+	}
+	r.drain()
+	if n := r.peek("SELECT count(*) FROM media_refs"); n != 2*sweepBatch+1 {
+		t.Fatalf("%d media references captured, want %d", n, 2*sweepBatch+1)
+	}
+	r.opts.MediaOn = false
+	r.restart()
+	r.p.sweep(t.Context())
+	if n := r.peek("SELECT count(*) FROM media_refs"); n != 0 {
+		t.Fatalf("%d media references left after one sweep with downloads off", n)
+	}
+	if n := r.peek("SELECT count(*) FROM messages WHERE media_type IS NOT NULL"); n != 2*sweepBatch+1 {
+		t.Fatalf("%d messages kept their media type, want every one", n)
+	}
+}
+
+func TestTheSweepPurgesLapsedTombstones(t *testing.T) {
+	r := newHistRig(t)
+	r.ingest(change(KindRevoke, group, "X1", alice, Key{RemoteJID: group, FromMe: true, ID: "M1"}))
+	r.clock.advance(7*24*time.Hour - time.Second)
+	r.p.sweep(t.Context())
+	if n := r.peek("SELECT count(*) FROM revoke_tombstones"); n != 1 {
+		t.Fatalf("%d tombstones within their seven days, want 1", n)
+	}
+	r.clock.advance(time.Second)
+	r.p.sweep(t.Context())
+	if n := r.peek("SELECT count(*) FROM revoke_tombstones"); n != 0 {
+		t.Fatalf("%d tombstones past their seven days", n)
+	}
+	r.ingest(inGroup("M1", alice, "a copy after the tombstone lapsed"))
+	if f := r.must(group, "M1", alice); f.Revoked {
+		t.Fatal("a copy after the tombstone lapsed was stored revoked")
+	}
+}
