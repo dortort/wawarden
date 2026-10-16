@@ -19,7 +19,15 @@ var protocolClientCalls = set("AddEventHandlerWithSuccessStatus", "BuildHistoryS
 	"GenerateMessageID", "IsConnected", "IsLoggedIn", "Logout", "PairPhone", "ParseWebMessage", "SendMessage", "SendPeerMessage",
 	"SendProtocolMessageReceipt", "SetMediaHTTPClient", "SetPreLoginHTTPClient", "SetWebsocketHTTPClient")
 
-var confinedProtocolCalls = map[string]string{"SendMessage": "transmitMessage", "SendPeerMessage": "transmitPeerMessage"}
+var confinedProtocolCalls = map[string]string{"DownloadToFile": "downloadToFile", "SendMessage": "transmitMessage", "SendPeerMessage": "transmitPeerMessage"}
+
+type confinementReason struct{ reaches, so string }
+
+var confinementReasons = map[string]confinementReason{
+	"DownloadToFile":  {reaches: "downloads from WhatsApp's media servers", so: "every download takes the adapter's one typed seam"},
+	"SendMessage":     {reaches: "sends to WhatsApp", so: "every send takes the engine's one send path"},
+	"SendPeerMessage": {reaches: "sends to WhatsApp", so: "every send takes the engine's one send path"},
+}
 
 var protocolClientMethods = sync.OnceValues(func() (map[string]bool, error) {
 	out, err := exec.CommandContext(context.Background(), "go", "list", "-m", "-f", "{{.Dir}}", whatsmeowModule).Output()
@@ -125,7 +133,7 @@ func transmitPeerMessage(ctx context.Context, cli *whatsmeow.Client, msg *waE2E.
 	return cli.SendPeerMessage(ctx, msg)
 }
 `},
-		{name: "the calls the adapter makes, its transmitters and its own methods whose names the library's client shares", rel: "internal/engine/wa/x.go", src: `package wa
+		{name: "the calls the adapter makes, its transmitters, its download seam and its own methods whose names the library's client shares", rel: "internal/engine/wa/x.go", src: `package wa
 
 import (
 	"context"
@@ -172,9 +180,47 @@ func f(ctx context.Context, s socketState, cli *whatsmeow.Client, web any) {
 		_ = cli.GenerateMessageID()
 	}
 	_ = cli.SendProtocolMessageReceipt(ctx, "", types.ReceiptTypeHistorySync)
-	_ = cli.DownloadToFile
 	_ = cli.ParseWebMessage
 	_ = web
+}
+
+func downloadToFile(ctx context.Context, cli *whatsmeow.Client, notif *waE2E.HistorySyncNotification, dst whatsmeow.File) error {
+	return cli.DownloadToFile(ctx, notif, dst)
+}
+`},
+		{name: "a download outside its seam, a download inside a function literal in its seam and the download reached by value", rel: "internal/engine/wa/x.go", want: 3, src: `package wa
+
+import (
+	"context"
+
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
+)
+
+func downloadToFile(ctx context.Context, cli *whatsmeow.Client, notif *waE2E.HistorySyncNotification, dst whatsmeow.File) error {
+	later := func() error { return cli.DownloadToFile(ctx, notif, dst) }
+	_ = cli.DownloadToFile
+	if err := later(); err != nil {
+		return err
+	}
+	return cli.DownloadToFile(ctx, notif, dst)
+}
+
+func fetch(ctx context.Context, cli *whatsmeow.Client, notif *waE2E.HistorySyncNotification) error {
+	return cli.DownloadToFile(ctx, notif, nil)
+}
+`},
+		{name: "a download seam in a subpackage of the adapter", rel: "internal/engine/wa/sub/x.go", want: 1, src: `package sub
+
+import (
+	"context"
+
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
+)
+
+func downloadToFile(ctx context.Context, cli *whatsmeow.Client, notif *waE2E.HistorySyncNotification, dst whatsmeow.File) error {
+	return cli.DownloadToFile(ctx, notif, dst)
 }
 `},
 		{name: "library calls in the adapter's tests, which the offline-tests rule fences, and the names outside the adapter", rel: "internal/engine/wa/x_test.go", src: `package wa
@@ -248,7 +294,8 @@ func checkProtocolClientCalls(f *sourceFile) []string {
 		if !protocolClientCalls[id.Name] {
 			out = append(out, f.at(id, "%s is a method of the protocol client that the adapter does not call: the adapter calls only the reviewed methods that %s lists", id.Name, archtestDir))
 		} else if fn, ok := confinedProtocolCalls[id.Name]; ok && (!called[id] || !inside(id, transmitters[fn]) || slices.ContainsFunc(closures, func(c ast.Node) bool { return inside(id, c) })) {
-			out = append(out, f.at(id, "%s sends to WhatsApp: only %s in %s calls it, directly and outside any function literal, so every send takes the engine's one send path", id.Name, fn, adapterDir))
+			r := confinementReasons[id.Name]
+			out = append(out, f.at(id, "%s %s: only %s in %s calls it, directly and outside any function literal, so %s", id.Name, r.reaches, fn, adapterDir, r.so))
 		}
 		return true
 	})
@@ -269,10 +316,49 @@ func TestProtocolClientCallsAreTheLibrarys(t *testing.T) {
 		if !protocolClientCalls[name] {
 			t.Errorf("%s is confined to %s but is not among the reviewed protocol calls", name, fn)
 		}
+		if r := confinementReasons[name]; r.reaches == "" || r.so == "" {
+			t.Errorf("%s is confined to %s but its finding gives no reason", name, fn)
+		}
+	}
+	for name := range confinementReasons {
+		if _, ok := confinedProtocolCalls[name]; !ok {
+			t.Errorf("a confinement reason names %s, which is not confined", name)
+		}
 	}
 	for name := range bannedProtocolCalls {
 		if methods[name] && protocolClientCalls[name] {
 			t.Errorf("%s is both banned and among the reviewed protocol calls", name)
+		}
+	}
+}
+
+func TestConfinedCallFindingsSayWhatTheCallReaches(t *testing.T) {
+	f, err := parseSource("internal/engine/wa/x.go", []byte(`package wa
+
+import (
+	"context"
+
+	"go.mau.fi/whatsmeow"
+)
+
+func fetch(ctx context.Context, cli *whatsmeow.Client) error { return cli.DownloadToFile(ctx, nil, nil) }
+
+func broadcast(ctx context.Context, cli *whatsmeow.Client) { _, _ = cli.SendPeerMessage(ctx, nil) }
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	got := checkProtocolClientCalls(f)
+	want := []string{
+		"DownloadToFile downloads from WhatsApp's media servers: only downloadToFile in " + adapterDir + " calls it, directly and outside any function literal, so every download takes the adapter's one typed seam",
+		"SendPeerMessage sends to WhatsApp: only transmitPeerMessage in " + adapterDir + " calls it, directly and outside any function literal, so every send takes the engine's one send path",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("findings %q, want %d", got, len(want))
+	}
+	for i, w := range want {
+		if !strings.HasSuffix(got[i], ": "+w) {
+			t.Errorf("finding %q, want it to end with %q", got[i], w)
 		}
 	}
 }
