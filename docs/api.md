@@ -828,7 +828,7 @@ client's `id` is its client id.
 | `POST /admin/v1/pair` | exactly `{}`, see [Request bodies](#request-bodies) | `200` `{"code":"<pairing code>"}`; see [Pairing](internals.md#pairing). |
 | `POST /admin/v1/reconnect` | exactly `{}` | `200` `{"status":"accepted"}`: the engine connects again at once, after an explicit reconnect as described under [Engine states](internals.md#engine-states). |
 | `POST /admin/v1/clients` | the client to create, below | `200` `{"client":<client>,"credential":"ww_..."}`. The JSON field `credential` holds the client token; this answer is the only one that carries it. |
-| `GET /admin/v1/clients` | none | `200` `{"clients":[...]}`, oldest first: each client's `id`, `name`, `state`, `created_at`, `expires_at`, `revoked_at`, `all_chats`, `allow_first_contact`, `read_chat_count` and `write_chat_count`. |
+| `GET /admin/v1/clients` | none | `200` `{"clients":[...]}`, oldest first: each client's `id`, `name`, `state`, `created_at`, `expires_at`, `revoked_at`, `all_chats`, `allow_first_contact`, `allow_media`, `read_chat_count` and `write_chat_count`. |
 | `GET /admin/v1/clients/{id}` | none | `200` with the client. |
 | `POST /admin/v1/clients/{id}/revoke` | exactly `{}` | `200` with the revoked client. Revoking a revoked client changes nothing and answers the same. |
 | `POST /admin/v1/backfill` | `{"chat":..., "count":...}`, below | `202` `{"request_id":"<id>"}`: the backfill went to WhatsApp under that id; the phone answers when it processes it. See [Backfill requests](#backfill-requests). |
@@ -839,7 +839,7 @@ client's `id` is its client id.
 A client is:
 
 ```json
-{"id":"aaaqeaye","name":"agent","state":"active","created_at":"2026-10-06T12:00:00Z","expires_at":"2027-01-04T12:00:00Z","revoked_at":null,"all_chats":false,"allow_first_contact":false,"read_chats":[{"id":"120363000000000001@g.us","kind":"group","known":true,"name":"Synthetic Group"}],"write_chats":[]}
+{"id":"aaaqeaye","name":"agent","state":"active","created_at":"2026-10-06T12:00:00Z","expires_at":"2027-01-04T12:00:00Z","revoked_at":null,"all_chats":false,"allow_first_contact":false,"allow_media":false,"read_chats":[{"id":"120363000000000001@g.us","kind":"group","known":true,"name":"Synthetic Group"}],"write_chats":[]}
 ```
 
 `state` is `active`, `expired` once `expires_at` has passed, or `revoked`.
@@ -860,6 +860,7 @@ optional:
 | `write_chats` | The chats the client may [send](#sending) to: at most 256, each also in `read_chats`. |
 | `all_chats` | `true` lets the client read every chat, including chats that appear later; then `read_chats` and `write_chats` must be empty. |
 | `allow_first_contact` | `true` lets a write chat be a direct chat the archive has not seen yet. |
+| `allow_media` | `true` marks the client as one that may download attachments; no key means `false`. The flag is stored and reported, but grants nothing in this build: no route or tool serves an attachment yet. |
 | `expires_in_days` | 1 to 365; `0` or no key means 90. A client never lives longer than 365 days, so a token cannot be made that never expires. |
 
 ### Backfill requests

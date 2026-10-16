@@ -27,7 +27,7 @@ func sampleView(t *testing.T) ClientView {
 	return ClientView{
 		ID: "aaaqeaye", Name: "agent", State: "active",
 		CreatedAt: time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC), ExpiresAt: time.Date(2027, 1, 4, 12, 0, 0, 0, time.UTC),
-		ReadCount: 2, WriteCount: 1,
+		AllowMedia: true, ReadCount: 2, WriteCount: 1,
 		Read: []ClientChatView{
 			{Chat: mustChat(t, "120363000000000001@g.us"), Known: true, Name: "Synthetic Group"},
 			{Chat: mustChat(t, "100000000000001@lid")},
@@ -37,7 +37,7 @@ func sampleView(t *testing.T) ClientView {
 }
 
 const sampleClientJSON = `{"id":"aaaqeaye","name":"agent","state":"active","created_at":"2026-10-06T12:00:00Z","expires_at":"2027-01-04T12:00:00Z",` +
-	`"revoked_at":null,"all_chats":false,"allow_first_contact":false,` +
+	`"revoked_at":null,"all_chats":false,"allow_first_contact":false,"allow_media":true,` +
 	`"read_chats":[{"id":"120363000000000001@g.us","kind":"group","known":true,"name":"Synthetic Group"},{"id":"100000000000001@lid","kind":"lid","known":false,"name":null}],` +
 	`"write_chats":[{"id":"120363000000000001@g.us","kind":"group","known":true,"name":"Synthetic Group"}]}`
 
@@ -46,7 +46,7 @@ func TestCreateClientAnswersTheViewAndTheCredentialOnce(t *testing.T) {
 	_, credential := token.NewClient()
 	f.service.view, f.service.credential = sampleView(t), credential
 	body := `{"name":"agent","read_chats":["120363000000000001@g.us","15550100001@c.us"],"write_chats":["120363000000000001@g.us"],` +
-		`"allow_first_contact":true,"expires_in_days":30}`
+		`"allow_first_contact":true,"allow_media":true,"expires_in_days":30}`
 	rec := adminRequest(t, f, http.MethodPost, "/admin/v1/clients", jsonType, body)
 	if want := `{"client":` + sampleClientJSON + `,"credential":"` + credential + `"}`; rec.Code != http.StatusOK || rec.Body.String() != want {
 		t.Fatalf("create = %d %s, want 200 %s", rec.Code, rec.Body, want)
@@ -54,8 +54,8 @@ func TestCreateClientAnswersTheViewAndTheCredentialOnce(t *testing.T) {
 	if n := strings.Count(rec.Body.String(), credential); n != 1 {
 		t.Fatalf("the create response holds the credential %d times", n)
 	}
-	want := policy.ClientSpec{Name: "agent", Read: []string{"120363000000000001@g.us", "15550100001@c.us"}, Write: []string{"120363000000000001@g.us"}, AllowFirstContact: true, ExpiresInDays: 30}
-	if got := f.service.spec; got.Name != want.Name || !slices.Equal(got.Read, want.Read) || !slices.Equal(got.Write, want.Write) || got.AllowFirstContact != want.AllowFirstContact || got.ExpiresInDays != want.ExpiresInDays || got.AllChats {
+	want := policy.ClientSpec{Name: "agent", Read: []string{"120363000000000001@g.us", "15550100001@c.us"}, Write: []string{"120363000000000001@g.us"}, AllowFirstContact: true, AllowMedia: true, ExpiresInDays: 30}
+	if got := f.service.spec; got.Name != want.Name || !slices.Equal(got.Read, want.Read) || !slices.Equal(got.Write, want.Write) || got.AllowFirstContact != want.AllowFirstContact || got.AllowMedia != want.AllowMedia || got.ExpiresInDays != want.ExpiresInDays || got.AllChats {
 		t.Fatalf("the service got %+v, want %+v", got, want)
 	}
 	if got := f.events.recorded(); !slices.Equal(got, [][2]string{{"client_create", "ok"}}) {
@@ -123,6 +123,7 @@ func TestCreateClientBodies(t *testing.T) {
 		{name: "two full chat sets", body: full, status: http.StatusOK},
 		{name: "unknown field", body: `{"name":"agent","token":"x"}`, status: http.StatusBadRequest, code: codeInvalidBody},
 		{name: "expiry as text", body: `{"name":"agent","expires_in_days":"90"}`, status: http.StatusBadRequest, code: codeInvalidBody},
+		{name: "allow_media as text", body: `{"name":"agent","all_chats":true,"allow_media":"true"}`, status: http.StatusBadRequest, code: codeInvalidBody},
 		{name: "over the create cap", body: `{"name":"` + strings.Repeat("a", maxClientBodyBytes) + `"}`, status: http.StatusRequestEntityTooLarge, code: codeBodyTooLarge},
 	}
 	for _, tt := range tests {
@@ -131,8 +132,8 @@ func TestCreateClientBodies(t *testing.T) {
 			f.service.view = sampleView(t)
 			rec := adminRequest(t, f, http.MethodPost, "/admin/v1/clients", jsonType, tt.body)
 			if tt.status == http.StatusOK {
-				if rec.Code != http.StatusOK || len(f.service.spec.Read) != 256 || len(f.service.spec.Write) != 256 {
-					t.Fatalf("create = %d %s with %d and %d chats", rec.Code, rec.Body, len(f.service.spec.Read), len(f.service.spec.Write))
+				if rec.Code != http.StatusOK || len(f.service.spec.Read) != 256 || len(f.service.spec.Write) != 256 || f.service.spec.AllowMedia {
+					t.Fatalf("create = %d %s with %d and %d chats, allow_media %v: a body without the flag asks for false", rec.Code, rec.Body, len(f.service.spec.Read), len(f.service.spec.Write), f.service.spec.AllowMedia)
 				}
 				return
 			}
@@ -149,7 +150,7 @@ func TestClientReadsAndRevoke(t *testing.T) {
 	f.service.view = sampleView(t)
 	rec := adminRequest(t, f, http.MethodGet, "/admin/v1/clients", "", "")
 	want := `{"clients":[{"id":"aaaqeaye","name":"agent","state":"active","created_at":"2026-10-06T12:00:00Z","expires_at":"2027-01-04T12:00:00Z",` +
-		`"revoked_at":null,"all_chats":false,"allow_first_contact":false,"read_chat_count":2,"write_chat_count":1}]}`
+		`"revoked_at":null,"all_chats":false,"allow_first_contact":false,"allow_media":true,"read_chat_count":2,"write_chat_count":1}]}`
 	if rec.Code != http.StatusOK || rec.Body.String() != want {
 		t.Fatalf("list = %d %s, want %s", rec.Code, rec.Body, want)
 	}

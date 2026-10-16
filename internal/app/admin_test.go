@@ -162,7 +162,7 @@ func TestClientsAreCreatedAuthenticatedAuditedAndRevoked(t *testing.T) {
 		!strings.Contains(r.body, `"id":"120363000000000001@g.us","kind":"group"`) || !strings.Contains(r.body, `"name":"Synthetic Group"`) {
 		t.Fatalf("chats = %d %s", r.status, r.body)
 	}
-	created := post(t, admin, "/admin/v1/clients", bearer(adminToken), `{"name":"agent","read_chats":["120363000000000001@g.us"],"write_chats":["120363000000000001@g.us"]}`)
+	created := post(t, admin, "/admin/v1/clients", bearer(adminToken), `{"name":"agent","read_chats":["120363000000000001@g.us"],"write_chats":["120363000000000001@g.us"],"allow_media":true}`)
 	var body struct {
 		Client struct {
 			ID    string `json:"id"`
@@ -170,8 +170,11 @@ func TestClientsAreCreatedAuthenticatedAuditedAndRevoked(t *testing.T) {
 		} `json:"client"`
 		Credential string `json:"credential"`
 	}
-	if created.status != http.StatusOK || json.Unmarshal([]byte(created.body), &body) != nil || body.Client.State != "active" {
+	if created.status != http.StatusOK || json.Unmarshal([]byte(created.body), &body) != nil || body.Client.State != "active" || !strings.Contains(created.body, `"allow_media":true`) {
 		t.Fatalf("create = %d %s", created.status, created.body)
+	}
+	if r := mustDo(t, http.MethodGet, admin, "/admin/v1/clients", bearer(adminToken)); r.status != http.StatusOK || !strings.Contains(r.body, `"allow_first_contact":false,"allow_media":true,`) {
+		t.Fatalf("list = %d %s, want the stored allow_media", r.status, r.body)
 	}
 	if id, ok := token.ParseClient(body.Credential); !ok || id != body.Client.ID {
 		t.Fatalf("the credential %q is not a client token for %q", body.Credential, body.Client.ID)

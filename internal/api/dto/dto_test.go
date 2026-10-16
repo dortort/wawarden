@@ -29,7 +29,7 @@ func samples() []dto.Response {
 		dto.Accepted{Status: "accepted"},
 		sampleClient(),
 		dto.ClientCreated{Client: sampleClient(), Credential: "ww_synthetic"},
-		dto.ClientList{Clients: []dto.ClientSummary{{ID: "aaaaaaaa", Name: "agent", State: "revoked", RevokedAt: &last, ReadChatCount: 1}}},
+		dto.ClientList{Clients: []dto.ClientSummary{{ID: "aaaaaaaa", Name: "agent", State: "revoked", RevokedAt: &last, AllowMedia: true, ReadChatCount: 1}}},
 		dto.AdminChats{Chats: []dto.AdminChat{{ID: "120363000000000001@g.us", Kind: "group", Ref: strings.Repeat("a", 32)}}, Truncated: true},
 		dto.Me{Client: dto.MeClient{ID: "aaaaaaaa", Name: "agent", ExpiresAt: last,
 			Read:  dto.ReadScope{Chats: []dto.ScopeChat{{ID: "120363000000000001@g.us", Kind: "group"}}},
@@ -64,6 +64,7 @@ func sampleClient() dto.Client {
 	name := "Synthetic Group"
 	return dto.Client{
 		ID: "aaaaaaaa", Name: "agent", State: "active", CreatedAt: "2026-10-05T12:00:00Z", ExpiresAt: "2027-01-03T12:00:00Z",
+		AllowMedia: true,
 		ReadChats:  []dto.ClientChat{{ID: "120363000000000001@g.us", Kind: "group", Known: true, Name: &name}},
 		WriteChats: []dto.ClientChat{},
 	}
@@ -157,6 +158,18 @@ func TestEncode(t *testing.T) {
 			response:        dto.Me{Client: dto.MeClient{ID: "aaaaaaaa", Name: "agent", ExpiresAt: "2027-01-03T12:00:00Z", Read: dto.ReadScope{All: true, Chats: []dto.ScopeChat{}}, Write: dto.WriteScope{Chats: []dto.ScopeChat{}}}, Session: dto.Session{State: "connected"}},
 			wantContentType: "application/json; charset=utf-8",
 			wantBody:        `{"client":{"id":"aaaaaaaa","name":"agent","expires_at":"2027-01-03T12:00:00Z","read":{"all":true,"chats":[]},"write":{"chats":[]}},"session":{"state":"connected"}}`,
+		},
+		{
+			name:            "client",
+			response:        sampleClient(),
+			wantContentType: "application/json; charset=utf-8",
+			wantBody:        `{"id":"aaaaaaaa","name":"agent","state":"active","created_at":"2026-10-05T12:00:00Z","expires_at":"2027-01-03T12:00:00Z","revoked_at":null,"all_chats":false,"allow_first_contact":false,"allow_media":true,"read_chats":[{"id":"120363000000000001@g.us","kind":"group","known":true,"name":"Synthetic Group"}],"write_chats":[]}`,
+		},
+		{
+			name:            "client list with the default flags",
+			response:        dto.ClientList{Clients: []dto.ClientSummary{{ID: "aaaaaaaa", Name: "agent", State: "active", CreatedAt: "2026-10-05T12:00:00Z", ExpiresAt: "2027-01-03T12:00:00Z", ReadChatCount: 1}}},
+			wantContentType: "application/json; charset=utf-8",
+			wantBody:        `{"clients":[{"id":"aaaaaaaa","name":"agent","state":"active","created_at":"2026-10-05T12:00:00Z","expires_at":"2027-01-03T12:00:00Z","revoked_at":null,"all_chats":false,"allow_first_contact":false,"allow_media":false,"read_chat_count":1,"write_chat_count":0}]}`,
 		},
 		{
 			name:            "metrics",

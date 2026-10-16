@@ -120,6 +120,7 @@ type Client struct {
 	RevokedAt         *string      `json:"revoked_at"`
 	AllChats          bool         `json:"all_chats"`
 	AllowFirstContact bool         `json:"allow_first_contact"`
+	AllowMedia        bool         `json:"allow_media"`
 	ReadChats         []ClientChat `json:"read_chats"`
 	WriteChats        []ClientChat `json:"write_chats"`
 }
@@ -142,6 +143,7 @@ type ClientSummary struct {
 	RevokedAt         *string `json:"revoked_at"`
 	AllChats          bool    `json:"all_chats"`
 	AllowFirstContact bool    `json:"allow_first_contact"`
+	AllowMedia        bool    `json:"allow_media"`
 	ReadChatCount     int64   `json:"read_chat_count"`
 	WriteChatCount    int64   `json:"write_chat_count"`
 }
