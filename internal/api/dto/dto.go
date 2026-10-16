@@ -445,7 +445,7 @@ func (a Attachment) Plan(rangeHeader, ifRange string) (Delivery, error) {
 func singleRange(header string, size int64) (first, last int64, code int) {
 	whole := size - 1
 	spec, ok := cutPrefixFold(header, "bytes=")
-	if !ok || strings.Contains(spec, ",") {
+	if !ok {
 		return 0, whole, statusOK
 	}
 	firstText, lastText, ok := strings.Cut(strings.Trim(spec, " \t"), "-")
