@@ -287,8 +287,9 @@ Further, the worker:
 - stores whether a message came live or from history sync, and whether the
   owner sent it;
 - sets the expiry of a message sent with a disappearing timer; every minute,
-  also between the rows and batches it applies, the engine removes the text of
-  expired messages from the archive as described under
+  also between the rows and batches it applies, the engine removes the text,
+  media type and media reference of expired messages from the archive as
+  described under
   [Message archive](configuration.md#message-archive);
 - learns which LID belongs to which phone number only from the alternate
   identifiers WhatsApp's servers attach to live messages and from history
@@ -662,9 +663,9 @@ queue, it holds:
   audio, `animated` or `lottie` for a sticker), the declared size of 0 to 2
   GiB, and when the reference expires and when it was added. It expires at the
   earlier of the message's time plus the reference retention and the message's
-  own expiry. It is written only with a new media message, or later by a copy
-  of a stored media message that has no reference, is not revoked and has not
-  expired, and never when that expiry has already passed as the message is
+  own expiry. It is written only with a new media message that has a media
+  type, or later by a copy of a stored media message that has a media type and
+  no reference, is not revoked and has not expired, and never when that expiry has already passed as the message is
   stored. The transaction that revokes a message deletes its reference, and so
   does the one that purges an expired message. A purge of references, at most
   a given number per call, removes those past their expiry, those added longer

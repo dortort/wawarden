@@ -273,7 +273,9 @@ revoked, origin, untrusted}`:
   says whether either was cut.
 - `media_type` is the MIME type of a media message, such as `image/jpeg`, or
   its kind (`image`, `video`, `audio`, `document` or `sticker`) when the MIME
-  type is missing or malformed; `null` for other messages.
+  type is missing or malformed; `null` for other messages, for a revoked
+  message, and for an expired one once the engine's expiry pass, which runs
+  every minute, has reached it.
 - `reply_to` is the message reference of the quoted message when it is in the
   archive, or `null`; `quote_verified` passes on whether the quote matched it.
 - `origin` is `gateway:<client id>` for a message a client sent through this
