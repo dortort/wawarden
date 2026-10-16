@@ -508,6 +508,8 @@ const (
 		count(CASE WHEN revoked_at IS NOT NULL THEN 1 END),
 		count(CASE WHEN revoked_at IS NULL AND expires_at > ?1 AND read_all = 1 THEN 1 END)
 		FROM clients`
+	selectMediaWriters = `SELECT count(*) FROM clients c WHERE c.revoked_at IS NULL AND c.expires_at > ? AND c.allow_media = 1
+		AND EXISTS (SELECT 1 FROM client_write_chats w WHERE w.client_id = c.id)`
 )
 
 func (c *Clients) List(ctx context.Context) ([]Client, error) {
@@ -534,23 +536,27 @@ func (c *Clients) List(ctx context.Context) ([]Client, error) {
 }
 
 func (c *Clients) WriteHolders(ctx context.Context, now time.Time) (int, error) {
-	return c.count(ctx, func(cl *policy.Client) bool { return policy.WriteHolder(cl, now) })
-}
-
-func (c *Clients) MediaWriters(ctx context.Context, now time.Time) (int, error) {
-	return c.count(ctx, func(cl *policy.Client) bool { return cl.AllowMedia && policy.WriteHolder(cl, now) })
-}
-
-func (c *Clients) count(ctx context.Context, match func(*policy.Client) bool) (int, error) {
 	s, err := c.current(ctx)
 	if err != nil {
 		return 0, err
 	}
 	var n int
 	for _, cred := range s.clients {
-		if match(cred.client) {
+		if policy.WriteHolder(cred.client, now) {
 			n++
 		}
+	}
+	return n, nil
+}
+
+func (c *Clients) MediaWriters(ctx context.Context) (int64, error) {
+	now := c.now()
+	var n int64
+	err := c.db.Read(ctx, "admin.media_writers", func(ctx context.Context, q db.Querier) error {
+		return q.QueryRowContext(ctx, selectMediaWriters, now.UnixMilli()).Scan(&n)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("admin: count the media writers: %w", err)
 	}
 	return n, nil
 }
