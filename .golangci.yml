@@ -180,6 +180,7 @@ linters:
             - ${base-path}/internal/logx/**
             - ${base-path}/internal/ratelimit/**
             - ${base-path}/internal/sanitize/**
+            - ${base-path}/internal/stage/**
             - "!$test"
           allow:
             - $gostd

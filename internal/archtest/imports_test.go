@@ -432,7 +432,7 @@ func checkFences(f *sourceFile) []string {
 	return out
 }
 
-var standardLibraryOnly = []string{"internal/cursor", "internal/keys", "internal/logx", "internal/ratelimit", "internal/sanitize"}
+var standardLibraryOnly = []string{"internal/cursor", "internal/keys", "internal/logx", "internal/ratelimit", "internal/sanitize", "internal/stage"}
 
 var standardLibraryOnlyRule = rule{
 	name:  "standard-library-only",
