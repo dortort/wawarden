@@ -250,6 +250,66 @@ func TestCreateValidatesAgainstTheArchive(t *testing.T) {
 	}
 }
 
+func TestAllowMediaRoundTrips(t *testing.T) {
+	f := open(t)
+	f.seed(t, phoneB, groupG)
+	specs := []policy.ClientSpec{
+		{Name: "plain", Read: []string{phoneB}},
+		{Name: "media", Read: []string{phoneB, groupG}, Write: []string{groupG}, AllowMedia: true},
+		{Name: "all media", AllChats: true, AllowMedia: true},
+	}
+	want := map[string]bool{}
+	full := map[string]string{}
+	for _, spec := range specs {
+		created, secret := f.create(t, spec)
+		if created.AllowMedia != spec.AllowMedia {
+			t.Fatalf("Create(%s).AllowMedia = %v, want %v", spec.Name, created.AllowMedia, spec.AllowMedia)
+		}
+		want[created.ID], full[created.ID] = spec.AllowMedia, secret
+	}
+	list, err := f.clients.List(t.Context())
+	if err != nil || len(list) != len(specs) {
+		t.Fatalf("List = %+v, %v", list, err)
+	}
+	for _, v := range list {
+		if v.AllowMedia != want[v.ID] {
+			t.Fatalf("List: %s AllowMedia = %v, want %v", v.Name, v.AllowMedia, want[v.ID])
+		}
+		got, err := f.clients.Get(t.Context(), v.ID)
+		if err != nil || got.AllowMedia != want[v.ID] {
+			t.Fatalf("Get(%s) = AllowMedia %v, %v, want %v", v.Name, got.AllowMedia, err, want[v.ID])
+		}
+		c, ok := f.authenticate(t, full[v.ID])
+		if !ok || c.AllowMedia != want[v.ID] {
+			t.Fatalf("Authenticate(%s) = AllowMedia %v, %v, want %v, true", v.Name, c != nil && c.AllowMedia, ok, want[v.ID])
+		}
+		g, ok := policy.DecideRead(c, start)
+		if !ok || g.Media() != want[v.ID] {
+			t.Fatalf("DecideRead(%s).Media() = %v, %v, want %v, true", v.Name, g.Media(), ok, want[v.ID])
+		}
+	}
+	rows, err := rawOpen(t, f.copyArchive(t)).QueryContext(t.Context(), "SELECT name, allow_media FROM clients")
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	stored := map[string]int64{}
+	for rows.Next() {
+		var name string
+		var media int64
+		if err := rows.Scan(&name, &media); err != nil {
+			t.Fatalf("Scan: %v", err)
+		}
+		stored[name] = media
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	if fmt.Sprint(stored) != "map[all media:1 media:1 plain:0]" {
+		t.Fatalf("stored allow_media %v, want 0 for the default and 1 when asked", stored)
+	}
+}
+
 func TestAuthenticationHashesAndComparesOncePerOutcome(t *testing.T) {
 	f := open(t)
 	live, liveToken := f.create(t, policy.ClientSpec{Name: "live", Read: []string{phoneA}})
