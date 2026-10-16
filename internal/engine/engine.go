@@ -83,6 +83,7 @@ type Client interface {
 	NewMessageID() string
 	Send(ctx context.Context, req SendRequest) (Sent, error)
 	Backfill(ctx context.Context, req BackfillRequest) (requestID string, err error)
+	FetchMedia(ctx context.Context, req MediaRequest) (Staged, error)
 }
 
 type VersionSource interface {

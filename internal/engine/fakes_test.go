@@ -195,6 +195,9 @@ type fakeClient struct {
 	sendErrs     []error
 	backfillErrs []error
 	onSend       func(SendRequest)
+	fetchErrs    []error
+	fetchStaged  Staged
+	onFetch      func(MediaRequest)
 }
 
 func newClient(paired bool) *fakeClient {
@@ -393,6 +396,21 @@ func (f *fakeClient) Backfill(_ context.Context, req BackfillRequest) (string, e
 	}
 	f.ids++
 	return "TEST-BF" + strconv.Itoa(f.ids), nil
+}
+
+func (f *fakeClient) FetchMedia(_ context.Context, req MediaRequest) (Staged, error) {
+	f.mu.Lock()
+	f.record("fetch:" + req.ID)
+	var err error
+	if len(f.fetchErrs) > 0 {
+		err, f.fetchErrs = f.fetchErrs[0], f.fetchErrs[1:]
+	}
+	staged, hook := f.fetchStaged, f.onFetch
+	f.mu.Unlock()
+	if hook != nil {
+		hook(req)
+	}
+	return staged, err
 }
 
 func (f *fakeClient) OnEvent(handler func(Event) bool) func() {
