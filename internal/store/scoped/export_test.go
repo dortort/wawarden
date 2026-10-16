@@ -26,6 +26,7 @@ var Queries = map[string]string{
 	"selectSearch":          selectSearch,
 	"selectChatSearch":      selectChatSearch,
 	"selectTopSeq":          selectTopSeq,
+	"selectAttachment":      selectAttachment,
 }
 
 const Window = window

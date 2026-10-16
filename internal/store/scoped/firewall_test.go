@@ -17,6 +17,7 @@ import (
 )
 
 var rowTypes = []reflect.Type{
+	reflect.TypeFor[scoped.Attachment](),
 	reflect.TypeFor[scoped.Chat](),
 	reflect.TypeFor[scoped.ChatPage](),
 	reflect.TypeFor[scoped.ChatPosition](),
@@ -27,6 +28,7 @@ var rowTypes = []reflect.Type{
 	reflect.TypeFor[scoped.MessagePosition](),
 	reflect.TypeFor[scoped.Query](),
 	reflect.TypeFor[scoped.Reader](),
+	reflect.TypeFor[scoped.SealedRef](),
 	reflect.TypeFor[scoped.SearchPage](),
 	reflect.TypeFor[scoped.SearchPosition](),
 }

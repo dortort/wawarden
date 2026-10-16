@@ -18,8 +18,8 @@ const (
 )
 
 var (
-	grantFreeMethods  = set("Query.Expression")
-	scopedReadMethods = set("Reader.Chat", "Reader.Chats", "Reader.Changes", "Reader.Message", "Reader.Messages", "Reader.Search")
+	grantFreeMethods  = set("Query.Expression", "SealedRef.Sealed")
+	scopedReadMethods = set("Reader.Attachment", "Reader.Chat", "Reader.Chats", "Reader.Changes", "Reader.Message", "Reader.Messages", "Reader.Search")
 )
 
 const grantWideningRead = `package scoped
@@ -67,7 +67,7 @@ type Reader struct{}
 
 func (r *Reader) Chats(g policy.ReadGrant) {}
 `},
-		{name: "reads with a grant first, unexported methods and types, functions and the pure query method", rel: scopedDir + "/x.go", src: `package scoped
+		{name: "reads with a grant first, unexported methods and types, functions and the pure value methods", rel: scopedDir + "/x.go", src: `package scoped
 
 import (
 	"context"
@@ -79,6 +79,8 @@ type Reader struct{}
 
 type Query struct{}
 
+type SealedRef struct{}
+
 type querier struct{}
 
 func (q querier) QueryContext(ctx context.Context) {}
@@ -86,7 +88,17 @@ func (r *Reader) Chats(g p.ReadGrant, ctx context.Context) {}
 func (r *Reader) Search(g, h p.ReadGrant)                  {}
 func (r *Reader) read(ctx context.Context)                 {}
 func (q Query) Expression() string                         { return "" }
+func (r SealedRef) Sealed() string                         { return "" }
 func New() *Reader                                         { return nil }
+`},
+		{name: "another method of a pure value type", rel: scopedDir + "/x.go", want: 2, src: `package scoped
+
+type Query struct{}
+
+type SealedRef struct{}
+
+func (q Query) Text() string     { return "" }
+func (r SealedRef) Text() string { return "" }
 `},
 		{name: "a test of the scoped package", rel: scopedDir + "/x_test.go", src: `package scoped
 
@@ -270,10 +282,11 @@ func (r *Reader) helper(g policy.ReadGrant, ctx context.Context) error { return 
 var later = func(r *Reader) error { return r.read(kept, nil, "x", nil) }
 `},
 		{name: "a read method that calls a sibling under a grant it decides", rel: scopedDir + "/leak.go", want: 1, src: grantWideningRead},
-		{name: "calls of read methods inside the package", rel: scopedDir + "/x.go", want: 8, src: `package scoped
+		{name: "calls of read methods inside the package", rel: scopedDir + "/x.go", want: 9, src: `package scoped
 
 import (
 	"context"
+	"time"
 
 	"github.com/dortort/wawarden/internal/policy"
 )
@@ -303,6 +316,10 @@ var through = func(r interface{ Changes(policy.ReadGrant) }) { r.Changes(kept) }
 
 func message(r *Reader, ctx context.Context) {
 	_, _, _ = r.Message(kept, ctx, policy.CanonicalChat{}, "", policy.CanonicalChat{})
+}
+
+func attachment(r *Reader, ctx context.Context) {
+	_, _, _ = r.Attachment(kept, ctx, policy.CanonicalChat{}, "", policy.CanonicalChat{}, time.Now())
 }
 `},
 		{name: "the reader and the builder", rel: scopedReader, src: `package scoped
@@ -385,7 +402,7 @@ func (r *Reader) Chat(g p.ReadGrant, ctx context.Context, ref string) (bool, err
 	var found bool
 	err := r.read(g, ctx, "x", func(ctx context.Context, q querier) error {
 		rows, err := rowsOf[Chat]{q, scanChat}.QueryContext(ctx, selectChat, ref)
-		found = len(rows) > 0 && g.Allows(rows[0].Chat) && rows[0].g == nil
+		found = len(rows) > 0 && g.Media() && g.Allows(rows[0].Chat) && rows[0].g == nil
 		return err
 	})
 	return found, err
