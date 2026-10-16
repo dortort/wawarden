@@ -29,6 +29,10 @@ func (s adminService) Status(ctx context.Context) (api.AdminStatus, error) {
 	if err != nil {
 		return api.AdminStatus{}, err
 	}
+	media, err := s.archive.Clients().MediaWriters(ctx, s.now())
+	if err != nil {
+		return api.AdminStatus{}, err
+	}
 	var backfills int
 	if err := s.archive.Read(ctx, "app.backfills_today", func(r *ingest.Reader) error {
 		backfills, err = r.BackfillsSince(s.now().UTC().Truncate(24 * time.Hour))
@@ -47,7 +51,7 @@ func (s adminService) Status(ctx context.Context) (api.AdminStatus, error) {
 		InboxBacklog:     c.InboxBacklog,
 		InboxQuarantined: c.InboxQuarantined,
 		BackfillsToday:   int64(backfills),
-		Clients:          api.ClientCounts{Active: n.Active, Expired: n.Expired, Revoked: n.Revoked, AllChatsActive: n.AllChatsActive},
+		Clients:          api.ClientCounts{Active: n.Active, Expired: n.Expired, Revoked: n.Revoked, AllChatsActive: n.AllChatsActive, MediaWriteActive: int64(media)},
 		LastIngest:       c.LastIngest,
 		Version:          s.version,
 	}, nil

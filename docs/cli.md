@@ -214,7 +214,8 @@ line per write chat, each with the chat's identifier, its kind, `seen` or
 
 `--allow-media` asks for the client's
 [`allow_media`](api.md#creating-a-client); the flag is stored and printed, but
-grants nothing in this build.
+grants nothing in this build. While an active client holds it and at least one
+write chat, `admin status` warns `media_write_client`.
 
 `--read` and `--write` can be repeated, and `--expires-days` defaults to 90.
 Each chat value is one of:
