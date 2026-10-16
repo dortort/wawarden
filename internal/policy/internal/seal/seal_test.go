@@ -42,11 +42,12 @@ func TestGrantsWithoutTheOkFlagAllowNothing(t *testing.T) {
 		{name: "read-all", g: ReadGrant{client: "c1", all: true}},
 		{name: "read-set", g: ReadGrant{client: "c1", chats: set(chatA, chatB)}},
 		{name: "read-all with a set holding the zero chat", g: ReadGrant{client: "c1", all: true, chats: set(chatA, Chat{})}},
+		{name: "read-set with media", g: ReadGrant{client: "c1", chats: set(chatA), media: true}},
 	}
 	for _, tt := range reads {
 		t.Run("ReadGrant "+tt.name, func(t *testing.T) {
-			if tt.g.Valid() || tt.g.All() || len(tt.g.Chats()) != 0 {
-				t.Fatalf("Valid() = %v, All() = %v, Chats() = %v, want false, false, empty", tt.g.Valid(), tt.g.All(), tt.g.Chats())
+			if tt.g.Valid() || tt.g.All() || tt.g.Media() || len(tt.g.Chats()) != 0 {
+				t.Fatalf("Valid() = %v, All() = %v, Media() = %v, Chats() = %v, want false, false, false, empty", tt.g.Valid(), tt.g.All(), tt.g.Media(), tt.g.Chats())
 			}
 			for _, chat := range probes {
 				if tt.g.Allows(chat) {
@@ -78,7 +79,7 @@ func TestGrantsWithoutTheOkFlagAllowNothing(t *testing.T) {
 }
 
 func TestValidGrantsRefuseTheZeroChatEvenWhenTheirSetHoldsIt(t *testing.T) {
-	r := NewReadGrant("c1", false, set(chatA, Chat{}))
+	r := NewReadGrant("c1", false, set(chatA, Chat{}), false)
 	w := NewWriteGrant("c1", set(chatA, Chat{}), false)
 	if r.Allows(Chat{}) || w.Allows(Chat{}) {
 		t.Fatalf("a valid grant allows the zero-value chat: read %v, write %v", r.Allows(Chat{}), w.Allows(Chat{}))
@@ -86,7 +87,7 @@ func TestValidGrantsRefuseTheZeroChatEvenWhenTheirSetHoldsIt(t *testing.T) {
 	if !r.Allows(chatA) || !w.Allows(chatA) {
 		t.Fatal("the grants no longer allow their own chat")
 	}
-	if all := NewReadGrant("c1", true, nil); all.Allows(Chat{}) || !all.Allows(chatC) {
+	if all := NewReadGrant("c1", true, nil, false); all.Allows(Chat{}) || !all.Allows(chatC) {
 		t.Fatalf("a read-all grant: Allows(zero) = %v, Allows(chat) = %v, want false, true", all.Allows(Chat{}), all.Allows(chatC))
 	}
 }

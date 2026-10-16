@@ -20,6 +20,7 @@ type ClientSpec struct {
 	Write             []string
 	AllChats          bool
 	AllowFirstContact bool
+	AllowMedia        bool
 	ExpiresInDays     int
 }
 
@@ -80,6 +81,7 @@ func ValidateClientSpec(spec ClientSpec, now time.Time) (Client, error) {
 		Write:             write,
 		ExpiresAt:         now.Add(time.Duration(days) * clientDay),
 		AllowFirstContact: spec.AllowFirstContact,
+		AllowMedia:        spec.AllowMedia,
 	}, nil
 }
 

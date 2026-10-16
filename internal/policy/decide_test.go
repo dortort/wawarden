@@ -78,12 +78,13 @@ func TestZeroChatIsNeverAllowed(t *testing.T) {
 
 func TestDecideRead(t *testing.T) {
 	tests := []struct {
-		name    string
-		client  *Client
-		now     time.Time
-		wantOK  bool
-		wantAll bool
-		allowed []CanonicalChat
+		name      string
+		client    *Client
+		now       time.Time
+		wantOK    bool
+		wantAll   bool
+		wantMedia bool
+		allowed   []CanonicalChat
 	}{
 		{name: "nil client", client: nil, now: now},
 		{name: "read-all", client: &Client{ID: "c1", ReadAll: true, ExpiresAt: future}, now: now, wantOK: true, wantAll: true, allowed: knownChats},
@@ -96,12 +97,22 @@ func TestDecideRead(t *testing.T) {
 		{name: "never expiring, decided before year one", client: &Client{ID: "c7", ReadAll: true}, now: time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC)},
 		{name: "expired", client: &Client{ID: "c8", ReadAll: true, ExpiresAt: now.Add(-time.Nanosecond)}, now: now},
 		{name: "zero decision time", client: &Client{ID: "c9", ReadAll: true, ExpiresAt: future}, now: time.Time{}},
+		{name: "read-set with media", client: &Client{ID: "m1", Read: set(chatA), AllowMedia: true, ExpiresAt: future}, now: now, wantOK: true, wantMedia: true, allowed: []CanonicalChat{chatA}},
+		{name: "read-all with media", client: &Client{ID: "m2", ReadAll: true, AllowMedia: true, ExpiresAt: future}, now: now, wantOK: true, wantAll: true, wantMedia: true, allowed: knownChats},
+		{name: "read+write with media", client: &Client{ID: "m3", Read: set(chatA, chatB), Write: set(chatA), AllowMedia: true, ExpiresAt: future}, now: now, wantOK: true, wantMedia: true, allowed: []CanonicalChat{chatA, chatB}},
+		{name: "empty read set with media allows nothing", client: &Client{ID: "m4", AllowMedia: true, ExpiresAt: future}, now: now, wantOK: true, wantMedia: true},
+		{name: "revoked with media", client: &Client{ID: "m5", ReadAll: true, AllowMedia: true, ExpiresAt: future, Revoked: true}, now: now},
+		{name: "expired with media", client: &Client{ID: "m6", Read: set(chatA), AllowMedia: true, ExpiresAt: now.Add(-time.Nanosecond)}, now: now},
+		{name: "never expiring with media", client: &Client{ID: "m7", ReadAll: true, AllowMedia: true}, now: now},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			g, ok := DecideRead(tt.client, tt.now)
 			if ok != tt.wantOK || g.Valid() != tt.wantOK {
 				t.Fatalf("DecideRead() ok = %v, Valid() = %v, want %v", ok, g.Valid(), tt.wantOK)
+			}
+			if g.Media() != tt.wantMedia {
+				t.Fatalf("Media() = %v, want %v", g.Media(), tt.wantMedia)
 			}
 			if !ok {
 				if !reflect.ValueOf(g).IsZero() {
@@ -235,7 +246,7 @@ func TestReadAllWithAWriteChatDeniesWrites(t *testing.T) {
 }
 
 func TestGrantsAreSnapshots(t *testing.T) {
-	c := &Client{ID: "c1", Read: set(chatA), Write: set(chatB), AllowFirstContact: true, ExpiresAt: future}
+	c := &Client{ID: "c1", Read: set(chatA), Write: set(chatB), AllowFirstContact: true, AllowMedia: true, ExpiresAt: future}
 	r, ok := DecideRead(c, now)
 	if !ok {
 		t.Fatal("DecideRead() denied a live client")
@@ -244,6 +255,12 @@ func TestGrantsAreSnapshots(t *testing.T) {
 	if !ok {
 		t.Fatal("DecideWrite() denied a live client")
 	}
+	plain := &Client{ID: "c3", Read: set(chatA), ExpiresAt: future}
+	p, ok := DecideRead(plain, now)
+	if !ok {
+		t.Fatal("DecideRead() denied a live client")
+	}
+	plain.AllowMedia = true
 
 	delete(c.Read, chatA)
 	c.Read[chatC] = struct{}{}
@@ -252,6 +269,7 @@ func TestGrantsAreSnapshots(t *testing.T) {
 	c.ID = "c2"
 	c.ReadAll = true
 	c.AllowFirstContact = false
+	c.AllowMedia = false
 	c.Revoked = true
 	c.ExpiresAt = now.Add(-time.Hour)
 
@@ -259,8 +277,11 @@ func TestGrantsAreSnapshots(t *testing.T) {
 	delete(exported, chatA)
 	exported[chatC] = struct{}{}
 
-	if !r.Valid() || r.Client() != "c1" || r.All() {
-		t.Fatalf("read grant changed after the client was mutated: valid %v, client %q, all %v", r.Valid(), r.Client(), r.All())
+	if !r.Valid() || r.Client() != "c1" || r.All() || !r.Media() {
+		t.Fatalf("read grant changed after the client was mutated: valid %v, client %q, all %v, media %v", r.Valid(), r.Client(), r.All(), r.Media())
+	}
+	if p.Media() {
+		t.Fatal("a read grant decided without media reports Media() after the client gained it")
 	}
 	if !r.Allows(chatA) || r.Allows(chatC) {
 		t.Fatalf("read grant follows the client's or the exported set: Allows(a) = %v, Allows(c) = %v", r.Allows(chatA), r.Allows(chatC))
@@ -285,8 +306,8 @@ func TestZeroValueGrantsAreInvalid(t *testing.T) {
 	chats := append([]CanonicalChat{{}}, knownChats...)
 
 	var r ReadGrant
-	if r.Valid() || r.All() || r.Client() != "" || len(r.Chats()) != 0 {
-		t.Fatalf("zero ReadGrant: valid %v, all %v, client %q, chats %v", r.Valid(), r.All(), r.Client(), r.Chats())
+	if r.Valid() || r.All() || r.Media() || r.Client() != "" || len(r.Chats()) != 0 {
+		t.Fatalf("zero ReadGrant: valid %v, all %v, media %v, client %q, chats %v", r.Valid(), r.All(), r.Media(), r.Client(), r.Chats())
 	}
 	var w WriteGrant
 	if w.Valid() || w.AllowFirstContact() || w.Client() != "" {

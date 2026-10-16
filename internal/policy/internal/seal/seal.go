@@ -47,16 +47,18 @@ type ReadGrant struct {
 	client string
 	all    bool
 	chats  map[Chat]struct{}
+	media  bool
 	ok     bool
 }
 
-func NewReadGrant(client string, all bool, chats map[Chat]struct{}) ReadGrant {
-	return ReadGrant{client: client, all: all, chats: chats, ok: true}
+func NewReadGrant(client string, all bool, chats map[Chat]struct{}, media bool) ReadGrant {
+	return ReadGrant{client: client, all: all, chats: chats, media: media, ok: true}
 }
 
 func (g ReadGrant) Client() string { return g.client }
 func (g ReadGrant) Valid() bool    { return g.ok }
 func (g ReadGrant) All() bool      { return g.ok && g.all }
+func (g ReadGrant) Media() bool    { return g.ok && g.media }
 
 func (g ReadGrant) Chats() map[Chat]struct{} {
 	if !g.ok {
