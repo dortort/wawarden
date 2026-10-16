@@ -51,6 +51,51 @@ func TestWriteHoldersCountsLiveClientsThatMayWrite(t *testing.T) {
 	}
 }
 
+func TestMediaWritersCountsLiveClientsThatHoldMediaAndMayWrite(t *testing.T) {
+	f := open(t)
+	f.seed(t, phoneA, phoneB, groupG)
+	writers := func(at time.Time) int {
+		t.Helper()
+		n, err := f.clients.MediaWriters(t.Context(), at)
+		if err != nil {
+			t.Fatalf("MediaWriters: %v", err)
+		}
+		return n
+	}
+	if n := writers(start); n != 0 {
+		t.Fatalf("MediaWriters of no clients = %d", n)
+	}
+	f.create(t, policy.ClientSpec{Name: "media reader", Read: []string{phoneA}, AllowMedia: true})
+	f.create(t, policy.ClientSpec{Name: "everything", AllChats: true, AllowMedia: true})
+	f.create(t, policy.ClientSpec{Name: "writer", Read: []string{phoneA}, Write: []string{phoneA}})
+	f.create(t, policy.ClientSpec{Name: "media writer", Read: []string{phoneA, groupG}, Write: []string{groupG}, AllowMedia: true})
+	f.create(t, policy.ClientSpec{Name: "short media writer", Read: []string{groupG}, Write: []string{groupG}, AllowMedia: true, ExpiresInDays: 1})
+	revoked, _ := f.create(t, policy.ClientSpec{Name: "revoked", Read: []string{phoneB}, Write: []string{phoneB}, AllowMedia: true})
+	if n := writers(start); n != 3 {
+		t.Fatalf("MediaWriters = %d, want the three writers that hold media", n)
+	}
+	if _, err := f.clients.Revoke(t.Context(), revoked.ID); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	for _, tt := range []struct {
+		at   time.Time
+		want int
+	}{
+		{start, 2},
+		{start.Add(24*time.Hour - time.Millisecond), 2},
+		{start.Add(24 * time.Hour), 1},
+		{start.Add(90 * 24 * time.Hour), 0},
+		{time.Time{}, 0},
+	} {
+		if n := writers(tt.at); n != tt.want {
+			t.Fatalf("MediaWriters at %v = %d, want %d", tt.at, n, tt.want)
+		}
+	}
+	if n, err := f.clients.WriteHolders(t.Context(), start); err != nil || n != 3 {
+		t.Fatalf("WriteHolders = %d, %v, want the three live writers with or without media", n, err)
+	}
+}
+
 var chatReference = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 func TestAFirstContactClientGivesItsUnseenChatsAReference(t *testing.T) {

@@ -534,13 +534,21 @@ func (c *Clients) List(ctx context.Context) ([]Client, error) {
 }
 
 func (c *Clients) WriteHolders(ctx context.Context, now time.Time) (int, error) {
+	return c.count(ctx, func(cl *policy.Client) bool { return policy.WriteHolder(cl, now) })
+}
+
+func (c *Clients) MediaWriters(ctx context.Context, now time.Time) (int, error) {
+	return c.count(ctx, func(cl *policy.Client) bool { return cl.AllowMedia && policy.WriteHolder(cl, now) })
+}
+
+func (c *Clients) count(ctx context.Context, match func(*policy.Client) bool) (int, error) {
 	s, err := c.current(ctx)
 	if err != nil {
 		return 0, err
 	}
 	var n int
 	for _, cred := range s.clients {
-		if policy.WriteHolder(cred.client, now) {
+		if match(cred.client) {
 			n++
 		}
 	}
