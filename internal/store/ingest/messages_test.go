@@ -15,11 +15,11 @@ import (
 func TestOpenCreatesTheSchemaOnce(t *testing.T) {
 	opts := testOptions(t)
 	s := openWith(t, opts)
-	if s.SchemaVersion() != 4 || LatestSchemaVersion() != s.SchemaVersion() {
-		t.Fatalf("schema version %d, latest %d, want 4", s.SchemaVersion(), LatestSchemaVersion())
+	if s.SchemaVersion() != 5 || LatestSchemaVersion() != s.SchemaVersion() {
+		t.Fatalf("schema version %d, latest %d, want 5", s.SchemaVersion(), LatestSchemaVersion())
 	}
 	for _, table := range []string{"chats", "chat_aliases", "lid_map", "contacts", "group_participants", "messages", "messages_fts", "history_blobs", "inbox", "sync_state",
-		"contact_names", "clients", "client_read_chats", "client_write_chats", "audit"} {
+		"contact_names", "clients", "client_read_chats", "client_write_chats", "audit", "media_refs", "revoke_tombstones"} {
 		if n := scalar[int](t, s, "SELECT count(*) FROM sqlite_schema WHERE name = ?", table); n != 1 {
 			t.Errorf("table %s missing", table)
 		}
@@ -35,7 +35,7 @@ func TestOpenCreatesTheSchemaOnce(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	again := openWith(t, opts)
-	if again.SchemaVersion() != 4 || scalar[int](t, again, "SELECT count(*) FROM messages") != 1 {
+	if again.SchemaVersion() != 5 || scalar[int](t, again, "SELECT count(*) FROM messages") != 1 {
 		t.Fatal("reopening changed the schema or the data")
 	}
 	if !again.Healthy() || again.Profile() != ProfileLocal {
@@ -47,7 +47,7 @@ func TestOpenRefusesANewerSchema(t *testing.T) {
 	opts := testOptions(t)
 	s := openWith(t, opts)
 	write(t, s, func(tx *Tx) error {
-		_, err := tx.q.ExecContext(tx.ctx, "PRAGMA user_version = 5")
+		_, err := tx.q.ExecContext(tx.ctx, "PRAGMA user_version = 6")
 		return err
 	})
 	if err := s.Close(); err != nil {
