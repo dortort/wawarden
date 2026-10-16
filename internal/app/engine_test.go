@@ -36,7 +36,7 @@ type stubClient struct {
 func newStubClient() *stubClient { return &stubClient{connected: make(chan struct{}, 16)} }
 
 func fixed(p engineParts) engineSource {
-	return func(context.Context, config.Config, *logx.Writer, *slog.Logger, *slog.Logger) (engineParts, error) {
+	return func(context.Context, config.Config, mediaParts, *logx.Writer, *slog.Logger, *slog.Logger) (engineParts, error) {
 		return p, nil
 	}
 }
@@ -343,7 +343,7 @@ func TestAFailingEngineSourceClosesTheArchive(t *testing.T) {
 	cfg := testConfig(t, "")
 	cfg.HistoryMaxBytes = config.DefaultHistoryMaxBytes
 	failure := errors.New("synthetic: no device store")
-	failing := func(context.Context, config.Config, *logx.Writer, *slog.Logger, *slog.Logger) (engineParts, error) {
+	failing := func(context.Context, config.Config, mediaParts, *logx.Writer, *slog.Logger, *slog.Logger) (engineParts, error) {
 		return engineParts{}, failure
 	}
 	if _, err := newAppWith(t.Context(), cfg, logx.NewWriter(io.Discard), nil, noClients{}, failing); !errors.Is(err, failure) {
