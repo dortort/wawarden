@@ -3,6 +3,7 @@ package ingest
 import (
 	"database/sql"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/dortort/wawarden/internal/policy"
@@ -35,6 +36,64 @@ const (
 	AddressingLID     Addressing = "lid"
 )
 
+type MediaKind string
+
+const (
+	MediaImage    MediaKind = "image"
+	MediaVideo    MediaKind = "video"
+	MediaAudio    MediaKind = "audio"
+	MediaDocument MediaKind = "document"
+	MediaSticker  MediaKind = "sticker"
+)
+
+var mediaVariants = map[MediaKind][]string{
+	MediaImage:    {""},
+	MediaVideo:    {"", "gif", "video_note"},
+	MediaAudio:    {"", "voice_note"},
+	MediaDocument: {""},
+	MediaSticker:  {"", "animated", "lottie"},
+}
+
+const (
+	maxMediaRef      = 2048
+	maxMediaDeclared = 2147483648
+	tombstoneLife    = 7 * 24 * time.Hour
+	tombstoneCap     = 100000
+)
+
+type Media struct {
+	Ref       string
+	Kind      MediaKind
+	Variant   string
+	Declared  int64
+	Retention time.Duration
+}
+
+func (m *Media) check() error {
+	variants, known := mediaVariants[m.Kind]
+	switch {
+	case len(m.Ref) == 0 || len(m.Ref) > maxMediaRef || !sealedRef.MatchString(m.Ref):
+		return invalid("media reference")
+	case !known:
+		return invalid("media kind")
+	case !slices.Contains(variants, m.Variant):
+		return invalid("media variant")
+	case m.Declared < 0 || m.Declared > maxMediaDeclared:
+		return invalid("declared media size")
+	case m.Retention <= 0:
+		return invalid("media reference retention")
+	}
+	return nil
+}
+
+func (m *Media) expiry(msg *Message) time.Time {
+	at := msg.Timestamp.Add(m.Retention)
+	if !msg.ExpiresAt.IsZero() && msg.ExpiresAt.Before(at) {
+		return msg.ExpiresAt
+	}
+	return at
+}
+
 type Ref struct {
 	seq  int64
 	chat policy.CanonicalChat
@@ -62,6 +121,7 @@ type Message struct {
 	Quote      *Quote
 	ExpiresAt  time.Time
 	Ingested   time.Time
+	Media      *Media
 }
 
 type Found struct {
@@ -76,21 +136,42 @@ type Found struct {
 
 const (
 	insertMessage = `INSERT INTO messages (chat_jid, id, sender_jid, from_me, origin, sender_alt, addressing_mode, ts, kind,
-		text, text_display, media_type, quoted_ref, quote_verified, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		text, text_display, media_type, quoted_ref, quote_verified, expires_at, revoked)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (chat_jid, id, sender_jid) DO NOTHING RETURNING seq`
-	selectSeq       = "SELECT seq FROM messages WHERE chat_jid = ? AND id = ? AND sender_jid = ?"
-	selectFound     = "SELECT seq, from_me, kind, text, revoked, edited_ts FROM messages WHERE chat_jid = ? AND id = ? AND sender_jid = ?"
-	selectChatOfSeq = "SELECT chat_jid FROM messages WHERE seq = ?"
-	selectForChange = "SELECT chat_jid, kind, text, revoked FROM messages WHERE seq = ?"
-	selectExpired   = "SELECT seq, text FROM messages WHERE expires_at <= ? AND text IS NOT NULL ORDER BY expires_at, seq LIMIT ?"
-	insertChat      = "INSERT INTO chats (jid, kind, last_ts) VALUES (?1, ?2, ?3) ON CONFLICT (jid) DO UPDATE SET last_ts = max(coalesce(last_ts, ?3), ?3)"
-	insertFTS       = "INSERT INTO messages_fts (rowid, text) VALUES (?, ?)"
-	deleteFTS       = "INSERT INTO messages_fts (messages_fts, rowid, text) VALUES ('delete', ?, ?)"
-	forgetText      = "UPDATE messages SET text = NULL, text_display = NULL WHERE seq = ?"
-	setEditedText   = "UPDATE messages SET text = ?, text_display = ?, edited_ts = ? WHERE seq = ?"
-	setRevoked      = "UPDATE messages SET revoked = 1 WHERE seq = ?"
-	setLastIngest   = "INSERT INTO sync_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value"
+	selectSeq          = "SELECT seq FROM messages WHERE chat_jid = ? AND id = ? AND sender_jid = ?"
+	selectFound        = "SELECT seq, from_me, kind, text, revoked, edited_ts FROM messages WHERE chat_jid = ? AND id = ? AND sender_jid = ?"
+	selectChatOfSeq    = "SELECT chat_jid FROM messages WHERE seq = ?"
+	selectForChange    = "SELECT chat_jid, kind, text, revoked FROM messages WHERE seq = ?"
+	selectExpired      = "SELECT seq, text FROM messages WHERE expires_at <= ? AND text IS NOT NULL ORDER BY expires_at, seq LIMIT ?"
+	selectExpiredMedia = "SELECT seq FROM messages WHERE expires_at <= ? AND media_type IS NOT NULL ORDER BY expires_at, seq LIMIT ?"
+	insertChat         = "INSERT INTO chats (jid, kind, last_ts) VALUES (?1, ?2, ?3) ON CONFLICT (jid) DO UPDATE SET last_ts = max(coalesce(last_ts, ?3), ?3)"
+	insertFTS          = "INSERT INTO messages_fts (rowid, text) VALUES (?, ?)"
+	deleteFTS          = "INSERT INTO messages_fts (messages_fts, rowid, text) VALUES ('delete', ?, ?)"
+	forgetText         = "UPDATE messages SET text = NULL, text_display = NULL WHERE seq = ?"
+	setEditedText      = "UPDATE messages SET text = ?, text_display = ?, edited_ts = ? WHERE seq = ?"
+	setRevoked         = "UPDATE messages SET revoked = 1 WHERE seq = ?"
+	forgetMediaType    = "UPDATE messages SET media_type = NULL WHERE seq = ?"
+	setLastIngest      = "INSERT INTO sync_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value"
+
+	insertMediaRef = "INSERT INTO media_refs (seq, ref, kind, variant, declared, expires_at, added_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+	fillMediaRef   = `INSERT INTO media_refs (seq, ref, kind, variant, declared, expires_at, added_at)
+		SELECT seq, ?2, ?3, ?4, ?5, min(?6, ts + ?7, coalesce(expires_at, ?6)), ?8 FROM messages
+		WHERE seq = ?1 AND kind = 'media' AND revoked = 0 AND min(?6, ts + ?7, coalesce(expires_at, ?6)) > ?8
+		ON CONFLICT (seq) DO NOTHING`
+	deleteMediaRef    = "DELETE FROM media_refs WHERE seq = ?"
+	expireMediaRef    = "UPDATE media_refs SET expires_at = ?1 WHERE seq = (SELECT seq FROM messages WHERE chat_jid = ?2 AND id = ?3 AND sender_jid = ?4) AND expires_at > ?1"
+	selectAllRefs     = "SELECT seq FROM media_refs ORDER BY seq LIMIT ?"
+	selectExpiredRefs = "SELECT seq FROM media_refs WHERE expires_at <= ? ORDER BY expires_at, seq LIMIT ?"
+	selectAgedRefs    = "SELECT seq FROM media_refs WHERE added_at <= ? ORDER BY added_at, seq LIMIT ?"
+
+	putTombstone = `INSERT INTO revoke_tombstones (chat_jid, id, sender_jid, expires_at) VALUES (?, ?, ?, ?)
+		ON CONFLICT (chat_jid, id, sender_jid) DO UPDATE SET expires_at = max(expires_at, excluded.expires_at)`
+	selectTombstone         = "SELECT EXISTS (SELECT 1 FROM revoke_tombstones WHERE chat_jid = ? AND id = ? AND sender_jid = ? AND expires_at > ?)"
+	deleteTombstone         = "DELETE FROM revoke_tombstones WHERE chat_jid = ? AND id = ? AND sender_jid = ?"
+	countTombstones         = "SELECT count(*) FROM revoke_tombstones"
+	selectExpiredTombstones = "SELECT chat_jid, id, sender_jid FROM revoke_tombstones WHERE expires_at <= ? ORDER BY expires_at LIMIT ?"
+	selectOldestTombstones  = "SELECT chat_jid, id, sender_jid FROM revoke_tombstones ORDER BY expires_at LIMIT ?"
 )
 
 func (m *Message) check() error {
@@ -113,6 +194,12 @@ func (m *Message) check() error {
 		return invalid("media type")
 	case m.Quote != nil && !m.Quote.Ref.Valid():
 		return invalid("quote")
+	case m.Media != nil && m.Kind != KindMedia:
+		return invalid("only a media message carries a media reference")
+	case m.Media != nil:
+		if err := m.Media.check(); err != nil {
+			return err
+		}
 	}
 	switch m.Kind {
 	case KindText, KindMedia, KindOther:
@@ -154,6 +241,13 @@ func (tx *Tx) insertMessage(m Message, ingested bool) (Ref, bool, error) {
 	if _, err := tx.q.ExecContext(tx.ctx, insertChat, chat.JID(), kindCode(chat.Kind()), ms(m.Timestamp)); err != nil {
 		return Ref{}, false, err
 	}
+	var revoked bool
+	if err := tx.q.QueryRowContext(tx.ctx, selectTombstone, chat.JID(), m.ID, sender.JID(), ms(m.Ingested)).Scan(&revoked); err != nil {
+		return Ref{}, false, err
+	}
+	if revoked {
+		m.Text, m.MediaType, m.Media = "", "", nil
+	}
 	text, display := nullString(m.Text), sql.NullString{}
 	if text.Valid {
 		display = sql.NullString{String: sanitize.Display(m.Text), Valid: true}
@@ -168,10 +262,17 @@ func (tx *Tx) insertMessage(m Message, ingested bool) (Ref, bool, error) {
 	}
 	var seq int64
 	err = tx.q.QueryRowContext(tx.ctx, insertMessage, chat.JID(), m.ID, sender.JID(), boolInt(m.FromMe), string(m.Origin), alt,
-		nullString(string(m.Addressing)), ms(m.Timestamp), string(m.Kind), text, display, nullString(m.MediaType), quoted, verified, expires).Scan(&seq)
+		nullString(string(m.Addressing)), ms(m.Timestamp), string(m.Kind), text, display, nullString(m.MediaType), quoted, verified, expires,
+		boolInt(revoked)).Scan(&seq)
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := tx.q.QueryRowContext(tx.ctx, selectSeq, chat.JID(), m.ID, sender.JID()).Scan(&seq); err != nil {
 			return Ref{}, false, err
+		}
+		if m.Media != nil {
+			if _, err := tx.q.ExecContext(tx.ctx, fillMediaRef, seq, m.Media.Ref, string(m.Media.Kind), nullString(m.Media.Variant), m.Media.Declared,
+				ms(m.Media.expiry(&m)), m.Media.Retention.Milliseconds(), ms(m.Ingested)); err != nil {
+				return Ref{}, false, err
+			}
 		}
 		return Ref{seq: seq, chat: chat}, false, nil
 	}
@@ -180,6 +281,19 @@ func (tx *Tx) insertMessage(m Message, ingested bool) (Ref, bool, error) {
 	}
 	if _, err := tx.q.ExecContext(tx.ctx, insertFTS, seq, text); err != nil {
 		return Ref{}, false, err
+	}
+	if revoked {
+		if _, err := tx.q.ExecContext(tx.ctx, deleteTombstone, chat.JID(), m.ID, sender.JID()); err != nil {
+			return Ref{}, false, err
+		}
+	}
+	if m.Media != nil {
+		if at := ms(m.Media.expiry(&m)); at > ms(m.Ingested) {
+			if _, err := tx.q.ExecContext(tx.ctx, insertMediaRef, seq, m.Media.Ref, string(m.Media.Kind), nullString(m.Media.Variant), m.Media.Declared,
+				at, ms(m.Ingested)); err != nil {
+				return Ref{}, false, err
+			}
+		}
 	}
 	if !ingested {
 		return Ref{seq: seq, chat: chat}, true, nil
@@ -206,15 +320,23 @@ func (tx *Tx) sameChat(ref Ref, chat policy.CanonicalChat) error {
 	return nil
 }
 
-func (r *Reader) ResolveInChat(chat policy.CanonicalChat, id string, sender policy.CanonicalChat) (Found, bool, error) {
+func (r *Reader) messageKey(chat policy.CanonicalChat, id string, sender policy.CanonicalChat) (policy.CanonicalChat, policy.CanonicalChat, error) {
 	if !messageID.MatchString(id) {
-		return Found{}, false, invalid("message id")
+		return policy.CanonicalChat{}, policy.CanonicalChat{}, invalid("message id")
 	}
 	chat, err := r.Canonical(chat)
 	if err != nil {
-		return Found{}, false, err
+		return policy.CanonicalChat{}, policy.CanonicalChat{}, err
 	}
 	if sender, err = r.canonicalUser(sender, "sender"); err != nil {
+		return policy.CanonicalChat{}, policy.CanonicalChat{}, err
+	}
+	return chat, sender, nil
+}
+
+func (r *Reader) ResolveInChat(chat policy.CanonicalChat, id string, sender policy.CanonicalChat) (Found, bool, error) {
+	chat, sender, err := r.messageKey(chat, id, sender)
+	if err != nil {
 		return Found{}, false, err
 	}
 	var seq int64
@@ -272,6 +394,14 @@ func (tx *Tx) forget(seq int64, old sql.NullString) error {
 	return err
 }
 
+func (tx *Tx) forgetMedia(seq int64) error {
+	if _, err := tx.q.ExecContext(tx.ctx, deleteMediaRef, seq); err != nil {
+		return err
+	}
+	_, err := tx.q.ExecContext(tx.ctx, forgetMediaType, seq)
+	return err
+}
+
 func (tx *Tx) ApplyEdit(ref Ref, text string, at time.Time) error {
 	if text == "" || at.IsZero() {
 		return invalid("edit")
@@ -301,6 +431,9 @@ func (tx *Tx) ApplyRevoke(ref Ref) error {
 		return err
 	}
 	if err := tx.forget(ref.seq, c.text); err != nil {
+		return err
+	}
+	if err := tx.forgetMedia(ref.seq); err != nil {
 		return err
 	}
 	if _, err := tx.q.ExecContext(tx.ctx, setRevoked, ref.seq); err != nil {
@@ -340,6 +473,131 @@ func (tx *Tx) PurgeExpired(now time.Time, limit int) (int, error) {
 		if _, err := tx.q.ExecContext(tx.ctx, insertFTS, e.seq, nil); err != nil {
 			return 0, err
 		}
+		if err := tx.forgetMedia(e.seq); err != nil {
+			return 0, err
+		}
 	}
-	return len(due), nil
+	if len(due) == limit {
+		return len(due), nil
+	}
+	media, err := seqs(tx.q.QueryContext(tx.ctx, selectExpiredMedia, ms(now), limit-len(due)))
+	if err != nil {
+		return 0, err
+	}
+	for _, seq := range media {
+		if err := tx.forgetMedia(seq); err != nil {
+			return 0, err
+		}
+	}
+	return len(due) + len(media), nil
+}
+
+func seqs(rows *sql.Rows, err error) ([]int64, error) {
+	if err != nil {
+		return nil, err
+	}
+	var out []int64
+	for rows.Next() {
+		var seq int64
+		if err := rows.Scan(&seq); err != nil {
+			return nil, errors.Join(err, rows.Close())
+		}
+		out = append(out, seq)
+	}
+	return out, errors.Join(rows.Err(), rows.Close())
+}
+
+type tombstoneKey struct{ chat, id, sender string }
+
+func tombstoneKeys(rows *sql.Rows, err error) ([]tombstoneKey, error) {
+	if err != nil {
+		return nil, err
+	}
+	var out []tombstoneKey
+	for rows.Next() {
+		var k tombstoneKey
+		if err := rows.Scan(&k.chat, &k.id, &k.sender); err != nil {
+			return nil, errors.Join(err, rows.Close())
+		}
+		out = append(out, k)
+	}
+	return out, errors.Join(rows.Err(), rows.Close())
+}
+
+func (tx *Tx) PutRevokeTombstone(chat policy.CanonicalChat, id string, sender policy.CanonicalChat, at time.Time) error {
+	if at.IsZero() {
+		return invalid("time")
+	}
+	chat, sender, err := tx.messageKey(chat, id, sender)
+	if err != nil {
+		return err
+	}
+	_, err = tx.q.ExecContext(tx.ctx, putTombstone, chat.JID(), id, sender.JID(), ms(at.Add(tombstoneLife)))
+	return err
+}
+
+func (tx *Tx) ExpireMediaRef(chat policy.CanonicalChat, id string, sender policy.CanonicalChat, now time.Time) error {
+	if now.IsZero() {
+		return invalid("time")
+	}
+	chat, sender, err := tx.messageKey(chat, id, sender)
+	if err != nil {
+		return err
+	}
+	_, err = tx.q.ExecContext(tx.ctx, expireMediaRef, ms(now), chat.JID(), id, sender.JID())
+	return err
+}
+
+func (tx *Tx) PurgeMediaRefs(now time.Time, retention time.Duration, on bool, limit int) (int, error) {
+	if now.IsZero() || retention <= 0 || limit <= 0 {
+		return 0, invalid("purge")
+	}
+	removed := 0
+	refs := func(due []int64, err error) error {
+		if err != nil {
+			return err
+		}
+		for _, seq := range due {
+			if _, err := tx.q.ExecContext(tx.ctx, deleteMediaRef, seq); err != nil {
+				return err
+			}
+		}
+		removed += len(due)
+		return nil
+	}
+	tombstones := func(due []tombstoneKey, err error) error {
+		if err != nil {
+			return err
+		}
+		for _, k := range due {
+			if _, err := tx.q.ExecContext(tx.ctx, deleteTombstone, k.chat, k.id, k.sender); err != nil {
+				return err
+			}
+		}
+		removed += len(due)
+		return nil
+	}
+	var err error
+	if on {
+		err = refs(seqs(tx.q.QueryContext(tx.ctx, selectExpiredRefs, ms(now), limit)))
+		if err == nil && removed < limit {
+			err = refs(seqs(tx.q.QueryContext(tx.ctx, selectAgedRefs, ms(now.Add(-retention)), limit-removed)))
+		}
+	} else {
+		err = refs(seqs(tx.q.QueryContext(tx.ctx, selectAllRefs, limit)))
+	}
+	if err == nil && removed < limit {
+		err = tombstones(tombstoneKeys(tx.q.QueryContext(tx.ctx, selectExpiredTombstones, ms(now), limit-removed)))
+	}
+	var count int
+	if err == nil && removed < limit {
+		err = tx.q.QueryRowContext(tx.ctx, countTombstones).Scan(&count)
+	}
+	if err == nil && count > tombstoneCap {
+		err = tombstones(tombstoneKeys(tx.q.QueryContext(tx.ctx, selectOldestTombstones, min(limit-removed, count-tombstoneCap))))
+	}
+	if err != nil {
+		return 0, err
+	}
+	return removed, nil
 }
