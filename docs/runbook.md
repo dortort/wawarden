@@ -76,6 +76,13 @@ clients depend on the service
 - `WAWARDEN_SEND_PER_CLIENT_PER_MINUTE` (10 by default and at most) and
   `WAWARDEN_SEND_GLOBAL_PER_HOUR` (30 by default, 60 at most). Lower is safer
   for the account ([ban risk](ban-risk.md)).
+- `WAWARDEN_MEDIA_MAX_BYTES`, `0` by default, which keeps attachment downloads
+  off. Above 0 (`104857600`, 100 MiB, is the suggested value), the service
+  keeps a sealed reference to each attachment up to that size for
+  `WAWARDEN_MEDIA_REF_RETENTION_DAYS` (30 by default); this build fetches no
+  attachment yet. At or below `16777216` (16 MiB), no attachment byte will be
+  written to disk. Give the container `--memory=768m` with downloads on.
+  Setting it back to 0 removes every stored reference within a minute.
 
 Keep a copy of `keys/master` off the host once the first start has created it.
 Do the same for `keys/retired/` after each
@@ -434,7 +441,9 @@ backup as above, with the service's `keys/master` and `keys/retired/`:
 A release brings the archive and the device store forward to its schema. A
 release refuses an archive written by a newer one (`archive_schema_newer`). So
 going back means [restoring](#restoring-a-backup) the backup taken before the
-upgrade into the older release.
+upgrade into the older release. A release that predates attachment downloads
+also refuses to start while any `WAWARDEN_MEDIA_*` variable is set
+(`unknown_variable`): remove them before going back to one.
 
 ### Before any upgrade
 
@@ -561,7 +570,7 @@ line on standard output and exits with a code
 | Exit code | Event | What it means |
 |---|---|---|
 | `2` | `startup_refused` | A check failed. `reason` gives the code, and `error` names the variable or the file in the data directory. |
-| `1` | `startup_failed` | The configuration was accepted, but the archive or the device store could not be opened or brought up to date, a lock was not acquired within five minutes, or a listener could not be opened. |
+| `1` | `startup_failed` | The configuration was accepted, but the archive or the device store could not be opened or brought up to date, a lock was not acquired within five minutes, the files that an earlier run left in `spool/` could not be removed, or a listener could not be opened. |
 
 Read the line in the service's output: `journalctl -u wawarden` under systemd,
 `docker logs <container>` for a container. Then:
@@ -588,6 +597,10 @@ Common refusals:
 | `plaintext_admin_token` | `WAWARDEN_ADMIN_TOKEN` is set. Give the service the hash only. |
 | `running_as_root` | The service runs as root. Run it as its own user. |
 | `data_dir_foreign_owner`, `data_dir_permissions` | The data directory is not owned by the service's user, or its mode is not exactly `0700`. |
+| `spool_dir_foreign_owner`, `spool_dir_permissions` | `spool/` in the data directory is not owned by the service's user, or its mode is not exactly `0700`. Fix its owner or mode, or delete it while the service is stopped: it holds nothing that outlives a run. |
+| `media_max_bytes_invalid` | `WAWARDEN_MEDIA_MAX_BYTES` is not `0` or a whole number of bytes up to 2147483648, such as `100MiB` written for `104857600`. |
+| `media_global_bytes_per_hour_invalid` | `WAWARDEN_MEDIA_GLOBAL_BYTES_PER_HOUR` is below `WAWARDEN_MEDIA_MAX_BYTES`, or outside 1 to 68719476736. |
+| `media_ref_retention_days_invalid`, `media_per_client_per_minute_invalid`, `media_global_per_hour_invalid` | An attachment setting is outside its range (1 to 365 days, 1 to 30 a minute, 1 to 600 an hour). The unsafe caps switches never lift these. |
 | `archive_schema_newer` | The archive was written by a newer release. |
 
 ## Disconnect reasons
