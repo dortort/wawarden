@@ -17,7 +17,7 @@ import (
 
 func translated(t *testing.T, evt any) engine.Event {
 	t.Helper()
-	ev, ok := translate(evt)
+	ev, ok := translate(evt, capture{})
 	if !ok {
 		t.Fatalf("%T was not translated", evt)
 	}
@@ -240,11 +240,11 @@ func TestFixtureTheRevokeZeroValueTrap(t *testing.T) {
 	if untyped.Message.GetProtocolMessage().GetType() != waE2E.ProtocolMessage_REVOKE {
 		t.Fatal("the library no longer reads an absent type as REVOKE; this trap needs another look")
 	}
-	if ev, ok := translate(untyped); ok {
+	if ev, ok := translate(untyped, capture{}); ok {
 		t.Fatalf("a protocol message without a type became %+v", ev)
 	}
 	other := live(t, peer, peer, "3EB0Z2", &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{Type: waE2E.ProtocolMessage_EPHEMERAL_SETTING.Enum(), EphemeralExpiration: proto.Uint32(86400)}})
-	if ev, ok := translate(other); ok {
+	if ev, ok := translate(other, capture{}); ok {
 		t.Fatalf("a protocol message of another type became %+v", ev)
 	}
 	plain := asMessage(t, textMessage(t, peer, peer, "3EB0Z3", "not a revoke"))
@@ -275,11 +275,11 @@ func TestMessagesWithoutContentAreAcknowledgedAndDropped(t *testing.T) {
 		"context only":              {MessageContextInfo: &waE2E.MessageContextInfo{MessageSecret: []byte("secret")}},
 		"empty":                     {},
 	} {
-		if ev, ok := translate(live(t, group, peer, "3EB0C1", raw)); ok {
+		if ev, ok := translate(live(t, group, peer, "3EB0C1", raw), capture{}); ok {
 			t.Errorf("%s became %+v", name, ev)
 		}
 	}
-	if ev, ok := translate(&events.Message{Info: types.MessageInfo{ID: "3EB0C2"}}); ok {
+	if ev, ok := translate(&events.Message{Info: types.MessageInfo{ID: "3EB0C2"}}, capture{}); ok {
 		t.Fatalf("a message without content became %+v", ev)
 	}
 	got := asMessage(t, live(t, peer, peer, "3EB0C3", &waE2E.Message{LocationMessage: &waE2E.LocationMessage{DegreesLatitude: proto.Float64(1)}}))
@@ -327,7 +327,7 @@ func TestConnectionAndPairingEventsTranslate(t *testing.T) {
 		}
 	}
 	for _, ignored := range []any{&events.StreamError{Code: "999"}, &events.Receipt{}, &events.Presence{}, &events.HistorySync{}, &events.QR{Codes: []string{"2@x"}}} {
-		if ev, ok := translate(ignored); ok {
+		if ev, ok := translate(ignored, capture{}); ok {
 			t.Errorf("%T became %+v", ignored, ev)
 		}
 	}
@@ -345,7 +345,7 @@ func TestGroupEventsTranslate(t *testing.T) {
 	if !ok || !reflect.DeepEqual(change, want) {
 		t.Fatalf("group change = %+v, want %+v", change, want)
 	}
-	if ev, ok := translate(&events.GroupInfo{JID: group, Announce: &types.GroupAnnounce{IsAnnounce: true}}); ok {
+	if ev, ok := translate(&events.GroupInfo{JID: group, Announce: &types.GroupAnnounce{IsAnnounce: true}}, capture{}); ok {
 		t.Fatalf("a group change the archive does not keep became %+v", ev)
 	}
 	joined, ok := translated(t, &events.JoinedGroup{GroupInfo: types.GroupInfo{
@@ -379,7 +379,7 @@ func TestContactEventsTranslate(t *testing.T) {
 		"no action":     {JID: peer, Timestamp: epoch},
 		"no identifier": contactEvent(t, types.EmptyJID, full),
 	} {
-		if ev, ok := translate(ignored); ok {
+		if ev, ok := translate(ignored, capture{}); ok {
 			t.Errorf("a contact event with %s became %+v", name, ev)
 		}
 	}

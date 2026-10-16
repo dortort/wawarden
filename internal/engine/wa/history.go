@@ -29,7 +29,7 @@ var (
 	errHistoryRef = errors.New("wa: the history notification lacks a download path, media key or hash")
 )
 
-func decodeHistory(cli *whatsmeow.Client, blob []byte) (engine.History, error) {
+func decodeHistory(cli *whatsmeow.Client, blob []byte, mc capture) (engine.History, error) {
 	var h waHistorySync.HistorySync
 	if err := historyOptions.Unmarshal(blob, &h); err != nil {
 		return engine.History{}, fmt.Errorf("wa: decode the history blob: %w", err)
@@ -47,14 +47,14 @@ func decodeHistory(cli *whatsmeow.Client, blob []byte) (engine.History, error) {
 		if pn, lid := c.GetPnJID(), c.GetLidJID(); pn != "" && lid != "" {
 			out.LIDMappings = append(out.LIDMappings, engine.LIDMapping{PN: pn, LID: lid})
 		}
-		if conv, ok := conversation(cli, c); ok {
+		if conv, ok := conversation(cli, c, mc); ok {
 			out.Conversations = append(out.Conversations, conv)
 		}
 	}
 	return out, nil
 }
 
-func conversation(cli *whatsmeow.Client, c *waHistorySync.Conversation) (engine.Conversation, bool) {
+func conversation(cli *whatsmeow.Client, c *waHistorySync.Conversation, mc capture) (engine.Conversation, bool) {
 	chat, err := types.ParseJID(c.GetID())
 	if err != nil || chat.User == "" || chat.Server == "" {
 		return engine.Conversation{}, false
@@ -68,14 +68,14 @@ func conversation(cli *whatsmeow.Client, c *waHistorySync.Conversation) (engine.
 		}
 	}
 	for _, hm := range c.GetMessages() {
-		if m, ok := historyMessage(cli, chat, hm.GetMessage()); ok {
+		if m, ok := historyMessage(cli, chat, hm.GetMessage(), mc); ok {
 			conv.Messages = append(conv.Messages, m)
 		}
 	}
 	return conv, true
 }
 
-func historyMessage(cli *whatsmeow.Client, chat types.JID, web *waWeb.WebMessageInfo) (engine.Message, bool) {
+func historyMessage(cli *whatsmeow.Client, chat types.JID, web *waWeb.WebMessageInfo, mc capture) (engine.Message, bool) {
 	if web.GetMessage() == nil {
 		return engine.Message{}, false
 	}
@@ -96,7 +96,7 @@ func historyMessage(cli *whatsmeow.Client, chat types.JID, web *waWeb.WebMessage
 	if m.Expiration == 0 {
 		m.Expiration = historyExpiration(web, m.Timestamp)
 	}
-	return m, true
+	return mc.attach(m, evt.Message, evt.IsViewOnce), true
 }
 
 func historyExpiration(web *waWeb.WebMessageInfo, sent time.Time) time.Duration {

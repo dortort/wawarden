@@ -2,6 +2,10 @@ package wa
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -137,4 +141,101 @@ func onDemandNotification(t testing.TB, sender types.JID, id, request string, in
 	n.SyncType = waE2E.HistorySyncType_ON_DEMAND.Enum()
 	n.PeerDataRequestSessionID = proto.String(request)
 	return evt
+}
+
+var errSyntheticSeal = errors.New("synthetic: the sealer refuses")
+
+type fakeSealer struct{ refuse bool }
+
+func (s fakeSealer) SealMedia(id string, pt []byte) (string, error) {
+	if s.refuse {
+		return "", errSyntheticSeal
+	}
+	return "sealed." + hex.EncodeToString([]byte(id)) + "." + hex.EncodeToString(pt), nil
+}
+
+func (fakeSealer) OpenMedia(id, text string) ([]byte, error) {
+	body, ok := strings.CutPrefix(text, "sealed."+hex.EncodeToString([]byte(id))+".")
+	if !ok {
+		return nil, errSyntheticSeal
+	}
+	return hex.DecodeString(body)
+}
+
+func randomBytes(n int64) []byte {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return b
+}
+
+type mediaFields struct {
+	path          string
+	key, sha, enc []byte
+	length        int64
+}
+
+func (f mediaFields) fileLength() *uint64 {
+	if f.length < 0 {
+		return nil
+	}
+	return proto.Uint64(uint64(f.length))
+}
+
+func syntheticMedia(length int64) mediaFields {
+	return mediaFields{path: "/example/" + hex.EncodeToString(randomBytes(8)), key: randomBytes(32), sha: randomBytes(32), enc: randomBytes(32), length: length}
+}
+
+type mediaFixture struct {
+	name     string
+	kind     string
+	variant  string
+	build    func(mediaFields) *waE2E.Message
+	viewOnce func(*waE2E.Message)
+}
+
+var mediaFixtures = []mediaFixture{
+	{name: "an image", kind: "image", build: func(f mediaFields) *waE2E.Message {
+		return &waE2E.Message{ImageMessage: &waE2E.ImageMessage{Mimetype: proto.String("image/jpeg"), Caption: proto.String("synthetic caption"),
+			DirectPath: proto.String(f.path), MediaKey: f.key, FileSHA256: f.sha, FileEncSHA256: f.enc, FileLength: f.fileLength()}}
+	}, viewOnce: func(m *waE2E.Message) { m.ImageMessage.ViewOnce = proto.Bool(true) }},
+	{name: "a video", kind: "video", build: func(f mediaFields) *waE2E.Message {
+		return &waE2E.Message{VideoMessage: &waE2E.VideoMessage{Mimetype: proto.String("video/mp4"),
+			DirectPath: proto.String(f.path), MediaKey: f.key, FileSHA256: f.sha, FileEncSHA256: f.enc, FileLength: f.fileLength()}}
+	}, viewOnce: func(m *waE2E.Message) { m.VideoMessage.ViewOnce = proto.Bool(true) }},
+	{name: "a GIF", kind: "video", variant: "gif", build: func(f mediaFields) *waE2E.Message {
+		return &waE2E.Message{VideoMessage: &waE2E.VideoMessage{Mimetype: proto.String("video/mp4"), GifPlayback: proto.Bool(true),
+			DirectPath: proto.String(f.path), MediaKey: f.key, FileSHA256: f.sha, FileEncSHA256: f.enc, FileLength: f.fileLength()}}
+	}, viewOnce: func(m *waE2E.Message) { m.VideoMessage.ViewOnce = proto.Bool(true) }},
+	{name: "a video note", kind: "video", variant: "video_note", build: func(f mediaFields) *waE2E.Message {
+		return &waE2E.Message{PtvMessage: &waE2E.VideoMessage{Mimetype: proto.String("video/mp4"),
+			DirectPath: proto.String(f.path), MediaKey: f.key, FileSHA256: f.sha, FileEncSHA256: f.enc, FileLength: f.fileLength()}}
+	}, viewOnce: func(m *waE2E.Message) { m.PtvMessage.ViewOnce = proto.Bool(true) }},
+	{name: "an audio", kind: "audio", build: func(f mediaFields) *waE2E.Message {
+		return &waE2E.Message{AudioMessage: &waE2E.AudioMessage{Mimetype: proto.String("audio/mpeg"),
+			DirectPath: proto.String(f.path), MediaKey: f.key, FileSHA256: f.sha, FileEncSHA256: f.enc, FileLength: f.fileLength()}}
+	}, viewOnce: func(m *waE2E.Message) { m.AudioMessage.ViewOnce = proto.Bool(true) }},
+	{name: "a voice note", kind: "audio", variant: "voice_note", build: func(f mediaFields) *waE2E.Message {
+		return &waE2E.Message{AudioMessage: &waE2E.AudioMessage{Mimetype: proto.String("audio/ogg; codecs=opus"), PTT: proto.Bool(true),
+			DirectPath: proto.String(f.path), MediaKey: f.key, FileSHA256: f.sha, FileEncSHA256: f.enc, FileLength: f.fileLength()}}
+	}, viewOnce: func(m *waE2E.Message) { m.AudioMessage.ViewOnce = proto.Bool(true) }},
+	{name: "a document", kind: "document", build: func(f mediaFields) *waE2E.Message {
+		return &waE2E.Message{DocumentMessage: &waE2E.DocumentMessage{Mimetype: proto.String("application/pdf"), FileName: proto.String("synthetic.pdf"),
+			DirectPath: proto.String(f.path), MediaKey: f.key, FileSHA256: f.sha, FileEncSHA256: f.enc, FileLength: f.fileLength()}}
+	}},
+	{name: "a sticker", kind: "sticker", build: func(f mediaFields) *waE2E.Message {
+		return &waE2E.Message{StickerMessage: &waE2E.StickerMessage{Mimetype: proto.String("image/webp"),
+			DirectPath: proto.String(f.path), MediaKey: f.key, FileSHA256: f.sha, FileEncSHA256: f.enc, FileLength: f.fileLength()}}
+	}},
+	{name: "an animated sticker", kind: "sticker", variant: "animated", build: func(f mediaFields) *waE2E.Message {
+		return &waE2E.Message{StickerMessage: &waE2E.StickerMessage{Mimetype: proto.String("image/webp"), IsAnimated: proto.Bool(true),
+			DirectPath: proto.String(f.path), MediaKey: f.key, FileSHA256: f.sha, FileEncSHA256: f.enc, FileLength: f.fileLength()}}
+	}},
+	{name: "a Lottie sticker", kind: "sticker", variant: "lottie", build: func(f mediaFields) *waE2E.Message {
+		return &waE2E.Message{StickerMessage: &waE2E.StickerMessage{Mimetype: proto.String("application/was"), IsAnimated: proto.Bool(true), IsLottie: proto.Bool(true),
+			DirectPath: proto.String(f.path), MediaKey: f.key, FileSHA256: f.sha, FileEncSHA256: f.enc, FileLength: f.fileLength()}}
+	}},
+}
+
+func viewOnceWrapped(m *waE2E.Message) *waE2E.Message {
+	return &waE2E.Message{ViewOnceMessageV2: &waE2E.FutureProofMessage{Message: m}}
 }

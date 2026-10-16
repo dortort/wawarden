@@ -137,6 +137,39 @@ func TestNewRefusesIncompleteOptions(t *testing.T) {
 	}
 }
 
+func TestNewRefusesIncompleteMediaOptions(t *testing.T) {
+	w, _ := newWriter()
+	full := Options{Device: &store.Device{}, Devices: &freshDevices{}, HistoryMaxBytes: 1, Writer: w, Alerts: logx.New(w, slog.LevelWarn),
+		MediaMaxBytes: 2 << 30, MediaRefRetention: time.Hour, MediaSealer: fakeSealer{}}
+	for name, change := range map[string]func(*Options){
+		"a negative cap":                   func(o *Options) { o.MediaMaxBytes = -1 },
+		"a cap over 2 GiB":                 func(o *Options) { o.MediaMaxBytes = (2 << 30) + 1 },
+		"no sealer":                        func(o *Options) { o.MediaSealer = nil },
+		"no retention":                     func(o *Options) { o.MediaRefRetention = 0 },
+		"a negative retention":             func(o *Options) { o.MediaRefRetention = -time.Hour },
+		"no sealer for a cap of 1 byte":    func(o *Options) { o.MediaSealer = nil; o.MediaMaxBytes = 1 },
+		"no retention for a cap of 1 byte": func(o *Options) { o.MediaRefRetention = 0; o.MediaMaxBytes = 1 },
+	} {
+		opts := full
+		change(&opts)
+		if _, err := New(opts); !errors.Is(err, errMediaOptions) {
+			t.Errorf("New with %s = %v, want errMediaOptions", name, err)
+		}
+	}
+	for name, change := range map[string]func(*Options){
+		"the largest cap": func(*Options) {},
+		"downloads off and nothing else set": func(o *Options) {
+			*o = Options{Device: o.Device, Devices: o.Devices, HistoryMaxBytes: 1, Writer: o.Writer, Alerts: o.Alerts}
+		},
+	} {
+		opts := full
+		change(&opts)
+		if _, err := New(opts); err != nil {
+			t.Errorf("New with %s = %v", name, err)
+		}
+	}
+}
+
 func TestTheClientIsBuiltForASupervisedDesktopCompanion(t *testing.T) {
 	r := newRig(t, pairedDevice())
 	if got, want := store.DeviceProps.GetOs(), deviceName(runtime.GOOS); got != want {

@@ -23,10 +23,10 @@ const (
 	messageDepth = 24
 )
 
-func translate(evt any) (engine.Event, bool) {
+func translate(evt any, mc capture) (engine.Event, bool) {
 	switch e := evt.(type) {
 	case *events.Message:
-		return message(e)
+		return message(e, mc)
 	case *events.GroupInfo:
 		return groupChange(e)
 	case *events.JoinedGroup:
@@ -60,7 +60,7 @@ func translate(evt any) (engine.Event, bool) {
 	return nil, false
 }
 
-func message(e *events.Message) (engine.Event, bool) {
+func message(e *events.Message, mc capture) (engine.Event, bool) {
 	if web := e.SourceWebMsg; web != nil {
 		restored := *e
 		restored.Info.ID = web.GetKey().GetID()
@@ -76,7 +76,7 @@ func message(e *events.Message) (engine.Event, bool) {
 	if !ok {
 		return nil, false
 	}
-	return m, true
+	return mc.attach(m, e.Message, e.IsViewOnce), true
 }
 
 func historyRef(id string, n *waE2E.HistorySyncNotification) engine.HistoryRef {
@@ -133,8 +133,8 @@ func content(info types.MessageInfo, m *waE2E.Message) (engine.Message, bool) {
 		out.Kind, out.Target = engine.KindPollUpdate, key(m.GetPollUpdateMessage().GetPollCreationMessageKey())
 		return out, true
 	}
-	if kind, mime, ok := media(m); ok {
-		out.Kind, out.MediaType, out.Text = engine.KindMedia, mediaType(mime, kind), text(m)
+	if part, ok := mediaOf(m); ok {
+		out.Kind, out.MediaType, out.Text = engine.KindMedia, mediaType(part.item.GetMimetype(), string(part.kind)), text(m)
 	} else if m.Conversation != nil || m.GetExtendedTextMessage() != nil {
 		out.Kind, out.Text = engine.KindText, text(m)
 	} else if hasContent(m) {
@@ -195,22 +195,54 @@ func text(m *waE2E.Message) string {
 	return ""
 }
 
-func media(m *waE2E.Message) (kind, mime string, ok bool) {
+type attachment interface {
+	GetMimetype() string
+	GetDirectPath() string
+	GetMediaKey() []byte
+	GetFileSHA256() []byte
+	GetFileEncSHA256() []byte
+	GetFileLength() uint64
+}
+
+type mediaPart struct {
+	kind     engine.MediaKind
+	variant  string
+	viewOnce bool
+	item     attachment
+}
+
+func mediaOf(m *waE2E.Message) (mediaPart, bool) {
 	switch {
 	case m.GetImageMessage() != nil:
-		return "image", m.GetImageMessage().GetMimetype(), true
+		im := m.GetImageMessage()
+		return mediaPart{kind: engine.MediaImage, viewOnce: im.GetViewOnce(), item: im}, true
 	case m.GetVideoMessage() != nil:
-		return "video", m.GetVideoMessage().GetMimetype(), true
+		v := m.GetVideoMessage()
+		return mediaPart{kind: engine.MediaVideo, variant: when(v.GetGifPlayback(), engine.VariantGIF), viewOnce: v.GetViewOnce(), item: v}, true
 	case m.GetPtvMessage() != nil:
-		return "video", m.GetPtvMessage().GetMimetype(), true
+		v := m.GetPtvMessage()
+		return mediaPart{kind: engine.MediaVideo, variant: engine.VariantVideoNote, viewOnce: v.GetViewOnce(), item: v}, true
 	case m.GetAudioMessage() != nil:
-		return "audio", m.GetAudioMessage().GetMimetype(), true
+		a := m.GetAudioMessage()
+		return mediaPart{kind: engine.MediaAudio, variant: when(a.GetPTT(), engine.VariantVoiceNote), viewOnce: a.GetViewOnce(), item: a}, true
 	case m.GetDocumentMessage() != nil:
-		return "document", m.GetDocumentMessage().GetMimetype(), true
+		return mediaPart{kind: engine.MediaDocument, item: m.GetDocumentMessage()}, true
 	case m.GetStickerMessage() != nil:
-		return "sticker", m.GetStickerMessage().GetMimetype(), true
+		s := m.GetStickerMessage()
+		variant := when(s.GetIsAnimated(), engine.VariantAnimated)
+		if s.GetIsLottie() {
+			variant = engine.VariantLottie
+		}
+		return mediaPart{kind: engine.MediaSticker, variant: variant, item: s}, true
 	}
-	return "", "", false
+	return mediaPart{}, false
+}
+
+func when(set bool, variant string) string {
+	if set {
+		return variant
+	}
+	return ""
 }
 
 func mediaType(mime, kind string) string {
