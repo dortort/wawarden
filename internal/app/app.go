@@ -154,6 +154,9 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 	if err := backup.RemoveStaging(cfg.DataDir); err != nil {
 		return nil, errors.Join(fmt.Errorf("app: remove the staging of an interrupted backup: %w", err), archive.Close())
 	}
+	if _, err := purgeSpool(cfg.DataDir); err != nil {
+		return nil, errors.Join(err, archive.Close())
+	}
 	logger.Info("archive opened", slog.String("event", "archive_opened"),
 		slog.Int("schema_version", archive.SchemaVersion()), slog.String("profile", string(archive.Profile())),
 		slog.Bool("ofd_locking", archive.OFDLocking()), slog.Int("recent_starts", starts))
