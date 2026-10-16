@@ -367,8 +367,10 @@ func TestDeliveryNeverStreamsWithoutADeadlineOrAnAuditRow(t *testing.T) {
 	})
 	t.Run("a writer without an audit row", func(t *testing.T) {
 		d := newDelivery(t, 3000)
-		deliver(d.writer, d.request(http.MethodGet, nil), d.attachment(), d.clock.now)
+		_, r := audited(httptest.NewRecorder(), d.request(http.MethodGet, nil), d.audit, d.failures.record, fixedNow)
+		deliver(d.writer, r, d.attachment(), d.clock.now)
 		requireError(t, d.writer.ResponseRecorder, http.StatusInternalServerError, codeInternal)
+		requireNoDeliveryHeaders(t, d.writer.Header())
 		if got := d.body.reads(); got != 0 || len(d.writer.deadlines) != 0 {
 			t.Fatalf("ReadAt calls = %d and deadlines %v, want neither", got, d.writer.deadlines)
 		}
