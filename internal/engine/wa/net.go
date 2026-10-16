@@ -396,7 +396,9 @@ func (j *mediaJob) settle(reserved int64, n int) {
 		j.activity++
 	}
 	j.mu.Unlock()
-	j.nudge()
+	if n > 0 {
+		j.nudge()
+	}
 }
 
 func (j *mediaJob) screen(resp *http.Response) error {
