@@ -711,6 +711,23 @@ The [audit anchor](observability.md#audit-retention)'s HMAC is HMAC-SHA256 under
 3. the key id, with a presence byte and its length;
 4. the row's HMAC.
 
+### Media reference
+
+A media reference is the WhatsApp adapter's attachment descriptor sealed with
+AES-256-GCM under the `media-ref` key derived from the
+[master key](configuration.md#master-key). Its text is strict unpadded
+base64url, at most 2048 characters, of, in this order:
+
+1. the version byte `0x01` and the 4-byte id of the sealing key;
+2. a 12-byte random nonce;
+3. the sealed descriptor and its 16-byte tag.
+
+The additional data is the version byte and the key id, then the message id and
+the label `media`, each preceded by its length as an unsigned varint. A
+reference opens only for the message id it was sealed for, under the current
+key or a retired one; only the current key seals. The cap leaves room for a
+descriptor of at most 1503 bytes.
+
 ## Design rationale
 
 ### Write chats must be readable
