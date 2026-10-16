@@ -129,6 +129,7 @@ func TestCaptureSealsEveryKindAndVariant(t *testing.T) {
 			f := syntheticMedia(4096)
 			raw := fx.build(f)
 			got := path.read(t, c, "3EB0M1", raw)
+			noMediaSecrets(t, fx.name+" on the "+path.name+" path", got, []byte(f.path), f.key, f.sha, f.enc)
 			if got.MediaRef == "" || got.MediaKind != engine.MediaKind(fx.kind) || got.MediaVariant != fx.variant || got.MediaBytes != 4096 {
 				t.Errorf("%s on the %s path captured %q, %q, %d, want a reference, %q, %q, 4096", fx.name, path.name, got.MediaKind, got.MediaVariant, got.MediaBytes, fx.kind, fx.variant)
 				continue
@@ -139,7 +140,9 @@ func TestCaptureSealsEveryKindAndVariant(t *testing.T) {
 				t.Errorf("%s on the %s path sealed %+v, want %+v", fx.name, path.name, d, want)
 			}
 			off := mediaClient(t, epoch, func(o *Options) { o.MediaMaxBytes = 0 })
-			if plain := path.read(t, off, "3EB0M1", raw); !reflect.DeepEqual(withoutReference(got), plain) {
+			plain := path.read(t, off, "3EB0M1", raw)
+			noMediaSecrets(t, fx.name+" on the "+path.name+" path without capture", plain, []byte(f.path), f.key, f.sha, f.enc)
+			if !reflect.DeepEqual(withoutReference(got), plain) {
 				t.Errorf("%s on the %s path = %+v with capture, %+v without: the capture changed more than its four fields", fx.name, path.name, got, plain)
 			}
 		}
