@@ -477,6 +477,7 @@ func TestFetchMediaMapsFailuresToSentinels(t *testing.T) {
 		"a MAC mismatch":             {then: returns(whatsmeow.ErrInvalidMediaHMAC), want: engine.ErrMediaFailed},
 		"a short file":               {then: returns(whatsmeow.ErrTooShortFile), want: engine.ErrMediaFailed},
 		"no connection":              {then: returns(whatsmeow.ErrNotConnected), want: engine.ErrNotConnected},
+		"no client":                  {then: returns(whatsmeow.ErrClientIsNil), want: engine.ErrNotConnected},
 		"a stalled request":          {then: returns(errMediaStall), want: engine.ErrMediaFailed},
 		"the job's deadline":         {then: ended(errMediaDeadline), want: engine.ErrMediaFailed},
 		"the job's byte budget":      {then: ended(errMediaEgress), want: engine.ErrMediaFailed},
@@ -582,6 +583,21 @@ func TestFetchMediaOnDiskReleasesTheSpoolOnFailure(t *testing.T) {
 		t.Fatal("the disk staging returned other bytes than the seam wrote")
 	}
 	staged.Erase()
+}
+
+func TestFetchMediaThroughTheProductionSeamNeedsAConnection(t *testing.T) {
+	c := mediaClient(t, epoch.Add(time.Hour))
+	m, _ := captured(t, c, mediaFixtures[0], 64)
+	c.fetch = downloadMediaFile
+	if staged, err := c.FetchMedia(t.Context(), request(m)); err != engine.ErrNotConnected || staged != nil {
+		t.Fatalf("FetchMedia without a connection = %v, %v, want exactly engine.ErrNotConnected and nothing staged", staged, err)
+	}
+	c.mu.Lock()
+	c.cli = nil
+	c.mu.Unlock()
+	if staged, err := c.FetchMedia(t.Context(), request(m)); err != engine.ErrNotConnected || staged != nil {
+		t.Fatalf("FetchMedia without a client = %v, %v, want exactly engine.ErrNotConnected and nothing staged", staged, err)
+	}
 }
 
 func TestTheMediaDownloaderRefusesAnEmptySource(t *testing.T) {
