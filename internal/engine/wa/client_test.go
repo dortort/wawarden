@@ -240,15 +240,19 @@ func TestEveryHTTPClientIsBoundedAndIgnoresTheProxyEnvironment(t *testing.T) {
 			t.Errorf("the %s client has timeout %v and redirect policy %v", name, client.Timeout, client.CheckRedirect != nil)
 		}
 		rt := client.Transport
-		if c, ok := rt.(capped); ok {
-			rt = c.next
+		if m, ok := rt.(mediaTransport); ok {
+			rt = m.next
 		} else if name != "websocket" {
 			t.Errorf("the %s client's responses are not capped", name)
 		}
 		checkTransport(t, name, rt)
 	}
-	if c, ok := r.c.http.media.Transport.(capped); !ok || c.max != (1<<20)+mediaOverhead {
+	m, ok := r.c.http.media.Transport.(mediaTransport)
+	if !ok || m.max != (1<<20)+mediaOverhead {
 		t.Fatalf("the media cap is %v, want the history cap plus %d bytes", r.c.http.media.Transport, mediaOverhead)
+	}
+	if m.bound != 2*time.Minute || r.c.http.media.Timeout != 40*time.Minute {
+		t.Fatalf("a media request without an attachment job is bounded at %v inside a client timeout of %v, want 2m0s inside 40m0s", m.bound, r.c.http.media.Timeout)
 	}
 	if err := r.c.http.media.CheckRedirect(nil, nil); !errors.Is(err, http.ErrUseLastResponse) {
 		t.Fatalf("the media client follows redirects: %v", err)
