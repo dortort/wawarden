@@ -33,15 +33,15 @@ func deliver(w http.ResponseWriter, r *http.Request, a dto.Attachment, now func(
 	var sent int64
 	complete := false
 	defer func() { a.Finished(sent, complete) }()
-	n := noteFrom(r.Context())
+	aw, audited := w.(*auditWriter)
 	plan, err := a.Plan(strings.Join(r.Header.Values("Range"), ","), strings.Join(r.Header.Values("If-Range"), ","))
-	if _, audited := w.(*auditWriter); !audited || n == nil || err != nil {
+	if !audited || err != nil {
 		writeError(w, http.StatusInternalServerError, codeInternal)
 		return
 	}
 	start := now()
 	if !start.Before(a.Expires()) {
-		n.reason = errMediaExpired.code
+		aw.note.reason = errMediaExpired.code
 		writeError(w, errMediaExpired.status, errMediaExpired.code)
 		return
 	}
@@ -60,7 +60,7 @@ func deliver(w http.ResponseWriter, r *http.Request, a dto.Attachment, now func(
 	}
 	head := r.Method == http.MethodHead
 	if !head {
-		n.bytes = plan.Length()
+		aw.note.bytes = plan.Length()
 	}
 	w.WriteHeader(plan.Code())
 	if !auditCommitted(w) {
