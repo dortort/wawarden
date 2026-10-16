@@ -142,6 +142,8 @@ type messageView struct {
 	} `json:"sender"`
 	FromMe        bool    `json:"from_me"`
 	TS            string  `json:"ts"`
+	Kind          string  `json:"kind"`
+	MediaType     *string `json:"media_type"`
 	Text          *string `json:"text"`
 	TextDisplay   *string `json:"text_display"`
 	TextTruncated bool    `json:"text_truncated"`
@@ -298,8 +300,11 @@ func TestDeniedAndMissingTakeTheSameArchivePath(t *testing.T) {
 func TestMessagesCarryTheFixedShape(t *testing.T) {
 	f := newReadFixture(t)
 	f.archive.messages[0].FromMe = true
+	f.archive.messages[0].Kind, f.archive.messages[0].Text, f.archive.messages[0].TextDisplay = "media", "", ""
 	f.archive.messages[1].Revoked, f.archive.messages[1].Text, f.archive.messages[1].TextDisplay = true, "", ""
+	f.archive.messages[1].Kind, f.archive.messages[1].MediaType = "media", "image/jpeg"
 	f.archive.messages[2].SavedName = "Saved Alice"
+	f.archive.messages[2].Kind, f.archive.messages[2].MediaType = "media", "image/jpeg"
 	f.archive.messages[3].ReplyID, f.archive.messages[3].ReplySender, f.archive.messages[3].QuoteVerified = "SYNTHETIC1", aliceChat, true
 	f.archive.messages[4].Text = ""
 	f.archive.messages[5].FromMe, f.archive.messages[5].SentBy = true, "client07"
@@ -321,8 +326,20 @@ func TestMessagesCarryTheFixedShape(t *testing.T) {
 	if m := page.Messages[5]; !m.FromMe || m.Origin != "gateway:client07" {
 		t.Fatalf("gateway send = %+v", m)
 	}
-	if m := page.Messages[1]; !m.Revoked || m.Text != nil || m.TextDisplay != nil {
-		t.Fatalf("revoked message = %+v", m)
+	if m := page.Messages[1]; !m.Revoked || m.Text != nil || m.TextDisplay != nil || m.MediaType != nil || m.Kind != "media" {
+		t.Fatalf("revoked message = %+v, want null text and media type", m)
+	}
+	if m := page.Messages[0]; m.MediaType != nil || m.Text != nil || m.Kind != "media" {
+		t.Fatalf("expired media message = %+v, want null text and media type", m)
+	}
+	if m := page.Messages[2]; m.MediaType == nil || *m.MediaType != "image/jpeg" || m.Kind != "media" {
+		t.Fatalf("media message = %+v, want its media type", m)
+	}
+	if m := page.Messages[3]; m.MediaType != nil || m.Kind != "text" {
+		t.Fatalf("text message = %+v, want a null media type", m)
+	}
+	if revoked := decodeBody[messageView](t, f.get(t, keyGroup, "/v1/messages/"+page.Messages[1].Ref)); !revoked.Revoked || revoked.MediaType != nil || revoked.Text != nil {
+		t.Fatalf("revoked message by reference = %+v, want null text and media type", revoked)
 	}
 	if m := page.Messages[2]; m.Sender.Name == nil || *m.Sender.Name != "Saved Alice" {
 		t.Fatalf("saved name = %+v", m.Sender)
@@ -342,7 +359,7 @@ func TestMessagesCarryTheFixedShape(t *testing.T) {
 		t.Fatalf("quoted message = %+v", quoted)
 	}
 	self := decodeBody[messageView](t, f.get(t, keyGroup, "/v1/messages/"+page.Messages[2].Ref))
-	if self.Text == nil || *self.Text != "synthetic text 8" {
+	if self.Text == nil || *self.Text != "synthetic text 8" || self.MediaType == nil || *self.MediaType != "image/jpeg" {
 		t.Fatalf("message by reference = %+v", self)
 	}
 	next := decodeBody[pageView](t, f.get(t, keyGroup, "/v1/chats/"+groupRef+"/messages?limit=5&cursor="+*page.Next))
