@@ -136,9 +136,17 @@ from the operating system and can contain a listen address.
 
 The protocol library logs through an adapter into the same writer as every other
 line, as `whatsmeow_log` events: `module` names the protocol library's component, such as
-`whatsmeow/Client/Socket`, and `detail` holds its formatted text after four
-changes. First every client or admin token in it is redacted as the writer
-does (see [Pseudonyms and dropped lines](#pseudonyms-and-dropped-lines)), so
+`whatsmeow/Client/Socket`, and `detail` holds its formatted text after five
+changes. First every `http`, `https`, `ws` or `wss` URL becomes `[url]`, every
+media direct path becomes `[path]`, and the value of any `hash`, `mms-type`,
+`oh`, `oe`, `__wa-mms` or `_nc_`-prefixed query parameter left over becomes
+`[param]`, so that the protocol library's media download warnings carry no
+media location or encrypted-file hash. A direct path is a path of the media
+servers' `/v/t<digit>`, `/o1/v/t<digit>` or `/m1/v/t<digit>` shape, a slash-led
+word that carries a query, or the rest of the text after the protocol library's
+error for a path that does not start with a slash; quotes and trailing
+punctuation around a URL or path are kept. Then every client or admin token in
+it is redacted as the writer does (see [Pseudonyms and dropped lines](#pseudonyms-and-dropped-lines)), so
 that masking its digits cannot leave the rest of its secret unrecognised. Then
 every run of six or more digits, with `.` and `:` between them, that is
 not directly followed by `@` becomes `[number]`, so that a phone number or a
