@@ -102,6 +102,20 @@ linters:
               desc: the MCP library is confined to internal/api, which serves its tools behind the client pipeline
             - pkg: github.com/google/jsonschema-go
               desc: the JSON Schema library is confined to internal/api, which builds and checks the MCP tool schemas
+        image-decoders:
+          files:
+            - $all
+            - "!$test"
+            - "!${base-path}/internal/attach/**"
+          deny:
+            - pkg: image/jpeg
+              desc: image decoders are confined to internal/attach, which decodes only by magic under a pixel and memory budget
+            - pkg: image/png
+              desc: image decoders are confined to internal/attach, which decodes only by magic under a pixel and memory budget
+            - pkg: image/gif
+              desc: image decoders are confined to internal/attach, which decodes only by magic under a pixel and memory budget
+            - pkg: golang.org/x/image
+              desc: image decoders are confined to internal/attach, which decodes only by magic under a pixel and memory budget
         test-only-modules:
           files:
             - $all

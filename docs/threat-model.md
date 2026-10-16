@@ -918,6 +918,10 @@ scoped-read-path rule cannot see.
   - the Unicode text library `golang.org/x/text`, which outside test files
     only `internal/store/scoped` may import, to normalise search queries to
     NFC;
+  - the image library `golang.org/x/image`, which outside test files only
+    `internal/attach` may import, to decode WebP. The standard library's
+    `image/jpeg`, `image/png` and `image/gif` decoders are confined to
+    `internal/attach` the same way;
   - the MCP library, `github.com/modelcontextprotocol/go-sdk`, and its JSON
     Schema library, `github.com/google/jsonschema-go`, which outside test
     files only `internal/api` may import;
