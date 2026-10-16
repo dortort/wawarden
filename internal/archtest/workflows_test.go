@@ -216,7 +216,11 @@ var (
 	pullsLookup = regexp.MustCompile(`\bgh (?:pr list|api\b.*/pulls)\b`)
 	outcome     = regexp.MustCompile(`\bpassed\b`)
 	runsTests   = regexp.MustCompile(`(?m)^\s*hack/offline-test\.sh(?:\s|$)`)
+	watchedList = regexp.MustCompile(`^\s*watched=\(([^)]*)\)\s*$`)
 )
+
+var watchedPaths = []string{"socket/", "store/", "send.go", "download.go", "download-to-file.go", "mediaconn.go", "mediaretry.go", "upload.go", "message.go",
+	"pair*.go", "handshake.go", "msgsecret.go", "appstate*"}
 
 func bumpWorkflowProblems(config string) []string {
 	var out []string
@@ -307,6 +311,37 @@ func bumpWorkflowProblems(config string) []string {
 	if lookups == 0 {
 		out = append(out, "no step looks up the open pull request from the workflow's branch")
 	}
+	return append(out, watchedPathProblems(config)...)
+}
+
+func watchedPathProblems(config string) []string {
+	var watched []string
+	lists, description := 0, ""
+	for _, script := range workflowScripts(config) {
+		for line := range strings.Lines(script) {
+			if m := watchedList.FindStringSubmatch(line); m != nil {
+				lists++
+				for _, w := range strings.Fields(m[1]) {
+					watched = append(watched, strings.Trim(w, `'"`))
+				}
+			}
+			if strings.Contains(line, "### Watched paths") {
+				description += strings.ReplaceAll(line, "\\`", "`")
+			}
+		}
+	}
+	if lists != 1 {
+		return []string{fmt.Sprintf("%d steps set the watched paths, want one, whose upstream diff the pull request shows", lists)}
+	}
+	var out []string
+	for _, p := range watchedPaths {
+		if !slices.Contains(watched, strings.TrimSuffix(p, "/")) {
+			out = append(out, fmt.Sprintf("the watched paths leave out %s, so a bump's pull request does not show how the library changed it", p))
+		}
+		if !strings.Contains(description, "`"+p+"`") {
+			out = append(out, fmt.Sprintf("the pull request's Watched paths section does not name %s", p))
+		}
+	}
 	return out
 }
 
@@ -320,6 +355,9 @@ func TestBumpWorkflowIsolation(t *testing.T) {
 		t.Errorf("%s: %s", name, problem)
 	}
 }
+
+const watchedDescription = "\\n### Watched paths\\n\\nThe full diff under \\`socket/\\`, \\`store/\\`, \\`send.go\\`, \\`download.go\\`, \\`download-to-file.go\\`, " +
+	"\\`mediaconn.go\\`, \\`mediaretry.go\\`, \\`upload.go\\`, \\`message.go\\`, \\`pair*.go\\`, \\`handshake.go\\`, \\`msgsecret.go\\` and \\`appstate*\\`.\\n"
 
 func TestBumpWorkflowProblems(t *testing.T) {
 	const config = `permissions: {}
@@ -339,6 +377,8 @@ jobs:
         run: |
           go build ./...
           hack/offline-test.sh
+          watched=(socket store send.go download.go download-to-file.go mediaconn.go mediaretry.go upload.go message.go 'pair*.go' handshake.go msgsecret.go 'appstate*')
+          printf "` + watchedDescription + `"
   propose:
     needs: prepare
     if: github.ref == 'refs/heads/main' && needs.prepare.outputs.new != ''
@@ -364,6 +404,7 @@ jobs:
           fi
 `
 	const setupGo = "      - uses: actions/setup-go@0000000000000000000000000000000000000000 # v0\n"
+	const media = "download.go download-to-file.go mediaconn.go mediaretry.go upload.go"
 	const check = "      - name: Check the Go version\n        run: hack/check-go-version.sh\n"
 	for _, tt := range []struct {
 		name, old, new string
@@ -392,6 +433,14 @@ jobs:
 		{name: "the first page of pull requests", old: openPullRequestLookup, new: `number=$(gh pr list --head "$branch" --base main --state open --json number,isCrossRepository --jq 'map(select(.isCrossRepository | not)) | .[0].number // empty')`, want: 2},
 		{name: "no lookup", old: "          " + openPullRequestLookup + "\n", want: 1},
 		{name: "edit by branch", old: `gh pr edit "$number"`, new: `gh pr edit "$branch"`, want: 1},
+		{name: "download-to-file.go not watched", old: media, new: "download.go mediaconn.go mediaretry.go upload.go", want: 1},
+		{name: "mediaconn.go and mediaretry.go not watched", old: media, new: "download.go download-to-file.go upload.go", want: 2},
+		{name: "download.go not watched", old: media, new: "download-to-file.go mediaconn.go mediaretry.go upload.go", want: 1},
+		{name: "mediaretry.go missing from the description", old: "\\`mediaretry.go\\`, ", want: 1},
+		{name: "store/ missing from the description", old: "\\`store/\\`, ", want: 1},
+		{name: "no description of the watched paths", old: "### Watched paths", new: "### Paths", want: len(watchedPaths)},
+		{name: "no watched paths", old: "          watched=(", new: "          paths=(", want: 1},
+		{name: "a second list of watched paths", old: "          go build ./...\n", new: "          watched=(socket)\n          go build ./...\n", want: 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			mutated := config
