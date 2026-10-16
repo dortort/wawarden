@@ -35,6 +35,7 @@ type mediaReply struct {
 	hold       bool
 	then       error
 	drip       time.Duration
+	idle       time.Duration
 }
 
 type mediaOrigin struct {
@@ -62,7 +63,7 @@ func (o *mediaOrigin) RoundTrip(req *http.Request) (*http.Response, error) {
 		StatusCode:    cmpOr(reply.status, http.StatusOK),
 		Header:        http.Header{},
 		ContentLength: cmpOr(reply.length, -1),
-		Body:          &mediaFakeBody{origin: o, ctx: ctx, data: reply.body, then: reply.then, drip: reply.drip},
+		Body:          &mediaFakeBody{origin: o, ctx: ctx, data: reply.body, then: reply.then, drip: reply.drip, idle: reply.idle},
 		Request:       req,
 	}
 	if reply.retryAfter != "" {
@@ -104,9 +105,13 @@ type mediaFakeBody struct {
 	data   []byte
 	then   error
 	drip   time.Duration
+	idle   time.Duration
 }
 
 func (b *mediaFakeBody) Read(p []byte) (int, error) {
+	if len(b.data) == 0 && b.idle > 0 {
+		return 0, b.wait(b.idle)
+	}
 	if len(b.data) == 0 {
 		if b.then != nil {
 			return 0, b.then
@@ -115,12 +120,8 @@ func (b *mediaFakeBody) Read(p []byte) (int, error) {
 		return 0, b.origin.aborted(b.ctx)
 	}
 	if b.drip > 0 {
-		t := time.NewTimer(b.drip)
-		defer t.Stop()
-		select {
-		case <-b.ctx.Done():
-			return 0, b.origin.aborted(b.ctx)
-		case <-t.C:
+		if err := b.wait(b.drip); err != nil {
+			return 0, err
 		}
 		p = p[:1]
 	}
@@ -130,6 +131,17 @@ func (b *mediaFakeBody) Read(p []byte) (int, error) {
 	b.origin.sent += int64(n)
 	b.origin.mu.Unlock()
 	return n, nil
+}
+
+func (b *mediaFakeBody) wait(d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-b.ctx.Done():
+		return b.origin.aborted(b.ctx)
+	case <-t.C:
+		return nil
+	}
 }
 
 func (b *mediaFakeBody) Close() error {
@@ -365,13 +377,18 @@ func TestAStallEndsOnlyItsRequestAsARetryableTimeout(t *testing.T) {
 		o := newMediaOrigin(
 			mediaReply{body: []byte("sy"), drip: gap},
 			mediaReply{hold: true},
+			mediaReply{idle: gap},
 			mediaReply{body: []byte("synt"), drip: gap, then: io.EOF},
 		)
 		c := mediaHTTPClient(o, mediaRequestBound)
 		for _, tc := range []struct {
 			what string
 			want time.Duration
-		}{{"a body that stalls after two slow bytes", 2*gap + mediaStall}, {"stalled headers", mediaStall}} {
+		}{
+			{"a body that stalls after two slow bytes", 2*gap + mediaStall},
+			{"stalled headers", mediaStall},
+			{"a body that answers every read with nothing", mediaStall},
+		} {
 			what := tc.what
 			start := time.Now()
 			_, _, err := mediaFetch(ctx, c)
