@@ -489,7 +489,9 @@ Right after the master key, `serve`:
    follows version 3 and only adds a column, tables, indexes and triggers and
    rebuilds the identity-mapping table, which takes one to two seconds per
    500,000 messages on a laptop, most of it checking the new column's
-   constraint against every stored message. Then
+   constraint against every stored message. Version 5 follows version 4 and
+   adds tables, columns and indexes and clears the media type of revoked
+   messages, which takes under a second per 500,000 messages on a laptop. Then
    `serve` completes a rewrite of the full-text index that a stop or a failed
    rewrite left due (see the end of this section) and logs `archive_opened`.
 
