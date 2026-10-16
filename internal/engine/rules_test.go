@@ -3,6 +3,7 @@ package engine
 import (
 	"database/sql"
 	"math/rand/v2"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -653,6 +654,9 @@ func TestResolutionNeverLeavesTheEventsChat(t *testing.T) {
 		if r.dropped(dropForeign) == 0 {
 			t.Fatalf("seed %d: no event named another chat", seed)
 		}
+		if n := r.peek("SELECT count(*) FROM revoke_tombstones WHERE chat_jid <> ?", group2); n != 0 {
+			t.Fatalf("seed %d: %d tombstones name a chat other than the revoke's", seed, n)
+		}
 	}
 }
 
@@ -670,4 +674,144 @@ func TestFixtureDirectChatKeysNeedTheOwner(t *testing.T) {
 
 func withDownloads(on bool, retention time.Duration) option {
 	return func(o *Options) { o.MediaOn, o.MediaRefRetention = on, retention }
+}
+
+func (r *pipeRig) peek(q string, args ...any) int {
+	r.t.Helper()
+	if err := r.archive.Close(); err != nil {
+		r.t.Fatalf("Close: %v", err)
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(r.opts.DataDir, "archive.db")+"?mode=ro")
+	if err != nil {
+		r.t.Fatalf("sql.Open: %v", err)
+	}
+	n := query[int](r.t, db, q, args...)
+	if err := db.Close(); err != nil {
+		r.t.Fatalf("Close: %v", err)
+	}
+	r.open()
+	r.opts.Archive = r.archive
+	r.p.archive = r.archive
+	return n
+}
+
+func TestARevokeOfAnAbsentTargetLeavesATombstoneOnlyWhenAuthorised(t *testing.T) {
+	edit := change(KindEdit, group, "X1", alice, Key{RemoteJID: group, FromMe: true, ID: "M1"})
+	edit.Text = "edited before the target arrived"
+	for _, tt := range []struct {
+		name    string
+		change  Message
+		copy    Message
+		from    string
+		live    bool
+		revoked bool
+		reason  string
+	}{
+		{name: "the original sender revokes", change: change(KindRevoke, group, "X1", alice, Key{RemoteJID: group, FromMe: true, ID: "M1"}),
+			copy: inGroup("M1", alice, "late copy"), from: alice, revoked: true},
+		{name: "the original sender revokes and the copy arrives live", change: change(KindRevoke, group, "X1", alice, Key{RemoteJID: group, FromMe: true, ID: "M1"}),
+			copy: inGroup("M1", alice, "late copy"), from: alice, live: true, revoked: true},
+		{name: "a recorded admin revokes another member's message", change: change(KindRevoke, group, "X1", "15550100003:2@s.whatsapp.net", Key{RemoteJID: group, Participant: alice, ID: "M1"}),
+			copy: inGroup("M1", alice, "late copy"), from: alice, revoked: true},
+		{name: "a member not recorded as admin names another member's message", change: change(KindRevoke, group, "X1", bob, Key{RemoteJID: group, Participant: alice, ID: "M1"}),
+			copy: inGroup("M1", alice, "late copy"), from: alice, reason: dropNotAdmin},
+		{name: "an unknown member names another member's message", change: change(KindRevoke, group, "X1", "15550100004@s.whatsapp.net", Key{RemoteJID: group, Participant: alice, ID: "M1"}),
+			copy: inGroup("M1", alice, "late copy"), from: alice, reason: dropAdminUnknown},
+		{name: "a direct-chat peer names the owner's message", change: change(KindRevoke, alice, "X1", alice, Key{RemoteJID: owner, ID: "M1"}),
+			copy: fromOwner(alice, "M1", "late copy"), from: owner, reason: dropNotOriginal},
+		{name: "the original sender reacts", change: change(KindReaction, group, "X1", alice, Key{RemoteJID: group, FromMe: true, ID: "M1"}),
+			copy: inGroup("M1", alice, "late copy"), from: alice},
+		{name: "the original sender edits", change: edit, copy: inGroup("M1", alice, "late copy"), from: alice},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newHistRig(t, withDownloads(true, DefaultMediaRefRetention))
+			r.ingest(members(carol), tt.change)
+			tombstones := 0
+			if tt.revoked {
+				tombstones = 1
+			}
+			if n := r.peek("SELECT count(*) FROM revoke_tombstones"); n != tombstones {
+				t.Fatalf("%d tombstones after the change, want %d", n, tombstones)
+			}
+			late := withMedia(tt.copy, MediaImage, "", 1234)
+			if tt.live {
+				r.ingest(late)
+			} else if err := r.h.apply(t.Context(), History{Conversations: []Conversation{{Chat: tt.change.Chat, Messages: []Message{late}}}}, epoch); err != nil {
+				t.Fatalf("applying the late history copy: %v", err)
+			}
+			f := r.must(tt.change.Chat, "M1", tt.from)
+			if f.Revoked != tt.revoked || tt.revoked != (f.Text == "") {
+				t.Fatalf("the late copy was stored as %+v, want revoked %v", f, tt.revoked)
+			}
+			if r.dropped(dropTargetAbsent) != 1 {
+				t.Fatalf("target_unknown drops %v, want 1", r.dropped(dropTargetAbsent))
+			}
+			for _, reason := range []string{dropNotOriginal, dropNotAdmin, dropAdminUnknown} {
+				want := 0.0
+				if reason == tt.reason {
+					want = 1
+				}
+				if got := r.dropped(reason); got != want {
+					t.Fatalf("%s drops %v, want %v", reason, got, want)
+				}
+			}
+			stored := 1
+			if tt.revoked {
+				stored = 0
+			}
+			db := r.inspect()
+			if n := query[int](t, db, "SELECT count(*) FROM media_refs"); n != stored {
+				t.Fatalf("%d media references, want %d", n, stored)
+			}
+			if n := query[int](t, db, "SELECT count(*) FROM messages WHERE id = 'M1' AND media_type IS NOT NULL"); n != stored {
+				t.Fatalf("%d copies kept their media type, want %d", n, stored)
+			}
+			if n := query[int](t, db, "SELECT count(*) FROM revoke_tombstones"); n != 0 {
+				t.Fatalf("%d tombstones left after the late copy", n)
+			}
+		})
+	}
+}
+
+func TestATombstoneRevokesOnlyACopyFromTheOriginalSender(t *testing.T) {
+	r := newHistRig(t)
+	r.ingest(members(carol), change(KindRevoke, group, "X1", carol, Key{RemoteJID: group, Participant: alice, ID: "M1"}))
+	r.ingest(inGroup("M1", bob, "same id, another sender"))
+	if f := r.must(group, "M1", bob); f.Revoked || f.Text != "same id, another sender" {
+		t.Fatalf("a copy from another sender was stored as %+v", f)
+	}
+	if n := r.peek("SELECT count(*) FROM revoke_tombstones"); n != 1 {
+		t.Fatalf("%d tombstones after a copy from another sender, want 1", n)
+	}
+	r.ingest(text(group2, "M1", alice, "same id, another chat"))
+	if f := r.must(group2, "M1", alice); f.Revoked {
+		t.Fatal("a copy in another chat was stored revoked")
+	}
+	r.ingest(inGroup("M1", alice, "the revoked message"))
+	if f := r.must(group, "M1", alice); !f.Revoked || f.Text != "" {
+		t.Fatalf("the original sender's copy was stored as %+v", f)
+	}
+}
+
+func TestATombstoneFollowsTheSendersCanonicalIdentifier(t *testing.T) {
+	r := newHistRig(t)
+	m := dm("M0", aliceLID, "maps alice")
+	m.SenderAlt = alice
+	r.ingest(m, change(KindRevoke, group, "X1", alice, Key{RemoteJID: group, FromMe: true, ID: "M1"}))
+	r.ingest(inGroup("M1", aliceLID, "late copy under the other identifier"))
+	if f := r.must(group, "M1", alice); !f.Revoked {
+		t.Fatalf("a copy keyed by the sender's other identifier was stored as %+v", f)
+	}
+}
+
+func TestARevokeNamingAnInvalidIDLeavesNoTombstone(t *testing.T) {
+	r := newPipeRig(t)
+	r.ingest(change(KindRevoke, group, "X1", alice, Key{RemoteJID: group, FromMe: true, ID: "not a message id"}))
+	if r.dropped(dropTargetAbsent) != 1 || r.dropped(dropInvalid) != 0 {
+		t.Fatalf("drops: target unknown %v, invalid %v", r.dropped(dropTargetAbsent), r.dropped(dropInvalid))
+	}
+	db := r.inspect()
+	if n := query[int](t, db, "SELECT count(*) FROM revoke_tombstones"); n != 0 {
+		t.Fatalf("%d tombstones for an invalid message id", n)
+	}
 }
