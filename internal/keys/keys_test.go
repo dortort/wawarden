@@ -27,6 +27,7 @@ const (
 	vectorCursor    = "497e790a7e9ede5e9802cb058072ec6c8e72e816d68679582c31df6704e93608"
 	vectorMref      = "d38e7716d67bbe35f4280e2ff20a733c05af9007f459a8307d9fc1044d17c578"
 	vectorAudit     = "ffe711ed496756b9b35266179d8289a0dab2e7b38ab4ee393f2a2fa36d6622a1"
+	vectorMediaRef  = "e8fbdf95b4f3f625d5022c382a8cf17e38e4f49068fb0d53658e3012ae50edc8"
 )
 
 var keyID = regexp.MustCompile(`^[0-9a-f]{8}$`)
@@ -224,6 +225,7 @@ func TestDerivationVectors(t *testing.T) {
 		{name: "cursor-seal", got: hex.EncodeToString(m.CursorSealKey()), want: vectorCursor, info: "wawarden/v1/cursor-seal", length: keySize},
 		{name: "mref", got: hex.EncodeToString(m.MessageRefKey()), want: vectorMref, info: "wawarden/v1/mref", length: keySize},
 		{name: "audit-chain", got: hex.EncodeToString(m.AuditChainKey()), want: vectorAudit, info: "wawarden/v1/audit-chain", length: keySize},
+		{name: "media-ref", got: hex.EncodeToString(m.MediaRefKey()), want: vectorMediaRef, info: "wawarden/v1/media-ref", length: keySize},
 	}
 	for _, tt := range tests {
 		if independent := hex.EncodeToString(hkdfSHA256(vectorMaster(), tt.info, tt.length)); independent != tt.want {
@@ -233,7 +235,7 @@ func TestDerivationVectors(t *testing.T) {
 			t.Fatalf("%s = %s, want %s: a derived key changed, which changes every pseudonym and HMAC made with it", tt.name, tt.got, tt.want)
 		}
 	}
-	purposes := []func() []byte{m.LogRedactKey, m.ChatHMACKey, m.CursorSealKey, m.MessageRefKey, m.AuditChainKey}
+	purposes := []func() []byte{m.LogRedactKey, m.ChatHMACKey, m.CursorSealKey, m.MessageRefKey, m.AuditChainKey, m.MediaRefKey}
 	for i, a := range purposes {
 		for _, b := range purposes[i+1:] {
 			if bytes.Equal(a(), b()) {
@@ -509,8 +511,8 @@ func TestMasterPrintsNoKey(t *testing.T) {
 	slog.New(slog.NewTextHandler(&out, nil)).Info("master", "m", m, "v", *m)
 	text := strings.ToLower(out.String())
 	for _, secret := range [][]byte{
-		vectorMaster(), m.LogRedactKey(), m.ChatHMACKey(), m.CursorSealKey(), m.MessageRefKey(), m.AuditChainKey(),
-		secretOf(80), retired.LogRedactKey(), retired.ChatHMACKey(), retired.CursorSealKey(), retired.MessageRefKey(), retired.AuditChainKey(),
+		vectorMaster(), m.LogRedactKey(), m.ChatHMACKey(), m.CursorSealKey(), m.MessageRefKey(), m.AuditChainKey(), m.MediaRefKey(),
+		secretOf(80), retired.LogRedactKey(), retired.ChatHMACKey(), retired.CursorSealKey(), retired.MessageRefKey(), retired.AuditChainKey(), retired.MediaRefKey(),
 	} {
 		for _, form := range []string{hex.EncodeToString(secret), hex.EncodeToString(secret[:8]), string(secret[8:16]), decimal(secret[:8])} {
 			if strings.Contains(text, strings.ToLower(form)) {
