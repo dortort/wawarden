@@ -1793,8 +1793,15 @@ those packages (`internal/archtest/imports_test.go`), and `depguard`.
   - Only `transmitMessage` calls `SendMessage`, and only
     `transmitPeerMessage` calls `SendPeerMessage`, each directly and outside
     any function literal.
-  - Only `downloadToFile`, the history download seam that `New` passes to the
-    client, calls `DownloadToFile`, directly and outside any function literal.
+  - Only `downloadToFile` and `downloadMediaFile`, the history and media
+    download seams that `New` passes to the client, call `DownloadToFile`,
+    directly and outside any function literal. The history seam takes only a
+    history notification, which only `DownloadHistory` builds and calls it
+    with. The media seam takes only a `mediasrc.Source`, whose one field is
+    unexported in its own package: only `downloadable` fills one, from a
+    sealed reference that `FetchMedia` opened, and the seam refuses an empty
+    one before the library is called. So an attachment is downloaded only
+    when `FetchMedia` is asked for it, never at receipt.
   - A protocol library update that adds a method finds it refused.
 
 **Protects.** I-5, I-6, account standing.
@@ -1802,9 +1809,9 @@ those packages (`internal/archtest/imports_test.go`), and `depguard`.
 **Enforced by.**
 
 - The architecture rules `confined-imports`, `raw-database-handle`,
-  `protocol-calls` and `protocol-client-calls`
+  `protocol-calls`, `protocol-client-calls` and `media-download`
   (`internal/archtest/protocol_test.go`, `protocolclient_test.go`,
-  `storage_test.go`), and `depguard`.
+  `mediadownload_test.go`, `storage_test.go`), and `depguard`.
 - Tests of the adapter's construction, on every client it builds: the
   settings, that the protocol library's HTTP clients are the adapter's, and
   that it holds exactly one event handler (`internal/engine/wa/client_test.go`).
