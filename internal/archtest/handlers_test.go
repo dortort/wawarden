@@ -15,6 +15,8 @@ var handlerBuilders = map[string]map[string]bool{
 	mcpModule + "/auth": set("ProtectedResourceMetadataHandler", "RequireBearerToken"),
 }
 
+var servedFiles = set("ServeContent", "ServeFile", "ServeFileFS")
+
 var handlerRule = rule{
 	name:  "handler-ownership",
 	check: checkHandlers,
@@ -214,14 +216,56 @@ var _ = http.HandlerFunc(nil)
 
 func f() http.Handler { return nil }
 `},
+		{name: "files served in api", rel: "internal/api/x.go", want: 3, src: `package api
+
+import (
+	"io/fs"
+	"net/http"
+	"strings"
+	"time"
+)
+
+func f(w http.ResponseWriter, r *http.Request, fsys fs.FS) {
+	http.ServeContent(w, r, "x", time.Time{}, strings.NewReader(""))
+	http.ServeFile(w, r, "x")
+	http.ServeFileFS(w, r, fsys, "x")
+}
+`},
+		{name: "files served through an alias outside api", rel: "internal/app/x.go", want: 3, src: `package app
+
+import web "net/http"
+
+var serve = []any{web.ServeContent, web.ServeFile, web.ServeFileFS}
+`},
+		{name: "files served in an api subpackage", rel: "internal/api/dto/x.go", want: 1, src: `package dto
+
+import "net/http"
+
+var _ = http.ServeContent
+`},
+		{name: "another package's file servers", rel: "internal/api/x.go", src: `package api
+
+import "example.com/http"
+
+func f() { http.ServeContent(nil, nil, "x", 0, nil) }
+`},
+		{name: "files served in a test", rel: "internal/api/x_test.go", src: `package api
+
+import "net/http"
+
+var _ = http.ServeFile
+`},
 	},
 }
 
 func checkHandlers(f *sourceFile) []string {
-	if f.test || f.dir == apiDir {
+	if f.test {
 		return nil
 	}
-	var out []string
+	out := servedFileCalls(f)
+	if f.dir == apiDir {
+		return out
+	}
 	ast.Inspect(f.file, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.FuncDecl:
@@ -273,6 +317,19 @@ func checkHandlers(f *sourceFile) []string {
 		case f.dir == listenersDir && f.isType(typ, "net/http", "Server") && !specHandler(handler):
 			out = append(out, f.at(lit, "an http.Server in %s must serve its spec's Handler unchanged", listenersDir))
 		}
+	})
+	return out
+}
+
+func servedFileCalls(f *sourceFile) []string {
+	var out []string
+	ast.Inspect(f.file, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok {
+			if s, p := f.ref(sel); s != nil && p == "net/http" && servedFiles[s.Sel.Name] {
+				out = append(out, f.at(sel, "http.%s serves bytes past the attachment plan: it drops no-store on errors, answers in text/plain, ranges in a goroutine and answers 304 and 412", s.Sel.Name))
+			}
+		}
+		return true
 	})
 	return out
 }
