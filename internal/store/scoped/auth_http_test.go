@@ -38,6 +38,7 @@ func storeClientHandler(t *testing.T, s *ingest.Store, reg *metrics.Registry) ht
 		Authenticator: s.Clients(), Metrics: reg, Archive: s.Scoped(), Audit: storeAudit{s.Audit()},
 		Session: func() string { return "connected" }, Cursors: cursors, Refs: refs,
 		Limits: api.ReadLimits{ReadsPerMinute: 1 << 30, SearchesPerMinute: 1 << 30}, Sender: refusingSender{}, SendRejected: func(string) {},
+		AuditFailed: func(string, error) {},
 	})
 }
 

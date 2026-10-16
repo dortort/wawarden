@@ -615,6 +615,7 @@ func TestNewClientHandlerRequiresItsDependencies(t *testing.T) {
 		{name: "no archive", deps: without(func(d *ClientDeps) { d.Archive = nil })},
 		{name: "no auditor", deps: without(func(d *ClientDeps) { d.Audit = nil })},
 		{name: "no session state", deps: without(func(d *ClientDeps) { d.Session = nil })},
+		{name: "no audit failure sink", deps: without(func(d *ClientDeps) { d.AuditFailed = nil })},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

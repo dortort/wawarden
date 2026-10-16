@@ -18,6 +18,7 @@ type pipeline struct {
 	throttle     *bucket
 	budget       *ratelimit.Limiter
 	audit        Auditor
+	auditFailed  func(action string, err error)
 	now          func() time.Time
 }
 
@@ -62,7 +63,7 @@ func (p *pipeline) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if p.audit != nil {
-		w, authenticated = audited(w, authenticated, p.audit, p.now)
+		w, authenticated = audited(w, authenticated, p.audit, p.auditFailed, p.now)
 	}
 	recovering(p.name, w, authenticated, p.router.ServeHTTP)
 }

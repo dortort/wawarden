@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dortort/wawarden/internal/api/dto"
 	"github.com/dortort/wawarden/internal/cursor"
 	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/policy"
@@ -674,7 +676,7 @@ var syntheticMessageRef = cursor.Ref{Chat: groupChat.JID(), ID: "SYNTHETIC1", Se
 
 func TestTheHeaderRowCarriesTheNotedMessageAndBytes(t *testing.T) {
 	audit := &fakeAuditor{}
-	w, r := audited(httptest.NewRecorder(), withClientRequest(t, liveClient("client-x"), http.MethodGet, "/x"), audit, fixedNow)
+	w, r := audited(httptest.NewRecorder(), withClientRequest(t, liveClient("client-x"), http.MethodGet, "/x"), audit, func(string, error) {}, fixedNow)
 	n := noteFrom(r.Context())
 	n.action, n.chat, n.message, n.bytes = actionMessage, groupChat, syntheticMessageRef, 4096
 	w.WriteHeader(http.StatusOK)
@@ -704,7 +706,7 @@ func TestStatusReasonNamesEachStatus(t *testing.T) {
 	}
 	audit := &fakeAuditor{}
 	for _, status := range []int{http.StatusPartialContent, http.StatusRequestedRangeNotSatisfiable} {
-		w, r := audited(httptest.NewRecorder(), withClientRequest(t, liveClient("client-x"), http.MethodGet, "/x"), audit, fixedNow)
+		w, r := audited(httptest.NewRecorder(), withClientRequest(t, liveClient("client-x"), http.MethodGet, "/x"), audit, func(string, error) {}, fixedNow)
 		noteFrom(r.Context()).action = actionMessage
 		w.WriteHeader(status)
 	}
@@ -714,5 +716,121 @@ func TestStatusReasonNamesEachStatus(t *testing.T) {
 	}
 	if got := audit.recorded(); !slices.Equal(got, want) {
 		t.Fatalf("audit = %+v, want %+v", got, want)
+	}
+}
+
+const (
+	actionProbeSent = "probe.sent"
+	reasonGone      = "client_gone"
+)
+
+type auditFailures struct{ actions []string }
+
+func (f *auditFailures) record(action string, err error) {
+	if err == nil {
+		action += " without an error"
+	}
+	f.actions = append(f.actions, action)
+}
+
+func auditedProbe(t *testing.T, ctx context.Context, audit *fakeAuditor, failures *auditFailures) (http.ResponseWriter, *httptest.ResponseRecorder) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	r := newRequest(t, http.MethodGet, "/x", nil)
+	w, r := audited(rec, r.WithContext(withClient(ctx, liveClient("client-x"))), audit, failures.record, fixedNow)
+	n := noteFrom(r.Context())
+	n.action, n.chat, n.message, n.bytes = actionMessage, groupChat, syntheticMessageRef, 4096
+	return w, rec
+}
+
+var probeHeader = ReadEvent{
+	At: testNow, Client: "client-x", Action: actionMessage, Chat: groupChat, OK: true, Reason: outcomeOK, Peer: "192.0.2.1", Message: syntheticMessageRef, Bytes: 4096,
+}
+
+func TestTheCompletionRowFollowsARecordedHeaderOnce(t *testing.T) {
+	audit, failures := &fakeAuditor{}, &auditFailures{}
+	ctx, cancel := context.WithCancel(t.Context())
+	w, rec := auditedProbe(t, ctx, audit, failures)
+	completeAudit(w, actionProbeSent, outcomeOK, 1)
+	if auditCommitted(w) || len(audit.recorded()) != 0 {
+		t.Fatalf("before the header: committed %v, audit %+v", auditCommitted(w), audit.recorded())
+	}
+	w.WriteHeader(http.StatusOK)
+	if !auditCommitted(w) {
+		t.Fatal("a recorded header is not committed")
+	}
+	_, _ = w.Write([]byte("synthetic body"))
+	cancel()
+	completeAudit(w, actionProbeSent, reasonGone, 1000)
+	completeAudit(w, actionProbeSent, outcomeOK, 4096)
+	completion := probeHeader
+	completion.Action, completion.OK, completion.Reason, completion.Bytes = actionProbeSent, false, reasonGone, 1000
+	if got, want := audit.recorded(), []ReadEvent{probeHeader, completion}; !slices.Equal(got, want) {
+		t.Fatalf("audit = %+v, want %+v", got, want)
+	}
+	if len(failures.actions) != 0 || rec.Code != http.StatusOK || rec.Body.String() != "synthetic body" {
+		t.Fatalf("failures %v, response %d %q", failures.actions, rec.Code, rec.Body.String())
+	}
+}
+
+func TestACompletionRowWithTheOKReasonIsOK(t *testing.T) {
+	audit := &fakeAuditor{}
+	w, _ := auditedProbe(t, t.Context(), audit, &auditFailures{})
+	w.WriteHeader(http.StatusPartialContent)
+	completeAudit(w, actionProbeSent, outcomeOK, 0)
+	completion := probeHeader
+	completion.Action, completion.Bytes = actionProbeSent, 0
+	if got, want := audit.recorded(), []ReadEvent{probeHeader, completion}; !slices.Equal(got, want) {
+		t.Fatalf("audit = %+v, want %+v", got, want)
+	}
+}
+
+func TestAReplacedHeaderWritesNoCompletionRow(t *testing.T) {
+	audit, failures := &fakeAuditor{fail: true}, &auditFailures{}
+	w, rec := auditedProbe(t, t.Context(), audit, failures)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("synthetic body"))
+	requireError(t, rec, http.StatusInternalServerError, codeInternal)
+	audit.fail = false
+	if auditCommitted(w) {
+		t.Fatal("a replaced header is committed")
+	}
+	completeAudit(w, actionProbeSent, outcomeOK, 4096)
+	if got := audit.recorded(); len(got) != 0 || len(failures.actions) != 0 {
+		t.Fatalf("audit %+v and failures %v after a replaced header, want neither", got, failures.actions)
+	}
+}
+
+func TestAFailedCompletionRowIsReportedOnceAndLeavesTheResponse(t *testing.T) {
+	audit, failures := &fakeAuditor{}, &auditFailures{}
+	w, rec := auditedProbe(t, t.Context(), audit, failures)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("synthetic body"))
+	audit.fail = true
+	completeAudit(w, actionProbeSent, outcomeOK, 4096)
+	completeAudit(w, actionProbeSent, outcomeOK, 4096)
+	if !slices.Equal(failures.actions, []string{actionProbeSent}) {
+		t.Fatalf("failures = %v, want one for %s", failures.actions, actionProbeSent)
+	}
+	if got := audit.recorded(); !slices.Equal(got, []ReadEvent{probeHeader}) || rec.Code != http.StatusOK || rec.Body.String() != "synthetic body" {
+		t.Fatalf("audit %+v, response %d %q", got, rec.Code, rec.Body.String())
+	}
+}
+
+func TestTheCompletionHookIsReachableFromARoute(t *testing.T) {
+	rt := newRouter(fixedNow, policy.AdminCredential{})
+	reached := false
+	rt.read("GET /probe", func(_ context.Context, _ policy.ReadGrant, r *Request) (dto.Response, error) {
+		_, reached = r.w.(*auditWriter)
+		return dto.Me{}, nil
+	})
+	audit := &fakeAuditor{}
+	w, r := audited(httptest.NewRecorder(), withClientRequest(t, liveClient("client-x"), http.MethodGet, "/probe"), audit, (&auditFailures{}).record, fixedNow)
+	rt.ServeHTTP(w, r)
+	if !reached || !auditCommitted(w) {
+		t.Fatalf("the route saw the audit writer %v, committed %v", reached, auditCommitted(w))
+	}
+	if auditCommitted(httptest.NewRecorder()) {
+		t.Fatal("a writer without an audit row is committed")
 	}
 }

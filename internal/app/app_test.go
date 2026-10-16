@@ -579,6 +579,7 @@ func TestAdminServesMetricsOnlyWithItsToken(t *testing.T) {
 	for _, want := range []string{
 		"wawarden_admin_auth_failures_total 4\n",
 		"wawarden_auth_failures_total 1\n",
+		"wawarden_audit_failures_total 0\n",
 		"wawarden_policy_denials_total 0\n",
 		"wawarden_sends_rejected_total{reason=\"budget_global\"} 0\n",
 		"wawarden_sends_rejected_total{reason=\"budget_hour\"} 0\n",

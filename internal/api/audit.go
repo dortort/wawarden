@@ -59,31 +59,54 @@ const (
 // Every response passes WriteHeader here first, so its audit row commits before a byte reaches the client.
 type auditWriter struct {
 	http.ResponseWriter
-	record func(status int) error
-	state  writerState
+	commit    func(action, reason string, bytes int64) error
+	note      *auditNote
+	failed    func(action string, err error)
+	state     writerState
+	completed bool
 }
 
-func audited(w http.ResponseWriter, r *http.Request, audit Auditor, now func() time.Time) (http.ResponseWriter, *http.Request) {
+func audited(w http.ResponseWriter, r *http.Request, audit Auditor, failed func(action string, err error), now func() time.Time) (http.ResponseWriter, *http.Request) {
 	note := &auditNote{action: actionUnrouted}
 	r = r.WithContext(context.WithValue(r.Context(), noteKey{}, note))
 	client := clientFrom(r.Context())
-	record := func(status int) error {
-		reason := note.reason
-		if reason == "" {
-			reason = statusReason(status)
-		}
+	commit := func(action, reason string, bytes int64) error {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), auditWait)
 		defer cancel()
 		err := audit.Record(ctx, ReadEvent{
-			At: now(), Client: client.ID, Action: note.action, Chat: note.chat, OK: reason == outcomeOK, Reason: reason, Peer: peer(r.RemoteAddr),
-			Message: note.message, Bytes: note.bytes,
+			At: now(), Client: client.ID, Action: action, Chat: note.chat, OK: reason == outcomeOK, Reason: reason, Peer: peer(r.RemoteAddr),
+			Message: note.message, Bytes: bytes,
 		})
 		if err != nil && r.Context().Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return errBusy
 		}
 		return err
 	}
-	return &auditWriter{ResponseWriter: w, record: record}, r
+	return &auditWriter{ResponseWriter: w, commit: commit, note: note, failed: failed}, r
+}
+
+func (a *auditWriter) record(status int) error {
+	reason := a.note.reason
+	if reason == "" {
+		reason = statusReason(status)
+	}
+	return a.commit(a.note.action, reason, a.note.bytes)
+}
+
+func auditCommitted(w http.ResponseWriter) bool {
+	a, ok := w.(*auditWriter)
+	return ok && a.state == recorded
+}
+
+func completeAudit(w http.ResponseWriter, action, reason string, bytes int64) {
+	a, ok := w.(*auditWriter)
+	if !ok || a.state != recorded || a.completed {
+		return
+	}
+	a.completed = true
+	if err := a.commit(action, reason, bytes); err != nil {
+		a.failed(action, err)
+	}
 }
 
 func (a *auditWriter) WriteHeader(status int) {

@@ -144,6 +144,7 @@ mcp-tool write_chats list_chats properties=cursor,limit required=-
 mcp-tool write_chats search_messages properties=chat,cursor,limit,query required=query
 mcp-tool write_chats send_message properties=chat,idempotency_key,reply_to,text required=chat,idempotency_key,text
 metric wawarden_admin_auth_failures_total counter
+metric wawarden_audit_failures_total counter
 metric wawarden_auth_failures_total counter
 metric wawarden_backup_last_success_timestamp_seconds gauge
 metric wawarden_build_info gauge labels=dev,revision,version
