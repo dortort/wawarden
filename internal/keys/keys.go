@@ -20,20 +20,21 @@ import (
 const Subcommand = "keys"
 
 const (
-	dirName     = "keys"
-	masterName  = "master"
-	retiredName = "retired"
-	masterSize  = 32
-	keySize     = 32
-	idSize      = 4
-	maxRetired  = 32
-	infoPrefix  = "wawarden/v1/"
-	idInfo      = infoPrefix + "key-id"
-	logInfo     = infoPrefix + "log-redact"
-	chatInfo    = infoPrefix + "chat-hmac"
-	cursorInfo  = infoPrefix + "cursor-seal"
-	mrefInfo    = infoPrefix + "mref"
-	auditInfo   = infoPrefix + "audit-chain"
+	dirName      = "keys"
+	masterName   = "master"
+	retiredName  = "retired"
+	masterSize   = 32
+	keySize      = 32
+	idSize       = 4
+	maxRetired   = 32
+	infoPrefix   = "wawarden/v1/"
+	idInfo       = infoPrefix + "key-id"
+	logInfo      = infoPrefix + "log-redact"
+	chatInfo     = infoPrefix + "chat-hmac"
+	cursorInfo   = infoPrefix + "cursor-seal"
+	mrefInfo     = infoPrefix + "mref"
+	auditInfo    = infoPrefix + "audit-chain"
+	mediaRefInfo = infoPrefix + "media-ref"
 
 	keysLabel    = dirName + "/"
 	masterLabel  = dirName + "/" + masterName
@@ -98,6 +99,7 @@ type Master struct {
 	cursorSeal *string
 	mref       *string
 	auditChain *string
+	mediaRef   *string
 	retired    []*Master
 }
 
@@ -112,6 +114,8 @@ func (m *Master) CursorSealKey() []byte { return []byte(*m.cursorSeal) }
 func (m *Master) MessageRefKey() []byte { return []byte(*m.mref) }
 
 func (m *Master) AuditChainKey() []byte { return []byte(*m.auditChain) }
+
+func (m *Master) MediaRefKey() []byte { return []byte(*m.mediaRef) }
 
 func (m *Master) Retired() []*Master { return slices.Clone(m.retired) }
 
@@ -463,7 +467,7 @@ func derive(secret []byte) (*Master, *Refusal) {
 		info string
 		key  **string
 	}{
-		{logInfo, &m.logRedact}, {chatInfo, &m.chatHMAC}, {cursorInfo, &m.cursorSeal}, {mrefInfo, &m.mref}, {auditInfo, &m.auditChain},
+		{logInfo, &m.logRedact}, {chatInfo, &m.chatHMAC}, {cursorInfo, &m.cursorSeal}, {mrefInfo, &m.mref}, {auditInfo, &m.auditChain}, {mediaRefInfo, &m.mediaRef},
 	} {
 		k, err := hkdf.Key(sha256.New, secret, nil, purpose.info, keySize)
 		if err != nil {
