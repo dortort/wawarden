@@ -25,6 +25,7 @@ const (
 	policyDir  = "internal/policy"
 	sealDir    = policyDir + "/internal/seal"
 	sealPath   = module + "/" + sealDir
+	attachDir  = "internal/attach"
 
 	imageModule = "golang.org/x/image"
 )
@@ -789,4 +790,77 @@ import (
 	if got := thirdPartyImports([]string{"example.com/allowed"})(f); len(got) != 2 {
 		t.Fatalf("findings %q, want exactly example.com/allowedx and example.com/other", got)
 	}
+}
+
+var imageDecoders = []string{"image/jpeg", "image/png", "image/gif", imageModule}
+
+var imageDecoderRule = rule{
+	name:  "image-decoders",
+	check: checkImageDecoders,
+	cases: []snippet{
+		{name: "each decoder outside the content policy", rel: "internal/api/x.go", want: 5, src: `package api
+
+import (
+	"image/gif"
+	"image/jpeg"
+	"image/png"
+	"golang.org/x/image/webp"
+	"golang.org/x/image/draw"
+)
+`},
+		{name: "a blank decoder registration outside the content policy", rel: "internal/app/x.go", want: 2, src: `package app
+
+import (
+	_ "image/jpeg"
+	_ "golang.org/x/image/webp"
+)
+`},
+		{name: "a directory that only starts like the content policy", rel: "internal/attachx/x.go", want: 1, src: `package attachx
+
+import "image/png"
+`},
+		{name: "neighbouring import paths", rel: "internal/app/x.go", src: `package app
+
+import (
+	_ "image"
+	_ "image/color"
+	_ "image/draw"
+	_ "image/jpegx"
+	_ "golang.org/x/imagex"
+)
+`},
+		{name: "the content policy", rel: "internal/attach/x.go", src: `package attach
+
+import (
+	"image/gif"
+	"image/jpeg"
+	"image/png"
+	"golang.org/x/image/webp"
+)
+`},
+		{name: "a package under the content policy", rel: "internal/attach/frame/x.go", src: `package frame
+
+import "golang.org/x/image/webp"
+`},
+		{name: "a test elsewhere", rel: "internal/app/x_test.go", src: `package app
+
+import (
+	"image/jpeg"
+	"image/png"
+)
+`},
+	},
+}
+
+func checkImageDecoders(f *sourceFile) []string {
+	if f.test || within(f.dir, attachDir) {
+		return nil
+	}
+	var out []string
+	for _, imp := range f.imports {
+		if slices.ContainsFunc(imageDecoders, func(d string) bool { return within(imp.path, d) }) {
+			out = append(out, f.at(imp.node, "%q may be imported only under %s: image decoders run only behind the content policy's magic and budget checks", imp.path, attachDir))
+		}
+	}
+	return out
 }
