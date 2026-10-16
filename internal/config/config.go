@@ -21,6 +21,7 @@ import (
 	"github.com/dortort/wawarden/internal/buildinfo"
 	"github.com/dortort/wawarden/internal/notify"
 	"github.com/dortort/wawarden/internal/policy"
+	"github.com/dortort/wawarden/internal/stage"
 )
 
 const (
@@ -171,7 +172,7 @@ const (
 	StorageNFS   StorageProfile = "nfs"
 )
 
-var dataSubdirectories = []string{"history", backup.Dir}
+var dataSubdirectories = []string{"history", backup.Dir, stage.Dir}
 
 var logLevels = map[string]slog.Level{
 	"debug": slog.LevelDebug,
