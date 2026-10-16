@@ -21,3 +21,10 @@ func TestFakeEngineSetting(t *testing.T) {
 		}
 	}
 }
+
+func TestAttachmentVariablesAreCheckedBeforeTheFakeEngine(t *testing.T) {
+	_, r := Load(environ(withDataDir(t, map[string]string{envMediaGlobalBytes: "0", envDevFakeEngine: "2"})), testOptions())
+	if r == nil || r.Reason != reasonMediaGlobalBytesInvalid || r.Variable != envMediaGlobalBytes {
+		t.Fatalf("Load = %v, want the attachment refusal %s before the dev variable's", r, reasonMediaGlobalBytesInvalid)
+	}
+}

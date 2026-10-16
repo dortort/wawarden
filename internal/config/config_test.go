@@ -113,6 +113,10 @@ func TestDefaults(t *testing.T) {
 		t.Fatalf("default data directory = %q, free-space floor = %d, history cap = %d up to %d, want /data, 268435456, 33554432 and 268435456",
 			defaultDataDir, defaultMinFreeBytes, DefaultHistoryMaxBytes, MaxHistoryMaxBytes)
 	}
+	if MaxMediaMaxBytes != 2147483648 || DefaultMediaRefRetentionDays != 30 || MaxMediaRefRetentionDays != 365 || DefaultMediaPerMinute != 6 || MaxMediaPerMinute != 30 ||
+		DefaultMediaGlobalPerHour != 60 || MaxMediaGlobalPerHour != 600 || DefaultMediaGlobalBytesPerHour != 4294967296 || MaxMediaGlobalBytesPerHour != 68719476736 {
+		t.Fatal("an attachment default or limit drifted from 2 GiB, 30 of 365 days, 6 of 30 a minute, 60 of 600 an hour and 4 GiB of 64 GiB an hour")
+	}
 	vars := withDataDir(t, nil)
 	cfg, r := Load(environ(vars), testOptions())
 	if r != nil {
@@ -135,6 +139,12 @@ func TestDefaults(t *testing.T) {
 		SearchPerMinute: 60,
 		SendGlobal:      30,
 		SendPerMinute:   10,
+
+		MediaMaxBytes:           0,
+		MediaRefRetentionDays:   30,
+		MediaPerMinute:          6,
+		MediaGlobalPerHour:      60,
+		MediaGlobalBytesPerHour: 4294967296,
 	}
 	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("Load = %+v, want %+v", cfg, want)
@@ -302,6 +312,69 @@ func TestRefusals(t *testing.T) {
 		{name: "send caps switch checked after the search rate", vars: map[string]string{envSearchPerMinute: "0", envUnsafeSendCaps: "2"}, reason: "search_per_minute_invalid", variable: envSearchPerMinute},
 		{name: "global send rate checked before the client send rate", vars: map[string]string{envSendGlobal: "0", envSendPerMinute: "0"}, reason: "send_global_per_hour_invalid", variable: envSendGlobal},
 		{name: "send caps switch checked before the send rates", vars: map[string]string{envSendGlobal: "0", envUnsafeSendCaps: "2"}, reason: "unsafe_send_caps_invalid", variable: envUnsafeSendCaps},
+
+		{name: "empty attachment cap", vars: map[string]string{envMediaMax: ""}, reason: "media_max_bytes_invalid", variable: envMediaMax},
+		{name: "negative attachment cap", vars: map[string]string{envMediaMax: "-1"}, reason: "media_max_bytes_invalid", variable: envMediaMax},
+		{name: "negative zero attachment cap", vars: map[string]string{envMediaMax: "-0"}, reason: "media_max_bytes_invalid", variable: envMediaMax},
+		{name: "signed attachment cap", vars: map[string]string{envMediaMax: "+104857600"}, reason: "media_max_bytes_invalid", variable: envMediaMax},
+		{name: "attachment cap with a leading zero", vars: map[string]string{envMediaMax: "0104857600"}, reason: "media_max_bytes_invalid", variable: envMediaMax},
+		{name: "attachment cap with two zeros", vars: map[string]string{envMediaMax: "00"}, reason: "media_max_bytes_invalid", variable: envMediaMax},
+		{name: "attachment cap with a space", vars: map[string]string{envMediaMax: "104857600 "}, reason: "media_max_bytes_invalid", variable: envMediaMax},
+		{name: "attachment cap with a unit", vars: map[string]string{envMediaMax: "100MiB"}, reason: "media_max_bytes_invalid", variable: envMediaMax},
+		{name: "attachment cap in hexadecimal", vars: map[string]string{envMediaMax: "0x6400000"}, reason: "media_max_bytes_invalid", variable: envMediaMax},
+		{name: "attachment cap above 2 GiB", vars: map[string]string{envMediaMax: "2147483649"}, reason: "media_max_bytes_invalid", variable: envMediaMax},
+		{name: "attachment cap above 2 GiB with the read caps lifted", vars: map[string]string{envMediaMax: "2147483649", envUnsafeRateCaps: "1"}, reason: "media_max_bytes_invalid", variable: envMediaMax},
+		{name: "attachment cap above 2 GiB with the send caps lifted", vars: map[string]string{envMediaMax: "2147483649", envUnsafeSendCaps: "1"}, reason: "media_max_bytes_invalid", variable: envMediaMax},
+		{name: "attachment cap beyond 64 bits", vars: map[string]string{envMediaMax: "18446744073709551616"}, reason: "media_max_bytes_invalid", variable: envMediaMax},
+		{name: "empty reference retention", vars: map[string]string{envMediaRetention: ""}, reason: "media_ref_retention_days_invalid", variable: envMediaRetention},
+		{name: "no reference retention", vars: map[string]string{envMediaRetention: "0"}, reason: "media_ref_retention_days_invalid", variable: envMediaRetention},
+		{name: "negative reference retention", vars: map[string]string{envMediaRetention: "-30"}, reason: "media_ref_retention_days_invalid", variable: envMediaRetention},
+		{name: "signed reference retention", vars: map[string]string{envMediaRetention: "+30"}, reason: "media_ref_retention_days_invalid", variable: envMediaRetention},
+		{name: "reference retention with a leading zero", vars: map[string]string{envMediaRetention: "030"}, reason: "media_ref_retention_days_invalid", variable: envMediaRetention},
+		{name: "reference retention with a unit", vars: map[string]string{envMediaRetention: "30d"}, reason: "media_ref_retention_days_invalid", variable: envMediaRetention},
+		{name: "reference retention above a year", vars: map[string]string{envMediaRetention: "366"}, reason: "media_ref_retention_days_invalid", variable: envMediaRetention},
+		{name: "reference retention above a year with the read caps lifted", vars: map[string]string{envMediaRetention: "366", envUnsafeRateCaps: "1"}, reason: "media_ref_retention_days_invalid", variable: envMediaRetention},
+		{name: "reference retention above a year with the send caps lifted", vars: map[string]string{envMediaRetention: "366", envUnsafeSendCaps: "1"}, reason: "media_ref_retention_days_invalid", variable: envMediaRetention},
+		{name: "reference retention beyond 64 bits", vars: map[string]string{envMediaRetention: "18446744073709551616"}, reason: "media_ref_retention_days_invalid", variable: envMediaRetention},
+		{name: "empty client attachment rate", vars: map[string]string{envMediaPerMinute: ""}, reason: "media_per_client_per_minute_invalid", variable: envMediaPerMinute},
+		{name: "zero client attachment rate", vars: map[string]string{envMediaPerMinute: "0"}, reason: "media_per_client_per_minute_invalid", variable: envMediaPerMinute},
+		{name: "negative client attachment rate", vars: map[string]string{envMediaPerMinute: "-1"}, reason: "media_per_client_per_minute_invalid", variable: envMediaPerMinute},
+		{name: "signed client attachment rate", vars: map[string]string{envMediaPerMinute: "+6"}, reason: "media_per_client_per_minute_invalid", variable: envMediaPerMinute},
+		{name: "client attachment rate with a leading zero", vars: map[string]string{envMediaPerMinute: "06"}, reason: "media_per_client_per_minute_invalid", variable: envMediaPerMinute},
+		{name: "client attachment rate with a unit", vars: map[string]string{envMediaPerMinute: "6/m"}, reason: "media_per_client_per_minute_invalid", variable: envMediaPerMinute},
+		{name: "client attachment rate above its cap", vars: map[string]string{envMediaPerMinute: "31"}, reason: "media_per_client_per_minute_invalid", variable: envMediaPerMinute},
+		{name: "client attachment rate above its cap with the read caps lifted", vars: map[string]string{envMediaPerMinute: "31", envUnsafeRateCaps: "1"}, reason: "media_per_client_per_minute_invalid", variable: envMediaPerMinute},
+		{name: "client attachment rate above its cap with the send caps lifted", vars: map[string]string{envMediaPerMinute: "31", envUnsafeSendCaps: "1"}, reason: "media_per_client_per_minute_invalid", variable: envMediaPerMinute},
+		{name: "client attachment rate beyond 64 bits", vars: map[string]string{envMediaPerMinute: "18446744073709551616", envUnsafeRateCaps: "1"}, reason: "media_per_client_per_minute_invalid", variable: envMediaPerMinute},
+		{name: "empty global attachment rate", vars: map[string]string{envMediaGlobal: ""}, reason: "media_global_per_hour_invalid", variable: envMediaGlobal},
+		{name: "zero global attachment rate", vars: map[string]string{envMediaGlobal: "0"}, reason: "media_global_per_hour_invalid", variable: envMediaGlobal},
+		{name: "negative global attachment rate", vars: map[string]string{envMediaGlobal: "-1"}, reason: "media_global_per_hour_invalid", variable: envMediaGlobal},
+		{name: "signed global attachment rate", vars: map[string]string{envMediaGlobal: "+60"}, reason: "media_global_per_hour_invalid", variable: envMediaGlobal},
+		{name: "global attachment rate with a leading zero", vars: map[string]string{envMediaGlobal: "060"}, reason: "media_global_per_hour_invalid", variable: envMediaGlobal},
+		{name: "global attachment rate with a unit", vars: map[string]string{envMediaGlobal: "60/h"}, reason: "media_global_per_hour_invalid", variable: envMediaGlobal},
+		{name: "global attachment rate above its cap", vars: map[string]string{envMediaGlobal: "601"}, reason: "media_global_per_hour_invalid", variable: envMediaGlobal},
+		{name: "global attachment rate above its cap with the read caps lifted", vars: map[string]string{envMediaGlobal: "601", envUnsafeRateCaps: "1"}, reason: "media_global_per_hour_invalid", variable: envMediaGlobal},
+		{name: "global attachment rate above its cap with the send caps lifted", vars: map[string]string{envMediaGlobal: "601", envUnsafeSendCaps: "1"}, reason: "media_global_per_hour_invalid", variable: envMediaGlobal},
+		{name: "global attachment rate beyond 64 bits", vars: map[string]string{envMediaGlobal: "18446744073709551616", envUnsafeSendCaps: "1"}, reason: "media_global_per_hour_invalid", variable: envMediaGlobal},
+		{name: "empty global attachment bytes", vars: map[string]string{envMediaGlobalBytes: ""}, reason: "media_global_bytes_per_hour_invalid", variable: envMediaGlobalBytes},
+		{name: "zero global attachment bytes", vars: map[string]string{envMediaGlobalBytes: "0"}, reason: "media_global_bytes_per_hour_invalid", variable: envMediaGlobalBytes},
+		{name: "zero global attachment bytes with downloads off", vars: map[string]string{envMediaMax: "0", envMediaGlobalBytes: "0"}, reason: "media_global_bytes_per_hour_invalid", variable: envMediaGlobalBytes},
+		{name: "negative global attachment bytes", vars: map[string]string{envMediaGlobalBytes: "-1"}, reason: "media_global_bytes_per_hour_invalid", variable: envMediaGlobalBytes},
+		{name: "signed global attachment bytes", vars: map[string]string{envMediaGlobalBytes: "+4294967296"}, reason: "media_global_bytes_per_hour_invalid", variable: envMediaGlobalBytes},
+		{name: "global attachment bytes with a leading zero", vars: map[string]string{envMediaGlobalBytes: "04294967296"}, reason: "media_global_bytes_per_hour_invalid", variable: envMediaGlobalBytes},
+		{name: "global attachment bytes with a unit", vars: map[string]string{envMediaGlobalBytes: "4GiB"}, reason: "media_global_bytes_per_hour_invalid", variable: envMediaGlobalBytes},
+		{name: "global attachment bytes above 64 GiB", vars: map[string]string{envMediaGlobalBytes: "68719476737"}, reason: "media_global_bytes_per_hour_invalid", variable: envMediaGlobalBytes},
+		{name: "global attachment bytes above 64 GiB with the read caps lifted", vars: map[string]string{envMediaGlobalBytes: "68719476737", envUnsafeRateCaps: "1"}, reason: "media_global_bytes_per_hour_invalid", variable: envMediaGlobalBytes},
+		{name: "global attachment bytes above 64 GiB with the send caps lifted", vars: map[string]string{envMediaGlobalBytes: "68719476737", envUnsafeSendCaps: "1"}, reason: "media_global_bytes_per_hour_invalid", variable: envMediaGlobalBytes},
+		{name: "global attachment bytes beyond 64 bits", vars: map[string]string{envMediaGlobalBytes: "18446744073709551616"}, reason: "media_global_bytes_per_hour_invalid", variable: envMediaGlobalBytes},
+		{name: "global attachment bytes below the attachment cap", vars: map[string]string{envMediaMax: "104857600", envMediaGlobalBytes: "104857599"}, reason: "media_global_bytes_per_hour_invalid", variable: envMediaGlobalBytes},
+		{name: "global attachment bytes one below the largest attachment cap", vars: map[string]string{envMediaMax: "2147483648", envMediaGlobalBytes: "2147483647"}, reason: "media_global_bytes_per_hour_invalid", variable: envMediaGlobalBytes},
+		{name: "attachment cap checked after the send rates", vars: map[string]string{envSendPerMinute: "0", envMediaMax: "-1"}, reason: "send_per_client_per_minute_invalid", variable: envSendPerMinute},
+		{name: "attachment cap checked before the reference retention", vars: map[string]string{envMediaMax: "-1", envMediaRetention: "0"}, reason: "media_max_bytes_invalid", variable: envMediaMax},
+		{name: "reference retention checked before the client attachment rate", vars: map[string]string{envMediaRetention: "0", envMediaPerMinute: "0"}, reason: "media_ref_retention_days_invalid", variable: envMediaRetention},
+		{name: "client attachment rate checked before the global attachment rate", vars: map[string]string{envMediaPerMinute: "0", envMediaGlobal: "0"}, reason: "media_per_client_per_minute_invalid", variable: envMediaPerMinute},
+		{name: "global attachment rate checked before the global attachment bytes", vars: map[string]string{envMediaGlobal: "0", envMediaGlobalBytes: "0"}, reason: "media_global_per_hour_invalid", variable: envMediaGlobal},
+		{name: "attachment cap checked before the global attachment bytes it bounds", vars: map[string]string{envMediaMax: "2147483649", envMediaGlobalBytes: "1"}, reason: "media_max_bytes_invalid", variable: envMediaMax},
 
 		{name: "plain http webhook", vars: map[string]string{envNotifyURL: "http://hooks.example.test/x", envNotifySecret: secretFile(t, 0o600)}, reason: "notify_url_invalid", variable: envNotifyURL},
 		{name: "webhook with credentials", vars: map[string]string{envNotifyURL: (&url.URL{Scheme: "https", User: url.UserPassword("synthetic", "synthetic"), Host: "hooks.example.test"}).String(), envNotifySecret: secretFile(t, 0o600)}, reason: "notify_url_invalid", variable: envNotifyURL},
@@ -795,6 +868,16 @@ func TestAccepted(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "every attachment variable set",
+			vars: map[string]string{envMediaMax: "104857600", envMediaRetention: "90", envMediaPerMinute: "3", envMediaGlobal: "30", envMediaGlobalBytes: "1073741824"},
+			check: func(t *testing.T, c Config) {
+				if c.MediaMaxBytes != 104857600 || c.MediaRefRetentionDays != 90 || c.MediaPerMinute != 3 || c.MediaGlobalPerHour != 30 || c.MediaGlobalBytesPerHour != 1073741824 {
+					t.Fatalf("attachment settings = %d bytes, %d days, %d a minute, %d an hour, %d bytes an hour",
+						c.MediaMaxBytes, c.MediaRefRetentionDays, c.MediaPerMinute, c.MediaGlobalPerHour, c.MediaGlobalBytesPerHour)
+				}
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -851,6 +934,45 @@ func TestSendLimits(t *testing.T) {
 			cfg, r := Load(environ(withDataDir(t, tt.vars)), testOptions())
 			if r != nil || cfg.SendGlobal != tt.global || cfg.SendPerMinute != tt.client || cfg.UnsafeSendCaps != tt.unsafeSendCaps {
 				t.Fatalf("Load = %d sends an hour, %d a client a minute, unsafe caps %v, %v", cfg.SendGlobal, cfg.SendPerMinute, cfg.UnsafeSendCaps, r)
+			}
+		})
+	}
+}
+
+func TestMediaLimits(t *testing.T) {
+	type limits struct {
+		max                  int64
+		retention, perMinute int
+		global               int
+		globalBytes          int64
+	}
+	defaults := limits{retention: 30, perMinute: 6, global: 60, globalBytes: 4294967296}
+	for _, tt := range []struct {
+		name string
+		vars map[string]string
+		want limits
+	}{
+		{name: "downloads off", vars: map[string]string{envMediaMax: "0"}, want: defaults},
+		{name: "suggested cap", vars: map[string]string{envMediaMax: "104857600"}, want: limits{max: 104857600, retention: 30, perMinute: 6, global: 60, globalBytes: 4294967296}},
+		{name: "lowest", vars: map[string]string{envMediaMax: "1", envMediaRetention: "1", envMediaPerMinute: "1", envMediaGlobal: "1", envMediaGlobalBytes: "1"},
+			want: limits{max: 1, retention: 1, perMinute: 1, global: 1, globalBytes: 1}},
+		{name: "caps", vars: map[string]string{envMediaMax: "2147483648", envMediaRetention: "365", envMediaPerMinute: "30", envMediaGlobal: "600", envMediaGlobalBytes: "68719476736"},
+			want: limits{max: 2147483648, retention: 365, perMinute: 30, global: 600, globalBytes: 68719476736}},
+		{name: "global bytes of 1 with downloads off", vars: map[string]string{envMediaMax: "0", envMediaGlobalBytes: "1"}, want: limits{retention: 30, perMinute: 6, global: 60, globalBytes: 1}},
+		{name: "global bytes equal to the cap", vars: map[string]string{envMediaMax: "104857600", envMediaGlobalBytes: "104857600"}, want: limits{max: 104857600, retention: 30, perMinute: 6, global: 60, globalBytes: 104857600}},
+		{name: "default global bytes above the largest cap", vars: map[string]string{envMediaMax: "2147483648"}, want: limits{max: 2147483648, retention: 30, perMinute: 6, global: 60, globalBytes: 4294967296}},
+		{name: "read caps lifted leave the media caps", vars: map[string]string{envUnsafeRateCaps: "1", envMediaPerMinute: "30", envMediaGlobal: "600"}, want: limits{retention: 30, perMinute: 30, global: 600, globalBytes: 4294967296}},
+		{name: "send caps lifted leave the media caps", vars: map[string]string{envUnsafeSendCaps: "1", envMediaPerMinute: "30", envMediaGlobal: "600"}, want: limits{retention: 30, perMinute: 30, global: 600, globalBytes: 4294967296}},
+		{name: "read caps lifted leave the media values", vars: map[string]string{envUnsafeRateCaps: "1", envMediaMax: "104857600", envMediaRetention: "7", envMediaPerMinute: "2", envMediaGlobal: "20", envMediaGlobalBytes: "209715200"},
+			want: limits{max: 104857600, retention: 7, perMinute: 2, global: 20, globalBytes: 209715200}},
+		{name: "read caps lifted without a media value", vars: map[string]string{envUnsafeRateCaps: "1"}, want: defaults},
+		{name: "send caps lifted without a media value", vars: map[string]string{envUnsafeSendCaps: "1"}, want: defaults},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, r := Load(environ(withDataDir(t, tt.vars)), testOptions())
+			got := limits{max: cfg.MediaMaxBytes, retention: cfg.MediaRefRetentionDays, perMinute: cfg.MediaPerMinute, global: cfg.MediaGlobalPerHour, globalBytes: cfg.MediaGlobalBytesPerHour}
+			if r != nil || got != tt.want {
+				t.Fatalf("Load = %+v, %v, want %+v", got, r, tt.want)
 			}
 		})
 	}
@@ -964,6 +1086,12 @@ func TestRefusalsNeverEchoValues(t *testing.T) {
 		{envBackupRecipient: syntheticAgeRecipient, envBackupKeep: secret},
 		{envBackupTime: secret},
 		{envAuditRetention: secret},
+		{envMediaMax: secret},
+		{envMediaRetention: secret},
+		{envMediaPerMinute: secret},
+		{envMediaGlobal: secret},
+		{envMediaGlobalBytes: secret},
+		{envMediaMax: "104857600", envMediaGlobalBytes: secret},
 	}
 	for _, vars := range tests {
 		_, r := Load(environ(withDataDir(t, vars)), testOptions())
@@ -972,6 +1100,24 @@ func TestRefusalsNeverEchoValues(t *testing.T) {
 		}
 		if strings.Contains(r.Error(), secret) {
 			t.Fatalf("refusal %q echoes the configured value", r.Error())
+		}
+	}
+	for _, vars := range []map[string]string{
+		{envMediaMax: "98765432123"},
+		{envMediaRetention: "98765"},
+		{envMediaPerMinute: "98765"},
+		{envMediaGlobal: "98765"},
+		{envMediaGlobalBytes: "98765432123456"},
+		{envMediaMax: "98765432", envMediaGlobalBytes: "98765431"},
+	} {
+		_, r := Load(environ(withDataDir(t, vars)), testOptions())
+		if r == nil {
+			t.Fatalf("Load accepted %v", vars)
+		}
+		for _, v := range vars {
+			if strings.Contains(r.Error(), v) {
+				t.Fatalf("refusal %q echoes the configured value %s", r.Error(), v)
+			}
 		}
 	}
 	_, r := Load(environ(withDataDir(t, map[string]string{envBackupRecipient: syntheticAgeSecret})), testOptions())

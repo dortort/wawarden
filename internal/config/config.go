@@ -55,6 +55,12 @@ const (
 	envSendPerMinute   = "WAWARDEN_SEND_PER_CLIENT_PER_MINUTE"
 	envUnsafeSendCaps  = "WAWARDEN_UNSAFE_SEND_CAPS"
 
+	envMediaMax         = "WAWARDEN_MEDIA_MAX_BYTES"
+	envMediaRetention   = "WAWARDEN_MEDIA_REF_RETENTION_DAYS"
+	envMediaPerMinute   = "WAWARDEN_MEDIA_PER_CLIENT_PER_MINUTE"
+	envMediaGlobal      = "WAWARDEN_MEDIA_GLOBAL_PER_HOUR"
+	envMediaGlobalBytes = "WAWARDEN_MEDIA_GLOBAL_BYTES_PER_HOUR"
+
 	prefix    = "WAWARDEN_"
 	devPrefix = "WAWARDEN_DEV_"
 
@@ -88,6 +94,16 @@ const (
 	DefaultAuditRetentionDays = 90
 	MinAuditRetentionDays     = 7
 	MaxAuditRetentionDays     = 3650
+
+	MaxMediaMaxBytes               = 2 << 30
+	DefaultMediaRefRetentionDays   = 30
+	MaxMediaRefRetentionDays       = 365
+	DefaultMediaPerMinute          = 6
+	MaxMediaPerMinute              = 30
+	DefaultMediaGlobalPerHour      = 60
+	MaxMediaGlobalPerHour          = 600
+	DefaultMediaGlobalBytesPerHour = 4 << 30
+	MaxMediaGlobalBytesPerHour     = 64 << 30
 
 	maxHashFileBytes = 4096
 
@@ -136,12 +152,17 @@ const (
 	reasonUnsafeSendCapsInvalid    = "unsafe_send_caps_invalid"
 	reasonSendGlobalInvalid        = "send_global_per_hour_invalid"
 	reasonSendPerMinuteInvalid     = "send_per_client_per_minute_invalid"
+	reasonMediaMaxBytesInvalid     = "media_max_bytes_invalid"
+	reasonMediaRetentionInvalid    = "media_ref_retention_days_invalid"
+	reasonMediaPerMinuteInvalid    = "media_per_client_per_minute_invalid"
+	reasonMediaGlobalInvalid       = "media_global_per_hour_invalid"
+	reasonMediaGlobalBytesInvalid  = "media_global_bytes_per_hour_invalid"
 )
 
 var known = []string{envDataDir, envListen, envAdminListen, envHealthListen, envAdminHash, envAdminHashFile, envLogLevel, envStorageProfile, envMinFreeBytes,
 	envOwnerPhone, envHistoryMax, envUnsafeDebug, envMetricsEMF, envNotifyURL, envNotifySecret, envNotifyPrivate, envBackupRecipient,
 	envReadPerMinute, envSearchPerMinute, envUnsafeRateCaps, envBackupTime, envBackupKeep, envAuditRetention, envSendGlobal, envSendPerMinute,
-	envUnsafeSendCaps}
+	envUnsafeSendCaps, envMediaMax, envMediaRetention, envMediaPerMinute, envMediaGlobal, envMediaGlobalBytes}
 
 type StorageProfile string
 
@@ -185,6 +206,12 @@ type Config struct {
 	SendPerMinute   int
 	UnsafeSendCaps  bool
 	Dev             Dev
+
+	MediaMaxBytes           int64
+	MediaRefRetentionDays   int
+	MediaPerMinute          int
+	MediaGlobalPerHour      int
+	MediaGlobalBytesPerHour int64
 }
 
 type Notify struct {
@@ -289,6 +316,21 @@ func Load(environ []string, opts Options) (Config, *Refusal) {
 		return Config{}, r
 	}
 	if cfg.SendPerMinute, r = sendLimit(env, envSendPerMinute, reasonSendPerMinuteInvalid, "minute", DefaultSendPerMinute, sendCap(MaxSendPerMinute, MaxUnsafeSendPerMinute, cfg.UnsafeSendCaps)); r != nil {
+		return Config{}, r
+	}
+	if cfg.MediaMaxBytes, r = mediaMaxBytes(env); r != nil {
+		return Config{}, r
+	}
+	if cfg.MediaRefRetentionDays, r = mediaRefRetention(env); r != nil {
+		return Config{}, r
+	}
+	if cfg.MediaPerMinute, r = mediaPerMinute(env); r != nil {
+		return Config{}, r
+	}
+	if cfg.MediaGlobalPerHour, r = mediaGlobalPerHour(env); r != nil {
+		return Config{}, r
+	}
+	if cfg.MediaGlobalBytesPerHour, r = mediaGlobalBytesPerHour(env, cfg.MediaMaxBytes); r != nil {
 		return Config{}, r
 	}
 	if cfg.Dev, r = devSettings(env); r != nil {
@@ -597,6 +639,76 @@ func sendLimit(env map[string]string, name, reason, unit string, def, limit int)
 	n, err := strconv.Atoi(v)
 	if err != nil || strconv.Itoa(n) != v || n < 1 || n > limit {
 		return 0, &Refusal{Reason: reason, Variable: name, detail: "must be a number of sends per " + unit + " written in decimal digits, from 1 to " + strconv.Itoa(limit)}
+	}
+	return n, nil
+}
+
+func decimal(v string) (int64, bool) {
+	n, err := strconv.ParseInt(v, 10, 64)
+	return n, err == nil && n >= 0 && strconv.FormatInt(n, 10) == v
+}
+
+func mediaMaxBytes(env map[string]string) (int64, *Refusal) {
+	v, ok := env[envMediaMax]
+	if !ok {
+		return 0, nil
+	}
+	n, valid := decimal(v)
+	if !valid || n > MaxMediaMaxBytes {
+		return 0, &Refusal{Reason: reasonMediaMaxBytesInvalid, Variable: envMediaMax,
+			detail: "must be 0, which turns attachment downloads off, or a number of bytes written in decimal digits, from 1 to " + strconv.FormatInt(MaxMediaMaxBytes, 10)}
+	}
+	return n, nil
+}
+
+func mediaRefRetention(env map[string]string) (int, *Refusal) {
+	v, ok := env[envMediaRetention]
+	if !ok {
+		return DefaultMediaRefRetentionDays, nil
+	}
+	n, valid := decimal(v)
+	if !valid || n < 1 || n > MaxMediaRefRetentionDays {
+		return 0, &Refusal{Reason: reasonMediaRetentionInvalid, Variable: envMediaRetention,
+			detail: "must be a number of days written in decimal digits, from 1 to " + strconv.Itoa(MaxMediaRefRetentionDays)}
+	}
+	return int(n), nil
+}
+
+func mediaPerMinute(env map[string]string) (int, *Refusal) {
+	v, ok := env[envMediaPerMinute]
+	if !ok {
+		return DefaultMediaPerMinute, nil
+	}
+	n, valid := decimal(v)
+	if !valid || n < 1 || n > MaxMediaPerMinute {
+		return 0, &Refusal{Reason: reasonMediaPerMinuteInvalid, Variable: envMediaPerMinute,
+			detail: "must be a number of attachment fetches per minute written in decimal digits, from 1 to " + strconv.Itoa(MaxMediaPerMinute)}
+	}
+	return int(n), nil
+}
+
+func mediaGlobalPerHour(env map[string]string) (int, *Refusal) {
+	v, ok := env[envMediaGlobal]
+	if !ok {
+		return DefaultMediaGlobalPerHour, nil
+	}
+	n, valid := decimal(v)
+	if !valid || n < 1 || n > MaxMediaGlobalPerHour {
+		return 0, &Refusal{Reason: reasonMediaGlobalInvalid, Variable: envMediaGlobal,
+			detail: "must be a number of attachment fetches per hour written in decimal digits, from 1 to " + strconv.Itoa(MaxMediaGlobalPerHour)}
+	}
+	return int(n), nil
+}
+
+func mediaGlobalBytesPerHour(env map[string]string, maxBytes int64) (int64, *Refusal) {
+	v, ok := env[envMediaGlobalBytes]
+	if !ok {
+		return DefaultMediaGlobalBytesPerHour, nil
+	}
+	n, valid := decimal(v)
+	if !valid || n < 1 || n < maxBytes || n > MaxMediaGlobalBytesPerHour {
+		return 0, &Refusal{Reason: reasonMediaGlobalBytesInvalid, Variable: envMediaGlobalBytes,
+			detail: "must be a number of bytes written in decimal digits, from 1 to " + strconv.FormatInt(MaxMediaGlobalBytesPerHour, 10) + " and not below " + envMediaMax}
 	}
 	return n, nil
 }
