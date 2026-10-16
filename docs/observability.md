@@ -53,6 +53,7 @@ lines have none of the four keys.
 |---|---|---|---|
 | `startup_refused` | `ERROR` | `reason`, `error` | The configuration or the [master key](configuration.md#master-key) is refused; exit `2`. |
 | `keys_loaded` | `INFO` | `key_id`, `retired` | The master key is loaded and the log pseudonyms are keyed with it; `key_id` is the 8-digit key id, never a key, and `retired` the number of [retired keys](configuration.md#master-key) loaded. |
+| `memory_limit` | `INFO` | `source` (`env`, `cgroup` or `none`), `soft_limit_bytes` | At start, the Go runtime's soft memory limit in effect and where it came from (see [Container hardening](hardening.md#container-hardening)); `soft_limit_bytes` is 9223372036854775807 when no limit applies. |
 | `db_lock_wait` | `WARN` | `database` (`archive` or `session`), `within` | Another process holds the lock of the archive or the device store; `serve` retries until `within` (`5m0s`) has passed. Logged once per database and start. |
 | `archive_opened` | `INFO` | `schema_version`, `profile`, `ofd_locking`, `recent_starts` | The [archive](configuration.md#message-archive) is open and locked. `ofd_locking` is `true` when open-file-description locks are in use, and `recent_starts` counts the starts of the last ten minutes, this one included, at most 64. |
 | `session_opened` | `INFO` | `paired` | The [device store](configuration.md#device-store) is open, locked and up to date; `paired` is `true` when it holds a linked device. |
