@@ -362,6 +362,7 @@ func TestInsertRefusesInvalidMediaReferences(t *testing.T) {
 		"a negative retention":               func(m *Message) { m.Media.Retention = -time.Hour },
 		"a reaction carrying a reference":    func(m *Message) { m.Kind, m.Text, m.MediaType = KindReaction, "", "" },
 		"a poll update carrying a reference": func(m *Message) { m.Kind, m.Text, m.MediaType = KindPollUpdate, "", "" },
+		"a reference without a media type":   func(m *Message) { m.MediaType = "" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := mediaMessage(t, groupJID, "ID1", alice, "caption", "sealed-reference")
@@ -431,6 +432,12 @@ func TestAReferenceIsWrittenWithANewRowOnly(t *testing.T) {
 	text := insert(t, s, textMessage(t, groupJID, "T1", alice, "plain words"))
 	if _, inserted := insertNew(t, s, mediaMessage(t, groupJID, "T1", alice, "plain words", "sealed-text")); inserted || storedRef(t, s, text) != "" {
 		t.Fatal("a duplicate gave a reference to a stored message that is not media")
+	}
+	untyped := mediaMessage(t, groupJID, "U1", alice, "", "unused")
+	untyped.Media, untyped.MediaType = nil, ""
+	untypedRef := insert(t, s, untyped)
+	if _, inserted := insertNew(t, s, mediaMessage(t, groupJID, "U1", alice, "", "sealed-untyped")); inserted || storedRef(t, s, untypedRef) != "" {
+		t.Fatal("a duplicate gave a reference to a stored media message without a media type")
 	}
 	if n := scalar[int](t, s, "SELECT count(*) FROM media_refs"); n != 2 {
 		t.Fatalf("%d references, want the first and the filled one", n)

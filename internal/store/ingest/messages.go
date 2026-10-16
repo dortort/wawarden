@@ -157,7 +157,7 @@ const (
 	insertMediaRef = "INSERT INTO media_refs (seq, ref, kind, variant, declared, expires_at, added_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
 	fillMediaRef   = `INSERT INTO media_refs (seq, ref, kind, variant, declared, expires_at, added_at)
 		SELECT seq, ?2, ?3, ?4, ?5, min(?6, ts + ?7, coalesce(expires_at, ?6)), ?8 FROM messages
-		WHERE seq = ?1 AND kind = 'media' AND revoked = 0 AND min(?6, ts + ?7, coalesce(expires_at, ?6)) > ?8
+		WHERE seq = ?1 AND kind = 'media' AND media_type IS NOT NULL AND revoked = 0 AND min(?6, ts + ?7, coalesce(expires_at, ?6)) > ?8
 		ON CONFLICT (seq) DO NOTHING`
 	deleteMediaRef    = "DELETE FROM media_refs WHERE seq = ?"
 	expireMediaRef    = "UPDATE media_refs SET expires_at = ?1 WHERE seq = (SELECT seq FROM messages WHERE chat_jid = ?2 AND id = ?3 AND sender_jid = ?4) AND expires_at > ?1"
@@ -196,6 +196,8 @@ func (m *Message) check() error {
 		return invalid("quote")
 	case m.Media != nil && m.Kind != KindMedia:
 		return invalid("only a media message carries a media reference")
+	case m.Media != nil && m.MediaType == "":
+		return invalid("a media reference needs a media type")
 	case m.Media != nil:
 		if err := m.Media.check(); err != nil {
 			return err
