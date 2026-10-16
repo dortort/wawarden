@@ -3,15 +3,24 @@ package dto
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
+	"iter"
+	"math"
 	"reflect"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/dortort/wawarden/internal/metrics"
 )
 
 const (
 	jsonContentType = "application/json; charset=utf-8"
+	statusOK        = 200
 	statusCreated   = 201
 	statusAccepted  = 202
 )
@@ -20,6 +29,8 @@ var (
 	errNoResponse      = errors.New("dto: no response to encode")
 	errNoRegistry      = errors.New("dto: no metrics registry to encode")
 	errForeignResponse = errors.New("dto: the response type is declared outside package dto")
+	errStreamOnly      = errors.New("dto: an attachment streams through its delivery plan and is never encoded")
+	errAttachment      = errors.New("dto: the attachment's kind, variant, served type, size, tag, body or expiry is invalid")
 )
 
 var pkgPath = reflect.TypeFor[Error]().PkgPath()
@@ -322,3 +333,252 @@ func encodeJSON(v any) (string, []byte, error) {
 	}
 	return jsonContentType, b, nil
 }
+
+const (
+	MediaFetching = "fetching"
+	MediaReady    = "ready"
+
+	statusPartialContent      = 206
+	statusRangeNotSatisfiable = 416
+	mediaRetryAfter           = 2 * time.Second
+	typeOctetStream           = "application/octet-stream"
+	attachmentPolicy          = "default-src 'none'; sandbox; frame-ancestors 'none'"
+)
+
+var servedExtensions = map[string]string{
+	"image/jpeg":      "jpg",
+	"image/png":       "png",
+	"audio/ogg":       "ogg",
+	"audio/mpeg":      "mp3",
+	"audio/mp4":       "m4a",
+	"video/mp4":       "mp4",
+	"application/pdf": "pdf",
+	typeOctetStream:   "bin",
+}
+
+var (
+	imageTypes = []string{"image/jpeg", "image/png"}
+	videoTypes = []string{"video/mp4", typeOctetStream}
+	audioTypes = []string{"audio/ogg", "audio/mpeg", "audio/mp4", typeOctetStream}
+)
+
+var servedTypes = map[string][]string{
+	"image/":           imageTypes,
+	"video/":           videoTypes,
+	"video/gif":        videoTypes,
+	"video/video_note": videoTypes,
+	"audio/":           audioTypes,
+	"audio/voice_note": audioTypes,
+	"document/":        {"application/pdf", typeOctetStream, "image/jpeg", "image/png"},
+	"sticker/":         imageTypes,
+	"sticker/animated": imageTypes,
+	"sticker/lottie":   {typeOctetStream},
+}
+
+var deliveryHeaders = []string{
+	"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Content-Disposition", "Content-Security-Policy",
+	"Cross-Origin-Resource-Policy",
+}
+
+func DeliveryHeaders() []string { return slices.Clone(deliveryHeaders) }
+
+type Attachment struct {
+	kind       string
+	servedType string
+	size       int64
+	etag       string
+	body       io.ReaderAt
+	expires    time.Time
+	finished   func(sent int64, complete bool)
+}
+
+func NewAttachment(kind, variant, servedType string, size int64, tag [16]byte, body io.ReaderAt, expires time.Time,
+	finished func(sent int64, complete bool)) (Attachment, error) {
+	if !slices.Contains(servedTypes[kind+"/"+variant], servedType) || size < 0 || tag == [16]byte{} || body == nil || expires.IsZero() {
+		return Attachment{}, errAttachment
+	}
+	return Attachment{
+		kind: kind, servedType: servedType, size: size, etag: `"` + hex.EncodeToString(tag[:]) + `"`, body: body, expires: expires, finished: finished,
+	}, nil
+}
+
+func (Attachment) encode() (string, []byte, error) { return "", nil, errStreamOnly }
+
+func (a Attachment) Expires() time.Time { return a.expires }
+
+func (a Attachment) Finished(sent int64, complete bool) {
+	if a.finished != nil {
+		a.finished(sent, complete)
+	}
+}
+
+func (a Attachment) Plan(rangeHeader, ifRange string) (Delivery, error) {
+	if a.body == nil {
+		return Delivery{}, errAttachment
+	}
+	first, last, code := int64(0), a.size-1, statusOK
+	if rangeHeader != "" && (ifRange == "" || ifRange == a.etag) {
+		first, last, code = singleRange(rangeHeader, a.size)
+	}
+	if code == statusRangeNotSatisfiable {
+		return Delivery{
+			code:   code,
+			header: [][2]string{{"Content-Range", "bytes */" + strconv.FormatInt(a.size, 10)}},
+			body:   io.NewSectionReader(a.body, 0, 0),
+		}, nil
+	}
+	length := last - first + 1
+	header := [][2]string{{"Content-Type", a.servedType}, {"Content-Length", strconv.FormatInt(length, 10)}}
+	if code == statusPartialContent {
+		header = append(header, [2]string{"Content-Range", "bytes " + strconv.FormatInt(first, 10) + "-" + strconv.FormatInt(last, 10) + "/" + strconv.FormatInt(a.size, 10)})
+	}
+	header = append(header,
+		[2]string{"Accept-Ranges", "bytes"},
+		[2]string{"ETag", a.etag},
+		[2]string{"Content-Disposition", `attachment; filename="wawarden-` + a.kind + "." + servedExtensions[a.servedType] + `"`},
+		[2]string{"Content-Security-Policy", attachmentPolicy},
+		[2]string{"Cross-Origin-Resource-Policy", "same-origin"},
+	)
+	return Delivery{code: code, header: header, body: io.NewSectionReader(a.body, first, length), whole: length == a.size}, nil
+}
+
+func singleRange(header string, size int64) (first, last int64, code int) {
+	whole := size - 1
+	spec, ok := cutPrefixFold(header, "bytes=")
+	if !ok || strings.Contains(spec, ",") {
+		return 0, whole, statusOK
+	}
+	firstText, lastText, ok := strings.Cut(strings.Trim(spec, " \t"), "-")
+	if !ok {
+		return 0, whole, statusOK
+	}
+	if firstText == "" {
+		suffix, ok := decimal(lastText)
+		switch {
+		case !ok:
+			return 0, whole, statusOK
+		case suffix == 0 || size == 0:
+			return 0, 0, statusRangeNotSatisfiable
+		}
+		return size - min(suffix, size), whole, statusPartialContent
+	}
+	first, ok = decimal(firstText)
+	if !ok {
+		return 0, whole, statusOK
+	}
+	last = math.MaxInt64
+	if lastText != "" {
+		if last, ok = decimal(lastText); !ok || last < first {
+			return 0, whole, statusOK
+		}
+	}
+	if first >= size {
+		return 0, 0, statusRangeNotSatisfiable
+	}
+	return first, min(last, whole), statusPartialContent
+}
+
+func cutPrefixFold(s, prefix string) (string, bool) {
+	if len(s) < len(prefix) || !strings.EqualFold(s[:len(prefix)], prefix) {
+		return "", false
+	}
+	return s[len(prefix):], true
+}
+
+func decimal(s string) (int64, bool) {
+	if s == "" {
+		return 0, false
+	}
+	var n int64
+	for i := range len(s) {
+		d := int64(s[i]) - '0'
+		switch {
+		case d < 0 || d > 9:
+			return 0, false
+		case n > (math.MaxInt64-d)/10:
+			n = math.MaxInt64
+		default:
+			n = n*10 + d
+		}
+	}
+	return n, true
+}
+
+type Delivery struct {
+	code   int
+	header [][2]string
+	body   *io.SectionReader
+	whole  bool
+}
+
+func (d Delivery) Code() int { return d.code }
+
+func (d Delivery) Header() iter.Seq2[string, string] {
+	return func(yield func(string, string) bool) {
+		for _, h := range d.header {
+			if !yield(h[0], h[1]) {
+				return
+			}
+		}
+	}
+}
+
+func (d Delivery) Body() *io.SectionReader { return d.body }
+
+func (d Delivery) Offset() int64 {
+	if d.body == nil {
+		return 0
+	}
+	_, off, _ := d.body.Outer()
+	return off
+}
+
+func (d Delivery) Length() int64 {
+	if d.body == nil {
+		return 0
+	}
+	return d.body.Size()
+}
+
+func (d Delivery) Whole() bool { return d.whole }
+
+type AttachmentInfo struct {
+	Kind              string  `json:"kind"`
+	Variant           string  `json:"variant"`
+	State             string  `json:"state"`
+	ServedType        string  `json:"served_type"`
+	Format            string  `json:"format"`
+	Normalised        bool    `json:"normalised"`
+	Bytes             int64   `json:"bytes"`
+	SizeDeclared      int64   `json:"size_declared"`
+	Delivery          string  `json:"delivery"`
+	Reason            *string `json:"reason"`
+	Parts             int     `json:"parts"`
+	Offset            int64   `json:"offset"`
+	Length            int64   `json:"length"`
+	RestRoute         string  `json:"rest_route"`
+	ExpiresAt         *string `json:"expires_at"`
+	RetryAfterSeconds *int    `json:"retry_after_seconds,omitempty"`
+	Untrusted         bool    `json:"untrusted"`
+	Notice            string  `json:"notice"`
+}
+
+type MediaStatus struct {
+	AttachmentInfo
+}
+
+func (m MediaStatus) Status() int {
+	if m.State == MediaFetching {
+		return statusAccepted
+	}
+	return statusOK
+}
+
+func (m MediaStatus) RetryAfter() time.Duration {
+	if m.State == MediaFetching {
+		return mediaRetryAfter
+	}
+	return 0
+}
+
+func (m MediaStatus) encode() (string, []byte, error) { return encodeJSON(m) }

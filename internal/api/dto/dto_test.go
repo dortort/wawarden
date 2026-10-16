@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dortort/wawarden/internal/api/dto"
 	"github.com/dortort/wawarden/internal/metrics"
@@ -218,6 +219,7 @@ func TestEncodeRefusesMissingContent(t *testing.T) {
 		{name: "nil response"},
 		{name: "zero metrics payload", response: dto.Prometheus{}},
 		{name: "metrics without a registry", response: dto.Metrics(nil)},
+		{name: "a stream-only attachment", response: sampleAttachment(t)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -262,7 +264,11 @@ func TestEncodeRefusesTypesDeclaredOutsideDTO(t *testing.T) {
 
 func TestNoForbiddenKeyCanBeProduced(t *testing.T) {
 	visited := make(map[reflect.Type]bool)
+	walked := attachmentSamples(t)
 	for _, r := range samples() {
+		walked = append(walked, r)
+	}
+	for _, r := range walked {
 		for _, problem := range jsonKeyProblems(reflect.TypeOf(r), reflect.TypeOf(r).Name(), visited) {
 			t.Error(problem)
 		}
@@ -277,7 +283,7 @@ func TestNoForbiddenKeyCanBeProduced(t *testing.T) {
 	}
 	for _, name := range declaredTypes(t) {
 		if !reached[name] {
-			t.Errorf("type dto.%s is not reached from samples(), so its JSON keys are unchecked: add it there", name)
+			t.Errorf("type dto.%s is not reached from samples() or attachmentSamples(), so its JSON keys are unchecked: add it there", name)
 		}
 	}
 }
@@ -513,10 +519,10 @@ func declaredTypes(t *testing.T) []string {
 	return names
 }
 
-func TestOnlyTheSendAndBackfillAnswersCarryTheirOwnStatus(t *testing.T) {
+func TestOnlyTheSendBackfillAndMediaAnswersCarryTheirOwnStatus(t *testing.T) {
 	type statused interface{ Status() int }
-	want := map[string]int{"dto.SendResult": 201, "dto.BackfillRequested": 202}
-	for _, r := range samples() {
+	want := map[string]int{"dto.SendResult": 201, "dto.BackfillRequested": 202, "dto.MediaStatus": 202}
+	for _, r := range append(samples(), sampleMediaStatus(dto.MediaFetching), sampleAttachment(t)) {
 		name := reflect.TypeOf(r).String()
 		s, ok := r.(statused)
 		switch {
@@ -534,4 +540,46 @@ func TestOnlyTheSendAndBackfillAnswersCarryTheirOwnStatus(t *testing.T) {
 	if err != nil || string(body) != `{"message":null,"replayed":false,"session":{"state":"connected"}}` {
 		t.Fatalf("an answer without a wait = %s, %v", body, err)
 	}
+	fetching, ready := sampleMediaStatus(dto.MediaFetching), sampleMediaStatus(dto.MediaReady)
+	if ready.Status() != 200 || ready.RetryAfter() != 0 || fetching.RetryAfter() != 2*time.Second {
+		t.Fatalf("a ready status answers %d after %v, a fetching one after %v; want 200 at once and 2s", ready.Status(), ready.RetryAfter(), fetching.RetryAfter())
+	}
+}
+
+var sampleTag = [16]byte{0x5e, 0x17, 0x7e, 0x71, 0xc0, 0xde, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09}
+
+const sampleETag = `"5e177e71c0de00010203040506070809"`
+
+var sampleExpiry = time.Date(2026, 10, 5, 12, 10, 0, 0, time.UTC)
+
+func sampleAttachment(t *testing.T) dto.Attachment {
+	t.Helper()
+	a, err := dto.NewAttachment("document", "", "application/pdf", 3000, sampleTag, strings.NewReader(strings.Repeat("SYNTHETIC-", 300)), sampleExpiry, nil)
+	if err != nil {
+		t.Fatalf("NewAttachment: %v", err)
+	}
+	return a
+}
+
+func sampleMediaStatus(state string) dto.MediaStatus {
+	return dto.MediaStatus{AttachmentInfo: sampleAttachmentInfo(state)}
+}
+
+func sampleAttachmentInfo(state string) dto.AttachmentInfo {
+	reason, expires := "too_large_for_inline", "2026-10-05T12:10:00.000Z"
+	return dto.AttachmentInfo{
+		Kind: "document", State: state, ServedType: "application/pdf", Format: "pdf", Bytes: 3000, SizeDeclared: 3000,
+		Delivery: "part", Reason: &reason, Parts: 1, Length: 3000, RestRoute: "/v1/messages/{mref}/media", ExpiresAt: &expires,
+		RetryAfterSeconds: new(2), Untrusted: true, Notice: "synthetic notice",
+	}
+}
+
+func attachmentSamples(t *testing.T) []any {
+	t.Helper()
+	a := sampleAttachment(t)
+	plan, err := a.Plan("bytes=0-9", "")
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	return []any{a, plan, sampleAttachmentInfo(dto.MediaReady), sampleMediaStatus(dto.MediaFetching), sampleMediaStatus(dto.MediaReady)}
 }
