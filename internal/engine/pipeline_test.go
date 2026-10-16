@@ -128,10 +128,10 @@ func TestAMessageOverTheCapIsDropped(t *testing.T) {
 
 func TestPayloadDecodingIsStrict(t *testing.T) {
 	for _, in := range []string{
-		``, `{}`, `{"v":1}`, `{"v":2,"message":{"chat":"x"}}`, `{"v":1,"message":{},"group":{}}`,
+		``, `{}`, `{"v":1}`, `{"v":3,"message":{"chat":"x"}}`, `{"v":1,"message":{},"group":{}}`,
 		`{"v":1,"message":{"chat":"x"}} {}`, `{"v":1,"message":{"chat":"x","unknown":1}}`, `{"v":1,"other":{}}`, `[1]`, "\xff",
 		`{"v":1,"contact":{"user":"x"},"message":{"chat":"x"}}`, `{"v":1,"contact":{"user":"x"},"group":{"chat":"x"}}`,
-		`{"v":1,"contact":{"user":"x","nickname":"y"}}`, `{"v":2,"contact":{"user":"x"}}`,
+		`{"v":1,"contact":{"user":"x","nickname":"y"}}`, `{"v":3,"contact":{"user":"x"}}`,
 	} {
 		if _, err := decodePayload([]byte(in)); err == nil {
 			t.Errorf("decodePayload(%q) accepted", in)
