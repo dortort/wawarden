@@ -52,7 +52,7 @@ type rule struct {
 
 var rules = []rule{
 	goroutineRule, netHTTPRule, dotImportRule, socketRule, muxRule, serverRule, handlerRule,
-	inListRule, bannedImportRule, reflectionRule, fenceRule, chatMethodRule, thirdPartyRule, hiddenPackageRule, nolintRule, generatedRule, wildcardRule,
+	inListRule, bannedImportRule, reflectionRule, fenceRule, chatMethodRule, thirdPartyRule, hiddenPackageRule, nolintRule, generatedRule, wildcardRule, imageDecoderRule,
 	credentialRule, preludeRule, secretComparisonRule, formRule, shadowRule, sealRule, keysDirectoryRule, standardLibraryOnlyRule, logHandlerRule, logOutputRule,
 	confinementRule, databaseFileRule, constantSQLRule, sqliteStatementRule, protocolCallRule, protocolClientCallRule, offlineTestRule, rawHandleRule,
 	notifyEventRule, execRule, ageRecipientOnlyRule, backupsDirectoryRule, spoolDirectoryRule, devOnlyRule, fakeImportRule, scopedGrantRule, scopedReadPathRule, analyzeRule,

@@ -938,8 +938,8 @@ scoped-read-path rule cannot see.
 
 - `depguard` in `golangci-lint`.
 - The architecture rules `import-fences`, `banned-imports`, `reflection`,
-  `third-party-imports`, `standard-library-only`, `process-execution` and
-  `confined-imports` (`internal/archtest/imports_test.go`,
+  `third-party-imports`, `standard-library-only`, `process-execution`,
+  `confined-imports` and `image-decoders` (`internal/archtest/imports_test.go`,
   `confinement_test.go`, `exec_test.go`). The banned-import, third-party and
   reflection-selector checks cover test files too.
 - The fence's self-test accepts `internal/store/scoped` and refuses its
