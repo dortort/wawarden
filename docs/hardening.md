@@ -211,11 +211,27 @@ docker exec wawarden /wawarden healthcheck
 - `--read-only` leaves `/data` as the only writable path, and
   `--cap-drop=ALL` with `no-new-privileges` removes what the process never
   uses (<https://docs.docker.com/reference/cli/docker/container/run/>).
-- `--memory`: history sync needs at most 2 times `WAWARDEN_HISTORY_MAX_BYTES`
-  plus 1 MiB to decompress a blob, about 65 MiB at the default, plus the
-  memory to decode it ([history sync](internals.md#history-sync)). 512 MiB
-  leaves room at the default; raise it with the cap, which allows up to
-  256 MiB.
+- `--memory`: size it as at least (2·H + 1 MiB + R) / 0.8, where H is
+  `WAWARDEN_HISTORY_MAX_BYTES` and R is 128 MiB. History sync needs at most
+  2 times `WAWARDEN_HISTORY_MAX_BYTES` plus 1 MiB to decompress a blob, about
+  65 MiB at the default ([history sync](internals.md#history-sync)). R is a
+  reserve for the process baseline and the memory to decode the blob; it is an
+  estimate, not a measurement. The rule gives about 241 MiB at the default, so
+  512 MiB leaves room, and about 801 MiB at the 256 MiB maximum: raise
+  `--memory` with the cap.
+- The 0.8 in that rule is the soft memory limit's share of the container's
+  memory. When `GOMEMLIMIT` is unset or empty, WaWarden sets the Go runtime's
+  soft memory limit at start to 80% of the container's cgroup memory limit,
+  read from cgroup v2 `memory.max`, else from cgroup v1
+  `memory.limit_in_bytes`: about 410 MiB with `--memory=512m`. When that file
+  gives no limit, as without `--memory`, it sets none. As the heap nears the
+  soft limit the runtime collects garbage more often, which keeps the memory
+  it manages below the limit while the live heap fits. A `GOMEMLIMIT` you set,
+  `off` included, always wins, and WaWarden then changes nothing. At the
+  `info` log level, one `memory_limit` line at start gives the limit in
+  effect, `soft_limit_bytes`, and its `source`: `env`, `cgroup` or `none`.
+  `soft_limit_bytes` is 9223372036854775807, the Go runtime's value for no
+  limit, when no limit applies.
 - `--stop-timeout 15`: the service takes up to 10 seconds to stop, which is
   Docker's default timeout exactly ([shutdown](cli.md#shutdown)).
 - The health check runs in exec form, `["/wawarden","healthcheck"]`; the image
