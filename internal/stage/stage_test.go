@@ -359,6 +359,28 @@ func TestATruncatedDiskFileFailsAuthentication(t *testing.T) {
 	requireRefused(t, ctx, err, stage.ErrAuth)
 }
 
+func TestSwappedSectorsFailAuthentication(t *testing.T) {
+	s, dir := newSpool(t, false)
+	f, ctx := admit(t, s, 2*sectorSize)
+	if _, err := f.Write(bytes.Repeat([]byte{0x5a}, 2*sectorSize)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	disk, err := os.OpenFile(filepath.Clean(filepath.Join(dir, entries(t, dir)[0].Name())), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("the spool file could not be opened for tampering: %v", err)
+	}
+	defer func() { _ = disk.Close() }()
+	b := make([]byte, 2*sectorSize)
+	if _, err := disk.ReadAt(b, 0); err != nil {
+		t.Fatalf("reading the two sectors to swap: %v", err)
+	}
+	if _, err := disk.WriteAt(append(bytes.Clone(b[sectorSize:]), b[:sectorSize]...), 0); err != nil {
+		t.Fatalf("swapping the two sectors on disk: %v", err)
+	}
+	_, err = f.ReadAt(make([]byte, 2*sectorSize), 0)
+	requireRefused(t, ctx, err, stage.ErrAuth)
+}
+
 func TestAStaleOffsetTripsTheLimit(t *testing.T) {
 	m := encrypt(t, 40000)
 	s, _ := newSpool(t, true)
