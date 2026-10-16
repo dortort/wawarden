@@ -203,12 +203,63 @@ func TestConcurrentUpdates(t *testing.T) {
 	}
 }
 
+func TestCounterAddIsAtomic(t *testing.T) {
+	const workers, perWorker = 16, 1000
+	r := metrics.NewRegistry()
+	fetched := r.Counter("wawarden_bytes_total", "Bytes.")
+	byName := r.CounterVec("wawarden_bytes_by_name_total", "Bytes by name.", "name")
+
+	var want uint64
+	for w := range workers {
+		want += perWorker * (1<<28 + uint64(w) + 1)
+	}
+	var wg sync.WaitGroup
+	for w := range workers {
+		wg.Go(func() {
+			name := fmt.Sprintf("w%d", w%2)
+			for range perWorker {
+				fetched.Add(1<<28 + uint64(w))
+				fetched.Inc()
+				byName.With(name).Add(1 << 28)
+				fetched.Add(0)
+			}
+		})
+	}
+	wg.Go(func() {
+		for range 50 {
+			var b strings.Builder
+			if err := r.WriteText(&b); err != nil {
+				t.Errorf("WriteText: %v", err)
+				return
+			}
+		}
+	})
+	wg.Wait()
+
+	if got := fetched.Value(); got != want {
+		t.Fatalf("fetched = %d after concurrent Add and Inc, want %d", got, want)
+	}
+	if want < 1<<40 {
+		t.Fatalf("the sum %d is too small to show integer formatting of large values", want)
+	}
+	for i := range 2 {
+		name := fmt.Sprintf("w%d", i)
+		if got, want := byName.With(name).Value(), uint64(workers/2*perWorker)<<28; got != want {
+			t.Fatalf("%s = %d, want %d", name, got, want)
+		}
+	}
+	out := exposition(t, r)
+	if line := fmt.Sprintf("wawarden_bytes_total %d\n", want); !strings.Contains(out, line) {
+		t.Fatalf("exposition does not show the exact sum %q:\n%s", line, out)
+	}
+}
+
 func TestSamplesExposeOnlyTheMethodsInUse(t *testing.T) {
 	tests := []struct {
 		typ  reflect.Type
 		want []string
 	}{
-		{typ: reflect.TypeFor[*metrics.Counter](), want: []string{"Inc", "Value"}},
+		{typ: reflect.TypeFor[*metrics.Counter](), want: []string{"Add", "Inc", "Value"}},
 		{typ: reflect.TypeFor[*metrics.Gauge](), want: []string{"Set", "Value"}},
 	}
 	for _, tt := range tests {
