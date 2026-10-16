@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/draw"
@@ -1082,6 +1083,67 @@ func TestSpoolFailuresAreNotRefusals(t *testing.T) {
 			}
 			if strings.Contains(err.Error(), errTestSpool.Error()) {
 				t.Fatal("the error carries the spool's own text")
+			}
+		})
+	}
+}
+
+func interlacedPNG(p []byte) []byte {
+	out := bytes.Clone(p)
+	out[28] = 1
+	copy(out[29:33], be32(int(crc32.ChecksumIEEE(out[12:29]))))
+	return out
+}
+
+func TestDecoderMemoryPerColourModel(t *testing.T) {
+	const rows = 2 * (8*10 + 1)
+	rgba := encodePNG(t, filled(10, 4, red))
+	for _, tt := range []struct {
+		name string
+		data []byte
+		want int64
+	}{
+		{"paletted png", encodePNG(t, image.NewPaletted(image.Rect(0, 0, 10, 4), color.Palette{red, blue})), 10*4*1 + rows},
+		{"greyscale png", encodePNG(t, image.NewGray(image.Rect(0, 0, 10, 4))), 10*4*4 + rows},
+		{"16-bit greyscale png", encodePNG(t, image.NewGray16(image.Rect(0, 0, 10, 4))), 10*4*8 + rows},
+		{"16-bit colour png", encodePNG(t, image.NewNRGBA64(image.Rect(0, 0, 10, 4))), 10*4*8 + rows},
+		{"truecolour png", rgba, 10*4*4 + rows},
+		{"interlaced truecolour png", interlacedPNG(rgba), 10*4*4*3/2 + rows},
+		{"gif", encodeGIF(t, 10, 4, red), 2 * 10 * 4},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			src := &source{ctx: t.Context(), s: newSpool(tt.data)}
+			head, err := src.head()
+			if err != nil {
+				t.Fatalf("head: %v", err)
+			}
+			var p plan
+			if imageCodec(head) == codecGIF {
+				p, err = planGIF(src)
+			} else {
+				p, err = planPNG(src, head)
+			}
+			if err != nil {
+				t.Fatalf("plan: %v", err)
+			}
+			if got := p.memory(); got != tt.want {
+				t.Fatalf("memory = %d, want %d", got, tt.want)
+			}
+		})
+	}
+	for _, tt := range []struct {
+		name  string
+		frame webpFrame
+		want  int64
+	}{
+		{"lossless", webpFrame{size: image.Pt(10, 4), lossless: true}, 9 * 10 * 4},
+		{"lossy", webpFrame{size: image.Pt(20, 17), bits: chunk{n: 100}}, 256*2*2*3/2 + 16*2*2 + 100},
+		{"lossy with raw alpha", webpFrame{size: image.Pt(20, 17), bits: chunk{n: 100}, alpha: alphaRaw}, 256*2*2*3/2 + 16*2*2 + 100 + 20*17},
+		{"lossy with lossless alpha", webpFrame{size: image.Pt(20, 17), bits: chunk{n: 100}, alpha: alphaLossless}, 256*2*2*3/2 + 16*2*2 + 100 + 10*20*17},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.frame.memory(); got != tt.want {
+				t.Fatalf("memory = %d, want %d", got, tt.want)
 			}
 		})
 	}
