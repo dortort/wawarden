@@ -404,6 +404,7 @@ func TestArchitecture(t *testing.T) {
 		"internal/policy/internal/seal/seal.go",
 		"internal/safego/safego.go",
 		"internal/sanitize/sanitize.go",
+		"internal/stage/stage.go",
 		"internal/store/admin/prune.go",
 		"internal/store/ingest/sends.go",
 		"internal/store/internal/db/db.go",
