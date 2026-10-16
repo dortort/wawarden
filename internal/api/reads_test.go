@@ -669,3 +669,19 @@ func FuzzReadQuery(f *testing.F) {
 		}
 	})
 }
+
+var syntheticMessageRef = cursor.Ref{Chat: groupChat.JID(), ID: "SYNTHETIC1", Sender: aliceChat.JID()}
+
+func TestTheHeaderRowCarriesTheNotedMessageAndBytes(t *testing.T) {
+	audit := &fakeAuditor{}
+	w, r := audited(httptest.NewRecorder(), withClientRequest(t, liveClient("client-x"), http.MethodGet, "/x"), audit, fixedNow)
+	n := noteFrom(r.Context())
+	n.action, n.chat, n.message, n.bytes = actionMessage, groupChat, syntheticMessageRef, 4096
+	w.WriteHeader(http.StatusOK)
+	want := []ReadEvent{{
+		At: testNow, Client: "client-x", Action: actionMessage, Chat: groupChat, OK: true, Reason: outcomeOK, Peer: "192.0.2.1", Message: syntheticMessageRef, Bytes: 4096,
+	}}
+	if got := audit.recorded(); !slices.Equal(got, want) {
+		t.Fatalf("audit = %+v, want %+v", got, want)
+	}
+}

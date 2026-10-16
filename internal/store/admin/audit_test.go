@@ -1,15 +1,19 @@
 package admin_test
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/dortort/wawarden/internal/cursor"
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/store/admin"
 	"github.com/dortort/wawarden/internal/token"
@@ -79,7 +83,7 @@ func TestAuditLinesCarryTheShapeAndTheHead(t *testing.T) {
 			keys = append(keys, k)
 		}
 		slices.Sort(keys)
-		if got := strings.Join(keys, " "); got != "action chain_head chat_hmac client event key_id ok reason ts" || line["event"] != "audit" || line["key_id"] != f.master.ID() {
+		if got := strings.Join(keys, " "); got != "action bytes chain_head chat_hmac client event key_id message_hmac ok reason ts" || line["event"] != "audit" || line["key_id"] != f.master.ID() {
 			t.Fatalf("audit line %d has the keys %s, the event %v and the key id %v, want the audit event under the master key", i, got, line["event"], line["key_id"])
 		}
 		if heads[i].Hex != hex.EncodeToString(stored[i][:16]) {
@@ -91,7 +95,7 @@ func TestAuditLinesCarryTheShapeAndTheHead(t *testing.T) {
 	if lines[1]["chat_hmac"] != hex.EncodeToString(m.Sum(nil)[:16]) || lines[1]["ok"] != false || lines[1]["reason"] != "out_of_scope" {
 		t.Fatalf("line %v does not carry the chat's HMAC under the chat-hmac key", lines[1])
 	}
-	if lines[0]["chat_hmac"] != nil || lines[0]["action"] != "client_create" || lines[11]["action"] != "client_revoke" || lines[0]["ts"] != "2026-10-06T12:00:00.000Z" {
+	if lines[0]["chat_hmac"] != nil || lines[1]["message_hmac"] != nil || lines[1]["bytes"] != nil || lines[0]["action"] != "client_create" || lines[11]["action"] != "client_revoke" || lines[0]["ts"] != "2026-10-06T12:00:00.000Z" {
 		t.Fatalf("lines %v and %v", lines[0], lines[11])
 	}
 	text := f.audit.String()
@@ -108,12 +112,23 @@ func TestAuditLinesCarryTheShapeAndTheHead(t *testing.T) {
 
 func TestAppendRefusesEventsTheChainDoesNotRecord(t *testing.T) {
 	f := open(t)
+	g, message := chat(t, groupG), cursor.Ref{Chat: groupG, ID: syntheticID, Sender: phoneA}
 	for name, e := range map[string]admin.Event{
 		"no time":           {Client: "aaaaaaaa", Action: "messages.read", Reason: "ok"},
 		"client not an id":  {At: start, Client: "15550100001", Action: "messages.read", Reason: "ok"},
 		"action not a code": {At: start, Client: "aaaaaaaa", Action: "Messages Read", Reason: "ok"},
 		"reason not a code": {At: start, Client: "aaaaaaaa", Action: "messages.read", Reason: phoneA},
 		"peer too long":     {At: start, Client: "aaaaaaaa", Action: "messages.read", Reason: "ok", Peer: strings.Repeat("1", 65)},
+		"negative bytes":    {At: start, Client: "aaaaaaaa", Action: "rest.media", Reason: "ok", Chat: g, Message: message, Bytes: -1},
+		"bytes, no message": {At: start, Client: "aaaaaaaa", Action: "rest.media", Reason: "ok", Chat: g, Bytes: 1},
+		"message, no chat":  {At: start, Client: "aaaaaaaa", Action: "rest.media", Reason: "not_found", Message: message},
+		"another chat":      {At: start, Client: "aaaaaaaa", Action: "rest.media", Reason: "ok", Chat: chat(t, phoneB), Message: message},
+		"no sender":         {At: start, Client: "aaaaaaaa", Action: "rest.media", Reason: "ok", Chat: g, Message: cursor.Ref{Chat: groupG, ID: syntheticID}},
+		"sender not a chat": {At: start, Client: "aaaaaaaa", Action: "rest.media", Reason: "ok", Chat: g, Message: cursor.Ref{Chat: groupG, ID: syntheticID, Sender: "alice"}},
+		"chat not a chat":   {At: start, Client: "aaaaaaaa", Action: "rest.media", Reason: "ok", Chat: g, Message: cursor.Ref{Chat: "group", ID: syntheticID, Sender: phoneA}},
+		"no message id":     {At: start, Client: "aaaaaaaa", Action: "rest.media", Reason: "ok", Chat: g, Message: cursor.Ref{Chat: groupG, Sender: phoneA}},
+		"message id too long": {At: start, Client: "aaaaaaaa", Action: "rest.media", Reason: "ok", Chat: g,
+			Message: cursor.Ref{Chat: groupG, ID: strings.Repeat("A", 257), Sender: phoneA}},
 	} {
 		if err := f.store.Audit().Record(t.Context(), e); err == nil {
 			t.Fatalf("%s: Record succeeded", name)
@@ -286,5 +301,206 @@ func TestAuditEventsCarryingATokenAreRefused(t *testing.T) {
 	}
 	if f.audit.String() != "" || len(auditRows(t, f)) != 0 {
 		t.Fatal("a refused event left a row or a line")
+	}
+}
+
+const syntheticID = "SYNTHETIC1"
+
+func mediaChainFixture(t *testing.T) (*fixture, []admin.Head) {
+	t.Helper()
+	f := open(t)
+	c, _ := f.create(t, policy.ClientSpec{Name: "agent", Read: []string{phoneA, groupG}})
+	g, message := chat(t, groupG), cursor.Ref{Chat: groupG, ID: syntheticID, Sender: phoneA}
+	device := cursor.Ref{Chat: groupG, ID: syntheticID, Sender: "15550100001:7@s.whatsapp.net"}
+	for i, e := range []admin.Event{
+		{Client: c.ID, Action: "messages.read", OK: true, Reason: "ok", Chat: g},
+		{Client: c.ID, Action: "rest.media", OK: true, Reason: "ok", Chat: g, Message: message, Bytes: 4096},
+		{Client: c.ID, Action: "rest.media", OK: true, Reason: "ok", Chat: g, Message: message},
+		{Client: c.ID, Action: "rest.media.sent", Reason: "client_gone", Chat: g, Message: device, Bytes: 1000, Peer: "127.0.0.1:50000"},
+		{Client: c.ID, Action: "rest.media", Reason: "not_found", Peer: "127.0.0.1:50000"},
+	} {
+		e.At = start.Add(time.Duration(i+1) * time.Second)
+		if err := f.store.Audit().Record(t.Context(), e); err != nil {
+			t.Fatalf("Record %d: %v", i, err)
+		}
+	}
+	heads := shippedHeads(t, f)
+	if len(heads) != 6 {
+		t.Fatalf("%d audit lines, want 6", len(heads))
+	}
+	return f, heads
+}
+
+func messageHMAC(key []byte, chat, id, sender string) []byte {
+	b := []byte("wawarden/audit-message/v1\x00")
+	for _, s := range []string{chat, id, sender} {
+		b = append(b, 1)
+		b = binary.AppendUvarint(b, uint64(len(s)))
+		b = append(b, s...)
+	}
+	m := hmac.New(sha256.New, key)
+	m.Write(b)
+	return m.Sum(nil)[:16]
+}
+
+func readMessageRows(t *testing.T, d *sql.DB) []admin.AuditRow {
+	t.Helper()
+	rows, err := d.QueryContext(t.Context(), "SELECT id, ts, client_id, action, chat, chat_hmac, ok, reason, peer, key_id, message_hmac, bytes FROM audit ORDER BY id")
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []admin.AuditRow
+	for rows.Next() {
+		var r admin.AuditRow
+		if err := rows.Scan(&r.ID, &r.TS, &r.Client, &r.Action, &r.Chat, &r.ChatHMAC, &r.OK, &r.Reason, &r.Peer, &r.Key, &r.MessageHMAC, &r.Bytes); err != nil {
+			t.Fatalf("Scan: %v", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	return out
+}
+
+func TestMessageRowsCarryAKeyedHMACAndTheBytes(t *testing.T) {
+	f, _ := mediaChainFixture(t)
+	want := messageHMAC(f.master.ChatHMACKey(), groupG, syntheticID, phoneA)
+	counts := map[int]float64{2: 4096, 3: 0, 4: 1000}
+	for i, line := range f.auditLines(t) {
+		n, carries := counts[i]
+		switch {
+		case carries && (line["message_hmac"] != hex.EncodeToString(want) || line["bytes"] != n):
+			t.Fatalf("line %d carries the message %v and %v bytes, want %x and %v", i, line["message_hmac"], line["bytes"], want, n)
+		case !carries && (line["message_hmac"] != nil || line["bytes"] != nil):
+			t.Fatalf("line %d names the message %v and %v bytes, want neither", i, line["message_hmac"], line["bytes"])
+		}
+		if _, ok := line["message_hmac"]; !ok {
+			t.Fatalf("line %d has no message_hmac key", i)
+		}
+		if _, ok := line["bytes"]; !ok {
+			t.Fatalf("line %d has no bytes key", i)
+		}
+	}
+	text := f.audit.String()
+	for _, s := range []string{syntheticID, phoneA, groupG, "15550100001", "120363000000000001", "127.0.0.1"} {
+		if strings.Contains(text, s) {
+			t.Fatalf("an audit line carries %q", s)
+		}
+	}
+	rows := readMessageRows(t, rawOpen(t, f.copyArchive(t)))
+	for i, r := range rows {
+		n, carries := counts[i]
+		if carries != (r.MessageHMAC != nil) || carries && (!hmac.Equal(r.MessageHMAC, want) || r.Bytes != sql.NullInt64{Int64: int64(n), Valid: true}) || !carries && r.Bytes.Valid {
+			t.Fatalf("row %d holds the message %x and %+v bytes", r.ID, r.MessageHMAC, r.Bytes)
+		}
+	}
+	if rows[4].Chat.String != groupG || rows[5].Chat.Valid {
+		t.Fatalf("rows %+v and %+v", rows[4], rows[5])
+	}
+}
+
+func TestRowMACKeepsTheFirstLayoutAndBindsTheMessage(t *testing.T) {
+	key, prev := bytes.Repeat([]byte{0x33}, 32), bytes.Repeat([]byte{0x44}, 32)
+	valid := func(s string) sql.NullString { return sql.NullString{String: s, Valid: true} }
+	r := admin.AuditRow{
+		ID: 7, TS: start.UnixMilli(), Client: "aaaaaaaa", Action: "messages.read", Reason: "ok", Key: "0a1b2c3d", OK: true,
+		Chat: valid(groupG), ChatHMAC: valid("00112233445566778899aabbccddeeff"), Peer: valid("127.0.0.1:50000"),
+	}
+	first := admin.AuditRow{ID: 1, TS: start.UnixMilli(), Client: "aaaaaaaa", Action: "client_create", Reason: "ok", Key: "0a1b2c3d"}
+	for name, tt := range map[string]struct {
+		r    admin.AuditRow
+		prev []byte
+		want string
+	}{
+		"a read":        {r, prev, "e1eb9f3aa84c6fe116cba14fd7c21795a66894dd4b0b14f3f4127f9921b0488e"},
+		"the first row": {first, make([]byte, 32), "a8bbc0eca5eec196dfda119c484ad6dfd83209202e1655539d3d039148552981"},
+	} {
+		if got := hex.EncodeToString(admin.RowMAC(key, tt.r, tt.prev)); got != tt.want {
+			t.Fatalf("%s: the row HMAC is %s, want the version 1 value %s", name, got, tt.want)
+		}
+	}
+	v2 := r
+	v2.MessageHMAC, v2.Bytes = bytes.Repeat([]byte{0x55}, 16), sql.NullInt64{Int64: 4096, Valid: true}
+	b, _ := binary.Append([]byte("wawarden/audit-row/v2\x00"), binary.BigEndian, [2]int64{v2.ID, v2.TS})
+	for _, f := range []struct {
+		present bool
+		s       string
+	}{{true, "aaaaaaaa"}, {true, "messages.read"}, {true, groupG}, {true, "00112233445566778899aabbccddeeff"}, {true, ""}, {true, "ok"}, {true, "127.0.0.1:50000"}, {true, string(v2.MessageHMAC)}, {true, "4096"}, {true, "0a1b2c3d"}} {
+		b = append(b, 1)
+		b = binary.AppendUvarint(b, uint64(len(f.s)))
+		b = append(b, f.s...)
+	}
+	m := hmac.New(sha256.New, key)
+	m.Write(append(b, prev...))
+	if !hmac.Equal(admin.RowMAC(key, v2, prev), m.Sum(nil)) {
+		t.Fatal("a row naming a message is not MACed under the version 2 layout")
+	}
+	seen := map[string]string{hex.EncodeToString(admin.RowMAC(key, r, prev)): "no message", hex.EncodeToString(admin.RowMAC(key, v2, prev)): "the message"}
+	for name, change := range map[string]func(*admin.AuditRow){
+		"bytes alone":       func(r *admin.AuditRow) { r.MessageHMAC = nil },
+		"zero bytes alone":  func(r *admin.AuditRow) { r.MessageHMAC, r.Bytes.Int64 = nil, 0 },
+		"the message alone": func(r *admin.AuditRow) { r.Bytes = sql.NullInt64{} },
+		"zero bytes":        func(r *admin.AuditRow) { r.Bytes.Int64 = 0 },
+		"one byte more":     func(r *admin.AuditRow) { r.Bytes.Int64++ },
+		"another message":   func(r *admin.AuditRow) { r.MessageHMAC = bytes.Repeat([]byte{0x56}, 16) },
+	} {
+		changed := v2
+		change(&changed)
+		mac := hex.EncodeToString(admin.RowMAC(key, changed, prev))
+		if other, dup := seen[mac]; dup {
+			t.Fatalf("%s has the row HMAC of %s", name, other)
+		}
+		seen[mac] = name
+	}
+}
+
+func TestVerifyDetectsMessageTampers(t *testing.T) {
+	f, heads := mediaChainFixture(t)
+	if intact := verify(t, f, f.copyArchive(t), heads); !intact.OK() || intact.Rows != 6 || intact.Verified != 6 || intact.HeadsMissing != 0 {
+		t.Fatalf("the intact chain reports %+v", intact)
+	}
+	for name, tt := range map[string]struct {
+		update string
+		row    int64
+	}{
+		"message HMAC edited":          {"message_hmac = randomblob(16)", 3},
+		"message HMAC widened":         {"message_hmac = CAST(message_hmac || x'00' AS BLOB)", 5},
+		"bytes edited":                 {"bytes = bytes - 1", 3},
+		"zero bytes edited":            {"bytes = 1", 4},
+		"message HMAC removed":         {"message_hmac = NULL", 3},
+		"bytes removed":                {"bytes = NULL", 4},
+		"both removed":                 {"message_hmac = NULL, bytes = NULL", 5},
+		"message HMAC added to a read": {"message_hmac = randomblob(16)", 2},
+		"bytes added to a read":        {"bytes = 0", 2},
+		"bytes added to a refusal":     {"bytes = 0", 6},
+		"message swapped from a row":   {"message_hmac = (SELECT message_hmac FROM audit WHERE id = 3), bytes = (SELECT bytes FROM audit WHERE id = 3)", 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := f.copyArchive(t)
+			d := rawOpen(t, path)
+			exec(t, d, unlock, "UPDATE audit SET "+tt.update+" WHERE id = "+strconv.FormatInt(tt.row, 10))
+			if err := d.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+			rep := verify(t, f, path, heads)
+			if rep.OK() || rep.Bad != 1 || rep.FirstBad != tt.row || rep.Problem != admin.ReasonHMACMismatch || rep.HeadsMissing != 0 {
+				t.Fatalf("Verify = %+v, want row %d alone refused for its HMAC", rep, tt.row)
+			}
+		})
+	}
+}
+
+func TestVerifyReadsACopyFromBeforeTheMessageColumns(t *testing.T) {
+	f, heads := chainFixture(t)
+	path := f.copyArchive(t)
+	d := rawOpen(t, path)
+	exec(t, d, "ALTER TABLE audit DROP COLUMN message_hmac", "ALTER TABLE audit DROP COLUMN bytes")
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if rep := verify(t, f, path, heads); !rep.OK() || rep.Rows != 12 || rep.Verified != 12 || rep.HeadsMissing != 0 {
+		t.Fatalf("Verify of a copy without the message columns = %+v", rep)
 	}
 }

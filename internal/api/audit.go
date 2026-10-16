@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/dortort/wawarden/internal/cursor"
 	"github.com/dortort/wawarden/internal/policy"
 )
 
@@ -17,13 +18,15 @@ const (
 )
 
 type ReadEvent struct {
-	At     time.Time
-	Client string
-	Action string
-	Chat   policy.CanonicalChat
-	OK     bool
-	Reason string
-	Peer   string
+	At      time.Time
+	Client  string
+	Action  string
+	Chat    policy.CanonicalChat
+	OK      bool
+	Reason  string
+	Peer    string
+	Message cursor.Ref
+	Bytes   int64
 }
 
 type Auditor interface {
@@ -31,9 +34,11 @@ type Auditor interface {
 }
 
 type auditNote struct {
-	action string
-	chat   policy.CanonicalChat
-	reason string
+	action  string
+	chat    policy.CanonicalChat
+	reason  string
+	message cursor.Ref
+	bytes   int64
 }
 
 type noteKey struct{}
@@ -71,6 +76,7 @@ func audited(w http.ResponseWriter, r *http.Request, audit Auditor, now func() t
 		defer cancel()
 		err := audit.Record(ctx, ReadEvent{
 			At: now(), Client: client.ID, Action: note.action, Chat: note.chat, OK: reason == outcomeOK, Reason: reason, Peer: peer(r.RemoteAddr),
+			Message: note.message, Bytes: note.bytes,
 		})
 		if err != nil && r.Context().Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return errBusy

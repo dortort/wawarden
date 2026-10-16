@@ -56,10 +56,15 @@ type AuditRow struct {
 	Client, Action, Reason, Key string
 	Chat, ChatHMAC, Peer        sql.NullString
 	OK                          bool
+	MessageHMAC                 []byte
+	Bytes                       sql.NullInt64
 }
 
 func RowMAC(key []byte, r AuditRow, prev []byte) []byte {
-	return rowMAC(key, row{id: r.ID, ts: r.TS, client: r.Client, action: r.Action, chat: r.Chat, chatHMAC: r.ChatHMAC, ok: r.OK, reason: r.Reason, peer: r.Peer, keyID: r.Key}, prev)
+	return rowMAC(key, row{
+		id: r.ID, ts: r.TS, client: r.Client, action: r.Action, chat: r.Chat, chatHMAC: r.ChatHMAC, ok: r.OK, reason: r.Reason, peer: r.Peer, keyID: r.Key,
+		messageHMAC: r.MessageHMAC, bytes: r.Bytes,
+	}, prev)
 }
 
 func AnchorMAC(key []byte, through, ts, prunedAt int64, keyID string, rowHMAC []byte) []byte {
