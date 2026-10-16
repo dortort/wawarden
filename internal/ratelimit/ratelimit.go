@@ -28,16 +28,30 @@ func (l *Limiter) Allow(key string) (retryAfter time.Duration, ok bool) {
 	defer l.mu.Unlock()
 	t := l.now()
 	l.sweep(t)
-	next := l.due[key]
-	if next.Before(t) {
-		next = t
-	}
-	next = next.Add(l.interval)
-	if over := next.Sub(t) - l.burst; over > 0 {
+	next, over := l.next(key, t)
+	if over > 0 {
 		return over, false
 	}
 	l.due[key] = next
 	return 0, true
+}
+
+func (l *Limiter) Peek(key string) (retryAfter time.Duration, ok bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if _, over := l.next(key, l.now()); over > 0 {
+		return over, false
+	}
+	return 0, true
+}
+
+func (l *Limiter) next(key string, t time.Time) (next time.Time, over time.Duration) {
+	next = l.due[key]
+	if next.Before(t) {
+		next = t
+	}
+	next = next.Add(l.interval)
+	return next, next.Sub(t) - l.burst
 }
 
 func (l *Limiter) sweep(t time.Time) {
