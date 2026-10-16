@@ -120,6 +120,13 @@ func newCapFile(limit int64, hint int64) *capFile {
 
 func (f *capFile) bytes() []byte { return f.buf }
 
+func (f *capFile) Size() int64 { return int64(len(f.buf)) }
+
+func (f *capFile) Erase() {
+	clear(f.buf[:cap(f.buf)])
+	f.buf, f.off, f.max = nil, 0, 0
+}
+
 func (f *capFile) Write(p []byte) (int, error) {
 	n, err := f.WriteAt(p, f.off)
 	f.off += int64(n)

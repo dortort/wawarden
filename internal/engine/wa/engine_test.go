@@ -49,7 +49,7 @@ func wireEngine(t *testing.T) *wired {
 		t.Fatalf("ingest.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = archive.Close() })
-	c, err := newClient(Options{Device: pairedDevice(), Devices: &freshDevices{}, OwnerPhone: ownerPhone, HistoryMaxBytes: 1 << 20, Writer: w, LogLevel: slog.LevelInfo, Alerts: logger}, refusingDial(t), noDownload, time.Now)
+	c, err := newClient(Options{Device: pairedDevice(), Devices: &freshDevices{}, OwnerPhone: ownerPhone, HistoryMaxBytes: 1 << 20, Writer: w, LogLevel: slog.LevelInfo, Alerts: logger}, refusingDial(t), noDownload, noFetch, time.Now)
 	if err != nil {
 		t.Fatalf("newClient: %v", err)
 	}

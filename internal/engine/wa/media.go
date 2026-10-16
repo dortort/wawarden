@@ -9,12 +9,17 @@ import (
 	"strings"
 	"time"
 
+	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/dortort/wawarden/internal/engine"
+	"github.com/dortort/wawarden/internal/engine/wa/internal/mediasrc"
+	"github.com/dortort/wawarden/internal/stage"
 )
 
 const (
+	mediaRAMThreshold = 16 << 20
 	imageCeiling      = 16 << 20
 	stickerCeiling    = 1 << 20
 	mediaHashSize     = 32
@@ -22,11 +27,35 @@ const (
 	descriptorFields  = 10
 )
 
-var errMediaOptions = errors.New("wa: an attachment cap is at most 2 GiB, and a cap above 0 needs a reference sealer and a retention")
+var (
+	errMediaOptions = errors.New("wa: an attachment cap is at most 2 GiB, and a cap above 0 needs a reference sealer, a retention and, above 16 MiB, a disk spool")
+	errMediaSource  = errors.New("wa: the attachment source carries no message")
+	errMediaLength  = errors.New("wa: the attachment is longer than its declared length")
+)
 
 type MediaSealer interface {
 	SealMedia(id string, pt []byte) (string, error)
 	OpenMedia(id, text string) ([]byte, error)
+}
+
+type stagedFile interface {
+	engine.Staged
+	whatsmeow.File
+}
+
+var (
+	_ stagedFile = (*capFile)(nil)
+	_ stagedFile = (*stage.Sealed)(nil)
+)
+
+type mediaDownloader func(ctx context.Context, cli *whatsmeow.Client, src mediasrc.Source, dst whatsmeow.File) error
+
+func downloadMediaFile(ctx context.Context, cli *whatsmeow.Client, src mediasrc.Source, dst whatsmeow.File) error {
+	msg, ok := src.Message()
+	if !ok {
+		return errMediaSource
+	}
+	return cli.DownloadToFile(ctx, msg, dst)
 }
 
 type capture struct {
@@ -88,6 +117,29 @@ func (mc capture) attach(out engine.Message, m *waE2E.Message, viewOnce bool) en
 	}
 	out.MediaRef, out.MediaKind, out.MediaVariant, out.MediaBytes = ref, d.kind, d.variant, declared
 	return out
+}
+
+func (mc capture) open(req engine.MediaRequest) (descriptor, error) {
+	if mc.max <= 0 {
+		return descriptor{}, engine.ErrMediaUnavailable
+	}
+	pt, err := mc.sealer.OpenMedia(req.ID, req.Ref)
+	if err != nil {
+		return descriptor{}, engine.ErrMediaUnavailable
+	}
+	d, ok := parseDescriptor(pt)
+	clear(pt)
+	if !ok {
+		return descriptor{}, engine.ErrMediaUnavailable
+	}
+	declared, ok := d.declared()
+	if !ok || d.kind != req.Kind || declared != req.Declared {
+		return descriptor{}, engine.ErrMediaUnavailable
+	}
+	if declared > mc.limit(d.kind) {
+		return descriptor{}, engine.ErrMediaTooLarge
+	}
+	return d, nil
 }
 
 type descriptor struct {
@@ -171,6 +223,73 @@ func parseDescriptor(pt []byte) (descriptor, bool) {
 	return d, true
 }
 
-func (c *Client) FetchMedia(context.Context, engine.MediaRequest) (engine.Staged, error) {
-	return nil, engine.ErrMediaUnavailable
+func downloadable(d descriptor) mediasrc.Source {
+	path, length := proto.String(d.directPath), proto.Uint64(d.length)
+	switch d.kind {
+	case engine.MediaImage:
+		return mediasrc.Wrap(&waE2E.ImageMessage{DirectPath: path, MediaKey: d.mediaKey, FileSHA256: d.fileSHA256, FileEncSHA256: d.fileEncSHA256, FileLength: length})
+	case engine.MediaVideo:
+		return mediasrc.Wrap(&waE2E.VideoMessage{DirectPath: path, MediaKey: d.mediaKey, FileSHA256: d.fileSHA256, FileEncSHA256: d.fileEncSHA256, FileLength: length})
+	case engine.MediaAudio:
+		return mediasrc.Wrap(&waE2E.AudioMessage{DirectPath: path, MediaKey: d.mediaKey, FileSHA256: d.fileSHA256, FileEncSHA256: d.fileEncSHA256, FileLength: length})
+	case engine.MediaDocument:
+		return mediasrc.Wrap(&waE2E.DocumentMessage{DirectPath: path, MediaKey: d.mediaKey, FileSHA256: d.fileSHA256, FileEncSHA256: d.fileEncSHA256, FileLength: length})
+	case engine.MediaSticker:
+		return mediasrc.Wrap(&waE2E.StickerMessage{DirectPath: path, MediaKey: d.mediaKey, FileSHA256: d.fileSHA256, FileEncSHA256: d.fileEncSHA256, FileLength: length})
+	}
+	return mediasrc.Wrap(nil)
+}
+
+func (c *Client) FetchMedia(ctx context.Context, req engine.MediaRequest) (engine.Staged, error) {
+	d, err := c.capture.open(req)
+	if err != nil {
+		return nil, err
+	}
+	declared := req.Declared
+	deadline := mediaRAMDeadline
+	if declared > mediaRAMThreshold {
+		deadline = mediaDiskDeadline(declared)
+	}
+	if !req.Deadline.IsZero() {
+		deadline = min(deadline, req.Deadline.Sub(c.now()))
+	}
+	if deadline <= 0 {
+		return nil, engine.ErrMediaFailed
+	}
+	src := downloadable(d)
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	var staged stagedFile
+	if declared <= mediaRAMThreshold {
+		staged = newCapFile(declared+mediaOverhead, declared)
+	} else if staged, err = c.spool.Admit(declared, cancel); err != nil {
+		return nil, engine.ErrMediaFailed
+	}
+	job, stop := withMediaJob(ctx, declared, deadline)
+	err = c.fetch(job, c.current(), src, staged)
+	cause := context.Cause(job)
+	stop()
+	if err == nil && declared > 0 && staged.Size() > declared {
+		err = errMediaLength
+	}
+	if err != nil {
+		staged.Erase()
+		return nil, fetchError(err, cause)
+	}
+	return staged, nil
+}
+
+func fetchError(err, cause error) error {
+	if t, ok := errors.AsType[*mediaThrottledError](cause); ok {
+		return &engine.ThrottledError{RetryAfter: t.RetryAfter}
+	}
+	switch {
+	case cause != nil:
+		return engine.ErrMediaFailed
+	case errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith403), errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith404), errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith410):
+		return engine.ErrMediaExpired
+	case errors.Is(err, whatsmeow.ErrNotConnected):
+		return engine.ErrNotConnected
+	}
+	return engine.ErrMediaFailed
 }
