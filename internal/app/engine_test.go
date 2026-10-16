@@ -97,6 +97,10 @@ func (c *stubClient) Backfill(context.Context, engine.BackfillRequest) (string, 
 	c.record("backfill")
 	return "STUB-BF1", nil
 }
+func (c *stubClient) FetchMedia(context.Context, engine.MediaRequest) (engine.Staged, error) {
+	c.record("fetch_media")
+	return nil, engine.ErrMediaUnavailable
+}
 
 func (c *stubClient) OnEvent(handler func(engine.Event) bool) func() {
 	c.mu.Lock()

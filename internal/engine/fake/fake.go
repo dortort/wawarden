@@ -443,6 +443,15 @@ func (c *Client) Backfill(ctx context.Context, req engine.BackfillRequest) (stri
 	return id, nil
 }
 
+func (c *Client) FetchMedia(ctx context.Context, _ engine.MediaRequest) (engine.Staged, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ctx.Err() != nil || !c.connected {
+		return nil, engine.ErrNotConnected
+	}
+	return nil, engine.ErrMediaUnavailable
+}
+
 func olderHistory(blob string, req engine.BackfillRequest) engine.History {
 	sender := req.Chat
 	if req.Chat == group {
