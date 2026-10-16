@@ -42,19 +42,19 @@ func newRouter(now func() time.Time, credential policy.AdminCredential) *router 
 }
 
 func (rt *router) read(pattern string, h func(context.Context, policy.ReadGrant, *Request) (dto.Response, error)) {
-	rt.register(route{pattern: pattern, class: classRead}, decided(func(r *http.Request) (policy.ReadGrant, bool) {
+	rt.register(route{pattern: pattern, class: classRead}, decided(rt.now, func(r *http.Request) (policy.ReadGrant, bool) {
 		return policy.DecideRead(clientFrom(r.Context()), rt.now())
 	}, h))
 }
 
 func (rt *router) write(pattern string, h func(context.Context, policy.WriteGrant, *Request) (dto.Response, error)) {
-	rt.register(route{pattern: pattern, class: classWrite}, decided(func(r *http.Request) (policy.WriteGrant, bool) {
+	rt.register(route{pattern: pattern, class: classWrite}, decided(rt.now, func(r *http.Request) (policy.WriteGrant, bool) {
 		return policy.DecideWrite(clientFrom(r.Context()), rt.now())
 	}, h))
 }
 
 func (rt *router) admin(pattern string, h func(context.Context, policy.AdminGrant, *Request) (dto.Response, error)) {
-	rt.register(route{pattern: pattern, class: classAdmin}, decided(func(r *http.Request) (policy.AdminGrant, bool) {
+	rt.register(route{pattern: pattern, class: classAdmin}, decided(rt.now, func(r *http.Request) (policy.AdminGrant, bool) {
 		presented, _ := bearerToken(r.Header)
 		return policy.DecideAdmin(rt.credential, presented)
 	}, h))
@@ -64,7 +64,7 @@ func (rt *router) mcp(pattern string, h http.Handler) {
 	rt.register(route{pattern: pattern, class: classMCP}, h.ServeHTTP)
 }
 
-func decided[G any](decide func(*http.Request) (G, bool), h func(context.Context, G, *Request) (dto.Response, error)) http.HandlerFunc {
+func decided[G any](now func() time.Time, decide func(*http.Request) (G, bool), h func(context.Context, G, *Request) (dto.Response, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		g, ok := decide(r)
 		if !ok {
@@ -83,9 +83,16 @@ func decided[G any](decide func(*http.Request) (G, bool), h func(context.Context
 			writeError(w, http.StatusInternalServerError, codeInternal)
 			return
 		}
+		if a, ok := resp.(dto.Attachment); ok {
+			deliver(w, r, a, now)
+			return
+		}
 		status := http.StatusOK
 		if s, ok := resp.(interface{ Status() int }); ok {
 			status = s.Status()
+		}
+		if s, ok := resp.(interface{ RetryAfter() time.Duration }); ok && s.RetryAfter() > 0 {
+			setRetryAfter(w.Header(), s.RetryAfter())
 		}
 		writeResponse(w, status, resp)
 	}

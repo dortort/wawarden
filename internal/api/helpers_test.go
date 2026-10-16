@@ -167,3 +167,85 @@ func requireSameResponse(t *testing.T, got, want *httptest.ResponseRecorder) {
 			got.Code, got.Header(), got.Body.String(), want.Code, want.Header(), want.Body.String())
 	}
 }
+
+func syntheticBytes(n int) []byte {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = byte(i % 251)
+	}
+	return b
+}
+
+type fakeReaderAt struct {
+	mu    sync.Mutex
+	data  []byte
+	calls int
+	errs  map[int]error
+	hook  func(call int)
+}
+
+func (f *fakeReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	f.mu.Lock()
+	f.calls++
+	call, err, hook := f.calls, f.errs[f.calls], f.hook
+	f.mu.Unlock()
+	if hook != nil {
+		hook(call)
+	}
+	if err != nil {
+		return 0, err
+	}
+	if off >= int64(len(f.data)) {
+		return 0, io.EOF
+	}
+	n := copy(p, f.data[off:])
+	if n < len(p) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+func (f *fakeReaderAt) reads() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+type writeFailure struct {
+	accepted int
+	err      error
+}
+
+type deadlineWriter struct {
+	*httptest.ResponseRecorder
+	events        []string
+	deadlines     []time.Time
+	writes        int
+	failWrites    map[int]writeFailure
+	failDeadlines map[int]error
+}
+
+func newDeadlineWriter() *deadlineWriter {
+	return &deadlineWriter{ResponseRecorder: httptest.NewRecorder()}
+}
+
+func (d *deadlineWriter) SetWriteDeadline(t time.Time) error {
+	d.deadlines = append(d.deadlines, t)
+	d.events = append(d.events, "deadline")
+	return d.failDeadlines[len(d.deadlines)]
+}
+
+func (d *deadlineWriter) WriteHeader(status int) {
+	d.events = append(d.events, "header")
+	d.ResponseRecorder.WriteHeader(status)
+}
+
+func (d *deadlineWriter) Write(p []byte) (int, error) {
+	d.writes++
+	d.events = append(d.events, "write")
+	if f, ok := d.failWrites[d.writes]; ok {
+		n, _ := d.ResponseRecorder.Write(p[:f.accepted])
+		return n, f.err
+	}
+	return d.ResponseRecorder.Write(p)
+}
