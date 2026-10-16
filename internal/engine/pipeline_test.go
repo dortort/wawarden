@@ -589,13 +589,16 @@ func TestNoReferenceIsCapturedWhileDownloadsAreOff(t *testing.T) {
 		t.Fatalf("an engine left at its zero options has downloads %v and a retention of %v", r.p.mediaOn, r.p.retention)
 	}
 	r.ingest(withMedia(dm("M1", alice, "caption"), MediaImage, "", 1234))
+	if n := r.peek("SELECT count(*) FROM media_refs"); n != 0 {
+		t.Fatalf("%d media references captured while downloads are off", n)
+	}
 	r.p.sweep(t.Context())
 	if e := r.logs.events("expiry_sweep_failed"); len(e) != 0 {
 		t.Fatalf("the sweep failed with the default retention: %v", e)
 	}
 	db := r.inspect()
 	if n := query[int](t, db, "SELECT count(*) FROM media_refs"); n != 0 {
-		t.Fatalf("%d media references captured while downloads are off", n)
+		t.Fatalf("%d media references left after the sweep while downloads are off", n)
 	}
 	if got := query[string](t, db, "SELECT media_type FROM messages WHERE id = 'M1'"); got != "application/octet-stream" {
 		t.Fatalf("media type = %q", got)
