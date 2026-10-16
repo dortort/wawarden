@@ -3,7 +3,9 @@ package wa
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -131,6 +133,90 @@ func TestMaskNumbers(t *testing.T) {
 	} {
 		if got := maskNumbers(in); got != want {
 			t.Errorf("maskNumbers(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+const (
+	cdnPath    = "/v/t62.7118-24/12345678_123456789012345_1234567890123456789_n.enc?ccb=11-4&oh=01_Q5AaSyntheticOhValue&oe=6700AB12&_nc_sid=5e03e0"
+	cdnPathO1  = "/o1/v/t24/f2/m232/AQOsyntheticPathSegment?ccb=9-4&oh=01_Q5AaOtherSynthetic&oe=6700CD34&_nc_sid=5e03e0&mms3=true"
+	encHash    = "c3ludGhldGljIGVuY3J5cHRlZCBmaWxlIGhhc2ggMzI="
+	hostFailed = "Failed to download media: %s, trying with next host..."
+	netRetry   = "Failed to download media due to network error: %v, retrying in %s..."
+)
+
+func syntheticMediaError(path string) error {
+	return &url.Error{Op: "Get", URL: "https://media.example" + path + "&hash=" + encHash + "&mms-type=image&__wa-mms=", Err: errors.New("synthetic")}
+}
+
+func TestScrubMedia(t *testing.T) {
+	unchanged := []string{
+		"no numbers here",
+		"jid 15550100001:4@s.whatsapp.net",
+		"took 1.5s",
+		"Failed to decrypt message from 15550100001:5@s.whatsapp.net in 120363000000000001@g.us: synthetic",
+		"app state version 3/5 of regular_high",
+		"module go.mau.fi/whatsmeow@v0.0.0/send.go:12",
+		"file /var/lib/wawarden/store.db is locked",
+		"key=value and a=b",
+		"__wa-mms= stays empty",
+		fmt.Sprintf(hostFailed, fmt.Sprintf("download failed with status code %d", 403)),
+		fmt.Sprintf("Failed to parse media retry notification: %v", errors.New("synthetic")),
+	}
+	for _, in := range unchanged {
+		if got := scrubMedia(in); got != in {
+			t.Errorf("scrubMedia(%q) = %q, want it unchanged", in, got)
+		}
+	}
+	for in, want := range map[string]string{
+		fmt.Sprintf(hostFailed, syntheticMediaError(cdnPath)):                                                                                                    `Failed to download media: Get "[url]": synthetic, trying with next host...`,
+		fmt.Sprintf(hostFailed, syntheticMediaError(cdnPathO1)):                                                                                                  `Failed to download media: Get "[url]": synthetic, trying with next host...`,
+		fmt.Sprintf(netRetry, syntheticMediaError(cdnPath), 2*time.Second):                                                                                       `Failed to download media due to network error: Get "[url]": synthetic, retrying in 2s...`,
+		fmt.Sprintf(netRetry, syntheticMediaError(cdnPath+` "quoted"`), 4*time.Second):                                                                           `Failed to download media due to network error: Get "[url]": synthetic, retrying in 4s...`,
+		fmt.Sprintf("Failed to download history sync data: %v", fmt.Errorf("failed to download media from last host: %w", syntheticMediaError(cdnPath))):         `Failed to download history sync data: failed to download media from last host: Get "[url]": synthetic`,
+		fmt.Sprintf("Failed to download history sync data: %v", fmt.Errorf("media download path does not start with slash: %s", cdnPath[1:]+" and 15550100001")): "Failed to download history sync data: media download path does not start with slash: [path]",
+		"direct path " + cdnPath + " expired":                                                                                                                    "direct path [path] expired",
+		"direct path " + cdnPathO1:                                                                                                                               "direct path [path]",
+		"stale /m1/v/t24/AnSyntheticSegment.enc":                                                                                                                 "stale [path]",
+		`direct_path:"` + cdnPath + `" media_key_timestamp:1700000000`:                                                                                           `direct_path:"[path]" media_key_timestamp:1700000000`,
+		"path=/x/y.enc?ccb=11-4":       "path=[path]",
+		"host media.example" + cdnPath: "host media.example[path]",
+		"retry oh=01_Q5AaSynthetic&oe=6700AB12&_nc_sid=5e03e0 and hash=" + encHash + " mms-type=image": "retry oh=[param]&oe=[param]&_nc_sid=[param] and hash=[param] mms-type=[param]",
+		"dial wss://chat.example.test/ws/chat failed":                                                  "dial [url] failed",
+		"HTTPS://Media.Example/x?oh=1, then 'http://cdn.example.test/y'":                               "[url], then '[url]'",
+	} {
+		if got := scrubMedia(in); got != want {
+			t.Errorf("scrubMedia(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestMediaLocationsNeverReachTheLog(t *testing.T) {
+	l, logs, _, _ := newAdapterLogger(t, 0)
+	sub := l.Sub("Client")
+	sub.Warnf(netRetry, syntheticMediaError(cdnPath), 2*time.Second)
+	sub.Warnf(hostFailed, syntheticMediaError(cdnPathO1))
+	sub.Warnf(hostFailed, fmt.Sprintf("download failed with status code %d", 403))
+	sub.Errorf("Failed to download history sync data: %v", fmt.Errorf("media download path does not start with slash: %s", cdnPath[1:]))
+	got := logs.String()
+	for _, leak := range []string{"media.example", "t62.7118", "AQOsynthetic", "Q5Aa", "6700AB12", "6700CD34", "5e03e0", encHash[:16], "mms-type=image"} {
+		if strings.Contains(got, leak) {
+			t.Fatalf("%q reached the output:\n%s", leak, got)
+		}
+	}
+	lines := logs.events("whatsmeow_log")
+	want := []string{
+		`Failed to download media due to network error: Get "[url]": synthetic, retrying in 2s...`,
+		`Failed to download media: Get "[url]": synthetic, trying with next host...`,
+		"Failed to download media: download failed with status code 403, trying with next host...",
+		"Failed to download history sync data: media download path does not start with slash: [path]",
+	}
+	if len(lines) != len(want) {
+		t.Fatalf("whatsmeow_log events %v, want %d", lines, len(want))
+	}
+	for i, w := range want {
+		if d := lines[i]["detail"]; d != w {
+			t.Errorf("detail %d = %q, want %q", i, d, w)
 		}
 	}
 }
