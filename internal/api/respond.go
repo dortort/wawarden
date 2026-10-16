@@ -20,6 +20,12 @@ const (
 	codeFirstContact         = "first_contact_refused"
 	codeInProgress           = "request_in_progress"
 	codeKeyReused            = "idempotency_key_reused"
+	codeMediaExpired         = "media_expired"
+	codeMediaFailed          = "media_failed"
+	codeMediaNotRequested    = "media_not_requested"
+	codeMediaTooLarge        = "media_too_large"
+	codeMediaUnavailable     = "media_unavailable"
+	codeMediaUnsupported     = "media_unsupported"
 	codeNotConnected         = "not_connected"
 	codeSendRejected         = "send_rejected"
 	codeSendOutcomeUnknown   = "send_outcome_unknown"
@@ -41,6 +47,15 @@ type codedError struct {
 }
 
 func (e *codedError) Error() string { return "api: request refused: " + e.code }
+
+var (
+	errMediaUnavailable  = &codedError{status: http.StatusNotFound, code: codeMediaUnavailable}
+	errMediaNotRequested = &codedError{status: http.StatusConflict, code: codeMediaNotRequested}
+	errMediaExpired      = &codedError{status: http.StatusGone, code: codeMediaExpired}
+	errMediaTooLarge     = &codedError{status: http.StatusUnprocessableEntity, code: codeMediaTooLarge}
+	errMediaUnsupported  = &codedError{status: http.StatusUnprocessableEntity, code: codeMediaUnsupported}
+	errMediaFailed       = &codedError{status: http.StatusBadGateway, code: codeMediaFailed}
+)
 
 func setSecurityHeaders(h http.Header) {
 	h.Set("Cache-Control", "no-store")
