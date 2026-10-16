@@ -9,10 +9,10 @@ import (
 	"github.com/dortort/wawarden/internal/store/internal/db"
 )
 
-const latestSchemaVersion = 4
+const latestSchemaVersion = 5
 
 func migrate(ctx context.Context, d *db.DB) (int, error) {
-	return d.Migrate(ctx, []string{schemaV1, schemaV2, schemaV3, schemaV4})
+	return d.Migrate(ctx, []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5})
 }
 
 func LatestSchemaVersion() int { return latestSchemaVersion }
@@ -346,4 +346,42 @@ INSERT INTO lid_map_v4 (lid, pn, source, learned_ts) SELECT lid, pn, source, lea
 DROP TABLE lid_map;
 
 ALTER TABLE lid_map_v4 RENAME TO lid_map;
+`
+
+const schemaV5 = `
+CREATE TABLE media_refs (
+	seq INTEGER PRIMARY KEY REFERENCES messages (seq) ON DELETE CASCADE,
+	ref TEXT NOT NULL CHECK (length(ref) BETWEEN 1 AND 2048 AND ref NOT GLOB '*[^!-~]*'),
+	kind TEXT NOT NULL CHECK (kind = 'image' OR kind = 'video' OR kind = 'audio' OR kind = 'document' OR kind = 'sticker'),
+	variant TEXT,
+	declared INTEGER NOT NULL CHECK (declared BETWEEN 0 AND 2147483648),
+	expires_at INTEGER NOT NULL,
+	added_at INTEGER NOT NULL,
+	CHECK (variant IS NULL OR (kind = 'video' AND (variant = 'gif' OR variant = 'video_note')) OR (kind = 'audio' AND variant = 'voice_note')
+		OR (kind = 'sticker' AND (variant = 'animated' OR variant = 'lottie')))
+) STRICT;
+
+CREATE INDEX media_refs_expiry ON media_refs (expires_at);
+
+CREATE INDEX media_refs_added ON media_refs (added_at);
+
+CREATE TABLE revoke_tombstones (
+	chat_jid TEXT NOT NULL,
+	id TEXT NOT NULL,
+	sender_jid TEXT NOT NULL,
+	expires_at INTEGER NOT NULL,
+	PRIMARY KEY (chat_jid, id, sender_jid)
+) STRICT, WITHOUT ROWID;
+
+CREATE INDEX revoke_tombstones_expiry ON revoke_tombstones (expires_at);
+
+CREATE INDEX messages_media_expiring ON messages (expires_at) WHERE expires_at IS NOT NULL AND media_type IS NOT NULL;
+
+ALTER TABLE clients ADD COLUMN allow_media INTEGER NOT NULL DEFAULT 0 CHECK (allow_media BETWEEN 0 AND 1);
+
+ALTER TABLE audit ADD COLUMN message_hmac BLOB CHECK (message_hmac IS NULL OR length(message_hmac) BETWEEN 16 AND 32);
+
+ALTER TABLE audit ADD COLUMN bytes INTEGER CHECK (bytes IS NULL OR bytes >= 0);
+
+UPDATE messages SET media_type = NULL WHERE revoked = 1 AND media_type IS NOT NULL;
 `

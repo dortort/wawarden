@@ -128,8 +128,8 @@ func TestTheFilesAndTheLatestVersionAreTheStores(t *testing.T) {
 	if a, s := Files(); a != "archive.db" || s != "session.db" {
 		t.Fatalf("Files = %q, %q", a, s)
 	}
-	if LatestArchiveVersion() != 4 {
-		t.Fatalf("LatestArchiveVersion = %d, want 4", LatestArchiveVersion())
+	if LatestArchiveVersion() != 5 {
+		t.Fatalf("LatestArchiveVersion = %d, want 5", LatestArchiveVersion())
 	}
 	if free, err := FreeBytes(t.TempDir()); err != nil || free == 0 {
 		t.Fatalf("FreeBytes = %d, %v", free, err)
@@ -147,7 +147,7 @@ func TestCheckCountsBothCopies(t *testing.T) {
 	}
 	sides, _ := filepath.Glob(archivePath + "-*")
 	a, err := CheckArchive(t.Context(), archivePath)
-	want := Archive{Integrity: Integrity{OK: true, Counted: true}, SchemaVersion: 4, Chats: 2, Messages: 3, BlobsPending: 2, BlobsQuarantined: 1,
+	want := Archive{Integrity: Integrity{OK: true, Counted: true}, SchemaVersion: 5, Chats: 2, Messages: 3, BlobsPending: 2, BlobsQuarantined: 1,
 		InboxBacklog: 2, InboxQuarantined: 1, ClientsActive: 1, AuditRows: 4}
 	if err != nil || !reflect.DeepEqual(a, want) {
 		t.Fatalf("CheckArchive = %+v, %v, want %+v", a, err, want)

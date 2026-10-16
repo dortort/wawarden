@@ -13,20 +13,24 @@ func TestMigratingALargeArchive(t *testing.T) {
 		"WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 999) "+
 			"INSERT INTO chats (jid, kind, last_ts) SELECT '1555' || (1000000 + i) || '@s.whatsapp.net', 1, 500000 FROM n",
 		"WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 500000) "+
-			"INSERT INTO messages (chat_jid, id, sender_jid, from_me, origin, ts, kind, text, text_display) "+
-			"SELECT '1555' || (1000000 + i % 1000) || '@s.whatsapp.net', 'M' || i, '1555' || (1000000 + i % 1000) || '@s.whatsapp.net', 0, 'live', i, 'text', 'synthetic ' || i, 'synthetic ' || i FROM n")
+			"INSERT INTO messages (chat_jid, id, sender_jid, from_me, origin, ts, kind, text, text_display, media_type, revoked) "+
+			"SELECT '1555' || (1000000 + i % 1000) || '@s.whatsapp.net', 'M' || i, '1555' || (1000000 + i % 1000) || '@s.whatsapp.net', 0, 'live', i, 'text', 'synthetic ' || i, 'synthetic ' || i, "+
+			"CASE WHEN i % 100 = 0 THEN 'image/jpeg' END, CASE WHEN i % 200 = 0 THEN 1 ELSE 0 END FROM n")
 	opts.WriteTimeout = time.Millisecond
 	start := time.Now()
 	s := openWith(t, opts)
 	t.Logf("migrated 500,000 messages in %v", time.Since(start))
-	if s.SchemaVersion() != 4 {
-		t.Fatalf("schema version %d, want 4", s.SchemaVersion())
+	if s.SchemaVersion() != 5 {
+		t.Fatalf("schema version %d, want 5", s.SchemaVersion())
 	}
 	requireNumbered(t, s, 500000)
 	if n := scalar[int](t, s, "SELECT count(DISTINCT ref) FROM chats WHERE length(ref) = 32"); n != 1000 {
 		t.Fatalf("%d chats with a reference, want 1000", n)
 	}
-	for _, index := range []string{"messages_chat_ts", "messages_change", "messages_change_chat", "chats_ref", "chats_last"} {
+	if kept, revoked := scalar[int](t, s, "SELECT count(*) FROM messages WHERE media_type IS NOT NULL"), scalar[int](t, s, "SELECT count(*) FROM messages WHERE revoked = 1 AND media_type IS NULL"); kept != 2500 || revoked != 2500 {
+		t.Fatalf("%d messages keep a media type and %d revoked messages lost it, want 2500 each", kept, revoked)
+	}
+	for _, index := range []string{"messages_chat_ts", "messages_change", "messages_change_chat", "chats_ref", "chats_last", "messages_media_expiring", "media_refs_expiry", "media_refs_added", "revoke_tombstones_expiry"} {
 		if n := scalar[int](t, s, "SELECT count(*) FROM sqlite_schema WHERE type = 'index' AND name = ?", index); n != 1 {
 			t.Errorf("index %s missing", index)
 		}
