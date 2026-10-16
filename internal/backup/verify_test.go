@@ -133,7 +133,7 @@ func manifestOf(t *testing.T, m manifest) []byte {
 
 func goodManifest(archive, session []byte) manifest {
 	return manifest{Format: 1, Version: "v0.0.0-test", Created: "2026-10-05T12:00:00Z", Databases: []entry{
-		{Name: "archive.db", SchemaVersion: 4, Bytes: int64(len(archive))},
+		{Name: "archive.db", SchemaVersion: 5, Bytes: int64(len(archive))},
 		{Name: "session.db", SchemaVersion: 16, Bytes: int64(len(session))},
 	}}
 }
@@ -249,7 +249,7 @@ func TestExtractRefusesAnythingButACompleteBackup(t *testing.T) {
 	}
 	work := workDir(t)
 	e, err := Extract(t.Context(), bytes.NewReader(complete), extractOptions(work))
-	if err != nil || e.Members[0].SchemaVersion != 4 || e.Members[1].SchemaVersion != 16 {
+	if err != nil || e.Members[0].SchemaVersion != 5 || e.Members[1].SchemaVersion != 16 {
 		t.Fatalf("the complete stream = %+v, %v", e, err)
 	}
 	padded := append(slices.Clone(complete), make([]byte, 10240)...)

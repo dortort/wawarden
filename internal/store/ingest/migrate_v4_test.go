@@ -113,8 +113,8 @@ func TestMigratingToVersion4KeepsMappingsMessagesAndTheAuditChain(t *testing.T) 
 	opts.Master = testMaster(t)
 	seedVersion3(t, opts)
 	s := openWith(t, opts)
-	if s.SchemaVersion() != 4 {
-		t.Fatalf("schema version %d, want 4", s.SchemaVersion())
+	if s.SchemaVersion() != 5 {
+		t.Fatalf("schema version %d, want 5", s.SchemaVersion())
 	}
 	rep, err := admin.Verify(t.Context(), copyArchive(t, s), opts.Master, nil)
 	if err != nil || !rep.OK() || rep.Rows != 4 || rep.Verified != 4 {
