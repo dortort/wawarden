@@ -663,14 +663,15 @@ queue, it holds:
   audio, `animated` or `lottie` for a sticker), the declared size of 0 to 2
   GiB, and when the reference expires and when it was added. It expires at the
   earlier of the message's time plus the reference retention and the message's
-  own expiry. It is written only with a new media message that has a media
-  type, or later by a copy of a stored media message that has a media type and
-  no reference, is not revoked and has not expired, and never when that expiry has already passed as the message is
-  stored. The transaction that revokes a message deletes its reference, and so
-  does the one that purges an expired message. A purge of references, at most
-  a given number per call, removes those past their expiry, those added longer
-  ago than the retention, and, while downloads are off, every one. Marking a
-  reference expired moves its expiry to the given time, never later;
+  own expiry. It is written only with a new media message that has a media type,
+  or later by a copy of a stored media message that has a media type and no
+  reference, is not revoked and has not expired, and never when that expiry has
+  already passed as the message is stored. The transaction that revokes a
+  message deletes its reference, and so does the one that purges an expired
+  message. A purge of references, at most a given number per call, removes those
+  past their expiry, those added longer ago than the retention, and, while
+  downloads are off, every one. Marking a reference expired moves its expiry to
+  the given time, never later;
 - no media type on a revoked message, nor on an expired one once the expiry
   purge reaches it: the revoke or purge clears it, and the migration to
   version 5 clears it on messages revoked before. The purge also reaches media
@@ -699,10 +700,10 @@ queue, it holds:
   room for a 32-byte digest of its token, not for the token; its expiry must be
   at most 366 days after its creation, and triggers refuse a write chat for a
   client that reads every chat, and an `INSERT OR REPLACE` or `REPLACE` that
-  would swap a client row under its chats. A client's `allow_media` flag is
-  off unless set. A client's chats are canonical identifiers, not references to stored
-  chats, so they may name a chat the archive has not seen yet, and a re-key
-  moves them from the phone number to the LID (see [Ingest](#ingest));
+  would swap a client row under its chats. A client's `allow_media` flag is off
+  unless set. A client's chats are canonical identifiers, not references to
+  stored chats, so they may name a chat the archive has not seen yet, and a
+  re-key moves them from the phone number to the LID (see [Ingest](#ingest));
 - the audit table, whose rows triggers refuse to update or replace, and to
   delete unless the audit anchor covers the row and it is not the newest row.
   Two columns, `message_hmac`, 16 to 32 bytes, and `bytes`, a count of 0 or
