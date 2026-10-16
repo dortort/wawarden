@@ -25,6 +25,7 @@ import (
 	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/safego"
+	"github.com/dortort/wawarden/internal/stage"
 )
 
 const (
@@ -79,6 +80,7 @@ type Options struct {
 	MediaMaxBytes     int64
 	MediaRefRetention time.Duration
 	MediaSealer       MediaSealer
+	MediaSpool        *stage.Spool
 }
 
 type downloader func(ctx context.Context, cli *whatsmeow.Client, notif *waE2E.HistorySyncNotification, dst whatsmeow.File) error
@@ -94,7 +96,9 @@ type Client struct {
 	log          logger
 	http         httpClients
 	download     downloader
+	fetch        mediaDownloader
 	capture      capture
+	spool        *stage.Spool
 	transmit     transmitter
 	transmitPeer peerTransmitter
 	online       func(socketState) bool
@@ -119,16 +123,16 @@ var (
 )
 
 func New(opts Options) (*Client, error) {
-	return newClient(opts, systemDial(), downloadToFile, time.Now)
+	return newClient(opts, systemDial(), downloadToFile, downloadMediaFile, time.Now)
 }
 
-func newClient(opts Options, dial dialFunc, download downloader, now func() time.Time) (*Client, error) {
+func newClient(opts Options, dial dialFunc, download downloader, fetch mediaDownloader, now func() time.Time) (*Client, error) {
 	if opts.Device == nil || opts.Devices == nil || opts.Writer == nil || opts.Alerts == nil ||
 		opts.HistoryMaxBytes <= 0 || opts.HistoryMaxBytes > engine.MaxHistoryMaxBytes {
 		return nil, errOptions
 	}
 	if opts.MediaMaxBytes < 0 || opts.MediaMaxBytes > mediaMaxDeclared || opts.MediaMaxBytes > 0 &&
-		(opts.MediaSealer == nil || opts.MediaRefRetention <= 0) {
+		(opts.MediaSealer == nil || opts.MediaRefRetention <= 0 || opts.MediaMaxBytes > mediaRAMThreshold && opts.MediaSpool == nil) {
 		return nil, errMediaOptions
 	}
 	configureDevice()
@@ -141,7 +145,9 @@ func newClient(opts Options, dial dialFunc, download downloader, now func() time
 		log:          newLibraryLogger(opts.Writer, opts.LogLevel, "whatsmeow", gate),
 		http:         newHTTPClients(dial, opts.HistoryMaxBytes+mediaOverhead),
 		download:     download,
+		fetch:        fetch,
 		capture:      capture{max: opts.MediaMaxBytes, retention: opts.MediaRefRetention, sealer: opts.MediaSealer, now: now},
+		spool:        opts.MediaSpool,
 		transmit:     transmitMessage,
 		transmitPeer: transmitPeerMessage,
 		online:       usable,

@@ -29,9 +29,11 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dortort/wawarden/internal/engine"
+	"github.com/dortort/wawarden/internal/engine/wa/internal/mediasrc"
 	"github.com/dortort/wawarden/internal/logx"
 	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/safego"
+	"github.com/dortort/wawarden/internal/stage"
 	"github.com/dortort/wawarden/internal/store/session"
 )
 
@@ -50,6 +52,10 @@ func refusingDial(t *testing.T) dialFunc {
 }
 
 func noDownload(context.Context, *whatsmeow.Client, *waE2E.HistorySyncNotification, whatsmeow.File) error {
+	return errNoDial
+}
+
+func noFetch(context.Context, *whatsmeow.Client, mediasrc.Source, whatsmeow.File) error {
 	return errNoDial
 }
 
@@ -82,7 +88,7 @@ func newRig(t *testing.T, device *store.Device, configure ...func(*Options)) *ri
 	for _, fn := range configure {
 		fn(&opts)
 	}
-	c, err := newClient(opts, refusingDial(t), noDownload, time.Now)
+	c, err := newClient(opts, refusingDial(t), noDownload, noFetch, time.Now)
 	if err != nil {
 		t.Fatalf("newClient: %v", err)
 	}
@@ -139,14 +145,19 @@ func TestNewRefusesIncompleteOptions(t *testing.T) {
 
 func TestNewRefusesIncompleteMediaOptions(t *testing.T) {
 	w, _ := newWriter()
+	spool, err := stage.New(stage.Options{Data: t.TempDir(), Local: true, UID: os.Getuid()})
+	if err != nil {
+		t.Fatalf("stage.New: %v", err)
+	}
 	full := Options{Device: &store.Device{}, Devices: &freshDevices{}, HistoryMaxBytes: 1, Writer: w, Alerts: logx.New(w, slog.LevelWarn),
-		MediaMaxBytes: 2 << 30, MediaRefRetention: time.Hour, MediaSealer: fakeSealer{}}
+		MediaMaxBytes: 2 << 30, MediaRefRetention: time.Hour, MediaSealer: fakeSealer{}, MediaSpool: spool}
 	for name, change := range map[string]func(*Options){
 		"a negative cap":                   func(o *Options) { o.MediaMaxBytes = -1 },
 		"a cap over 2 GiB":                 func(o *Options) { o.MediaMaxBytes = (2 << 30) + 1 },
 		"no sealer":                        func(o *Options) { o.MediaSealer = nil },
 		"no retention":                     func(o *Options) { o.MediaRefRetention = 0 },
 		"a negative retention":             func(o *Options) { o.MediaRefRetention = -time.Hour },
+		"no spool for a cap over 16 MiB":   func(o *Options) { o.MediaSpool = nil; o.MediaMaxBytes = mediaRAMThreshold + 1 },
 		"no sealer for a cap of 1 byte":    func(o *Options) { o.MediaSealer = nil; o.MediaMaxBytes = 1 },
 		"no retention for a cap of 1 byte": func(o *Options) { o.MediaRefRetention = 0; o.MediaMaxBytes = 1 },
 	} {
@@ -157,7 +168,8 @@ func TestNewRefusesIncompleteMediaOptions(t *testing.T) {
 		}
 	}
 	for name, change := range map[string]func(*Options){
-		"the largest cap": func(*Options) {},
+		"the largest cap":        func(*Options) {},
+		"16 MiB without a spool": func(o *Options) { o.MediaSpool = nil; o.MediaMaxBytes = mediaRAMThreshold },
 		"downloads off and nothing else set": func(o *Options) {
 			*o = Options{Device: o.Device, Devices: o.Devices, HistoryMaxBytes: 1, Writer: o.Writer, Alerts: o.Alerts}
 		},
@@ -513,7 +525,7 @@ func TestLogoutRemovesTheLocalDeviceWhenTheServerCannotBeReached(t *testing.T) {
 		t.Fatalf("the saved device was not read back: %v", err)
 	}
 	alerts, _ := newLogger(slog.LevelWarn)
-	c, err := newClient(Options{Device: stored, Devices: sess, OwnerPhone: ownerPhone, HistoryMaxBytes: 1 << 20, Writer: w, Alerts: alerts}, refusingDial(t), noDownload, time.Now)
+	c, err := newClient(Options{Device: stored, Devices: sess, OwnerPhone: ownerPhone, HistoryMaxBytes: 1 << 20, Writer: w, Alerts: alerts}, refusingDial(t), noDownload, noFetch, time.Now)
 	if err != nil {
 		t.Fatalf("newClient: %v", err)
 	}

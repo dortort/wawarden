@@ -2,17 +2,26 @@ package wa
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"os"
 	"reflect"
 	"testing"
 	"time"
 
+	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/proto/waHistorySync"
+	"go.mau.fi/whatsmeow/util/cbcutil"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dortort/wawarden/internal/engine"
+	"github.com/dortort/wawarden/internal/engine/wa/internal/mediasrc"
+	"github.com/dortort/wawarden/internal/stage"
 )
 
 const (
@@ -20,18 +29,27 @@ const (
 	testRetention = 30 * 24 * time.Hour
 )
 
+func newSpool(t *testing.T) *stage.Spool {
+	t.Helper()
+	spool, err := stage.New(stage.Options{Data: t.TempDir(), Local: true, UID: os.Getuid()})
+	if err != nil {
+		t.Fatalf("stage.New: %v", err)
+	}
+	return spool
+}
+
 func mediaClient(t *testing.T, now time.Time, configure ...func(*Options)) *Client {
 	t.Helper()
 	w, _ := newWriter()
 	alerts, _ := newLogger(slog.LevelWarn)
 	opts := Options{
 		Device: pairedDevice(), Devices: &freshDevices{}, OwnerPhone: ownerPhone, HistoryMaxBytes: 1 << 20, Writer: w, Alerts: alerts,
-		MediaMaxBytes: testMediaCap, MediaRefRetention: testRetention, MediaSealer: fakeSealer{},
+		MediaMaxBytes: testMediaCap, MediaRefRetention: testRetention, MediaSealer: fakeSealer{}, MediaSpool: newSpool(t),
 	}
 	for _, fn := range configure {
 		fn(&opts)
 	}
-	c, err := newClient(opts, refusingDial(t), noDownload, func() time.Time { return now })
+	c, err := newClient(opts, refusingDial(t), noDownload, noFetch, func() time.Time { return now })
 	if err != nil {
 		t.Fatalf("newClient: %v", err)
 	}
@@ -310,5 +328,313 @@ func TestTheDescriptorNamesOnlyTheKindsAndVariantsItKnows(t *testing.T) {
 	over.kind, over.length = engine.MediaDocument, mediaMaxDeclared+1
 	if _, ok := over.declared(); ok {
 		t.Error("a descriptor over 2 GiB was accepted")
+	}
+}
+
+type fakeFetch struct {
+	calls int
+	src   whatsmeow.DownloadableMessage
+	job   bool
+	dst   whatsmeow.File
+	write []byte
+	then  func(ctx context.Context) error
+}
+
+func (f *fakeFetch) fetch(ctx context.Context, _ *whatsmeow.Client, src mediasrc.Source, dst whatsmeow.File) error {
+	f.calls++
+	f.src, _ = src.Message()
+	_, f.job = ctx.Value(mediaJobKey{}).(*mediaJob)
+	f.dst = dst
+	if f.write != nil {
+		if _, err := io.Copy(dst, bytes.NewReader(f.write)); err != nil {
+			return err
+		}
+	}
+	if f.then != nil {
+		return f.then(ctx)
+	}
+	return nil
+}
+
+func captured(t *testing.T, c *Client, fx mediaFixture, length int64) (engine.Message, mediaFields) {
+	t.Helper()
+	f := syntheticMedia(length)
+	m := liveMedia(t, c, "3EB0F1", fx.build(f))
+	if m.MediaRef == "" {
+		t.Fatalf("%s of %d bytes was not captured", fx.name, length)
+	}
+	return m, f
+}
+
+func request(m engine.Message) engine.MediaRequest {
+	return engine.MediaRequest{ID: m.ID, Ref: m.MediaRef, Kind: m.MediaKind, Declared: m.MediaBytes}
+}
+
+func stagedBytes(t *testing.T, s engine.Staged) []byte {
+	t.Helper()
+	out := make([]byte, s.Size())
+	if n, err := s.ReadAt(out, 0); n != len(out) || err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("ReadAt = %d, %v", n, err)
+	}
+	return out
+}
+
+func TestFetchMediaStagesInRAMUpToTheThresholdAndOnDiskAbove(t *testing.T) {
+	document := mediaFixtures[6]
+	for name, tt := range map[string]struct {
+		length int64
+		disk   bool
+	}{
+		"a small attachment":       {length: 4096},
+		"an empty attachment":      {length: 0},
+		"exactly the threshold":    {length: mediaRAMThreshold},
+		"just above the threshold": {length: mediaRAMThreshold + 1, disk: true},
+	} {
+		c := mediaClient(t, epoch.Add(time.Hour))
+		m, f := captured(t, c, document, tt.length)
+		plain := randomBytes(tt.length)
+		fake := &fakeFetch{write: plain}
+		c.fetch = fake.fetch
+		staged, err := c.FetchMedia(t.Context(), request(m))
+		if err != nil {
+			t.Fatalf("FetchMedia of %s = %v", name, err)
+		}
+		switch s := staged.(type) {
+		case *capFile:
+			if tt.disk || int64(cap(s.buf)) != tt.length+mediaOverhead {
+				t.Errorf("%s staged in RAM with capacity %d, want disk %v or capacity %d", name, cap(s.buf), tt.disk, tt.length+mediaOverhead)
+			}
+		case *stage.Sealed:
+			if !tt.disk {
+				t.Errorf("%s staged on disk", name)
+			}
+		default:
+			t.Fatalf("%s staged in %T", name, staged)
+		}
+		if fake.dst != any(staged) || !fake.job || !bytes.Equal(stagedBytes(t, staged), plain) {
+			t.Errorf("%s: the seam wrote into %T with a job %v, and the staged bytes differ from the plaintext", name, fake.dst, fake.job)
+		}
+		doc, ok := fake.src.(*waE2E.DocumentMessage)
+		if !ok || doc.GetDirectPath() != f.path || !bytes.Equal(doc.GetMediaKey(), f.key) || !bytes.Equal(doc.GetFileSHA256(), f.sha) ||
+			!bytes.Equal(doc.GetFileEncSHA256(), f.enc) || doc.GetFileLength() != *f.fileLength() {
+			t.Errorf("%s: the seam was handed %#v, want the captured document", name, fake.src)
+		}
+		staged.Erase()
+	}
+}
+
+func TestDownloadableBuildsTheRecordedClass(t *testing.T) {
+	want := map[engine.MediaKind]struct {
+		class string
+		mms   whatsmeow.MediaType
+	}{
+		engine.MediaImage:    {"*waE2E.ImageMessage", whatsmeow.MediaImage},
+		engine.MediaVideo:    {"*waE2E.VideoMessage", whatsmeow.MediaVideo},
+		engine.MediaAudio:    {"*waE2E.AudioMessage", whatsmeow.MediaAudio},
+		engine.MediaDocument: {"*waE2E.DocumentMessage", whatsmeow.MediaDocument},
+		engine.MediaSticker:  {"*waE2E.StickerMessage", whatsmeow.MediaImage},
+	}
+	for kind, w := range want {
+		d := descriptor{directPath: "/example/m1", mediaKey: randomBytes(32), fileSHA256: randomBytes(32), fileEncSHA256: randomBytes(32), length: 7, kind: kind}
+		msg, ok := downloadable(d).Message()
+		if !ok || fmt.Sprintf("%T", msg) != w.class || whatsmeow.GetMediaType(msg) != w.mms || msg.GetDirectPath() != d.directPath ||
+			!bytes.Equal(msg.GetMediaKey(), d.mediaKey) || !bytes.Equal(msg.GetFileSHA256(), d.fileSHA256) || !bytes.Equal(msg.GetFileEncSHA256(), d.fileEncSHA256) {
+			t.Errorf("downloadable(%s) = %T %v, want a %s of media type %s carrying the descriptor", kind, msg, msg, w.class, w.mms)
+		}
+	}
+	if msg, ok := downloadable(descriptor{kind: "thumbnail"}).Message(); ok {
+		t.Errorf("downloadable of an unknown kind = %v", msg)
+	}
+}
+
+func TestFetchMediaMapsFailuresToSentinels(t *testing.T) {
+	image := mediaFixtures[0]
+	throttled := func(ctx context.Context) error {
+		return ctx.Value(mediaJobKey{}).(*mediaJob).end(&mediaThrottledError{RetryAfter: 90 * time.Second})
+	}
+	ended := func(cause error) func(context.Context) error {
+		return func(ctx context.Context) error {
+			ctx.Value(mediaJobKey{}).(*mediaJob).cancel(cause)
+			return fmt.Errorf("synthetic: %w", context.Cause(ctx))
+		}
+	}
+	returns := func(err error) func(context.Context) error {
+		return func(context.Context) error { return fmt.Errorf("synthetic library text: %w", err) }
+	}
+	status := func(code int) error { return whatsmeow.DownloadHTTPError{Response: &http.Response{StatusCode: code}} }
+	for name, tt := range map[string]struct {
+		then  func(context.Context) error
+		write int64
+		want  error
+	}{
+		"a 403":                      {then: returns(whatsmeow.ErrMediaDownloadFailedWith403), want: engine.ErrMediaExpired},
+		"a 404":                      {then: returns(whatsmeow.ErrMediaDownloadFailedWith404), want: engine.ErrMediaExpired},
+		"a 410":                      {then: returns(whatsmeow.ErrMediaDownloadFailedWith410), want: engine.ErrMediaExpired},
+		"a server's 410 response":    {then: returns(status(http.StatusGone)), want: engine.ErrMediaExpired},
+		"a server's 400 response":    {then: returns(status(http.StatusBadRequest)), want: engine.ErrMediaFailed},
+		"a plaintext hash mismatch":  {then: returns(whatsmeow.ErrInvalidMediaSHA256), want: engine.ErrMediaFailed},
+		"an encrypted hash mismatch": {then: returns(whatsmeow.ErrInvalidMediaEncSHA256), want: engine.ErrMediaFailed},
+		"a MAC mismatch":             {then: returns(whatsmeow.ErrInvalidMediaHMAC), want: engine.ErrMediaFailed},
+		"a short file":               {then: returns(whatsmeow.ErrTooShortFile), want: engine.ErrMediaFailed},
+		"no connection":              {then: returns(whatsmeow.ErrNotConnected), want: engine.ErrNotConnected},
+		"a stalled request":          {then: returns(errMediaStall), want: engine.ErrMediaFailed},
+		"the job's deadline":         {then: ended(errMediaDeadline), want: engine.ErrMediaFailed},
+		"the job's byte budget":      {then: ended(errMediaEgress), want: engine.ErrMediaFailed},
+		"a failed watchdog":          {then: ended(errMediaWatchdog), want: engine.ErrMediaFailed},
+		"a 404 after the job ended": {then: func(ctx context.Context) error {
+			_ = ended(errMediaDeadline)(ctx)
+			return whatsmeow.ErrMediaDownloadFailedWith404
+		}, want: engine.ErrMediaFailed},
+		"plaintext over the declared": {write: 1, want: engine.ErrMediaFailed},
+	} {
+		c := mediaClient(t, epoch.Add(time.Hour))
+		m, _ := captured(t, c, image, 64)
+		fake := &fakeFetch{write: randomBytes(64 + tt.write), then: tt.then}
+		c.fetch = fake.fetch
+		staged, err := c.FetchMedia(t.Context(), request(m))
+		if err != tt.want || staged != nil {
+			t.Errorf("FetchMedia with %s = %v, %v, want exactly %v and nothing staged", name, staged, err, tt.want)
+		}
+		if f, ok := fake.dst.(*capFile); !ok || f.buf != nil || f.Size() != 0 {
+			t.Errorf("FetchMedia with %s left %T staged", name, fake.dst)
+		}
+	}
+	c := mediaClient(t, epoch.Add(time.Hour))
+	m, _ := captured(t, c, image, 64)
+	c.fetch = (&fakeFetch{then: throttled}).fetch
+	_, err := c.FetchMedia(t.Context(), request(m))
+	var th *engine.ThrottledError
+	if !errors.As(err, &th) || th.RetryAfter != 90*time.Second || !errors.Is(err, engine.ErrMediaThrottled) {
+		t.Fatalf("FetchMedia when the server throttles = %v, want a throttle of 90s", err)
+	}
+}
+
+func TestFetchMediaRefusesBeforeTheSeam(t *testing.T) {
+	image, document := mediaFixtures[0], mediaFixtures[6]
+	now := epoch.Add(time.Hour)
+	c := mediaClient(t, now)
+	m, f := captured(t, c, image, 64)
+	big, _ := captured(t, c, document, 2<<20)
+	forged := func(d descriptor, declared int64) engine.MediaRequest {
+		ref, _ := fakeSealer{}.SealMedia(m.ID, d.marshal())
+		return engine.MediaRequest{ID: m.ID, Ref: ref, Kind: d.kind, Declared: declared}
+	}
+	valid := descriptor{directPath: f.path, mediaKey: f.key, fileSHA256: f.sha, fileEncSHA256: f.enc, length: 64, kind: engine.MediaImage}
+	relative, oversized, unknown := valid, valid, valid
+	relative.directPath = "example/m1"
+	oversized.length = imageCeiling + 1
+	unknown.kind = "thumbnail"
+	for name, tt := range map[string]struct {
+		client *Client
+		req    engine.MediaRequest
+		want   error
+	}{
+		"downloads off":              {client: mediaClient(t, now, func(o *Options) { o.MediaMaxBytes = 0 }), req: request(m), want: engine.ErrMediaUnavailable},
+		"a reference for another id": {req: engine.MediaRequest{ID: "3EB0F2", Ref: m.MediaRef, Kind: m.MediaKind, Declared: m.MediaBytes}, want: engine.ErrMediaUnavailable},
+		"no reference":               {req: engine.MediaRequest{ID: m.ID, Kind: m.MediaKind, Declared: m.MediaBytes}, want: engine.ErrMediaUnavailable},
+		"another kind":               {req: engine.MediaRequest{ID: m.ID, Ref: m.MediaRef, Kind: engine.MediaVideo, Declared: m.MediaBytes}, want: engine.ErrMediaUnavailable},
+		"another length":             {req: engine.MediaRequest{ID: m.ID, Ref: m.MediaRef, Kind: m.MediaKind, Declared: 65}, want: engine.ErrMediaUnavailable},
+		"a relative path":            {req: forged(relative, 64), want: engine.ErrMediaUnavailable},
+		"an unknown kind":            {req: forged(unknown, 64), want: engine.ErrMediaUnavailable},
+		"an image over its ceiling":  {req: forged(oversized, imageCeiling+1), want: engine.ErrMediaTooLarge},
+		"a lowered cap":              {client: mediaClient(t, now, func(o *Options) { o.MediaMaxBytes = 1 << 20 }), req: request(big), want: engine.ErrMediaTooLarge},
+		"a deadline already passed":  {req: engine.MediaRequest{ID: m.ID, Ref: m.MediaRef, Kind: m.MediaKind, Declared: m.MediaBytes, Deadline: now}, want: engine.ErrMediaFailed},
+	} {
+		client := tt.client
+		if client == nil {
+			client = c
+		}
+		fake := &fakeFetch{}
+		client.fetch = fake.fetch
+		if staged, err := client.FetchMedia(t.Context(), tt.req); err != tt.want || staged != nil || fake.calls != 0 {
+			t.Errorf("FetchMedia with %s = %v, %v after %d seam calls, want exactly %v and no call", name, staged, err, fake.calls, tt.want)
+		}
+	}
+}
+
+func TestFetchMediaOnDiskReleasesTheSpoolOnFailure(t *testing.T) {
+	document := mediaFixtures[6]
+	spool := newSpool(t)
+	c := mediaClient(t, epoch.Add(time.Hour), func(o *Options) { o.MediaSpool = spool })
+	m, _ := captured(t, c, document, mediaRAMThreshold+1)
+	held, err := spool.Admit(1, func(error) {})
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	busy := &fakeFetch{}
+	c.fetch = busy.fetch
+	if staged, err := c.FetchMedia(t.Context(), request(m)); err != engine.ErrMediaFailed || staged != nil || busy.calls != 0 {
+		t.Fatalf("FetchMedia with the spool busy = %v, %v after %d calls, want ErrMediaFailed and no call", staged, err, busy.calls)
+	}
+	held.Erase()
+	over := &fakeFetch{write: make([]byte, mediaRAMThreshold+1+mediaOverhead+1)}
+	c.fetch = over.fetch
+	if staged, err := c.FetchMedia(t.Context(), request(m)); err != engine.ErrMediaFailed || staged != nil {
+		t.Fatalf("FetchMedia writing past the spool's limit = %v, %v, want ErrMediaFailed", staged, err)
+	}
+	fits := &fakeFetch{write: randomBytes(mediaRAMThreshold + 1)}
+	c.fetch = fits.fetch
+	staged, err := c.FetchMedia(t.Context(), request(m))
+	if err != nil {
+		t.Fatalf("FetchMedia after a refused write = %v, want the spool released", err)
+	}
+	if !bytes.Equal(stagedBytes(t, staged), fits.write) {
+		t.Fatal("the disk staging returned other bytes than the seam wrote")
+	}
+	staged.Erase()
+}
+
+func TestTheMediaDownloaderRefusesAnEmptySource(t *testing.T) {
+	r := newRig(t, pairedDevice())
+	var declared mediasrc.Source
+	literal := mediasrc.Source{}
+	for name, src := range map[string]mediasrc.Source{"a declared variable": declared, "new": *new(mediasrc.Source), "a composite literal": literal, "Wrap(nil)": mediasrc.Wrap(nil)} {
+		for _, cli := range []*whatsmeow.Client{r.c.current(), nil} {
+			staged := newCapFile(1<<20, 0)
+			if err := downloadMediaFile(t.Context(), cli, src, staged); !errors.Is(err, errMediaSource) || len(staged.bytes()) != 0 {
+				t.Fatalf("a download of %s = %v, %d bytes, want errMediaSource before the library is called", name, err, len(staged.bytes()))
+			}
+		}
+	}
+}
+
+func TestTheRAMStagingErasesItsBuffer(t *testing.T) {
+	f := newCapFile(64+mediaOverhead, 64)
+	if _, err := f.Write(bytes.Repeat([]byte{0xa5}, 64)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	backing := f.buf[:cap(f.buf)]
+	f.Erase()
+	f.Erase()
+	if !bytes.Equal(backing, make([]byte, len(backing))) || f.Size() != 0 || f.buf != nil {
+		t.Fatalf("after Erase the buffer holds %x and the file %d bytes", backing, f.Size())
+	}
+	if _, err := f.WriteAt([]byte{1}, 0); err == nil {
+		t.Fatal("an erased staging file accepted a write")
+	}
+}
+
+func TestTheDiskStagingDecryptsInPlace(t *testing.T) {
+	plain := randomBytes(3*(32<<10) + 123)
+	key, iv, macKey := randomBytes(32), randomBytes(16), randomBytes(32)
+	sealed, err := newSpool(t).Admit(int64(len(plain)), func(error) {})
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	defer sealed.Erase()
+	if _, _, _, _, err := cbcutil.EncryptStream(key, iv, macKey, bytes.NewReader(plain), sealed); err != nil {
+		t.Fatalf("EncryptStream: %v", err)
+	}
+	if err := sealed.Truncate(sealed.Size() - 10); err != nil {
+		t.Fatalf("Truncate: %v", err)
+	}
+	if _, err := sealed.Seek(0, io.SeekStart); err != nil {
+		t.Fatalf("Seek: %v", err)
+	}
+	if err := cbcutil.DecryptFile(key, iv, sealed); err != nil {
+		t.Fatalf("DecryptFile: %v", err)
+	}
+	if got := stagedBytes(t, sealed); !bytes.Equal(got, plain) {
+		t.Fatalf("decrypted %d bytes, want the %d plaintext bytes", len(got), len(plain))
 	}
 }
