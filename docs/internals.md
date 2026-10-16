@@ -300,7 +300,10 @@ Further, the worker:
   also between the rows and batches it applies, the engine removes the text,
   media type and media reference of expired messages from the archive as
   described under
-  [Message archive](configuration.md#message-archive);
+  [Message archive](configuration.md#message-archive), and in the same
+  transaction purges media references past their expiry or older than the
+  retention, every media reference while downloads are off, and revoke
+  tombstones past their 7 days or beyond the newest 100,000;
 - learns which LID belongs to which phone number only from the alternate
   identifiers WhatsApp's servers attach to live messages and from history
   sync, and re-keys the direct chat (see [Re-keys](#re-keys) below).
@@ -672,9 +675,11 @@ queue, it holds:
   (`image`, `video`, `audio`, `document` or `sticker`), a variant that only
   its kind may carry (`gif` or `video_note` for a video, `voice_note` for
   audio, `animated` or `lottie` for a sticker), the declared size of 0 to 2
-  GiB, and when the reference expires and when it was added. Nothing in this
-  build stores a reference with a message, runs the purge of references or
-  marks one expired; the archive's operations on the table are these. A
+  GiB, and when the reference expires and when it was added. The engine stores
+  a message's reference only while its downloads switch is on, and nothing in
+  this build turns that switch on, so no reference is stored yet; its minute
+  sweep runs the purge of references, and a fetch that answers that the
+  attachment has expired marks that message's reference expired. A
   reference stored with a message expires at the earlier of the message's
   time plus the retention given with it and the message's own expiry.
   It is written only with a new media message that has a media type, or later
