@@ -22,12 +22,19 @@ import (
 const (
 	fillerCount    = 3000
 	canaryAlphabet = "АБВГДЕЖЗИЙКЛМНОПабвгдежзийклмноп"
+	sealedAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	typeAlphabet   = "abcdefghijklmnopqrstuvwxyz"
 	replacement    = "an ordinary replacement sentence"
+	secretPart     = 16
 )
 
 var (
 	controls   = []string{"good morning, see you at noon", "the meeting moved to friday", "thanks, that works for me"}
 	canary     = synthetic(2, canaryAlphabet, 1500)
+	sealed     = synthetic(3, sealedAlphabet, 400)
+	sealedType = "application/x-" + synthetic(4, typeAlphabet, 40)
+	bareSealed = synthetic(5, sealedAlphabet, 400)
+	bareType   = "application/x-" + synthetic(6, typeAlphabet, 40)
 	companions = func() []string {
 		out := make([]string, 25)
 		for i := range out {
@@ -120,6 +127,8 @@ func baseline(t *testing.T) []byte {
 	return baselineFile
 }
 
+type secret struct{ name, value string }
+
 type proof struct {
 	t        *testing.T
 	s        *Store
@@ -127,6 +136,24 @@ type proof struct {
 	trigrams map[string]bool
 	terms    map[string]bool
 	segments []string
+	secrets  []secret
+}
+
+func (p *proof) secretLeaks(raw []byte) []string {
+	var out []string
+	for _, sec := range p.secrets {
+		if bytes.Contains(raw, []byte(sec.value)) {
+			out = append(out, "the raw bytes keep the "+sec.name)
+			continue
+		}
+		for i := 0; i+secretPart <= len(sec.value); i += secretPart {
+			if bytes.Contains(raw, []byte(sec.value[i:i+secretPart])) {
+				out = append(out, "the raw bytes keep part of the "+sec.name)
+				break
+			}
+		}
+	}
+	return out
 }
 
 func newProof(t *testing.T) *proof {
@@ -226,6 +253,14 @@ func (p *proof) leaks() []string {
 		if n > 0 {
 			out = append(out, "a message row holds the text")
 		}
+		for _, sec := range p.secrets {
+			if err := r.q.QueryRowContext(r.ctx, "SELECT (SELECT count(*) FROM media_refs WHERE ref = ?1) + (SELECT count(*) FROM messages WHERE media_type = ?1)", sec.value).Scan(&n); err != nil {
+				return err
+			}
+			if n > 0 {
+				out = append(out, "a row holds the "+sec.name)
+			}
+		}
 		return nil
 	})
 	raw := p.files()
@@ -235,7 +270,7 @@ func (p *proof) leaks() []string {
 	for _, tri := range hits(raw, p.trigrams) {
 		out = append(out, "the raw bytes hold "+tri)
 	}
-	return out
+	return append(out, p.secretLeaks(raw)...)
 }
 
 func column(r *Reader, query string, args ...any) ([]string, error) {
@@ -260,14 +295,23 @@ func leaksWith(leaks []string, prefix string) bool {
 
 func (p *proof) plant() Ref {
 	p.t.Helper()
+	ref := p.store()
+	p.detected()
+	return ref
+}
+
+func (p *proof) store() Ref {
+	p.t.Helper()
 	var seq int64
 	write(p.t, p.s, func(tx *Tx) error {
 		var err error
-		seq, err = tx.AppendInbox([]byte(`{"text":"`+canary+`"}`), epoch)
+		seq, err = tx.AppendInbox([]byte(`{"text":"`+canary+`","media_type":"`+sealedType+`","media_ref":"`+sealed+`"}`), epoch)
 		return err
 	})
 	m := textMessage(p.t, alice, "CANARY", alice, "before "+canary+" after")
-	m.ExpiresAt = epoch.Add(time.Hour)
+	m.ExpiresAt, m.Kind, m.MediaType = epoch.Add(time.Hour), KindMedia, sealedType
+	m.Media = &Media{Ref: sealed, Kind: MediaDocument, Declared: 1 << 20, Retention: refRetention}
+	p.secrets = append(p.secrets, secret{"reference", sealed}, secret{"media type", sealedType})
 	var ref Ref
 	for i, text := range companions {
 		if i == len(companions)/2 {
@@ -281,8 +325,17 @@ func (p *proof) plant() Ref {
 		}
 		insert(p.t, p.s, textMessage(p.t, alice, fmt.Sprintf("COMPANION%d", i), alice, text))
 	}
-	p.detected()
 	return ref
+}
+
+func (p *proof) plantCaptionless() {
+	p.t.Helper()
+	m := textMessage(p.t, alice, "CAPTIONLESS", alice, "")
+	m.ExpiresAt, m.Kind, m.MediaType = epoch.Add(time.Hour), KindMedia, bareType
+	m.Media = &Media{Ref: bareSealed, Kind: MediaImage, Declared: 2048, Retention: refRetention}
+	p.secrets = append(p.secrets, secret{"captionless reference", bareSealed}, secret{"captionless media type", bareType})
+	insert(p.t, p.s, m)
+	p.detected()
 }
 
 func (p *proof) detected() {
@@ -291,7 +344,11 @@ func (p *proof) detected() {
 		p.t.Fatal("the full-text index has a single page per segment, so its page keys are not under test")
 	}
 	leaks := p.leaks()
-	for _, want := range []string{"the raw bytes hold the whole text", "MATCH", "fts5vocab", "an index page key holds"} {
+	wants := []string{"the raw bytes hold the whole text", "MATCH", "fts5vocab", "an index page key holds"}
+	for _, sec := range p.secrets {
+		wants = append(wants, "a row holds the "+sec.name, "the raw bytes keep the "+sec.name)
+	}
+	for _, want := range wants {
 		if !leaksWith(leaks, want) {
 			p.t.Fatalf("the planted canary is not detected by %q, so its absence would prove nothing", want)
 		}
@@ -330,8 +387,8 @@ func (p *proof) assertGone() {
 		p.t.Fatalf("Close: %v", err)
 	}
 	raw := p.files()
-	if bytes.Contains(raw, []byte(canary)) || len(hits(raw, p.trigrams)) > 0 {
-		p.t.Fatalf("the canary survives in the closed database file or its journal: %q", hits(raw, p.trigrams))
+	if bytes.Contains(raw, []byte(canary)) || len(hits(raw, p.trigrams)) > 0 || len(p.secretLeaks(raw)) > 0 {
+		p.t.Fatalf("the canary survives in the closed database file or its journal: %q %q", hits(raw, p.trigrams), p.secretLeaks(raw))
 	}
 }
 
@@ -377,14 +434,29 @@ func TestRevokedTextIsGoneFromDisk(t *testing.T) {
 func TestExpiredTextIsGoneFromDisk(t *testing.T) {
 	p := newProof(t)
 	p.plant()
+	p.plantCaptionless()
 	write(t, p.s, func(tx *Tx) error {
 		n, err := tx.PurgeExpired(epoch.Add(2*time.Hour), 10)
-		if err == nil && n != 1 {
-			err = fmt.Errorf("purged %d messages, want the canary", n)
+		if err == nil && n != 2 {
+			err = fmt.Errorf("purged %d messages, want the canary and the captionless media", n)
+		}
+		if err == nil {
+			_, err = tx.PurgeMediaRefs(epoch.Add(2*time.Hour), refRetention, true, 10)
 		}
 		return err
 	})
 	p.rewritten()
+	p.controlsSurvive()
+	p.assertGone()
+}
+
+func TestALateCopyOfARevokedMessageIsGoneFromDisk(t *testing.T) {
+	p := newProof(t)
+	write(t, p.s, func(tx *Tx) error { return tx.PutRevokeTombstone(chat(t, alice), "CANARY", chat(t, alice), epoch) })
+	p.store()
+	if f, ok := resolve(t, p.s, alice, "CANARY", alice); !ok || !f.Revoked {
+		t.Fatalf("the late copy was stored as %+v, %v, want it revoked", f, ok)
+	}
 	p.controlsSurvive()
 	p.assertGone()
 }
@@ -396,6 +468,10 @@ func TestEditedTextIsGoneFromDisk(t *testing.T) {
 	if matches(t, p.s, replacement) != 1 {
 		t.Fatal("the edited text is not indexed")
 	}
+	if leaks := p.leaks(); !leaksWith(leaks, "a row holds the reference") || !leaksWith(leaks, "a row holds the media type") {
+		t.Fatalf("leaks %q after a caption edit, want the reference and the media type kept", leaks)
+	}
+	p.secrets = nil
 	p.rewritten()
 	p.controlsSurvive()
 	p.assertGone()
@@ -548,6 +624,43 @@ func TestTheDeletionProofDetectsAWeakerProcedure(t *testing.T) {
 			want: "MATCH finds",
 		},
 		{
+			name: "without the reference delete",
+			revoke: func(t *testing.T, p *proof, ref Ref) {
+				write(t, p.s, func(tx *Tx) error { return weakRevoke(tx, ref, forgetMediaType) })
+			},
+			want: "the raw bytes keep the reference",
+		},
+		{
+			name: "without the media type clear",
+			revoke: func(t *testing.T, p *proof, ref Ref) {
+				write(t, p.s, func(tx *Tx) error { return weakRevoke(tx, ref, deleteMediaRef) })
+			},
+			want: "the raw bytes keep the media type",
+		},
+		{
+			name: "an expiry without the captionless media pass",
+			revoke: func(t *testing.T, p *proof, ref Ref) {
+				p.plantCaptionless()
+				write(t, p.s, func(tx *Tx) error {
+					c, err := tx.load(ref)
+					if err == nil {
+						err = tx.forget(ref.seq, c.text)
+					}
+					if err == nil {
+						_, err = tx.q.ExecContext(tx.ctx, insertFTS, ref.seq, nil)
+					}
+					if err == nil {
+						err = tx.forgetMedia(ref.seq)
+					}
+					if err == nil {
+						_, err = tx.PurgeMediaRefs(epoch.Add(2*time.Hour), refRetention, true, 10)
+					}
+					return err
+				})
+			},
+			want: "the raw bytes keep the captionless media type",
+		},
+		{
 			name: "without the index rewrite",
 			revoke: func(_ *testing.T, p *proof, ref Ref) {
 				p.writeWithoutTheRewrite(func(tx *Tx) error { return tx.ApplyRevoke(ref) })
@@ -574,4 +687,20 @@ func TestTheDeletionProofDetectsAWeakerProcedure(t *testing.T) {
 			}
 		})
 	}
+}
+
+func weakRevoke(tx *Tx, ref Ref, media string) error {
+	c, err := tx.load(ref)
+	if err == nil {
+		err = tx.forget(ref.seq, c.text)
+	}
+	for _, stmt := range []string{media, setRevoked} {
+		if err == nil {
+			_, err = tx.q.ExecContext(tx.ctx, stmt, ref.seq)
+		}
+	}
+	if err == nil {
+		_, err = tx.q.ExecContext(tx.ctx, insertFTS, ref.seq, nil)
+	}
+	return err
 }
