@@ -442,10 +442,10 @@ service is stopped. It:
    when another process holds its lock, as a running service does, it refuses
    with `service_running` before changing anything. A data directory without
    `archive.db` passes;
-2. checks `keys/` and `keys/master` as `serve` does (refusals 51 to 54 and 55
-   to 59; it creates neither), creates `keys/retired/` with mode `0700` when it
+2. checks `keys/` and `keys/master` as `serve` does (refusals 60 to 63 and 64
+   to 68; it creates neither), creates `keys/retired/` with mode `0700` when it
    does not exist, and checks it and every key in it as `serve` does (refusals
-   60 to 71). It refuses with `retired_keys_too_many` when `keys/retired/`
+   69 to 80). It refuses with `retired_keys_too_many` when `keys/retired/`
    already holds 32 keys besides the current one;
 3. draws 32 bytes from the operating system's cryptographic random source and
    refuses with `rotate_key_collision`, before changing anything else, when

@@ -81,10 +81,15 @@ These are all the variables this build reads.
 | `WAWARDEN_AUDIT_RETENTION_DAYS` | `90` | How many days the [audit chain](observability.md#audit-chain) keeps its rows: each night, after the backup, rows written more than this many days before are removed behind a signed anchor. A whole number from 7 to 3650 in decimal digits. Unset means 90; no setting keeps rows forever. | `audit_retention_invalid` |
 | `WAWARDEN_READ_PER_CLIENT_PER_MINUTE` | `600` | Each client's [read budget](api.md#read-rate-limits): requests per minute, from 1 to 600, refilled evenly with a burst of at most 60. Every authenticated client request, whatever its route or answer, costs one. | `read_per_minute_invalid` |
 | `WAWARDEN_SEARCH_PER_CLIENT_PER_MINUTE` | `60` | Each client's [search budget](api.md#read-rate-limits): searches per minute, from 1 to 60, refilled evenly with a burst of at most 6. A search costs one from both budgets. | `search_per_minute_invalid` |
-| `WAWARDEN_UNSAFE_RATE_CAPS` | unset | `1` lifts the upper caps of the two read budgets to 1000000 per minute and logs `unsafe_rate_caps` at start; `0` or unset keeps them. Zero or a negative budget stays refused. It never lifts the send limits. | `unsafe_rate_caps_invalid` |
-| `WAWARDEN_UNSAFE_SEND_CAPS` | unset | `1` lifts the upper caps of the two [send limits](api.md#send-limits) to 600 an hour and 60 a minute and logs `unsafe_send_caps` at every start; `0` or unset keeps them. Zero or a negative limit stays refused. | `unsafe_send_caps_invalid` |
+| `WAWARDEN_UNSAFE_RATE_CAPS` | unset | `1` lifts the upper caps of the two read budgets to 1000000 per minute and logs `unsafe_rate_caps` at start; `0` or unset keeps them. Zero or a negative budget stays refused. It never lifts the send limits or the attachment limits. | `unsafe_rate_caps_invalid` |
+| `WAWARDEN_UNSAFE_SEND_CAPS` | unset | `1` lifts the upper caps of the two [send limits](api.md#send-limits) to 600 an hour and 60 a minute and logs `unsafe_send_caps` at every start; `0` or unset keeps them. Zero or a negative limit stays refused. It never lifts the attachment limits. | `unsafe_send_caps_invalid` |
 | `WAWARDEN_SEND_GLOBAL_PER_HOUR` | `30` | The [global send limit](api.md#send-limits): sends a sliding hour, all clients together, from 1 to 60, or to 600 with `WAWARDEN_UNSAFE_SEND_CAPS=1`. Each client's hourly share is this divided by the number of clients that may write, at least 1. | `send_global_per_hour_invalid` |
 | `WAWARDEN_SEND_PER_CLIENT_PER_MINUTE` | `10` | Each client's [send limit](api.md#send-limits) per sliding minute, from 1 to 10, or to 60 with `WAWARDEN_UNSAFE_SEND_CAPS=1`. | `send_per_client_per_minute_invalid` |
+| `WAWARDEN_MEDIA_MAX_BYTES` | `0` (off) | The largest attachment, in bytes, whose reference the service keeps so that it can be downloaded later: `0`, or a number in decimal digits from `1` to `2147483648` (2 GiB), with no sign, unit, separator or white space. `0` turns attachment downloads off: no reference is captured, and the expiry sweep, which runs every minute, removes every stored one. Above `0`, a reference is kept only for an attachment whose declared size is at most this cap, and at most 16 MiB for an image or 1 MiB for a sticker, and never for a view-once message. At or below `16777216` (16 MiB), a fetched attachment is held in memory only and never written to disk; above it, one over 16 MiB is staged as ciphertext in [`spool/`](#data-directory). `104857600` (100 MiB) is the suggested value when you turn downloads on; then give the container `--memory=768m` instead of `512m` (see [Container hardening](hardening.md#container-hardening)). Neither unsafe caps switch changes it. This build captures and keeps references but fetches no attachment yet. | `media_max_bytes_invalid` |
+| `WAWARDEN_MEDIA_REF_RETENTION_DAYS` | `30` | How many days an attachment reference is kept: a whole number from 1 to 365 written in decimal digits. A reference expires at its message's time plus this many days, or at the message's own expiry when that comes first, and none is kept for a message already past that point. The expiry sweep removes a reference once it expires or once it has been stored this many days. | `media_ref_retention_days_invalid` |
+| `WAWARDEN_MEDIA_PER_CLIENT_PER_MINUTE` | `6` | The attachment fetches each client may start per minute, from 1 to 30. Neither unsafe caps switch lifts this cap. This build fetches no attachment yet, so the value is only validated. | `media_per_client_per_minute_invalid` |
+| `WAWARDEN_MEDIA_GLOBAL_PER_HOUR` | `60` | The attachment fetches over a sliding hour, all clients together, from 1 to 600. Neither unsafe caps switch lifts this cap. This build fetches no attachment yet, so the value is only validated. | `media_global_per_hour_invalid` |
+| `WAWARDEN_MEDIA_GLOBAL_BYTES_PER_HOUR` | `4294967296` (4 GiB) | The attachment bytes over a sliding hour, all clients together: a number in decimal digits from `1` to `68719476736` (64 GiB), and not below `WAWARDEN_MEDIA_MAX_BYTES`. Neither unsafe caps switch lifts this cap. This build fetches no attachment yet, so the value is only validated. | `media_global_bytes_per_hour_invalid` |
 | `WAWARDEN_DEV_FAKE_ENGINE` | unset | Development builds only; a release build refuses it with `dev_variable_in_release`. `1` runs the [fake engine](internals.md#fake-engine) in place of WhatsApp, `wrong_account` runs it pairing a number that is not the owner's, and `0` or unset runs the WhatsApp engine. | `dev_fake_engine_invalid` |
 
 ### Rules for all variables
@@ -272,69 +277,78 @@ The checks run in this order. What to do about each refusal is in the
 | 34 | `unsafe_send_caps_invalid` | `WAWARDEN_UNSAFE_SEND_CAPS` | The value is not `0` or `1`. |
 | 35 | `send_global_per_hour_invalid` | `WAWARDEN_SEND_GLOBAL_PER_HOUR` | The value is not a whole number written in decimal digits, without a sign or leading zero, from 1 to 60, or to 600 with `WAWARDEN_UNSAFE_SEND_CAPS=1`. Zero, a negative number and an empty value are always refused; `WAWARDEN_UNSAFE_RATE_CAPS` does not lift this cap. |
 | 36 | `send_per_client_per_minute_invalid` | `WAWARDEN_SEND_PER_CLIENT_PER_MINUTE` | The value is not a whole number written in decimal digits, without a sign or leading zero, from 1 to 10, or to 60 with `WAWARDEN_UNSAFE_SEND_CAPS=1`. Zero, a negative number and an empty value are always refused; `WAWARDEN_UNSAFE_RATE_CAPS` does not lift this cap. |
-| 37 | `dev_fake_engine_invalid` | `WAWARDEN_DEV_FAKE_ENGINE` | A development build sees a value other than `0`, `1` or `wrong_account`. A release build refuses the name itself at check 2. |
-| 38 | `running_as_root` | none | The real or the effective user ID is 0 and `--allow-root` was not given. |
-| 39 | `data_dir_unusable` | `WAWARDEN_DATA_DIR` | The directory does not exist and cannot be created, or cannot be inspected; the path is empty. |
-| 40 | `data_dir_not_directory` | `WAWARDEN_DATA_DIR` | The path is not a directory, or its last component is a symbolic link. |
-| 41 | `data_dir_foreign_owner` | `WAWARDEN_DATA_DIR` | The directory is not owned by the process's effective user ID. |
-| 42 | `data_dir_permissions` | `WAWARDEN_DATA_DIR` | The directory's mode is not exactly `0700`. |
-| 43 | `history_dir_unusable` | none; the error names `history/` | `history` exists in the data directory but cannot be inspected. |
-| 44 | `history_dir_not_directory` | none; the error names `history/` | `history` exists but is not a directory, or is a symbolic link. |
-| 45 | `history_dir_foreign_owner` | none; the error names `history/` | `history` is not owned by the process's effective user ID. |
-| 46 | `history_dir_permissions` | none; the error names `history/` | The mode of `history` is not exactly `0700`. |
-| 47 | `backups_dir_unusable` | none; the error names `backups/` | `backups` exists in the data directory but cannot be inspected. |
-| 48 | `backups_dir_not_directory` | none; the error names `backups/` | `backups` exists but is not a directory, or is a symbolic link. |
-| 49 | `backups_dir_foreign_owner` | none; the error names `backups/` | `backups` is not owned by the process's effective user ID. |
-| 50 | `backups_dir_permissions` | none; the error names `backups/` | The mode of `backups` is not exactly `0700`. |
-| 51 | `keys_dir_unusable` | none; the error names `keys/` | `keys` in the data directory does not exist and cannot be created, or cannot be inspected. |
-| 52 | `keys_dir_not_directory` | none; the error names `keys/` | `keys` is not a directory, or is a symbolic link. |
-| 53 | `keys_dir_foreign_owner` | none; the error names `keys/` | `keys` is not owned by the process's effective user ID. |
-| 54 | `keys_dir_permissions` | none; the error names `keys/` | The mode of `keys` is not exactly `0700`. |
-| 55 | `master_key_unusable` | none; the error names `keys/master` | `keys/master` does not exist and cannot be created, or cannot be inspected, opened or read. |
-| 56 | `master_key_not_regular` | none; the error names `keys/master` | `keys/master` is not a regular file: a symbolic link (even to a valid key), a directory or a named pipe, for example. |
-| 57 | `master_key_foreign_owner` | none; the error names `keys/master` | `keys/master` is not owned by the process's effective user ID. |
-| 58 | `master_key_permissions` | none; the error names `keys/master` | `keys/master` grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 59 | `master_key_size` | none; the error names `keys/master` | `keys/master` does not hold exactly 32 bytes. |
-| 60 | `retired_keys_dir_unusable` | none; the error names `keys/retired/` | `keys/retired` exists but cannot be inspected or listed. |
-| 61 | `retired_keys_dir_not_directory` | none; the error names `keys/retired/` | `keys/retired` is not a directory, or is a symbolic link. |
-| 62 | `retired_keys_dir_foreign_owner` | none; the error names `keys/retired/` | `keys/retired` is not owned by the process's effective user ID. |
-| 63 | `retired_keys_dir_permissions` | none; the error names `keys/retired/` | The mode of `keys/retired` is not exactly `0700`. |
-| 64 | `retired_key_name` | none; the error names `keys/retired/` | An entry of `keys/retired` whose name does not start with `.` is not named by a key id: 8 lower-case hexadecimal digits derived from the key (see [Master key](#master-key)). |
-| 65 | `retired_keys_too_many` | none; the error names `keys/retired/` | `keys/retired` holds more than 32 keys. |
-| 66 | `retired_key_unusable` | none; the error names the retired key | A retired key cannot be inspected, opened or read. |
-| 67 | `retired_key_not_regular` | none; the error names the retired key | A retired key is not a regular file: a symbolic link (even to a valid key) or a directory, for example. |
-| 68 | `retired_key_foreign_owner` | none; the error names the retired key | A retired key is not owned by the process's effective user ID. |
-| 69 | `retired_key_permissions` | none; the error names the retired key | A retired key grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 70 | `retired_key_size` | none; the error names the retired key | A retired key does not hold exactly 32 bytes. |
-| 71 | `retired_key_id_mismatch` | none; the error names the retired key | The key id derived from a retired key is not its name. |
-| 72 | `retired_key_current` | none; the error names the retired key | A retired key is the current master key, as a [`keys rotate`](cli.md#keys-rotate) interrupted before it replaced `keys/master` leaves it; run `keys rotate` again. |
-| 73 | `storage_filesystem_unknown` | none | The filesystem of the data directory cannot be inspected (`statfs`). |
-| 74 | `storage_network_filesystem` | none | The storage profile is `local` and the data directory is on a network filesystem; see [Storage profiles](#storage-profiles). |
-| 75 | `archive_db_unusable` | none; the error names `archive.db` | `archive.db` does not exist and cannot be created, or cannot be inspected. |
-| 76 | `archive_db_not_regular` | none; the error names `archive.db` | `archive.db` is not a regular file: a symbolic link or a directory, for example. |
-| 77 | `archive_db_foreign_owner` | none; the error names `archive.db` | `archive.db` is not owned by the process's effective user ID. |
-| 78 | `archive_db_permissions` | none; the error names `archive.db` | `archive.db` grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 79 | `archive_journal_unusable` | none; the error names `archive.db-journal` | `archive.db-journal` exists but cannot be inspected. |
-| 80 | `archive_journal_not_regular` | none; the error names `archive.db-journal` | `archive.db-journal` exists but is not a regular file. |
-| 81 | `archive_journal_foreign_owner` | none; the error names `archive.db-journal` | `archive.db-journal` is not owned by the process's effective user ID. |
-| 82 | `archive_journal_permissions` | none; the error names `archive.db-journal` | `archive.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 83 | `storage_ofd_unavailable` | none | On Linux, the storage profile is `local` and the kernel or the data directory's filesystem refused open-file-description locks; see [Storage profiles](#storage-profiles). |
-| 84 | `archive_schema_newer` | none; the error names `archive.db` | The archive's schema version is newer than this build knows: a newer release wrote it. |
-| 85 | `session_db_unusable` | none; the error names `session.db` | `session.db` does not exist and cannot be created, or cannot be inspected. |
-| 86 | `session_db_not_regular` | none; the error names `session.db` | `session.db` is not a regular file: a symbolic link or a directory, for example. |
-| 87 | `session_db_foreign_owner` | none; the error names `session.db` | `session.db` is not owned by the process's effective user ID. |
-| 88 | `session_db_permissions` | none; the error names `session.db` | `session.db` grants any access to group or others, or has the setuid, setgid or sticky bit. |
-| 89 | `session_journal_unusable` | none; the error names `session.db-journal` | `session.db-journal` exists but cannot be inspected. |
-| 90 | `session_journal_not_regular` | none; the error names `session.db-journal` | `session.db-journal` exists but is not a regular file. |
-| 91 | `session_journal_foreign_owner` | none; the error names `session.db-journal` | `session.db-journal` is not owned by the process's effective user ID. |
-| 92 | `session_journal_permissions` | none; the error names `session.db-journal` | `session.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 37 | `media_max_bytes_invalid` | `WAWARDEN_MEDIA_MAX_BYTES` | The value is not `0` or a whole number from 1 to 2147483648 written in decimal digits: it is empty, negative, above 2147483648, signed, or has a leading zero, white space or a unit. Neither unsafe caps switch lifts this cap. |
+| 38 | `media_ref_retention_days_invalid` | `WAWARDEN_MEDIA_REF_RETENTION_DAYS` | The value is not a whole number from 1 to 365 written in decimal digits: it is empty, `0`, above 365, signed, or has a leading zero, white space or a unit. |
+| 39 | `media_per_client_per_minute_invalid` | `WAWARDEN_MEDIA_PER_CLIENT_PER_MINUTE` | The value is not a whole number written in decimal digits, without a sign or leading zero, from 1 to 30. Zero, a negative number and an empty value are refused; neither `WAWARDEN_UNSAFE_RATE_CAPS` nor `WAWARDEN_UNSAFE_SEND_CAPS` lifts this cap. |
+| 40 | `media_global_per_hour_invalid` | `WAWARDEN_MEDIA_GLOBAL_PER_HOUR` | The value is not a whole number written in decimal digits, without a sign or leading zero, from 1 to 600. Zero, a negative number and an empty value are refused; neither `WAWARDEN_UNSAFE_RATE_CAPS` nor `WAWARDEN_UNSAFE_SEND_CAPS` lifts this cap. |
+| 41 | `media_global_bytes_per_hour_invalid` | `WAWARDEN_MEDIA_GLOBAL_BYTES_PER_HOUR` | The value is not a whole number of bytes written in decimal digits, without a sign or leading zero, from 1 to 68719476736, or it is below `WAWARDEN_MEDIA_MAX_BYTES`. Zero, a negative number and an empty value are refused; neither unsafe caps switch lifts this cap. |
+| 42 | `dev_fake_engine_invalid` | `WAWARDEN_DEV_FAKE_ENGINE` | A development build sees a value other than `0`, `1` or `wrong_account`. A release build refuses the name itself at check 2. |
+| 43 | `running_as_root` | none | The real or the effective user ID is 0 and `--allow-root` was not given. |
+| 44 | `data_dir_unusable` | `WAWARDEN_DATA_DIR` | The directory does not exist and cannot be created, or cannot be inspected; the path is empty. |
+| 45 | `data_dir_not_directory` | `WAWARDEN_DATA_DIR` | The path is not a directory, or its last component is a symbolic link. |
+| 46 | `data_dir_foreign_owner` | `WAWARDEN_DATA_DIR` | The directory is not owned by the process's effective user ID. |
+| 47 | `data_dir_permissions` | `WAWARDEN_DATA_DIR` | The directory's mode is not exactly `0700`. |
+| 48 | `history_dir_unusable` | none; the error names `history/` | `history` exists in the data directory but cannot be inspected. |
+| 49 | `history_dir_not_directory` | none; the error names `history/` | `history` exists but is not a directory, or is a symbolic link. |
+| 50 | `history_dir_foreign_owner` | none; the error names `history/` | `history` is not owned by the process's effective user ID. |
+| 51 | `history_dir_permissions` | none; the error names `history/` | The mode of `history` is not exactly `0700`. |
+| 52 | `backups_dir_unusable` | none; the error names `backups/` | `backups` exists in the data directory but cannot be inspected. |
+| 53 | `backups_dir_not_directory` | none; the error names `backups/` | `backups` exists but is not a directory, or is a symbolic link. |
+| 54 | `backups_dir_foreign_owner` | none; the error names `backups/` | `backups` is not owned by the process's effective user ID. |
+| 55 | `backups_dir_permissions` | none; the error names `backups/` | The mode of `backups` is not exactly `0700`. |
+| 56 | `spool_dir_unusable` | none; the error names `spool/` | `spool` exists in the data directory but cannot be inspected. |
+| 57 | `spool_dir_not_directory` | none; the error names `spool/` | `spool` exists but is not a directory, or is a symbolic link. |
+| 58 | `spool_dir_foreign_owner` | none; the error names `spool/` | `spool` is not owned by the process's effective user ID. |
+| 59 | `spool_dir_permissions` | none; the error names `spool/` | The mode of `spool` is not exactly `0700`. |
+| 60 | `keys_dir_unusable` | none; the error names `keys/` | `keys` in the data directory does not exist and cannot be created, or cannot be inspected. |
+| 61 | `keys_dir_not_directory` | none; the error names `keys/` | `keys` is not a directory, or is a symbolic link. |
+| 62 | `keys_dir_foreign_owner` | none; the error names `keys/` | `keys` is not owned by the process's effective user ID. |
+| 63 | `keys_dir_permissions` | none; the error names `keys/` | The mode of `keys` is not exactly `0700`. |
+| 64 | `master_key_unusable` | none; the error names `keys/master` | `keys/master` does not exist and cannot be created, or cannot be inspected, opened or read. |
+| 65 | `master_key_not_regular` | none; the error names `keys/master` | `keys/master` is not a regular file: a symbolic link (even to a valid key), a directory or a named pipe, for example. |
+| 66 | `master_key_foreign_owner` | none; the error names `keys/master` | `keys/master` is not owned by the process's effective user ID. |
+| 67 | `master_key_permissions` | none; the error names `keys/master` | `keys/master` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 68 | `master_key_size` | none; the error names `keys/master` | `keys/master` does not hold exactly 32 bytes. |
+| 69 | `retired_keys_dir_unusable` | none; the error names `keys/retired/` | `keys/retired` exists but cannot be inspected or listed. |
+| 70 | `retired_keys_dir_not_directory` | none; the error names `keys/retired/` | `keys/retired` is not a directory, or is a symbolic link. |
+| 71 | `retired_keys_dir_foreign_owner` | none; the error names `keys/retired/` | `keys/retired` is not owned by the process's effective user ID. |
+| 72 | `retired_keys_dir_permissions` | none; the error names `keys/retired/` | The mode of `keys/retired` is not exactly `0700`. |
+| 73 | `retired_key_name` | none; the error names `keys/retired/` | An entry of `keys/retired` whose name does not start with `.` is not named by a key id: 8 lower-case hexadecimal digits derived from the key (see [Master key](#master-key)). |
+| 74 | `retired_keys_too_many` | none; the error names `keys/retired/` | `keys/retired` holds more than 32 keys. |
+| 75 | `retired_key_unusable` | none; the error names the retired key | A retired key cannot be inspected, opened or read. |
+| 76 | `retired_key_not_regular` | none; the error names the retired key | A retired key is not a regular file: a symbolic link (even to a valid key) or a directory, for example. |
+| 77 | `retired_key_foreign_owner` | none; the error names the retired key | A retired key is not owned by the process's effective user ID. |
+| 78 | `retired_key_permissions` | none; the error names the retired key | A retired key grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 79 | `retired_key_size` | none; the error names the retired key | A retired key does not hold exactly 32 bytes. |
+| 80 | `retired_key_id_mismatch` | none; the error names the retired key | The key id derived from a retired key is not its name. |
+| 81 | `retired_key_current` | none; the error names the retired key | A retired key is the current master key, as a [`keys rotate`](cli.md#keys-rotate) interrupted before it replaced `keys/master` leaves it; run `keys rotate` again. |
+| 82 | `storage_filesystem_unknown` | none | The filesystem of the data directory cannot be inspected (`statfs`). |
+| 83 | `storage_network_filesystem` | none | The storage profile is `local` and the data directory is on a network filesystem; see [Storage profiles](#storage-profiles). |
+| 84 | `archive_db_unusable` | none; the error names `archive.db` | `archive.db` does not exist and cannot be created, or cannot be inspected. |
+| 85 | `archive_db_not_regular` | none; the error names `archive.db` | `archive.db` is not a regular file: a symbolic link or a directory, for example. |
+| 86 | `archive_db_foreign_owner` | none; the error names `archive.db` | `archive.db` is not owned by the process's effective user ID. |
+| 87 | `archive_db_permissions` | none; the error names `archive.db` | `archive.db` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 88 | `archive_journal_unusable` | none; the error names `archive.db-journal` | `archive.db-journal` exists but cannot be inspected. |
+| 89 | `archive_journal_not_regular` | none; the error names `archive.db-journal` | `archive.db-journal` exists but is not a regular file. |
+| 90 | `archive_journal_foreign_owner` | none; the error names `archive.db-journal` | `archive.db-journal` is not owned by the process's effective user ID. |
+| 91 | `archive_journal_permissions` | none; the error names `archive.db-journal` | `archive.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 92 | `storage_ofd_unavailable` | none | On Linux, the storage profile is `local` and the kernel or the data directory's filesystem refused open-file-description locks; see [Storage profiles](#storage-profiles). |
+| 93 | `archive_schema_newer` | none; the error names `archive.db` | The archive's schema version is newer than this build knows: a newer release wrote it. |
+| 94 | `session_db_unusable` | none; the error names `session.db` | `session.db` does not exist and cannot be created, or cannot be inspected. |
+| 95 | `session_db_not_regular` | none; the error names `session.db` | `session.db` is not a regular file: a symbolic link or a directory, for example. |
+| 96 | `session_db_foreign_owner` | none; the error names `session.db` | `session.db` is not owned by the process's effective user ID. |
+| 97 | `session_db_permissions` | none; the error names `session.db` | `session.db` grants any access to group or others, or has the setuid, setgid or sticky bit. |
+| 98 | `session_journal_unusable` | none; the error names `session.db-journal` | `session.db-journal` exists but cannot be inspected. |
+| 99 | `session_journal_not_regular` | none; the error names `session.db-journal` | `session.db-journal` exists but is not a regular file. |
+| 100 | `session_journal_foreign_owner` | none; the error names `session.db-journal` | `session.db-journal` is not owned by the process's effective user ID. |
+| 101 | `session_journal_permissions` | none; the error names `session.db-journal` | `session.db-journal` grants any access to group or others, or has the setuid, setgid or sticky bit. |
 
-The table is in the order the checks run. Checks 1 to 38 read only the
-environment and the process; checks 39 to 92 inspect the data directory.
+The table is in the order the checks run. Checks 1 to 43 read only the
+environment and the process; checks 44 to 101 inspect the data directory.
 
-- Checks 60 to 72 run only when `keys/retired` exists. Checks 66 to 72 run for
+- Checks 69 to 81 run only when `keys/retired` exists. Checks 75 to 81 run for
   each retired key in turn, in order of name.
-- Checks 85 to 92 run on `session.db` after the archive is open, and not at
+- Checks 94 to 101 run on `session.db` after the archive is open, and not at
   all when the [fake engine](internals.md#fake-engine) runs. The
   [storage profile](#storage-profiles) is checked again for `session.db`,
   which passes once it passed for the archive.
@@ -342,12 +356,12 @@ environment and the process; checks 39 to 92 inspect the data directory.
 What a refused start leaves behind:
 
 - When the data directory is missing, `serve` creates it only after checks 1
-  to 38 pass, so a start refused by any of them leaves nothing behind.
-- `history/` and `backups/` are checked only when they exist; `serve` creates
-  neither at start (see [Data directory](#data-directory)).
-- `keys/` and the master key are created, when missing, only after checks 39
-  to 50 pass.
-- An empty `archive.db` is created only after checks 39 to 74 pass, and an
+  to 43 pass, so a start refused by any of them leaves nothing behind.
+- `history/`, `backups/` and `spool/` are checked only when they exist;
+  `serve` creates none of them at start (see [Data directory](#data-directory)).
+- `keys/` and the master key are created, when missing, only after checks 44
+  to 59 pass.
+- An empty `archive.db` is created only after checks 44 to 83 pass, and an
   empty `session.db` only once the archive is open.
 - A refusal by a later check (on a filesystem that forces its own ownership or
   mode, for example), or a `startup_failed` exit, leaves what was created in
@@ -369,9 +383,9 @@ The data directory is `WAWARDEN_DATA_DIR`, by default `/data`.
   others, and no setuid, setgid or sticky bit. `0750`, `0755`, `0701` and `0500`
   are all refused.
 
-The checks run once, at start. When they exist, `history/` and `backups/` in the
-data directory must also be directories, not symbolic links, owned by the
-effective user ID with mode exactly `0700` (refusals 43 to 50). Then `serve`
+The checks run once, at start. When they exist, `history/`, `backups/` and
+`spool/` in the data directory must also be directories, not symbolic links,
+owned by the effective user ID with mode exactly `0700` (refusals 48 to 59). Then `serve`
 creates the [master key](#master-key) when it is missing and opens the
 [message archive](#message-archive), `archive.db`, and the
 [device store](#device-store), `session.db`. The
@@ -385,6 +399,17 @@ beyond `WAWARDEN_BACKUP_KEEP` from `backups/`, and refuses to delete anything
 when that directory holds an entry it did not write. The directory must be on a writable, persistent
 filesystem that supports hard links and that only the service's user can read.
 
+`spool/` holds attachments staged on disk. Only an attachment over 16 MiB,
+fetched while `WAWARDEN_MEDIA_MAX_BYTES` is above 16 MiB, is staged there, and
+the first one creates `spool/` with mode `0700`; this build fetches no
+attachment yet. A staged file has mode `0600` and holds only ciphertext under a
+key kept in memory. On the `local` [profile](#storage-profiles) its name is
+removed as soon as it is created; on `nfs` it stays until its job ends. Once
+`archive.db` is locked, `serve` removes every regular file in `spool/` at every
+start, whatever `WAWARDEN_MEDIA_MAX_BYTES` is, and while that is above 0 it
+removes every hour the staged files that no running job holds. A
+[backup](#backups) never includes `spool/`.
+
 Mechanisms that add group permissions or the setgid bit to a volume, such as
 Kubernetes `fsGroup`, make the directory fail the mode check.
 
@@ -394,7 +419,7 @@ Kubernetes `fsGroup`, make the directory fail the mode check.
 bytes. Right after the data directory checks, `serve`:
 
 1. creates `keys/` with mode `0700` when it does not exist;
-2. checks `keys/` (refusals 51 to 54): a directory, not a symbolic link, owned by
+2. checks `keys/` (refusals 60 to 63): a directory, not a symbolic link, owned by
    the effective user ID, with mode exactly `0700`;
 3. when `keys/master` does not exist, writes 32 bytes from the operating system's
    cryptographic random source to a new temporary file `keys/.master-<random>`
@@ -402,12 +427,12 @@ bytes. Right after the data directory checks, `serve`:
    the temporary name and flushes the directory. When two processes start at once,
    the second link fails, and both use the key that was linked first. `serve`
    never replaces an existing key; only [`keys rotate`](cli.md#keys-rotate) does;
-4. checks `keys/master` (refusals 55 to 59): a regular file, not a symbolic link,
+4. checks `keys/master` (refusals 64 to 68): a regular file, not a symbolic link,
    owned by the effective user ID, without any permission for group or others and
    without the setuid, setgid or sticky bit, holding exactly 32 bytes. Mode `0600`
    and mode `0400` are both accepted;
-5. when `keys/retired` exists, checks it and the retired keys in it (refusals 60
-   to 72): a directory, not a symbolic link, owned by the effective user ID, with
+5. when `keys/retired` exists, checks it and the retired keys in it (refusals 69
+   to 81): a directory, not a symbolic link, owned by the effective user ID, with
    mode exactly `0700`, holding at most 32 keys besides names that start with
    `.`, each named by its key id and checked as `keys/master` is, none of them
    the current master key. `keys rotate` puts each master key it replaces there.
@@ -423,7 +448,7 @@ only the derived keys, of the master key and of each retired key:
 | `chat-hmac` | 32 bytes | The `chat_hmac` of [audit lines](observability.md#audit-chain): the first 16 bytes of HMAC-SHA256 under this key over the chat's canonical identifier. It also keys their `message_hmac`, over a separate domain (see [Audit row HMAC](internals.md#audit-row-hmac)). No [notification event](observability.md#notifications) names a chat. |
 | `cursor-seal` | 32 bytes | Seals the `next` cursors of the [client API](api.md#cursors-and-message-references). |
 | `mref` | 32 bytes | Seals the [message references](api.md#cursors-and-message-references) of the client API. |
-| `media-ref` | 32 bytes | Reserved for sealing [media references](internals.md#media-reference); derived and kept, but nothing uses it in this build. |
+| `media-ref` | 32 bytes | Seals the [media reference](internals.md#media-reference) the engine keeps for an attachment while `WAWARDEN_MEDIA_MAX_BYTES` is above 0; a retired key's opens what it sealed. Nothing in this build opens one yet. |
 | `audit-chain` | 32 bytes | The key of the [audit chain](observability.md#audit-chain)'s row HMACs. |
 
 What leaves the service:
@@ -470,10 +495,10 @@ paired.
 Right after the master key, `serve`:
 
 1. checks the data directory's filesystem against the
-   [storage profile](#storage-profiles) (refusals 73 and 74);
+   [storage profile](#storage-profiles) (refusals 82 and 83);
 2. creates `archive.db` empty with mode `0600` when it does not exist, and
-   refuses (75 to 78) one that is not a regular file, belongs to another user,
-   or grants any access to group or others; then refuses (79 to 82) an
+   refuses (84 to 87) one that is not a regular file, belongs to another user,
+   or grants any access to group or others; then refuses (88 to 91) an
    `archive.db-journal` that exists and fails the same checks;
 3. opens one connection and reads back every setting it applies, refusing the
    connection on any difference: foreign keys on, the rollback journal in
@@ -567,7 +592,7 @@ linked device that the WhatsApp protocol library (`go.mau.fi/whatsmeow`) keeps,
 in its own tables, through the same SQLite engine. Right after the archive,
 `serve` opens it with every step the archive gets: the storage profile is
 checked, the file is created empty with mode `0600` when it does not exist, the
-file and its journal must pass refusals 85 to 92, the connection reads back the
+file and its journal must pass refusals 94 to 101, the connection reads back the
 same fixed settings and takes the same exclusive lock, kept the same way, with
 `db_lock_wait` naming `session` and `db_lost` too. Then the protocol library
 brings its tables up to date, within one minute. A store written by a newer
@@ -927,7 +952,8 @@ volumes:
   `WAWARDEN_HISTORY_MAX_BYTES`; see [Memory bounds](internals.md#memory-bounds).
   With `GOMEMLIMIT` unset, WaWarden sets a soft memory limit of 80% of it,
   about 410 MiB; [container hardening](hardening.md#container-hardening) gives
-  the sizing rule.
+  the sizing rule. Raise it to `768m` when you set `WAWARDEN_MEDIA_MAX_BYTES`
+  above 0 with the other attachment settings at their defaults.
 - Admin commands run inside the container and read the token on standard
   input. `-T` gives the command no terminal, so `--token-stdin` reads the
   redirected file:
