@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,19 @@ const (
 	minMaskedRun   = 6
 	truncated      = "[truncated]"
 	maskedNumber   = "[number]"
+	scrubbedURL    = "[url]"
+	scrubbedPath   = "[path]"
+	scrubbedParam  = "[param]"
+	noSlashPath    = "media download path does not start with slash: "
+	logStop        = "\\s\"'<>`"
+)
+
+var (
+	logQuotedURL  = regexp.MustCompile(`"((?i:https?|wss?)://(?:[^"\\]|\\.)*)"`)
+	logBareURL    = regexp.MustCompile("\\b((?i:https?|wss?)://[^" + logStop + "]*)")
+	logCDNPath    = regexp.MustCompile("(/(?:o1/|m1/)?v/t[0-9][^" + logStop + "]*)")
+	logQueryPath  = regexp.MustCompile("(?:^|[^\\w.~%+/@-])(/[^" + logStop + "]*[?&][^" + logStop + "]*)")
+	logMediaParam = regexp.MustCompile("\\b(?:hash|mms-type|oh|oe|_nc_\\w+|__wa-mms)=([^&" + logStop + "]+)")
 )
 
 type debugGate struct {
@@ -85,7 +99,7 @@ func (l logger) write(out *slog.Logger, level slog.Level, format string, args []
 	if !out.Enabled(ctx, level) {
 		return
 	}
-	detail := clip(maskNumbers(logx.RedactTokens(fmt.Sprintf(format, args...))))
+	detail := clip(maskNumbers(logx.RedactTokens(scrubMedia(fmt.Sprintf(format, args...)))))
 	out.LogAttrs(ctx, level, "protocol library log", slog.String("event", "whatsmeow_log"), slog.String("module", l.module), slog.String("detail", detail))
 }
 
@@ -115,6 +129,37 @@ func signalLine(level slog.Level, caller, msg string) {
 	if l := signalOut.Load(); l != nil {
 		l.write(l.out, level, "%s: %s", []any{caller, msg})
 	}
+}
+
+func scrubMedia(s string) string {
+	if i := strings.Index(s, noSlashPath); i >= 0 {
+		s = s[:i+len(noSlashPath)] + scrubbedPath
+	}
+	if !strings.ContainsAny(s, "/=") {
+		return s
+	}
+	s = redactGroup(logQuotedURL, s, scrubbedURL)
+	s = redactGroup(logBareURL, s, scrubbedURL)
+	s = redactGroup(logCDNPath, s, scrubbedPath)
+	s = redactGroup(logQueryPath, s, scrubbedPath)
+	return redactGroup(logMediaParam, s, scrubbedParam)
+}
+
+func redactGroup(re *regexp.Regexp, s, placeholder string) string {
+	var b strings.Builder
+	last := 0
+	for _, m := range re.FindAllStringSubmatchIndex(s, -1) {
+		start := m[2]
+		end := start + len(strings.TrimRight(s[start:m[3]], ".,;:!?)"))
+		b.WriteString(s[last:start])
+		b.WriteString(placeholder)
+		last = end
+	}
+	if last == 0 {
+		return s
+	}
+	b.WriteString(s[last:])
+	return b.String()
 }
 
 func maskNumbers(s string) string {
