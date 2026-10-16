@@ -2,6 +2,8 @@ package wa
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/hex"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,6 +13,7 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/dortort/wawarden/internal/engine"
 	"github.com/dortort/wawarden/internal/policy"
@@ -78,6 +81,7 @@ func FuzzMessageBytes(f *testing.F) {
 			} else if !reflect.DeepEqual(ev, sealed) {
 				t.Fatalf("the capture changed %+v into %+v", ev, sealed)
 			}
+			checkPlantedSecrets(t, info, &m, on)
 			switch e := ev.(type) {
 			case engine.Message:
 				checkFuzzedMessage(t, info, evt, e, len(data))
@@ -137,6 +141,76 @@ func checkCapturedMessage(t *testing.T, plain, sealed engine.Message) {
 		d.chat != sealed.Chat || d.sender != sealed.Sender || d.fromMe != sealed.FromMe {
 		t.Fatalf("message %+v carries a reference to %+v", sealed, d)
 	}
+}
+
+func checkPlantedSecrets(t *testing.T, info types.MessageInfo, m *waE2E.Message, on capture) {
+	t.Helper()
+	evt := (&events.Message{Info: info, RawMessage: proto.Clone(m).(*waE2E.Message)}).UnwrapRaw()
+	part, ok := mediaOf(evt.Message)
+	if !ok {
+		return
+	}
+	path, key, sha, enc := "/"+hex.EncodeToString(randomBytes(16)), randomBytes(32), randomBytes(32), randomBytes(32)
+	r := part.item.(proto.Message).ProtoReflect()
+	fields := r.Descriptor().Fields()
+	r.Set(fields.ByName("directPath"), protoreflect.ValueOfString(path))
+	r.Set(fields.ByName("mediaKey"), protoreflect.ValueOfBytes(key))
+	r.Set(fields.ByName("fileSHA256"), protoreflect.ValueOfBytes(sha))
+	r.Set(fields.ByName("fileEncSHA256"), protoreflect.ValueOfBytes(enc))
+	for _, mc := range []capture{{}, on} {
+		if ev, ok := translate(evt, mc); ok {
+			if msg, isMessage := ev.(engine.Message); isMessage {
+				noMediaSecrets(t, "a fuzzed message", msg, []byte(path), key, sha, enc)
+			}
+		}
+	}
+}
+
+func noMediaSecrets(t *testing.T, where string, m engine.Message, secrets ...[]byte) {
+	t.Helper()
+	fields := stringsIn(reflect.ValueOf(withoutReference(m)))
+	for _, secret := range secrets {
+		if len(secret) == 0 {
+			continue
+		}
+		hexed := hex.EncodeToString(secret)
+		for _, form := range []string{string(secret), hexed, strings.ToUpper(hexed), base64.RawStdEncoding.EncodeToString(secret), base64.RawURLEncoding.EncodeToString(secret)} {
+			for _, field := range fields {
+				if strings.Contains(field, form) {
+					t.Fatalf("%s carries media key material outside its reference: %q in %+v", where, field, m)
+				}
+			}
+		}
+	}
+}
+
+func stringsIn(v reflect.Value) []string {
+	switch v.Kind() {
+	case reflect.String:
+		return []string{v.String()}
+	case reflect.Pointer:
+		if !v.IsNil() {
+			return stringsIn(v.Elem())
+		}
+	case reflect.Slice:
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			return []string{string(v.Bytes())}
+		}
+		var out []string
+		for i := range v.Len() {
+			out = append(out, stringsIn(v.Index(i))...)
+		}
+		return out
+	case reflect.Struct:
+		var out []string
+		for i := range v.NumField() {
+			if v.Type().Field(i).IsExported() {
+				out = append(out, stringsIn(v.Field(i))...)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 func FuzzMediaDescriptor(f *testing.F) {
