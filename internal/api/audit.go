@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/dortort/wawarden/internal/api/dto"
 	"github.com/dortort/wawarden/internal/cursor"
 	"github.com/dortort/wawarden/internal/policy"
 )
@@ -122,6 +123,9 @@ func (a *auditWriter) WriteHeader(status int) {
 		h := a.Header()
 		h.Del("Retry-After")
 		h.Del("Allow")
+		for _, name := range dto.DeliveryHeaders() {
+			h.Del(name)
+		}
 		if errors.Is(err, errBusy) {
 			setRetryAfter(h, errBusy.retryAfter)
 			writeError(a.ResponseWriter, errBusy.status, errBusy.code)

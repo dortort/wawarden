@@ -173,6 +173,7 @@ func TestAReplacedAuditWriterStopsWithoutReading(t *testing.T) {
 	d.audit.fail = false
 	d.requireAudit()
 	d.requireFinished(0, false)
+	requireNoDeliveryHeaders(t, d.writer.Header())
 	requireSecurityHeaders(t, d.writer.Header())
 }
 
@@ -324,6 +325,15 @@ func TestAnUnsatisfiableRangeAnswers416WithTheSize(t *testing.T) {
 			requireSecurityHeaders(t, rec.Header())
 		})
 	}
+}
+
+func TestAFailedHeaderRowStripsTheRangeRefusal(t *testing.T) {
+	d := newDelivery(t, 3000)
+	d.audit.fail = true
+	d.serve(http.MethodGet, http.Header{"Range": {"bytes=3000-"}})
+	requireError(t, d.writer.ResponseRecorder, http.StatusInternalServerError, codeInternal)
+	requireNoDeliveryHeaders(t, d.writer.Header())
+	requireSecurityHeaders(t, d.writer.Header())
 }
 
 func TestAnExpiredJobAnswersGoneWithoutReading(t *testing.T) {
