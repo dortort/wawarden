@@ -576,7 +576,7 @@ var serverNames = set("s.whatsapp.net", "whatsapp.net")
 
 var networkEntryPoints = set("ConnectContext", "Download", "DownloadAny", "DownloadFB", "DownloadFBToFile", "DownloadMediaWithOnlyPath",
 	"DownloadMediaWithOnlyPathToFile", "DownloadMediaWithPath", "DownloadMediaWithPathToFile", "DownloadThumbnail", "DownloadToFile", "FetchAppState",
-	"SendMessage", "SendPeerMessage", "Upload", "UploadReader")
+	"FetchStickerPack", "SendMediaRetryReceipt", "SendMessage", "SendPeerMessage", "Upload", "UploadReader")
 
 var transportSetters = set("SetMediaHTTPClient", "SetPreLoginHTTPClient", "SetWebsocketHTTPClient")
 
@@ -656,6 +656,22 @@ func f(ctx context.Context, cli *whatsmeow.Client) {
 	_ = cli.FetchAppState(ctx, appstate.WAPatchRegular, false, false)
 }
 `},
+		{name: "sticker-pack fetches and media retry receipts in a test", rel: "internal/engine/wa/x_test.go", want: 3, src: `package wa
+
+import (
+	"context"
+
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/types"
+)
+
+func f(ctx context.Context, cli *whatsmeow.Client) {
+	_, _ = cli.FetchStickerPack(ctx, "synthetic")
+	_ = cli.SendMediaRetryReceipt(ctx, &types.MessageInfo{}, nil)
+	retry := cli.SendMediaRetryReceipt
+	_ = retry
+}
+`},
 		{name: "the adapter's own methods in a test, whose names the library's client shares, and the library's socket constants", rel: "internal/engine/wa/x_test.go", src: `package wa
 
 import (
@@ -732,6 +748,18 @@ var (
 	zone                  = "eth" + strings.Repeat("0", 1)
 	documentationName     = "corp." + strings.ToLower("INTERNAL")
 )
+
+func TestNetworkEntryPointsAreTheLibrarys(t *testing.T) {
+	methods, err := protocolClientMethods()
+	if err != nil {
+		t.Fatalf("read the methods of the protocol client: %v", err)
+	}
+	for name := range networkEntryPoints {
+		if !methods[name] {
+			t.Errorf("the offline-tests rule names the network entry point %s, which is not a method of %s.Client", name, whatsmeowModule)
+		}
+	}
+}
 
 func offlineTests(allowed map[string]addressAllowance) func(*sourceFile) []string {
 	return func(f *sourceFile) []string {
