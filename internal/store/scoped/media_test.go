@@ -231,6 +231,53 @@ func TestAnAttachmentWithACorruptKindIsRefused(t *testing.T) {
 	}
 }
 
+func TestARevokedOrExpiredRowShowsNoMediaType(t *testing.T) {
+	s := openStore(t)
+	brief := mediaMessage(t, alice, "E", alice, epoch.Add(time.Minute))
+	brief.ExpiresAt = epoch.Add(time.Hour)
+	insert(t, s, mediaMessage(t, alice, "R", alice, epoch), brief, mediaMessage(t, alice, "L", alice, epoch.Add(2*time.Minute)))
+	exec(t, s, "UPDATE messages SET revoked = 1 WHERE id = 'R'")
+	write(t, s, func(tx *ingest.Tx) error {
+		_, err := tx.PurgeExpired(epoch.Add(2*time.Hour), 10)
+		return err
+	})
+	if kept, err := s.Scoped().Column(t.Context(), "SELECT media_type FROM messages WHERE id = 'R'"); err != nil || len(kept) != 1 || kept[0] != "image/jpeg" {
+		t.Fatalf("the revoked row's media type = %q, %v, want it still stored", kept, err)
+	}
+	ref := refOf(t, s, alice)
+	page, _, err := s.Scoped().Messages(grantAll(t), t.Context(), ref, scoped.MessagePosition{}, scoped.Older, 5)
+	if err != nil || len(page.Messages) != 3 {
+		t.Fatalf("Messages = %+v, %v", page, err)
+	}
+	changes, _, err := s.Scoped().Changes(grantAll(t), t.Context(), "", scoped.ChangePosition{}, 5)
+	if err != nil || len(changes.Messages) != 3 {
+		t.Fatalf("Changes = %+v, %v", changes, err)
+	}
+	q, err := scoped.ParseQuery("synthetic caption")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, _, err := s.Scoped().Search(grantAll(t), t.Context(), q, "", scoped.SearchPosition{}, 5)
+	if err != nil || len(found.Messages) != 1 || found.Messages[0].ID != "L" {
+		t.Fatalf("Search = %+v, %v", found, err)
+	}
+	rows := map[string][]scoped.Message{"Messages": page.Messages, "Changes": changes.Messages, "Search": found.Messages}
+	for _, id := range []string{"R", "E", "L"} {
+		one, ok, err := s.Scoped().Message(grantAll(t), t.Context(), chat(t, alice), id, chat(t, alice))
+		if err != nil || !ok {
+			t.Fatalf("Message(%s) = %v, %v", id, ok, err)
+		}
+		rows["Message"] = append(rows["Message"], one)
+	}
+	for name, ms := range rows {
+		for _, m := range ms {
+			if want := map[string]string{"L": "image/jpeg"}[m.ID]; m.MediaType != want {
+				t.Errorf("%s: %s media type = %q, want %q", name, m.ID, m.MediaType, want)
+			}
+		}
+	}
+}
+
 func TestAnAttachmentReadNeverQueues(t *testing.T) {
 	opts := testOptions(t.TempDir())
 	opts.ReadSlots = 1
