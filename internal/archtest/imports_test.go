@@ -25,6 +25,8 @@ const (
 	policyDir  = "internal/policy"
 	sealDir    = policyDir + "/internal/seal"
 	sealPath   = module + "/" + sealDir
+
+	imageModule = "golang.org/x/image"
 )
 
 var bannedImports = set("net/http/pprof", "expvar", "net/http/cgi", "net/http/fcgi", "plugin", "unsafe", "C")
@@ -40,7 +42,7 @@ var senderDenied = []string{"database/sql", "modernc.org/sqlite", "go.mau.fi/wha
 var policyAllowed = set("bytes", "cmp", "crypto/sha256", "crypto/subtle", "encoding/base64", "encoding/binary", "encoding/hex",
 	"errors", "hash/crc32", "iter", "maps", "slices", "sort", "strconv", "strings", "time", "unicode", "unicode/utf8", "unique")
 
-var importableModules = []string{"filippo.io/age", "go.mau.fi/libsignal", "go.mau.fi/whatsmeow", "google.golang.org/protobuf", "modernc.org/sqlite", rapidModule, textModule, mcpModule, schemaModule}
+var importableModules = []string{"filippo.io/age", "go.mau.fi/libsignal", "go.mau.fi/whatsmeow", "google.golang.org/protobuf", "modernc.org/sqlite", rapidModule, textModule, mcpModule, schemaModule, imageModule}
 
 var indirectOnlyModules = []string{
 	"filippo.io/edwards25519",
