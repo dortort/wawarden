@@ -106,6 +106,7 @@ func clientHandler(t tb, reader api.ReadArchive, auth api.Authenticator, audit a
 		Archive: reader, Audit: audit,
 		Session: func() string { return "connected" }, Cursors: cursors, Refs: refs,
 		Limits: api.ReadLimits{ReadsPerMinute: 1 << 30, SearchesPerMinute: 1 << 30}, Sender: refusingSender{}, SendRejected: func(string) {},
+		AuditFailed: func(string, error) {},
 	})
 }
 

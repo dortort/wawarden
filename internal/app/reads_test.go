@@ -1,12 +1,17 @@
 package app
 
 import (
+	"errors"
+	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/dortort/wawarden/internal/cursor"
 	"github.com/dortort/wawarden/internal/keys"
+	"github.com/dortort/wawarden/internal/logx"
+	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/token"
 )
 
@@ -139,5 +144,27 @@ func TestTheClientListenerAppliesTheConfiguredReadBudget(t *testing.T) {
 	}
 	if err := stop(); err != nil {
 		t.Fatalf("Run = %v", err)
+	}
+}
+
+func TestAFailedAuditRowIsCountedAndLogged(t *testing.T) {
+	reg, logs := metrics.NewRegistry(), &syncBuffer{}
+	failed := auditFailures(reg, logx.New(logx.NewWriter(logs), slog.LevelWarn))
+	failed("rest.media.sent", errors.New("synthetic failure naming 15550100001@s.whatsapp.net and SYNTHETIC1"))
+	var b strings.Builder
+	if err := reg.WriteText(&b); err != nil {
+		t.Fatalf("WriteText: %v", err)
+	}
+	if !strings.Contains(b.String(), "wawarden_audit_failures_total 1\n") {
+		t.Fatalf("metrics lack one audit failure:\n%s", b.String())
+	}
+	got := logs.find("audit_failed")
+	if len(got) != 1 || got[0]["level"] != "WARN" || got[0]["action"] != "rest.media.sent" || got[0]["error_type"] != "*errors.errorString" {
+		t.Fatalf("audit_failed events = %v, want one warning naming the action and the error type", got)
+	}
+	for _, s := range []string{"15550100001", "SYNTHETIC1", "synthetic failure"} {
+		if strings.Contains(logs.buf.String(), s) {
+			t.Fatalf("the log carries %q", s)
+		}
 	}
 }

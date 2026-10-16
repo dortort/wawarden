@@ -36,6 +36,7 @@ func testClientDeps(t testing.TB, auth Authenticator, now func() time.Time) Clie
 	return ClientDeps{
 		Authenticator: auth, Metrics: metrics.NewRegistry(), Now: now, Archive: &fakeArchive{}, Audit: &fakeAuditor{},
 		Session: func() string { return "connected" }, Cursors: cursors, Refs: refs, Sender: &fakeSender{}, SendRejected: func(string) {},
+		AuditFailed: func(string, error) {},
 	}
 }
 

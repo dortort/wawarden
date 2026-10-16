@@ -208,6 +208,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 			Session: func() string { return string(a.engine.Status().State) }, Cursors: cursors, Refs: refs,
 			Limits: api.ReadLimits{ReadsPerMinute: cfg.ReadPerMinute, SearchesPerMinute: cfg.SearchPerMinute},
 			Sender: sendService{sender: newSender(cfg, archive, a.engine, notifier), rejected: rejected}, SendRejected: rejected,
+			AuditFailed: auditFailures(reg, alerts),
 		}),
 	}}
 	if cfg.AdminCredential != nil {
