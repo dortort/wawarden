@@ -173,6 +173,7 @@ func invalid(what string) error { return fmt.Errorf("%w: %s", ErrInvalid, what) 
 var (
 	messageID = regexp.MustCompile(`^[\x21-\x7e]{1,128}$`)
 	mediaType = regexp.MustCompile(`^[a-z0-9][a-z0-9.+/-]{0,63}$`)
+	sealedRef = regexp.MustCompile(`^[\x21-\x7e]+$`)
 )
 
 func ms(t time.Time) int64 { return t.UnixMilli() }
