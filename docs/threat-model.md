@@ -172,7 +172,9 @@ These are stated so that nobody relies on WaWarden for them:
 - Deletion residuals in backups, in filesystem blocks the service cannot
   scrub, in full-text index page keys shorter than a trigram, in other stored
   text that holds the same text, and in messages that history sync stores after
-  their revocation or edit arrived (see [Deletion and storage](#deletion-and-storage)).
+  their edit arrived, or after a revocation that left no tombstone, or whose
+  tombstone lapsed, was dropped or no longer matches the sender's identifier
+  (see [Deletion and storage](#deletion-and-storage)).
   Other stored text means names, identifiers and messages waiting in the inbox.
 - Agents that pass message text into tools. WaWarden marks the text as
   untrusted; what an agent does with it is the agent's responsibility.
@@ -719,12 +721,19 @@ enforce them.
     journal, unless the archive still holds the same text, trigram or value
     elsewhere. Elsewhere means a remaining message, a message waiting in the
     inbox, a stored name (a push name, saved contact name, chat name or group
-    subject), an identifier or another stored value, or the schema.
+    subject), an identifier or another stored value, or the schema;
+  - a copy of a message whose revocation the archive accepted before the
+    message was stored, from the message's sender and within the tombstone's 7
+    days, is stored already revoked, without text, media type or media
+    reference.
 
   The exceptions are backups, a page key that holds less than a whole trigram,
   a trigram left by a stop or a failure between the deletion and the index
-  rewrite it requires, and a revocation or edit that arrives before history
-  sync has stored its target (see [Deletion and storage](#deletion-and-storage)).
+  rewrite it requires, an edit, or a revocation the archive would have refused
+  for a stored target, that arrives before history sync has stored its target,
+  and a late copy whose tombstone has lapsed or was dropped, or whose sender's
+  canonical identifier changed in between (see
+  [Deletion and storage](#deletion-and-storage)).
 - **I-9 Panics are contained.** A panic is recovered, counted and logged
   without its value when it happens in a goroutine that WaWarden starts, in one
   of its HTTP handlers, or in the protocol adapter's event handler, which runs
@@ -2886,7 +2895,8 @@ This subsection is the canonical statement of what the protocol library
   person.
 - **Group admins as the archive knows them.** A revocation of another member's
   message in a group is applied when the archive records the revoker as an
-  admin of that group.
+  admin of that group. A revocation of a message not stored yet is checked the
+  same way before it leaves a tombstone.
   - That record is only as current as the group changes and history WhatsApp
     has delivered. A demotion the engine never received leaves a former admin
     able to revoke. A member the archive does not record is refused.
@@ -2984,11 +2994,16 @@ This subsection is the canonical statement of what the protocol library
   - A trigram that is a key also stays from the commit of the deletion until
     the rewrite commits. When the process stops or the rewrite fails in
     between, it stays until the next start or the next rewrite.
-  - A revocation or an edit whose target is not yet in the archive is dropped,
-    and not kept for later. History sync can store the target afterwards, as it
-    can during the initial sync, where live traffic is applied while blobs wait
-    for their download. The target then keeps its original text, and nothing
-    that arrives later removes it.
+  - An edit whose target is not yet in the archive is dropped, and not kept for
+    later. So is a revocation of such a target, unless it passes the check a
+    stored target gets; then it leaves a tombstone for 7 days, at most 100,000
+    of them, the oldest dropped first. History sync can store the target
+    afterwards, as it can during the initial sync, where live traffic is
+    applied while blobs wait for their download. An edited target then keeps
+    its original text, and so does a revoked one whose tombstone has lapsed or
+    was dropped, or whose sender's canonical identifier changed in between, as
+    when the archive learns the sender's LID. Nothing that arrives later
+    removes that text.
 - **An interrupted revoke.** A crash in the middle of a revoke, an edit or an
   expiry rolls it back. The old text is then in the database again until the
   change is applied again, and the journal keeps the pre-image until the next

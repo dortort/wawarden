@@ -254,11 +254,21 @@ when it drops an event:
 | An edit needs new text and a target that is neither revoked, a reaction nor a poll vote. | `invalid`, `target_kind` |
 | An edit must be newer than the last edit applied to its target, so that an edit delivered late or again never brings back text the sender has since replaced. | `stale_edit` |
 
-A revocation or edit whose target is not in the archive yet is dropped
-(`target_unknown`) and not kept for later. When history sync stores the target
-afterwards, as it can during the initial sync, because live traffic is applied
-while blobs wait for their download, the target keeps its original text: a
-revoked message its text, an edited one its earlier wording (see the
+A revocation whose target is not in the archive yet, and that passes the check
+a stored target would get (it comes from the target's sender, or in a group
+from a member the archive records as an admin), is counted as `target_unknown`
+and leaves a tombstone for 7 days, keyed by the chat, the target's identifier
+and the canonical identifier of its sender. A copy of that message from that
+sender stored within those days, live or from history sync, is stored already
+revoked, without text, media type or media reference. Any other revocation of
+an absent target, and every edit or reaction of one, is dropped
+(`target_unknown`, with the check's own reason for a revocation it refuses) and
+not kept for later. When history sync stores the target afterwards, as it can
+during the initial sync, because live traffic is applied while blobs wait for
+their download, an edited target keeps its earlier wording, and a revoked one
+keeps its text when its tombstone has lapsed, or was dropped as the oldest
+beyond 100,000, or when the canonical identifier of its sender changed in
+between, as when the archive learns the sender's LID (see the
 [threat model's residual risks](threat-model.md#residual-risks)).
 
 Further, the worker:
@@ -681,7 +691,9 @@ queue, it holds:
   version 5 clears it on messages revoked before. The purge also reaches media
   without a caption, which keeps no text;
 - revoke tombstones: a chat, message id and canonical original sender, each
-  kept 7 days. Nothing in this build writes one. While one lives, a copy of
+  kept 7 days. The engine writes one only for a revocation of a message not
+  stored yet that passes the check a stored target would get (see
+  [Ingest](#ingest)). While one lives, a copy of
   that message from that sender is stored already revoked, without text, media
   type or reference, and removes the tombstone; a copy from any other sender is
   stored as usual. The purge of references also removes tombstones past their
