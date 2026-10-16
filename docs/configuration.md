@@ -124,6 +124,16 @@ that is not a comma-separated list of `key=value` pairs makes the binary panic
 in every subcommand, with exit status 2, no `startup_refused` event and a
 message that repeats the malformed part, so leave the variable unset.
 
+`GOMEMLIMIT` is the Go runtime's own soft memory limit, and `serve` does not
+check it. When it is set to any value, `off` included, WaWarden changes
+nothing. When it is unset or empty, WaWarden sets the soft limit at start to
+80% of the container's cgroup memory limit, and sets none when the container
+has no limit. At the `info` log level, every start logs `memory_limit` with
+the limit in effect and its source. The Go runtime parses the variable before
+WaWarden runs and aborts on a malformed value.
+[Container hardening](hardening.md#container-hardening) sizes `--memory` from
+the soft limit.
+
 ### Unknown variables stop the service
 
 > **`wawarden serve` refuses to start when the environment contains any variable
@@ -912,6 +922,9 @@ volumes:
   [shutdown](cli.md#shutdown) grace period. Compose's default is 10 seconds.
 - `mem_limit: 512m` leaves room for history sync at the default
   `WAWARDEN_HISTORY_MAX_BYTES`; see [Memory bounds](internals.md#memory-bounds).
+  With `GOMEMLIMIT` unset, WaWarden sets a soft memory limit of 80% of it,
+  about 410 MiB; [container hardening](hardening.md#container-hardening) gives
+  the sizing rule.
 - Admin commands run inside the container and read the token on standard
   input. `-T` gives the command no terminal, so `--token-stdin` reads the
   redirected file:
