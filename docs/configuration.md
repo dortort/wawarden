@@ -523,15 +523,17 @@ ends succeeds. A deadline that passes just as a statement starts can be lost in
 the database driver: that statement then runs to its end before the call fails.
 
 Revoked, edited and expired message text is removed from the database file,
-its journal and the full-text index, as described in the
-[threat model](threat-model.md#security-invariants) (I-8). Outside that
-guarantee are:
+its journal and the full-text index, and the media type and media reference of
+a revoked or expired message from the database file and its journal, as
+described in the [threat model](threat-model.md#security-invariants) (I-8).
+Outside that guarantee are:
 
-- backups, which keep the old text until [backup retention](#backup-retention)
-  deletes them;
-- the same text, or any three-character run of it, held elsewhere in the
-  archive: by another message, a message waiting in the inbox, a push name, a
-  chat name or group subject, an identifier or the schema;
+- backups, which keep the old text, media type and reference until
+  [backup retention](#backup-retention) deletes them;
+- the same text, or any three-character run of it, or the same media type,
+  held elsewhere in the archive: by another message, a message waiting in the
+  inbox, a push name, a chat name or group subject, an identifier or the
+  schema;
 - a revocation or edit that arrives before history sync has stored its
   target (see [Ingest](internals.md#ingest)).
 
