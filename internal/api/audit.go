@@ -125,12 +125,14 @@ func (a *auditWriter) Unwrap() http.ResponseWriter { return a.ResponseWriter }
 
 func statusReason(status int) string {
 	switch status {
-	case http.StatusOK, http.StatusCreated, http.StatusAccepted:
+	case http.StatusOK, http.StatusCreated, http.StatusAccepted, http.StatusPartialContent:
 		return outcomeOK
 	case http.StatusNotFound:
 		return codeNotFound
 	case http.StatusMethodNotAllowed:
 		return codeMethodNotAllowed
+	case http.StatusRequestedRangeNotSatisfiable:
+		return codeRangeNotSatisfiable
 	}
 	return codeInternal
 }

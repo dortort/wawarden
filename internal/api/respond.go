@@ -27,6 +27,7 @@ const (
 	codeBackfillNoAnchor     = "backfill_no_anchor"
 	codeMethodNotAllowed     = "method_not_allowed"
 	codeNotFound             = "not_found"
+	codeRangeNotSatisfiable  = "range_not_satisfiable"
 	codeRateLimited          = "rate_limited"
 	codeTooManyRequests      = "too_many_requests"
 	codeUnauthorized         = "unauthorized"

@@ -685,3 +685,34 @@ func TestTheHeaderRowCarriesTheNotedMessageAndBytes(t *testing.T) {
 		t.Fatalf("audit = %+v, want %+v", got, want)
 	}
 }
+
+func TestStatusReasonNamesEachStatus(t *testing.T) {
+	for status, want := range map[int]string{
+		http.StatusOK:                           outcomeOK,
+		http.StatusCreated:                      outcomeOK,
+		http.StatusAccepted:                     outcomeOK,
+		http.StatusPartialContent:               outcomeOK,
+		http.StatusNoContent:                    codeInternal,
+		http.StatusNotFound:                     codeNotFound,
+		http.StatusMethodNotAllowed:             codeMethodNotAllowed,
+		http.StatusRequestedRangeNotSatisfiable: codeRangeNotSatisfiable,
+		http.StatusInternalServerError:          codeInternal,
+	} {
+		if got := statusReason(status); got != want {
+			t.Fatalf("statusReason(%d) = %q, want %q", status, got, want)
+		}
+	}
+	audit := &fakeAuditor{}
+	for _, status := range []int{http.StatusPartialContent, http.StatusRequestedRangeNotSatisfiable} {
+		w, r := audited(httptest.NewRecorder(), withClientRequest(t, liveClient("client-x"), http.MethodGet, "/x"), audit, fixedNow)
+		noteFrom(r.Context()).action = actionMessage
+		w.WriteHeader(status)
+	}
+	want := []ReadEvent{
+		{At: testNow, Client: "client-x", Action: actionMessage, OK: true, Reason: outcomeOK, Peer: "192.0.2.1"},
+		{At: testNow, Client: "client-x", Action: actionMessage, Reason: codeRangeNotSatisfiable, Peer: "192.0.2.1"},
+	}
+	if got := audit.recorded(); !slices.Equal(got, want) {
+		t.Fatalf("audit = %+v, want %+v", got, want)
+	}
+}
