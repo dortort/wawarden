@@ -19,12 +19,16 @@ var protocolClientCalls = set("AddEventHandlerWithSuccessStatus", "BuildHistoryS
 	"GenerateMessageID", "IsConnected", "IsLoggedIn", "Logout", "PairPhone", "ParseWebMessage", "SendMessage", "SendPeerMessage",
 	"SendProtocolMessageReceipt", "SetMediaHTTPClient", "SetPreLoginHTTPClient", "SetWebsocketHTTPClient")
 
-var confinedProtocolCalls = map[string]string{"DownloadToFile": "downloadToFile", "SendMessage": "transmitMessage", "SendPeerMessage": "transmitPeerMessage"}
+var confinedProtocolCalls = map[string][]string{
+	"DownloadToFile":  {"downloadToFile", "downloadMediaFile"},
+	"SendMessage":     {"transmitMessage"},
+	"SendPeerMessage": {"transmitPeerMessage"},
+}
 
 type confinementReason struct{ reaches, so string }
 
 var confinementReasons = map[string]confinementReason{
-	"DownloadToFile":  {reaches: "downloads from WhatsApp's media servers", so: "every download takes the adapter's one typed seam"},
+	"DownloadToFile":  {reaches: "downloads from WhatsApp's media servers", so: "every download takes one of the adapter's two typed seams"},
 	"SendMessage":     {reaches: "sends to WhatsApp", so: "every send takes the engine's one send path"},
 	"SendPeerMessage": {reaches: "sends to WhatsApp", so: "every send takes the engine's one send path"},
 }
@@ -210,6 +214,46 @@ func fetch(ctx context.Context, cli *whatsmeow.Client, notif *waE2E.HistorySyncN
 	return cli.DownloadToFile(ctx, notif, nil)
 }
 `},
+		{name: "the history and media download seams", rel: "internal/engine/wa/x.go", src: `package wa
+
+import (
+	"context"
+
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
+
+	"github.com/dortort/wawarden/internal/engine/wa/internal/mediasrc"
+)
+
+func downloadToFile(ctx context.Context, cli *whatsmeow.Client, notif *waE2E.HistorySyncNotification, dst whatsmeow.File) error {
+	return cli.DownloadToFile(ctx, notif, dst)
+}
+
+func downloadMediaFile(ctx context.Context, cli *whatsmeow.Client, src mediasrc.Source, dst whatsmeow.File) error {
+	msg, ok := src.Message()
+	if !ok {
+		return nil
+	}
+	return cli.DownloadToFile(ctx, msg, dst)
+}
+`},
+		{name: "a third download site beside the two seams", rel: "internal/engine/wa/x.go", want: 1, src: `package wa
+
+import (
+	"context"
+
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
+)
+
+func downloadToFile(ctx context.Context, cli *whatsmeow.Client, notif *waE2E.HistorySyncNotification, dst whatsmeow.File) error {
+	return cli.DownloadToFile(ctx, notif, dst)
+}
+
+func downloadStickerFile(ctx context.Context, cli *whatsmeow.Client, sticker *waE2E.StickerMessage, dst whatsmeow.File) error {
+	return cli.DownloadToFile(ctx, sticker, dst)
+}
+`},
 		{name: "a download seam in a subpackage of the adapter", rel: "internal/engine/wa/sub/x.go", want: 1, src: `package sub
 
 import (
@@ -293,13 +337,21 @@ func checkProtocolClientCalls(f *sourceFile) []string {
 		}
 		if !protocolClientCalls[id.Name] {
 			out = append(out, f.at(id, "%s is a method of the protocol client that the adapter does not call: the adapter calls only the reviewed methods that %s lists", id.Name, archtestDir))
-		} else if fn, ok := confinedProtocolCalls[id.Name]; ok && (!called[id] || !inside(id, transmitters[fn]) || slices.ContainsFunc(closures, func(c ast.Node) bool { return inside(id, c) })) {
+		} else if fns, ok := confinedProtocolCalls[id.Name]; ok && (!called[id] || !slices.ContainsFunc(fns, func(fn string) bool { return inside(id, transmitters[fn]) }) ||
+			slices.ContainsFunc(closures, func(c ast.Node) bool { return inside(id, c) })) {
 			r := confinementReasons[id.Name]
-			out = append(out, f.at(id, "%s %s: only %s in %s calls it, directly and outside any function literal, so %s", id.Name, r.reaches, fn, adapterDir, r.so))
+			out = append(out, f.at(id, "%s %s: only %s in %s %s it, directly and outside any function literal, so %s", id.Name, r.reaches, strings.Join(fns, " and "), adapterDir, verb(len(fns)), r.so))
 		}
 		return true
 	})
 	return out
+}
+
+func verb(subjects int) string {
+	if subjects == 1 {
+		return "calls"
+	}
+	return "call"
 }
 
 func TestProtocolClientCallsAreTheLibrarys(t *testing.T) {
@@ -312,7 +364,11 @@ func TestProtocolClientCallsAreTheLibrarys(t *testing.T) {
 			t.Errorf("the reviewed protocol calls name %s, which is not a method of %s.Client", name, whatsmeowModule)
 		}
 	}
-	for name, fn := range confinedProtocolCalls {
+	for name, fns := range confinedProtocolCalls {
+		fn := strings.Join(fns, " and ")
+		if len(fns) == 0 {
+			t.Errorf("%s is confined to no function", name)
+		}
 		if !protocolClientCalls[name] {
 			t.Errorf("%s is confined to %s but is not among the reviewed protocol calls", name, fn)
 		}
@@ -350,7 +406,7 @@ func broadcast(ctx context.Context, cli *whatsmeow.Client) { _, _ = cli.SendPeer
 	}
 	got := checkProtocolClientCalls(f)
 	want := []string{
-		"DownloadToFile downloads from WhatsApp's media servers: only downloadToFile in " + adapterDir + " calls it, directly and outside any function literal, so every download takes the adapter's one typed seam",
+		"DownloadToFile downloads from WhatsApp's media servers: only downloadToFile and downloadMediaFile in " + adapterDir + " call it, directly and outside any function literal, so every download takes one of the adapter's two typed seams",
 		"SendPeerMessage sends to WhatsApp: only transmitPeerMessage in " + adapterDir + " calls it, directly and outside any function literal, so every send takes the engine's one send path",
 	}
 	if len(got) != len(want) {
