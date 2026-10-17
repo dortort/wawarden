@@ -21,13 +21,14 @@ import (
 )
 
 const (
-	fakeChat       = "15550100021@s.whatsapp.net"
-	fakeLargeSize  = 8<<20 + 64<<10
-	fakePartSize   = 8 << 20
-	attachmentURI  = "wawarden:attachment"
-	partURI        = "wawarden:attachment-part"
-	octetStream    = "application/octet-stream"
-	fakeAttachment = 8
+	fakeChat        = "15550100021@s.whatsapp.net"
+	fakeLargeSize   = 8<<20 + 64<<10
+	fakeNearCapSize = 8<<20 - 64<<10
+	fakePartSize    = 8 << 20
+	attachmentURI   = "wawarden:attachment"
+	partURI         = "wawarden:attachment-part"
+	octetStream     = "application/octet-stream"
+	fakeAttachment  = 9
 )
 
 type bearerTransport struct {
@@ -232,7 +233,7 @@ func TestTheFakeEngineServesEveryAttachmentKindOverRESTAndMCP(t *testing.T) {
 	t.Cleanup(func() { _ = session.Close() })
 	f.cs = session
 
-	const photo, voice, video, pdf, sticker, jpegDocument, corrupt, expired = 0, 1, 2, 3, 4, 5, 6, 7
+	const photo, voice, video, pdf, sticker, jpegDocument, corrupt, expired, nearCap = 0, 1, 2, 3, 4, 5, 6, 7, 8
 	served := func(i int, contentType string) reply {
 		t.Helper()
 		r := f.rest(i)
@@ -278,6 +279,13 @@ func TestTheFakeEngineServesEveryAttachmentKindOverRESTAndMCP(t *testing.T) {
 	if a := f.inline(corrupt, "blob", octetStream, []byte(raw.body)); a.info.Normalised || a.info.Format != "image" || a.info.ServedType != octetStream {
 		t.Fatalf("the refused JPEG document over MCP = %+v", a.info)
 	}
+	nearCapDocument := served(nearCap, "application/pdf")
+	if len(nearCapDocument.body) != fakeNearCapSize || !strings.HasPrefix(nearCapDocument.body, "%PDF-") {
+		t.Fatalf("the near-cap PDF over REST holds %d bytes", len(nearCapDocument.body))
+	}
+	if a := f.inline(nearCap, "blob", "application/pdf", []byte(nearCapDocument.body)); a.info.Bytes != fakeNearCapSize || a.info.Format != "pdf" {
+		t.Fatalf("the near-cap PDF over MCP = %+v", a.info)
+	}
 
 	if a := f.call(expired, nil); a.err != "media_expired" {
 		t.Fatalf("the expired attachment over MCP = %s %+v, want media_expired", a.err, a.info)
@@ -289,16 +297,16 @@ func TestTheFakeEngineServesEveryAttachmentKindOverRESTAndMCP(t *testing.T) {
 		t.Fatalf("the expired attachment over MCP afterwards = %s, want media_unavailable", a.err)
 	}
 	if counts, _ := f.status(); counts["media_refs_live"] != fakeAttachment-1 || counts["media_refs_expired"] != 1 {
-		t.Fatalf("status counts %v after the expiry, want seven live references and one expired", counts)
+		t.Fatalf("status counts %v after the expiry, want eight live references and one expired", counts)
 	}
 
 	for series, want := range map[string]string{
-		`wawarden_media_fetches_total{result="ok"}`:                     "14",
+		`wawarden_media_fetches_total{result="ok"}`:                     "16",
 		`wawarden_media_fetches_total{result="expired"}`:                "1",
 		`wawarden_media_fetches_total{result="rate_limited"}`:           "0",
-		`wawarden_media_fetched_bytes_total`:                            strconv.Itoa(2 * (377 + 120 + fakeLargeSize + fakeLargeSize + 32 + 377 + 188)),
-		`wawarden_media_deliveries_total{transport="rest",result="ok"}`: "7",
-		`wawarden_media_deliveries_total{transport="mcp",result="ok"}`:  "9",
+		`wawarden_media_fetched_bytes_total`:                            strconv.Itoa(2 * (377 + 120 + fakeLargeSize + fakeLargeSize + 32 + 377 + 188 + fakeNearCapSize)),
+		`wawarden_media_deliveries_total{transport="rest",result="ok"}`: "8",
+		`wawarden_media_deliveries_total{transport="mcp",result="ok"}`:  "10",
 		`wawarden_media_delivered_bytes_total{transport="rest"}`:        strconv.FormatInt(f.served["rest"], 10),
 		`wawarden_media_delivered_bytes_total{transport="mcp"}`:         strconv.FormatInt(f.served["mcp"], 10),
 		`wawarden_media_jobs`:                                           "0",

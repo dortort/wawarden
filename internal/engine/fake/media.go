@@ -13,15 +13,17 @@ import (
 )
 
 const (
-	refPhoto       = "FAKE-MEDIA-PHOTO"
-	refVoiceNote   = "FAKE-MEDIA-VOICE-NOTE"
-	refVideo       = "FAKE-MEDIA-VIDEO"
-	refPDF         = "FAKE-MEDIA-PDF"
-	refSticker     = "FAKE-MEDIA-STICKER"
-	refJPEGDoc     = "FAKE-MEDIA-JPEG-DOCUMENT"
-	refCorruptDoc  = "FAKE-MEDIA-CORRUPT-JPEG-DOCUMENT"
-	refExpired     = "FAKE-MEDIA-EXPIRED"
-	largeMediaSize = 8<<20 + 64<<10
+	refPhoto         = "FAKE-MEDIA-PHOTO"
+	refVoiceNote     = "FAKE-MEDIA-VOICE-NOTE"
+	refVideo         = "FAKE-MEDIA-VIDEO"
+	refPDF           = "FAKE-MEDIA-PDF"
+	refSticker       = "FAKE-MEDIA-STICKER"
+	refJPEGDoc       = "FAKE-MEDIA-JPEG-DOCUMENT"
+	refCorruptDoc    = "FAKE-MEDIA-CORRUPT-JPEG-DOCUMENT"
+	refExpired       = "FAKE-MEDIA-EXPIRED"
+	refNearCapPDF    = "FAKE-MEDIA-NEAR-CAP-PDF"
+	largeMediaSize   = 8<<20 + 64<<10
+	nearCapMediaSize = 8<<20 - 64<<10
 
 	jpegFixture = "" +
 		"\xff\xd8\xff\xdb\x00\x84\x00\x10\x0b\x0c\x0e\x0c\x0a\x10\x0e\x0d\x0e\x12\x11\x10\x13\x18\x28\x1a\x18\x16\x16\x18\x31\x23\x25\x1d" +
@@ -53,7 +55,8 @@ var mediaFixtures = map[string]func() []byte{
 	refPhoto:      func() []byte { return []byte(jpegFixture) },
 	refVoiceNote:  func() []byte { return []byte(oggFixture) },
 	refVideo:      mp4Fixture,
-	refPDF:        pdfFixture,
+	refPDF:        func() []byte { return pdfFixture(largeMediaSize) },
+	refNearCapPDF: func() []byte { return pdfFixture(nearCapMediaSize) },
 	refSticker:    func() []byte { return []byte(webpFixture) },
 	refJPEGDoc:    func() []byte { return []byte(jpegFixture) },
 	refCorruptDoc: func() []byte { return []byte(jpegFixture[:len(jpegFixture)/2]) },
@@ -72,6 +75,7 @@ func mediaMessages() []engine.Message {
 		attachment("FAKE-L26", engine.MediaDocument, "", "image/jpeg", refJPEGDoc, len(jpegFixture)),
 		attachment("FAKE-L27", engine.MediaDocument, "", "image/jpeg", refCorruptDoc, len(jpegFixture)/2),
 		attachment("FAKE-L28", engine.MediaImage, "", "image/jpeg", refExpired, len(jpegFixture)),
+		attachment("FAKE-L29", engine.MediaDocument, "", "application/pdf", refNearCapPDF, nearCapMediaSize),
 	}
 }
 
@@ -107,7 +111,7 @@ func mp4Fixture() []byte {
 	return append(head, box("mdat", filler[:largeMediaSize-len(head)-8])...)
 }
 
-func pdfFixture() []byte {
+func pdfFixture(size int) []byte {
 	content := "BT /F1 12 Tf 20 45 Td (A synthetic WaWarden document) Tj ET"
 	objects := []string{
 		"<< /Type /Catalog /Pages 2 0 R >>",
@@ -117,7 +121,7 @@ func pdfFixture() []byte {
 		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
 	}
 	var b bytes.Buffer
-	b.Grow(largeMediaSize)
+	b.Grow(size)
 	b.WriteString("%PDF-1.4\n")
 	xref := "xref\n0 " + decimal(len(objects)+1) + "\n0000000000 65535 f \n"
 	for i, o := range objects {
@@ -126,8 +130,8 @@ func pdfFixture() []byte {
 	}
 	tail := "trailer\n<< /Size " + decimal(len(objects)+1) + " /Root 1 0 R >>\nstartxref\n"
 	end := "\n%%EOF\n"
-	line := []byte("% synthetic padding that sends this document in two parts          ")
-	for left := largeMediaSize - b.Len() - len(xref) - len(tail) - len(decimal(largeMediaSize)) - len(end); left > 0; {
+	line := []byte("% synthetic padding that brings this document to its test size    ")
+	for left := size - b.Len() - len(xref) - len(tail) - len(decimal(size)) - len(end); left > 0; {
 		n := min(len(line), left)
 		b.Write(line[:n-1])
 		b.WriteByte('\n')
