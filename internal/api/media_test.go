@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -177,9 +178,10 @@ type mediaFixture struct {
 	stopped chan struct{}
 	ticks   chan time.Time
 
-	mu      sync.Mutex
-	revoked map[string]bool
-	liveErr error
+	mu         sync.Mutex
+	revoked    map[string]bool
+	liveErr    error
+	livePanics bool
 }
 
 func mediaClient(id string, read ...policy.CanonicalChat) *policy.Client {
@@ -233,6 +235,9 @@ func cmpOr[T int | int64](v, fallback T) T {
 func (f *mediaFixture) clientLive(_ context.Context, client string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.livePanics {
+		panic(secretPanic{text: panicCanary})
+	}
 	return !f.revoked[client], f.liveErr
 }
 
@@ -901,6 +906,32 @@ func TestTheSweepDropsIneligibleJobs(t *testing.T) {
 	f.ticks <- testNow
 	if erasures, _ := keptSpool.state(); erasures != 1 || f.view(keyMedia, "MEDIA2").state != 0 {
 		t.Fatalf("the sweep left an expired job, with %d erasures", erasures)
+	}
+}
+
+func TestAPanicInOneSweepLeavesTheNextOnesRunning(t *testing.T) {
+	f := newMediaFixture(t, mediaOptions{})
+	logs := installPanicReporter(t, f.reg)
+	f.attach("MEDIA1", "document", smallSize)
+	spool := newFakeSpool(smallSize, true)
+	f.ready(keyMedia, "MEDIA1", spool)
+	f.mu.Lock()
+	f.livePanics = true
+	f.mu.Unlock()
+	f.ticks <- testNow
+	f.ticks <- testNow
+	f.await("the sweep's panic to be counted", func() bool { return f.metric(`wawarden_panics_total{name="api.media.sweep"}`) != "" })
+	if strings.Contains(logs.String(), panicCanary) {
+		t.Fatal("the panic's value was logged")
+	}
+	f.mu.Lock()
+	f.livePanics = false
+	f.mu.Unlock()
+	f.clock.advance(mediaRAMLife)
+	f.ticks <- testNow
+	f.ticks <- testNow
+	if erasures, _ := spool.state(); erasures != 1 {
+		t.Fatalf("the sweep after a panic left the expired job, with %d erasures", erasures)
 	}
 }
 
