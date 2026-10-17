@@ -15,6 +15,7 @@ import (
 
 	"github.com/dortort/wawarden/internal/engine"
 	"github.com/dortort/wawarden/internal/engine/wa/internal/mediasrc"
+	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/stage"
 )
 
@@ -119,7 +120,7 @@ func (mc capture) attach(out engine.Message, m *waE2E.Message, viewOnce bool) en
 	return out
 }
 
-func (mc capture) open(req engine.MediaRequest) (descriptor, error) {
+func (mc capture) open(ctx context.Context, req engine.MediaRequest) (descriptor, error) {
 	if mc.max <= 0 {
 		return descriptor{}, engine.ErrMediaUnavailable
 	}
@@ -133,13 +134,32 @@ func (mc capture) open(req engine.MediaRequest) (descriptor, error) {
 		return descriptor{}, engine.ErrMediaUnavailable
 	}
 	declared, ok := d.declared()
-	if !ok || d.kind != req.Kind || declared != req.Declared {
+	if !ok || d.kind != req.Kind || declared != req.Declared || !d.boundTo(ctx, req) {
 		return descriptor{}, engine.ErrMediaUnavailable
 	}
 	if declared > mc.limit(d.kind) {
 		return descriptor{}, engine.ErrMediaTooLarge
 	}
 	return d, nil
+}
+
+func (d descriptor) boundTo(ctx context.Context, req engine.MediaRequest) bool {
+	if req.Canonical == nil {
+		return false
+	}
+	for _, f := range [...]struct {
+		recorded string
+		row      policy.CanonicalChat
+	}{{d.chat, req.Chat}, {d.sender, req.Sender}} {
+		c, ok := policy.Normalize(f.recorded)
+		if !ok {
+			return false
+		}
+		if got, err := req.Canonical.Canonical(ctx, c); err != nil || got != f.row {
+			return false
+		}
+	}
+	return true
 }
 
 type descriptor struct {
@@ -241,7 +261,7 @@ func downloadable(d descriptor) mediasrc.Source {
 }
 
 func (c *Client) FetchMedia(ctx context.Context, req engine.MediaRequest) (engine.Staged, error) {
-	d, err := c.capture.open(req)
+	d, err := c.capture.open(ctx, req)
 	if err != nil {
 		return nil, err
 	}

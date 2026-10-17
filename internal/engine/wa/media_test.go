@@ -21,6 +21,7 @@ import (
 
 	"github.com/dortort/wawarden/internal/engine"
 	"github.com/dortort/wawarden/internal/engine/wa/internal/mediasrc"
+	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/stage"
 )
 
@@ -375,8 +376,45 @@ func captured(t *testing.T, c *Client, fx mediaFixture, length int64) (engine.Me
 	return m, f
 }
 
+type sameRow struct{}
+
+func (sameRow) Canonical(_ context.Context, c policy.CanonicalChat) (policy.CanonicalChat, error) {
+	return c, nil
+}
+
+type mappedRow map[string]policy.CanonicalChat
+
+func (m mappedRow) Canonical(_ context.Context, c policy.CanonicalChat) (policy.CanonicalChat, error) {
+	if to, ok := m[c.JID()]; ok {
+		return to, nil
+	}
+	return c, nil
+}
+
+type failingRow struct{}
+
+func (failingRow) Canonical(context.Context, policy.CanonicalChat) (policy.CanonicalChat, error) {
+	return policy.CanonicalChat{}, errors.New("synthetic: the archive is busy")
+}
+
+func rowOf(t *testing.T, jid string) policy.CanonicalChat {
+	t.Helper()
+	c, ok := policy.Normalize(jid)
+	if !ok {
+		t.Fatalf("Normalize(%q) rejected a test identifier", jid)
+	}
+	return c
+}
+
+func bind(req engine.MediaRequest, m engine.Message) engine.MediaRequest {
+	req.Chat, _ = policy.Normalize(m.Chat)
+	req.Sender, _ = policy.Normalize(m.Sender)
+	req.Canonical = sameRow{}
+	return req
+}
+
 func request(m engine.Message) engine.MediaRequest {
-	return engine.MediaRequest{ID: m.ID, Ref: m.MediaRef, Kind: m.MediaKind, Declared: m.MediaBytes}
+	return bind(engine.MediaRequest{ID: m.ID, Ref: m.MediaRef, Kind: m.MediaKind, Declared: m.MediaBytes}, m)
 }
 
 func stagedBytes(t *testing.T, s engine.Staged) []byte {
@@ -527,9 +565,9 @@ func TestFetchMediaRefusesBeforeTheSeam(t *testing.T) {
 	big, _ := captured(t, c, document, 2<<20)
 	forged := func(d descriptor, declared int64) engine.MediaRequest {
 		ref, _ := fakeSealer{}.SealMedia(m.ID, d.marshal())
-		return engine.MediaRequest{ID: m.ID, Ref: ref, Kind: d.kind, Declared: declared}
+		return bind(engine.MediaRequest{ID: m.ID, Ref: ref, Kind: d.kind, Declared: declared}, m)
 	}
-	valid := descriptor{directPath: f.path, mediaKey: f.key, fileSHA256: f.sha, fileEncSHA256: f.enc, length: 64, kind: engine.MediaImage}
+	valid := descriptor{directPath: f.path, mediaKey: f.key, fileSHA256: f.sha, fileEncSHA256: f.enc, length: 64, kind: engine.MediaImage, chat: m.Chat, sender: m.Sender}
 	relative, oversized, unknown := valid, valid, valid
 	relative.directPath = "example/m1"
 	oversized.length = imageCeiling + 1
@@ -540,15 +578,15 @@ func TestFetchMediaRefusesBeforeTheSeam(t *testing.T) {
 		want   error
 	}{
 		"downloads off":              {client: mediaClient(t, now, func(o *Options) { o.MediaMaxBytes = 0 }), req: request(m), want: engine.ErrMediaUnavailable},
-		"a reference for another id": {req: engine.MediaRequest{ID: "3EB0F2", Ref: m.MediaRef, Kind: m.MediaKind, Declared: m.MediaBytes}, want: engine.ErrMediaUnavailable},
-		"no reference":               {req: engine.MediaRequest{ID: m.ID, Kind: m.MediaKind, Declared: m.MediaBytes}, want: engine.ErrMediaUnavailable},
-		"another kind":               {req: engine.MediaRequest{ID: m.ID, Ref: m.MediaRef, Kind: engine.MediaVideo, Declared: m.MediaBytes}, want: engine.ErrMediaUnavailable},
-		"another length":             {req: engine.MediaRequest{ID: m.ID, Ref: m.MediaRef, Kind: m.MediaKind, Declared: 65}, want: engine.ErrMediaUnavailable},
+		"a reference for another id": {req: bind(engine.MediaRequest{ID: "3EB0F2", Ref: m.MediaRef, Kind: m.MediaKind, Declared: m.MediaBytes}, m), want: engine.ErrMediaUnavailable},
+		"no reference":               {req: bind(engine.MediaRequest{ID: m.ID, Kind: m.MediaKind, Declared: m.MediaBytes}, m), want: engine.ErrMediaUnavailable},
+		"another kind":               {req: bind(engine.MediaRequest{ID: m.ID, Ref: m.MediaRef, Kind: engine.MediaVideo, Declared: m.MediaBytes}, m), want: engine.ErrMediaUnavailable},
+		"another length":             {req: bind(engine.MediaRequest{ID: m.ID, Ref: m.MediaRef, Kind: m.MediaKind, Declared: 65}, m), want: engine.ErrMediaUnavailable},
 		"a relative path":            {req: forged(relative, 64), want: engine.ErrMediaUnavailable},
 		"an unknown kind":            {req: forged(unknown, 64), want: engine.ErrMediaUnavailable},
 		"an image over its ceiling":  {req: forged(oversized, imageCeiling+1), want: engine.ErrMediaTooLarge},
 		"a lowered cap":              {client: mediaClient(t, now, func(o *Options) { o.MediaMaxBytes = 1 << 20 }), req: request(big), want: engine.ErrMediaTooLarge},
-		"a deadline already passed":  {req: engine.MediaRequest{ID: m.ID, Ref: m.MediaRef, Kind: m.MediaKind, Declared: m.MediaBytes, Deadline: now}, want: engine.ErrMediaFailed},
+		"a deadline already passed":  {req: bind(engine.MediaRequest{ID: m.ID, Ref: m.MediaRef, Kind: m.MediaKind, Declared: m.MediaBytes, Deadline: now}, m), want: engine.ErrMediaFailed},
 	} {
 		client := tt.client
 		if client == nil {
@@ -560,6 +598,51 @@ func TestFetchMediaRefusesBeforeTheSeam(t *testing.T) {
 			t.Errorf("FetchMedia with %s = %v, %v after %d seam calls, want exactly %v and no call", name, staged, err, fake.calls, tt.want)
 		}
 	}
+}
+
+func TestAReferenceOpensOnlyForItsOwnRow(t *testing.T) {
+	image := mediaFixtures[0]
+	c := mediaClient(t, epoch.Add(time.Hour))
+	m, _ := captured(t, c, image, 64)
+	victimLID := rowOf(t, "100000000000077@lid")
+	moved := func(edit func(*engine.MediaRequest)) engine.MediaRequest {
+		req := request(m)
+		edit(&req)
+		return req
+	}
+	for name, req := range map[string]engine.MediaRequest{
+		"a row in another chat":           moved(func(r *engine.MediaRequest) { r.Chat = rowOf(t, "120363000000000002@g.us") }),
+		"a row from another sender":       moved(func(r *engine.MediaRequest) { r.Sender = rowOf(t, "15550100004@s.whatsapp.net") }),
+		"a row the chat and sender swap":  moved(func(r *engine.MediaRequest) { r.Chat, r.Sender = r.Sender, r.Chat }),
+		"no canonicaliser":                moved(func(r *engine.MediaRequest) { r.Canonical = nil }),
+		"a canonicaliser that fails":      moved(func(r *engine.MediaRequest) { r.Canonical = failingRow{} }),
+		"a sender merged into another id": moved(func(r *engine.MediaRequest) { r.Canonical = mappedRow{victim.String(): victimLID} }),
+	} {
+		fake := &fakeFetch{}
+		c.fetch = fake.fetch
+		if staged, err := c.FetchMedia(t.Context(), req); err != engine.ErrMediaUnavailable || staged != nil || fake.calls != 0 {
+			t.Errorf("FetchMedia for %s = %v, %v after %d seam calls, want the refusal before the seam", name, staged, err, fake.calls)
+		}
+	}
+	unparsable := descriptor{directPath: "/v/t62.7118-24/synthetic", mediaKey: []byte{1}, fileSHA256: make([]byte, 32), fileEncSHA256: make([]byte, 32), length: 64,
+		kind: engine.MediaImage, chat: "not-a-chat", sender: m.Sender}
+	ref, _ := fakeSealer{}.SealMedia(m.ID, unparsable.marshal())
+	fake := &fakeFetch{}
+	c.fetch = fake.fetch
+	if _, err := c.FetchMedia(t.Context(), bind(engine.MediaRequest{ID: m.ID, Ref: ref, Kind: engine.MediaImage, Declared: 64}, m)); err != engine.ErrMediaUnavailable || fake.calls != 0 {
+		t.Fatalf("FetchMedia of a reference whose chat does not parse = %v after %d seam calls", err, fake.calls)
+	}
+
+	merged := moved(func(r *engine.MediaRequest) {
+		r.Sender, r.Canonical = victimLID, mappedRow{victim.String(): victimLID}
+	})
+	fake = &fakeFetch{write: bytes.Repeat([]byte{7}, 64)}
+	c.fetch = fake.fetch
+	staged, err := c.FetchMedia(t.Context(), merged)
+	if err != nil || fake.calls != 1 {
+		t.Fatalf("FetchMedia of a reference sealed under a phone number after its sender's merge = %v after %d seam calls", err, fake.calls)
+	}
+	staged.Erase()
 }
 
 func TestFetchMediaOnDiskReleasesTheSpoolOnFailure(t *testing.T) {
