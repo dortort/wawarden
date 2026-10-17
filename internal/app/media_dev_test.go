@@ -287,13 +287,18 @@ func TestTheFakeEngineServesEveryAttachmentKindOverRESTAndMCP(t *testing.T) {
 		t.Fatalf("the near-cap PDF over MCP = %+v", a.info)
 	}
 
-	if r := f.rest(expired); r.status != http.StatusGone || r.body != `{"error":"media_expired"}` {
+	expiredPath := "/v1/messages/" + f.mrefs[expired] + "/media"
+	if r := mustDo(t, http.MethodPost, f.to, expiredPath, f.auth); r.status != http.StatusAccepted {
+		t.Fatalf("POST the expired attachment = %d %s, want 202", r.status, r.body)
+	}
+	waitUntil(t, "the expired fetch to end", func() bool { return f.metric(`wawarden_media_fetches_total{result="expired"}`) == "1" })
+	if r := mustDo(t, http.MethodGet, f.to, expiredPath, f.auth); r.status != http.StatusGone || r.body != `{"error":"media_expired"}` {
 		t.Fatalf("the expired attachment over REST = %d %s, want 410 media_expired", r.status, r.body)
 	}
 	if a := f.call(expired, nil); a.err != "media_unavailable" {
 		t.Fatalf("the expired attachment over MCP afterwards = %s, want media_unavailable", a.err)
 	}
-	if r := mustDo(t, http.MethodPost, f.to, "/v1/messages/"+f.mrefs[expired]+"/media", f.auth); r.status != http.StatusNotFound || r.body != `{"error":"media_unavailable"}` {
+	if r := mustDo(t, http.MethodPost, f.to, expiredPath, f.auth); r.status != http.StatusNotFound || r.body != `{"error":"media_unavailable"}` {
 		t.Fatalf("the expired attachment over REST afterwards = %d %s", r.status, r.body)
 	}
 	if counts, _ := f.status(); counts["media_refs_live"] != fakeAttachment-1 || counts["media_refs_expired"] != 1 {
