@@ -488,7 +488,8 @@ alert on.
     expired client, then stops at its next chunk
     ([Attachments](api.md#attachments)); tested in
     `internal/api/media_test.go` and `internal/app/media_test.go`. A
-    `get_attachment` result that already carries the file is still written,
+    `get_attachment` result that already carries the file or a part is still
+    written,
     at most 25 seconds after its call started plus 30 seconds to write it
     ([get_attachment](api.md#get_attachment)); tested in
     `internal/api/mcp_test.go`.
@@ -2243,13 +2244,14 @@ and account standing.
   same `unknown tool` error, byte for byte, with the same audit reason as any
   unknown name.
 - **Delivery hold.** The MCP library writes a tool result after the handler
-  returns. A `get_attachment` result that carries a file is published on the
+  returns. A `get_attachment` result that carries a file or a part is
+  published on the
   request's exchange, under its lock and only while the request is live,
   after its write deadline was renewed to 30 seconds. The endpoint releases
   the result's permit, job delivery and job hold only after the library's
   handler returns: at once when the response was written, counting the
   delivery complete only when every byte was accepted and the audit row
-  committed; otherwise from a recovered goroutine after the tool's handler
+  committed, and a part toward completing the job only then; otherwise from a recovered goroutine after the tool's handler
   returns and a 2-second settle, without completing the job and without
   clearing its bytes. An erase while the hold is out defers the clear to its
   release.
@@ -2269,8 +2271,8 @@ and account standing.
   POST, and concurrent reservations. They also compare a hidden
   `send_message`, and a hidden `get_attachment`, byte for byte with an
   unknown tool.
-- Tests that pause a published `get_attachment` result before the library
-  writes it, erase its job by each path, and find the bytes intact until the
+- Tests that pause a published `get_attachment` result or part before the
+  library writes it, erase its job by each path, and find the bytes intact until the
   release; that a concurrent call answers `busy` and drops its hold; and that
   an orphaned, unwritten or unaudited result, a closed exchange and a panic
   release everything without completing the job (`internal/api/mcp_test.go`).
@@ -2298,10 +2300,12 @@ and account standing.
     own goroutine, where an unrecovered panic would stop the process;
   - answers with one fixed code in `content[0].text`.
 - `get_attachment` goes through `mediaTool`, which checks `message` against
-  its bound (1 to 640 characters), mints the read grant, gives the call 25
+  its bound (1 to 640 characters) and `part` against 0 to 255, mints the read
+  grant, gives the call 25
   seconds, recovers a panic the same way, and answers the routes' fixed codes
   with an empty status. Its result brackets the status and the file between
-  constant texts, marks the block `wawarden/untrusted`, and echoes no argument.
+  constant texts, marks the block `wawarden/untrusted`, and echoes no
+  argument, the part index included.
 - The tools call the same code as the REST routes, so scope, cursor binding
   and denied-equals-missing are the routes'.
 - Argument values, schema-validation text, store errors and panic values never
@@ -2734,8 +2738,8 @@ This subsection is the canonical statement of what the protocol library
   commits finishes with its grant, within the 2-second read deadline. An
   attachment delivery in flight keeps sending until the next minute's sweep
   drops its job, and the chunk it is writing then can take up to 30 more
-  seconds. A `get_attachment` result already published with its file is still
-  written, up to 25 seconds after its call started plus 30 seconds to write
+  seconds. A `get_attachment` result already published with its file or a
+  part is still written, up to 25 seconds after its call started plus 30 seconds to write
   it, and its job's bytes stay in memory until then. A spool dropped without
   clearing after an orphaned result stays on the heap until the next garbage
   collection.
@@ -2963,6 +2967,11 @@ This subsection is the canonical statement of what the protocol library
     `wawarden_policy_denials_total` stays `0` and is no alarm. The audit rows'
     `not_found` reasons are what shows a client probing.
   - How an agent should treat what it reads is in [agents.md](agents.md).
+- **Attachment bytes saved by MCP hosts.** An MCP host may write a blob or a
+  part it receives to a file, as Claude Code does for some blobs in its
+  tool-results directory, and an agent joins parts into a file of its own.
+  Those copies are outside WaWarden: revoking the client, withdrawing the
+  message or the job's end of life does not remove them.
 - **References of merged chats.** When a re-key merges a chat without messages
   into the other chat of the same person, the merged chat's reference stops
   resolving and answers as missing. A merge that would remove a chat a client
