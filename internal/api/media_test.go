@@ -1053,6 +1053,48 @@ func TestPerJobDeliveryCaps(t *testing.T) {
 	if running != 0 || reserved != 0 || sent != 30 {
 		t.Fatalf("after the deliveries: %d running, %d reserved, %d delivered", running, reserved, sent)
 	}
+
+	h := newMediaFixture(t, mediaOptions{})
+	h.attach("MEDIA1", "document", 1000)
+	held := newFakeSpool(1000, true)
+	v = h.ready(keyMedia, "MEDIA1", held)
+	for range 3 {
+		if w := h.get(keyMedia, "MEDIA1", ranged); w.Code != http.StatusPartialContent {
+			t.Fatalf("a delivery within the share = %d", w.Code)
+		}
+	}
+	overCap := func() int {
+		n, _ := strconv.Atoi(h.metric(`wawarden_media_deliveries_total{transport="rest",result="over_cap"}`))
+		return n
+	}
+	refused := overCap()
+	reading, release := make(chan struct{}), make(chan struct{})
+	held.mu.Lock()
+	fourth := held.reads + 1
+	held.hook = func(call int) {
+		if call == fourth {
+			close(reading)
+			<-release
+		}
+	}
+	held.mu.Unlock()
+	answered := make(chan *deadlineWriter, 1)
+	go func() { answered <- h.get(keyMedia, "MEDIA1", ranged) }()
+	<-reading
+	requireWriterError(t, h.get(keyMedia, "MEDIA1", ranged), http.StatusTooManyRequests, codeRateLimited)
+	if n := overCap(); n != refused+1 {
+		t.Fatalf("over-cap deliveries went from %d to %d, want the refusal counted once", refused, n)
+	}
+	close(release)
+	if w := <-answered; w.Code != http.StatusPartialContent {
+		t.Fatalf("the delivery whose bytes were reserved = %d", w.Code)
+	}
+	h.m.mu.Lock()
+	running, reserved, sent = v.job.running, v.job.reserved, v.job.delivered
+	h.m.mu.Unlock()
+	if running != 0 || reserved != 0 || sent != 3996 {
+		t.Fatalf("after four deliveries: %d running, %d reserved, %d delivered", running, reserved, sent)
+	}
 }
 
 func TestOnlyWrittenPartsJoinTheDeliveredSet(t *testing.T) {
