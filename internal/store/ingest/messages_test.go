@@ -433,6 +433,12 @@ func TestAReferenceIsWrittenWithANewRowOnly(t *testing.T) {
 	if _, inserted := insertNew(t, s, mediaMessage(t, groupJID, "T1", alice, "plain words", "sealed-text")); inserted || storedRef(t, s, text) != "" {
 		t.Fatal("a duplicate gave a reference to a stored message that is not media")
 	}
+	typedText := textMessage(t, groupJID, "T2", alice, "typed words")
+	typedText.MediaType = "image/jpeg"
+	typedTextRef := insert(t, s, typedText)
+	if _, inserted := insertNew(t, s, mediaMessage(t, groupJID, "T2", alice, "typed words", "sealed-typed-text")); inserted || storedRef(t, s, typedTextRef) != "" {
+		t.Fatal("a duplicate gave a reference to a stored text message that carries a media type")
+	}
 	untyped := mediaMessage(t, groupJID, "U1", alice, "", "unused")
 	untyped.Media, untyped.MediaType = nil, ""
 	untypedRef := insert(t, s, untyped)
