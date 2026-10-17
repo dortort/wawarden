@@ -1475,6 +1475,46 @@ func TestOverlappingGaugeUpdatesEndAtTheLatestState(t *testing.T) {
 	}
 }
 
+func TestAGaugeWriteFinishesBeforeTheNextUpdateReads(t *testing.T) {
+	h := newSupRig(t)
+	h.versions(versionResult{v: current})
+	h.s.begin(t.Context(), 1)
+	if !h.s.step(t.Context()) {
+		t.Fatal("no version refresh step")
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(unblock)
+	write, held := h.s.setGauges, false
+	h.s.setGauges = func(paired, connected bool) {
+		if !held {
+			held = true
+			close(entered)
+			<-release
+		}
+		write(paired, connected)
+	}
+	h.client.onConnect = func() { h.client.setPaired(false) }
+	stepped, handled := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(stepped)
+		h.s.step(t.Context())
+	}()
+	eventually(t, "the connect step is writing its gauges", closed(entered))
+	h.client.setPaired(true)
+	go func() {
+		defer close(handled)
+		h.deliver(Connected{})
+	}()
+	eventually(t, "the Connected update has finished or waits for the step's", func() bool { return closed(handled)() || waitingForTheGauges() })
+	unblock()
+	eventually(t, "both gauge updates have returned", func() bool { return closed(stepped)() && closed(handled)() })
+	h.want(StateConnected, "")
+	if p, c := h.counter("wawarden_paired"), h.counter("wawarden_connected"); p != 1 || c != 1 {
+		t.Fatalf("paired gauge %v and connected gauge %v while paired and connected, want 1 and 1", p, c)
+	}
+}
+
 func closed(ch <-chan struct{}) func() bool {
 	return func() bool {
 		select {
