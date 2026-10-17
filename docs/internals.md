@@ -459,8 +459,8 @@ job ends after 2 minutes and is cut at `WAWARDEN_HISTORY_MAX_BYTES` plus
 32 bytes; its timeout gives the same kind of error as the client's own timeout,
 which the protocol library retries.
 
-Nothing in this build starts an attachment job, so only the paragraph above
-applies to the traffic it sends. When a request's context carries a job, made
+An attachment job starts only when a client asks for the attachment (see
+[Attachments](api.md#attachments)). When a request's context carries a job, made
 from an attachment's declared length and a deadline, the client's transport
 holds every request of the job to these limits:
 
@@ -823,8 +823,8 @@ The [audit anchor](observability.md#audit-retention)'s HMAC is HMAC-SHA256 under
 A media reference is an attachment descriptor sealed with AES-256-GCM under
 the `media-ref` key derived from the [master key](configuration.md#master-key).
 The adapter seals one for each attachment it captures while
-`WAWARDEN_MEDIA_MAX_BYTES` is above 0; nothing in this build fetches an
-attachment, so none is opened yet. Its text is strict unpadded
+`WAWARDEN_MEDIA_MAX_BYTES` is above 0, and opens it only to fetch the
+attachment a client asked for. Its text is strict unpadded
 base64url, at most 2048 characters, of, in this order:
 
 1. the version byte `0x01` and the 4-byte id of the sealing key;
