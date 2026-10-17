@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -72,6 +73,9 @@ func TestAdmitArithmetic(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := testSpool(t, t.TempDir(), c.local, c.minFree, c.free)
+			if err := s.Headroom(declared); !errors.Is(err, c.want) || (c.want == nil) != (err == nil) {
+				t.Fatalf("Headroom with %d free = %v, want %v", c.free, err, c.want)
+			}
 			f, err := s.Admit(declared, func(error) {})
 			if !errors.Is(err, c.want) || (c.want == nil) != (err == nil) {
 				t.Fatalf("Admit with %d free = %v, want %v", c.free, err, c.want)
@@ -84,6 +88,48 @@ func TestAdmitArithmetic(t *testing.T) {
 			}
 			f.Erase()
 		})
+	}
+}
+
+func TestHeadroomCreatesNothingAndInspectsTheDataDirectoryFirst(t *testing.T) {
+	data := t.TempDir()
+	s := testSpool(t, data, true, 0, math.MaxUint64)
+	var inspected []string
+	s.statfs = func(dir string, st *syscall.Statfs_t) error {
+		inspected = append(inspected, dir)
+		if _, err := os.Lstat(dir); err != nil {
+			return &os.PathError{Op: "statfs", Path: dir, Err: syscall.ENOENT}
+		}
+		return freeSpace(math.MaxUint64)(dir, st)
+	}
+	if err := s.Headroom(10); err != nil {
+		t.Fatalf("Headroom before the staging directory exists = %v", err)
+	}
+	if want := []string{filepath.Join(data, Dir), data}; !slices.Equal(inspected, want) {
+		t.Fatalf("Headroom inspected %q, want %q", inspected, want)
+	}
+	if _, err := os.Lstat(filepath.Join(data, Dir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Headroom created the staging directory: %v", err)
+	}
+	f, _ := testAdmit(t, s, 10)
+	if err := s.Headroom(10); !errors.Is(err, ErrBusy) {
+		t.Fatalf("Headroom with a live disk spool = %v, want the busy refusal", err)
+	}
+	f.Erase()
+	inspected = nil
+	if err := s.Headroom(10); err != nil || !slices.Equal(inspected, []string{filepath.Join(data, Dir)}) {
+		t.Fatalf("Headroom once the directory exists = %v after inspecting %q", err, inspected)
+	}
+	for _, declared := range []int64{-1, 0, maxDeclared + 1} {
+		if err := s.Headroom(declared); !errors.Is(err, errDeclared) {
+			t.Fatalf("Headroom(%d) = %v, want the declared-length refusal", declared, err)
+		}
+	}
+	s.statfs = func(string, *syscall.Statfs_t) error {
+		return &os.PathError{Op: "statfs", Path: data, Err: syscall.EIO}
+	}
+	if err := s.Headroom(10); !errors.Is(err, syscall.EIO) || errors.Is(err, ErrSpace) || strings.Contains(err.Error(), data) {
+		t.Fatalf("Headroom with a failing statfs = %v, want the errno under a text that names no path", err)
 	}
 }
 
