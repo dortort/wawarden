@@ -192,8 +192,11 @@ its image digest and the commands to verify and reproduce it.
   `WAWARDEN_MEDIA_MAX_BYTES`, `Range` and `If-Range` passed through, no caching
   or compression) and allow `POST /mcp` responses of 16 MiB lasting 55 seconds
   (see [Reverse proxy with TLS](docs/hardening.md#reverse-proxy-with-tls)).
-- Run `wawarden admin status` from the same release as the server: it refuses
-  a status answer without `downloads` or the three new counts.
+- Run `wawarden admin status` and `wawarden admin clients` from the same
+  release as the server. `admin status` refuses a status answer without
+  `downloads` or the three new counts, and `admin clients` refuses a client
+  without `allow_media`, so against an earlier server `admin clients revoke`
+  revokes the client but reports a failure.
 
 ## [1.1.0] - 2026-10-15
 
