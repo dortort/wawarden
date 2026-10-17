@@ -6,7 +6,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/constant"
+	"go/parser"
+	"go/token"
 	"io/fs"
+	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -19,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dortort/wawarden/internal/config"
 	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/store/ingest"
 )
@@ -603,6 +609,141 @@ func TestHistoryMemoryBoundIsTheDocumentedOne(t *testing.T) {
 	want := fmt.Sprintf("at most %d times `WAWARDEN_HISTORY_MAX_BYTES` plus %d MiB", historyMemoryFactor, historyMemorySlack>>20)
 	if !strings.Contains(strings.Join(strings.Fields(string(doc)), " "), want) {
 		t.Fatalf("docs/internals.md does not state %q", want)
+	}
+}
+
+const (
+	mediaMarshalFactor = 6
+	mediaFetchBuffer   = 70 << 10
+	mediaSectorCounter = 4
+	memoryReserve      = 128 << 20
+)
+
+func sourceConstant(t *testing.T, file, name string) int64 {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), filepath.Join("..", filepath.FromSlash(file)), nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	var found ast.Expr
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.ValueSpec:
+			for i, id := range n.Names {
+				if id.Name == name && i < len(n.Values) {
+					found = n.Values[i]
+				}
+			}
+		case *ast.KeyValueExpr:
+			if id, ok := n.Key.(*ast.Ident); ok && id.Name == name {
+				found = n.Value
+			}
+		}
+		return found == nil
+	})
+	value, ok := constant.Int64Val(evaluate(found))
+	if !ok {
+		t.Fatalf("internal/%s defines no integer constant %s", file, name)
+	}
+	return value
+}
+
+func evaluate(e ast.Expr) constant.Value {
+	switch e := e.(type) {
+	case *ast.BasicLit:
+		return constant.MakeFromLiteral(e.Value, e.Kind, 0)
+	case *ast.ParenExpr:
+		return evaluate(e.X)
+	case *ast.BinaryExpr:
+		x, y := evaluate(e.X), evaluate(e.Y)
+		if e.Op == token.SHL {
+			shift, ok := constant.Uint64Val(y)
+			if !ok {
+				return constant.MakeUnknown()
+			}
+			return constant.Shift(x, e.Op, uint(shift))
+		}
+		return constant.BinaryOp(x, e.Op, y)
+	}
+	return constant.MakeUnknown()
+}
+
+func TestAttachmentMemoryBoundIsTheDocumentedOne(t *testing.T) {
+	const mib = 1 << 20
+	threshold := sourceConstant(t, "api/media.go", "mediaRAMThreshold")
+	staged := sourceConstant(t, "api/media.go", "mediaStagedSlots")
+	fetches := sourceConstant(t, "api/media.go", "mediaFetchSlots")
+	deliveries := sourceConstant(t, "api/media.go", "mediaDeliveries")
+	part := sourceConstant(t, "api/media.go", "mediaPartSize")
+	blob := sourceConstant(t, "api/tools.go", "mcpBlobCap")
+	chunk := sourceConstant(t, "api/deliver.go", "deliveryChunk")
+	overhead := sourceConstant(t, "stage/stage.go", "overhead")
+	sector := sourceConstant(t, "stage/sealed.go", "sectorSize")
+	tag := sourceConstant(t, "stage/sealed.go", "tagSize")
+	budget := sourceConstant(t, "attach/image.go", "budget")
+	if part != blob {
+		t.Fatalf("a part is %d bytes but an inline blob %d: the documented 7·8 MiB term no longer holds", part, blob)
+	}
+	memlimit, err := os.ReadFile(filepath.Join("..", "app", "memlimit.go"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !strings.Contains(string(memlimit), "h.limit(limit - limit/5)") {
+		t.Fatal("internal/app/memlimit.go no longer sets the soft limit to 4/5 of the cgroup limit")
+	}
+	const share = 0.8
+
+	entry := tag + mediaSectorCounter
+	table := (config.MaxMediaMaxBytes + sector - 1) / sector * entry
+	media := staged*(threshold+overhead) + budget + (1+mediaMarshalFactor)*blob + fetches*mediaFetchBuffer + deliveries*staged*chunk + table
+	history := func(h int64) int64 { return historyMemoryFactor*h + historyMemorySlack }
+	round := func(b float64) int64 { return int64(math.Round(b / mib)) }
+	size := func(b int64) float64 { return float64(b+memoryReserve) / share }
+	off, offMax := size(history(config.DefaultHistoryMaxBytes)), size(history(config.MaxHistoryMaxBytes))
+	on, onMax := size(media+history(config.DefaultHistoryMaxBytes)), size(media+history(config.MaxHistoryMaxBytes))
+	for _, fit := range []struct {
+		need float64
+		have int64
+	}{{off, 512 * mib}, {on, 768 * mib}, {onMax, 1280 * mib}} {
+		if fit.need > float64(fit.have) {
+			t.Fatalf("the advised --memory of %d MiB is below the %d MiB the rule asks for", fit.have/mib, round(fit.need))
+		}
+	}
+
+	for _, doc := range []struct {
+		name  string
+		wants []string
+	}{
+		{"internals.md", []string{
+			fmt.Sprintf("%d·(%d MiB + %d B) + %d MiB + %d·%d MiB + %d·%d KiB + %d·%d KiB + ⌈MAX / %d KiB⌉·%d B",
+				staged, threshold/mib, overhead, budget/mib, 1+mediaMarshalFactor, blob/mib, fetches, mediaFetchBuffer>>10, deliveries*staged, chunk>>10, sector>>10, entry),
+			fmt.Sprintf("estimated at %d times %d MiB", mediaMarshalFactor, blob/mib),
+			fmt.Sprintf("about %.2f MiB at the %d GiB maximum", float64(table)/mib, config.MaxMediaMaxBytes>>30),
+			fmt.Sprintf("That is about %d MiB whatever MAX is, and about %d MiB together with one history blob at the default cap.",
+				round(float64(media)), round(float64(media+history(config.DefaultHistoryMaxBytes)))),
+		}},
+		{"hardening.md", []string{
+			fmt.Sprintf("at least (A + %d·H + %d MiB + R) / %g", historyMemoryFactor, historyMemorySlack/mib, share),
+			fmt.Sprintf("R is %d MiB", memoryReserve/mib),
+			fmt.Sprintf("about %d MiB above it", round(float64(media))),
+			fmt.Sprintf("about %d MiB at the default, so `--memory=512m` holds, and about %d MiB with H at its %d MiB maximum.",
+				round(off), round(offMax), config.MaxHistoryMaxBytes/mib),
+			fmt.Sprintf("about %d MiB at the defaults, so use `--memory=768m`, and about %d MiB with H at its maximum, so 1.25 GiB.",
+				round(on), round(onMax)),
+			fmt.Sprintf("to %g%% of the container's cgroup memory limit", share*100),
+			fmt.Sprintf("about %d MiB with `--memory=512m`", round(share*512*mib)),
+		}},
+	} {
+		text, err := os.ReadFile(filepath.Join("..", "..", "docs", doc.name))
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		flat := strings.Join(strings.Fields(string(text)), " ")
+		for _, want := range doc.wants {
+			if !strings.Contains(flat, want) {
+				t.Errorf("docs/%s does not state %q", doc.name, want)
+			}
+		}
 	}
 }
 
