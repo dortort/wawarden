@@ -178,7 +178,8 @@ func TestFakeEnginePairsIngestsAndArchives(t *testing.T) {
 	st := s.waitForStatus("the script is ingested and both bad blobs are quarantined", func(st map[string]string) bool {
 		return st["history blobs quarantined"] == "2" && st["history blobs pending"] == "0" && st["inbox backlog"] == "0" && len(s.events("quarantine")) == 2
 	})
-	want := map[string]string{"state": "connected", "reason": "none", "paired": "true", "chats": "3", "messages": "17", "inbox quarantined": "0"}
+	want := map[string]string{"state": "connected", "reason": "none", "paired": "true", "chats": "3", "messages": "24", "inbox quarantined": "0",
+		"downloads": "off", "media references live": "0"}
 	for k, v := range want {
 		if st[k] != v {
 			t.Fatalf("status %s = %q, want %q (status %v)", k, st[k], v, st)
@@ -189,7 +190,7 @@ func TestFakeEnginePairsIngestsAndArchives(t *testing.T) {
 	for _, line := range []string{
 		"wawarden_paired 1",
 		"wawarden_connected 1",
-		"wawarden_messages_ingested_total 17",
+		"wawarden_messages_ingested_total 24",
 		`wawarden_ingest_dropped_total{reason="chat_rejected"} 2`,
 		`wawarden_ingest_dropped_total{reason="foreign_reference"} 2`,
 		`wawarden_ingest_dropped_total{reason="history_not_primary"} 1`,
@@ -274,6 +275,7 @@ func checkArchive(t *testing.T, dataDir string) {
 		{group, bob, "FAKE-L14", func(f ingest.Found) bool { return f.Kind == ingest.KindReaction }, "the reaction is stored"},
 		{group, alice, "FAKE-L16", func(f ingest.Found) bool { return f.Kind == ingest.KindPollUpdate }, "the poll update is stored"},
 		{alice, alice, "FAKE-L18", func(f ingest.Found) bool { return f.Kind == ingest.KindMedia }, "the media message is stored"},
+		{alice, alice, "FAKE-L28", func(f ingest.Found) bool { return f.Kind == ingest.KindMedia }, "the last scripted attachment is stored"},
 	}
 	if err := store.Read(ctx, "test.fake_archive", func(r *ingest.Reader) error {
 		for _, tt := range tests {
