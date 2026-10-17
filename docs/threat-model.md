@@ -362,7 +362,12 @@ These are stated so that nobody relies on WaWarden for them:
      `spool/` as AES-GCM sector ciphertext under a key drawn for the file and
      held only in memory, in a `0600` file whose name is removed at once on
      the `local` profile, and erased when its job ends. Every start empties
-     `spool/`, and backups exclude it.
+     `spool/`, and backups exclude it. Outside `internal/stage` and tests,
+     the `spool-directory` architecture rule refuses a literal path element
+     `spool`, in a string literal, a run of concatenated literals or a run
+     assembled from the file's constants, and any use of `stage.Dir` except
+     the start-time check in `internal/config`
+     (`internal/archtest/spooldir_test.go`).
    - Backups are encrypted to an operator-supplied age recipient, so the
      service can write them but not read them. Before each backup, `backups/`
      and its staging directory `backups/tmp/` must be directories, not
