@@ -72,6 +72,17 @@ func seeded(t *testing.T) (archive, device string, deviceVersion int) {
 				return err
 			}
 		}
+		for _, id := range []string{"M1", "M2"} {
+			if _, _, err := tx.InsertMessage(ingest.Message{Chat: chat(t, canary+"@s.whatsapp.net"), ID: id, Sender: chat(t, canary+"@s.whatsapp.net"),
+				Origin: ingest.OriginLive, Timestamp: epoch, Kind: ingest.KindMedia, MediaType: "image/jpeg", Ingested: epoch,
+				Media: &ingest.Media{Ref: "synthetic-ref-" + id, Kind: ingest.MediaImage, Declared: 1024, Retention: 50 * 365 * 24 * time.Hour}}); err != nil {
+				return err
+			}
+		}
+		if err := errors.Join(tx.ExpireMediaRef(chat(t, canary+"@s.whatsapp.net"), "M2", chat(t, canary+"@s.whatsapp.net"), epoch),
+			tx.PutRevokeTombstone(chat(t, canary+"@s.whatsapp.net"), "R1", chat(t, canary+"@s.whatsapp.net"), epoch)); err != nil {
+			return err
+		}
 		if err := tx.SetPushName(chat(t, canary+"@s.whatsapp.net"), "Alice Example", epoch, ingest.OriginLive); err != nil {
 			return err
 		}
@@ -147,8 +158,8 @@ func TestCheckCountsBothCopies(t *testing.T) {
 	}
 	sides, _ := filepath.Glob(archivePath + "-*")
 	a, err := CheckArchive(t.Context(), archivePath)
-	want := Archive{Integrity: Integrity{OK: true, Counted: true}, SchemaVersion: 5, Chats: 2, Messages: 3, BlobsPending: 2, BlobsQuarantined: 1,
-		InboxBacklog: 2, InboxQuarantined: 1, ClientsActive: 1, AuditRows: 4}
+	want := Archive{Integrity: Integrity{OK: true, Counted: true}, SchemaVersion: 5, Chats: 2, Messages: 5, BlobsPending: 2, BlobsQuarantined: 1,
+		InboxBacklog: 2, InboxQuarantined: 1, ClientsActive: 1, AuditRows: 4, MediaRefsLive: 1, MediaRefsExpired: 1, RevokeTombstones: 1}
 	if err != nil || !reflect.DeepEqual(a, want) {
 		t.Fatalf("CheckArchive = %+v, %v, want %+v", a, err, want)
 	}
@@ -192,6 +203,28 @@ func tamper(t *testing.T, path, statement string) {
 	}
 	if n, err := res.RowsAffected(); err != nil || n == 0 {
 		t.Fatalf("%s changed %d rows, %v", statement, n, err)
+	}
+}
+
+func TestACopyOlderThanTheMediaTablesIsCountedWithoutThem(t *testing.T) {
+	archivePath, _, _ := seeded(t)
+	db, err := sql.Open("sqlite", "file:"+archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{"DROP TABLE media_refs", "DROP TABLE revoke_tombstones", "PRAGMA user_version = 4"} {
+		if _, err := db.ExecContext(t.Context(), statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	a, err := CheckArchive(t.Context(), archivePath)
+	want := Archive{Integrity: Integrity{OK: true, Counted: true}, SchemaVersion: 4, Chats: 2, Messages: 5, BlobsPending: 2, BlobsQuarantined: 1,
+		InboxBacklog: 2, InboxQuarantined: 1, ClientsActive: 1, AuditRows: 4}
+	if err != nil || !reflect.DeepEqual(a, want) {
+		t.Fatalf("CheckArchive of a version 4 copy = %+v, %v, want %+v", a, err, want)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 
 const (
 	checkLimit  = 30 * time.Minute
+	mediaSchema = 5
 	notReadable = "the copy cannot be read as a database"
 	integrityOK = "ok"
 
@@ -42,6 +43,9 @@ type Archive struct {
 	InboxQuarantined int64
 	ClientsActive    int64
 	AuditRows        int64
+	MediaRefsLive    int64
+	MediaRefsExpired int64
+	RevokeTombstones int64
 }
 
 type Device struct {
@@ -79,7 +83,12 @@ func CheckArchive(ctx context.Context, path string) (Archive, error) {
 		}
 		a.Chats, a.Messages, a.BlobsPending, a.BlobsQuarantined = c.Chats, c.Messages, c.BlobsPending, c.BlobsQuarantined
 		a.InboxBacklog, a.InboxQuarantined, a.ClientsActive = c.InboxBacklog, c.InboxQuarantined, clients.Active
-		return nil
+		if a.SchemaVersion < mediaSchema {
+			return nil
+		}
+		media, err := admin.New(d).MediaCounts(ctx, time.Now())
+		a.MediaRefsLive, a.MediaRefsExpired, a.RevokeTombstones = media.RefsLive, media.RefsExpired, media.Tombstones
+		return err
 	})
 	return a, err
 }
