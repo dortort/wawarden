@@ -2,6 +2,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -66,6 +67,7 @@ type App struct {
 	backupEvery time.Duration
 	spool       *stage.Spool
 	sweepEvery  time.Duration
+	media       *mediaRun
 	starts      int
 	recovered   int
 	serving     listenerSet
@@ -220,7 +222,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 			Session: func() string { return string(a.engine.Status().State) }, Cursors: cursors, Refs: refs,
 			Limits: api.ReadLimits{ReadsPerMinute: cfg.ReadPerMinute, SearchesPerMinute: cfg.SearchPerMinute},
 			Sender: sendService{sender: newSender(cfg, archive, a.engine, notifier), rejected: rejected}, SendRejected: rejected,
-			AuditFailed: auditFailures(reg, alerts),
+			AuditFailed: auditFailures(reg, alerts), Media: a.mediaDeps(ctx, cfg, media, archive),
 		}),
 	}}
 	if cfg.AdminCredential != nil {
@@ -237,6 +239,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 	}
 	serving, err := listeners.Open(ctx, logger, specs)
 	if err != nil {
+		a.media.halt()
 		return nil, errors.Join(err, a.closeStores())
 	}
 	health, err := listeners.Open(ctx, logger, []listeners.Spec{{
@@ -245,6 +248,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 		Handler: api.NewHealthHandler(a.healthy),
 	}})
 	if err != nil {
+		a.media.halt()
 		return nil, errors.Join(err, serving.Shutdown(ctx), a.closeStores())
 	}
 	a.serving, a.health = serving, health
@@ -263,6 +267,20 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 		}
 	}
 	return a, nil
+}
+
+func (a *App) mediaDeps(ctx context.Context, cfg config.Config, media mediaParts, archive *ingest.Store) *api.MediaDeps {
+	if media.maxBytes <= 0 {
+		return nil
+	}
+	root, stop := context.WithCancel(context.WithoutCancel(ctx))
+	a.media = &mediaRun{stop: stop, stopped: make(chan struct{})}
+	return &api.MediaDeps{
+		Service: newMediaService(a.engine, media.spool, time.Now), MaxBytes: media.maxBytes,
+		PerMinute: cmp.Or(cfg.MediaPerMinute, config.DefaultMediaPerMinute), GlobalPerHour: cmp.Or(cfg.MediaGlobalPerHour, config.DefaultMediaGlobalPerHour),
+		GlobalBytesPerHour: cmp.Or(cfg.MediaGlobalBytesPerHour, config.DefaultMediaGlobalBytesPerHour), Root: root,
+		ClientLive: clientLive(archive.Clients()), Stopped: func() { close(a.media.stopped) },
+	}
 }
 
 func changesOf(archive, session backup.Database) func(context.Context) ([2]int64, error) {
@@ -356,11 +374,13 @@ func (a *App) Run(ctx context.Context) error {
 
 	grace, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.grace)
 	defer cancel()
+	a.media.halt()
 	drained := a.serving.Shutdown(grace)
 	if a.afterDrain != nil {
 		a.afterDrain()
 	}
 	stopped := a.engine.Stop(grace)
+	mediaStopped := a.media.wait(grace)
 	stopBackingUp()
 	var backupStopped error
 	select {
@@ -374,7 +394,7 @@ func (a *App) Run(ctx context.Context) error {
 	if a.emf != nil {
 		a.emit()
 	}
-	err := errors.Join(failure, drained, stopped, backupStopped, a.notify.Stop(grace), a.closeStores(), a.health.Shutdown(grace))
+	err := errors.Join(failure, drained, stopped, mediaStopped, backupStopped, a.notify.Stop(grace), a.closeStores(), a.health.Shutdown(grace))
 	if err != nil {
 		a.logger.Error("stopped with errors", slog.String("event", "stopped"), slog.String("error", err.Error()))
 		return err
