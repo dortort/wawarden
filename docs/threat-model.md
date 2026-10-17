@@ -487,7 +487,7 @@ alert on.
     runs until the sweep that runs every minute drops the job of a revoked or
     expired client, then stops at its next chunk
     ([Attachments](api.md#attachments)); tested in
-    `internal/api/media_test.go`.
+    `internal/api/media_test.go` and `internal/app/media_test.go`.
   - Tested with the real client list in `internal/store/admin/cache_test.go`,
     `internal/store/scoped/auth_http_test.go` and
     `internal/api/pipeline_test.go`.
