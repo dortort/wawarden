@@ -133,7 +133,13 @@ these constraints on the proxy:
   ([request bodies](api.md#request-bodies)); a proxy limit below
   64 KiB breaks MCP calls and sends of long or escaped texts.
 - **Timeouts.** A send can take 25 seconds and the service writes a response
-  within 30; give the proxy's upstream read timeout at least 30 seconds.
+  within 30, except an attachment delivery; give the proxy's upstream read
+  timeout at least 30 seconds.
+- **Attachments.** On `GET /v1/messages/*/media`, a delivery renews a
+  30-second write deadline before each 256 KiB chunk, so there the proxy turns
+  response buffering off, allows a whole response at least 30 minutes, sets no
+  response-size limit below `WAWARDEN_MEDIA_MAX_BYTES`, and passes `Range` and
+  `If-Range` through ([delivery](api.md#delivery)).
 - **MCP is plain HTTP.** The endpoint is `POST /mcp` only, stateless and
   JSON-only: no server-sent events, no WebSocket upgrade, no session affinity.
 - **Logs.** Never log the `Authorization` header. The query string of
@@ -142,7 +148,8 @@ these constraints on the proxy:
 - **Rate limits.** Each listener has one failure budget shared by every caller
   ([failed authentication](api.md#failed-authentication)); limits
   per source address belong in the proxy.
-- **Responses** are JSON with `Cache-Control: no-store`; do not cache them.
+- **Responses** are JSON, except attachment bytes, and all carry
+  `Cache-Control: no-store`; do not cache them.
 
 ## Gate the admin listener separately
 
@@ -175,7 +182,7 @@ The service makes these outbound connections and no others
 |---|---|
 | `wss://web.whatsapp.com/ws/chat`, port 443 | While a device is paired or pairing was requested |
 | `https://web.whatsapp.com`, the protocol version | Before connecting |
-| The media hosts WhatsApp names at run time, such as `mmg.whatsapp.net`, for history-sync downloads | During history sync and after a backfill request |
+| The media hosts WhatsApp names at run time, such as `mmg.whatsapp.net`, for history-sync downloads and the attachments clients ask for while `WAWARDEN_MEDIA_MAX_BYTES` is above 0 | During history sync, after a backfill request, and when a client with `allow_media` starts an attachment job |
 | The webhook host and port of `WAWARDEN_NOTIFY_URL`, HTTPS only | When it is set; private addresses are refused unless `WAWARDEN_NOTIFY_ALLOW_PRIVATE=1` |
 | The system's DNS resolver | For all of the above |
 
@@ -446,7 +453,9 @@ controls a release controls the account; the
       opened at all; metrics come from EMF, not a token-holding scraper.
 - [ ] A proxy, if any, adds no `Origin` or `Sec-Fetch-Site`, logs neither
       `Authorization` nor query strings, allows 64 KiB bodies and 30-second
-      responses, and limits callers per address.
+      responses, except on `GET /v1/messages/*/media`, where it buffers
+      nothing, allows a whole response at least 30 minutes and passes `Range`
+      and `If-Range`, and limits callers per address.
 - [ ] Egress goes only to WhatsApp's names, the webhook and DNS, enforced or
       alerting.
 - [ ] The container runs read-only, without capabilities, with
