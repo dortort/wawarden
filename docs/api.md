@@ -575,7 +575,7 @@ restart refills them, and `WAWARDEN_UNSAFE_RATE_CAPS` lifts none of them:
 
 | Budget | Limit |
 |---|---|
-| Each client | `WAWARDEN_MEDIA_PER_CLIENT_PER_MINUTE`, 6 jobs a minute, evenly, with a burst of 2 |
+| Each client | `WAWARDEN_MEDIA_PER_CLIENT_PER_MINUTE`, 6 jobs a minute, evenly, with a burst of 2 (1 when the limit is 1) |
 | All clients, count | `WAWARDEN_MEDIA_GLOBAL_PER_HOUR`, 60 jobs in any hour |
 | All clients, bytes | `WAWARDEN_MEDIA_GLOBAL_BYTES_PER_HOUR`, 4 GiB in any hour, charged with the declared size when the job starts; bytes fetched beyond it are charged when the fetch ends |
 
