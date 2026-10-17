@@ -12,6 +12,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"io"
+	"log/slog"
 	"maps"
 	"math"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -434,21 +436,41 @@ func (f stagedFetcher) FetchMedia(context.Context, engine.MediaRequest) (engine.
 }
 
 func TestClientLivenessFollowsTheClientTable(t *testing.T) {
-	a, _ := open(t, testConfig(t, ""), nil)
-	t.Cleanup(func() { _ = a.closeStores() })
-	live := clientLive(a.archive.Clients())
-	c, _, err := a.archive.Clients().Create(t.Context(), policy.ClientSpec{Name: "synthetic media reader", AllChats: true, AllowMedia: true})
+	var now atomic.Int64
+	now.Store(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC).UnixMilli())
+	archive, err := ingest.Open(t.Context(), ingest.Options{DataDir: t.TempDir(), UID: os.Geteuid(), Profile: ingest.ProfileLocal,
+		Logger: logx.New(logx.NewWriter(io.Discard), slog.LevelInfo), Master: testMaster(t), Now: func() time.Time { return time.UnixMilli(now.Load()) }})
+	if err != nil {
+		t.Fatalf("ingest.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = archive.Close() })
+	clients := archive.Clients()
+	live := clientLive(clients)
+	c, _, err := clients.Create(t.Context(), policy.ClientSpec{Name: "synthetic media reader", AllChats: true, AllowMedia: true})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if ok, err := live(t.Context(), c.ID); !ok || err != nil {
-		t.Fatalf("a live client = %v, %v", ok, err)
+	brief, _, err := clients.Create(t.Context(), policy.ClientSpec{Name: "synthetic brief reader", AllChats: true, AllowMedia: true, ExpiresInDays: 1})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
 	}
-	if _, err := a.archive.Clients().Revoke(t.Context(), c.ID); err != nil {
+	for _, id := range []string{c.ID, brief.ID} {
+		if ok, err := live(t.Context(), id); !ok || err != nil {
+			t.Fatalf("a live client = %v, %v", ok, err)
+		}
+	}
+	if _, err := clients.Revoke(t.Context(), c.ID); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
 	if ok, err := live(t.Context(), c.ID); ok || err != nil {
 		t.Fatalf("a revoked client = %v, %v", ok, err)
+	}
+	now.Store(brief.ExpiresAt.UnixMilli())
+	if got, err := clients.Get(t.Context(), brief.ID); err != nil || got.State != admin.StateExpired {
+		t.Fatalf("Get after the expiry = %v, %v", got.State, err)
+	}
+	if ok, err := live(t.Context(), brief.ID); ok || err != nil {
+		t.Fatalf("an expired client = %v, %v", ok, err)
 	}
 	if ok, err := live(t.Context(), "zzzzzzzz"); ok || err != nil {
 		t.Fatalf("an unknown client = %v, %v", ok, err)
