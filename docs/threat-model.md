@@ -83,7 +83,7 @@ Most sensitive first.
 |---|---|
 | Device store (`session.db`) | The linked device's keys and the protocol library's state: Signal sessions, sender keys, message secrets, identity mappings and contact names. Whoever holds it can act as the account until the device is unlinked on the phone. |
 | Archive (`archive.db`) and history blobs | Every archived chat, in plaintext. `serve` creates and locks the archive and runs the engine. Once a device is paired, the engine writes WhatsApp traffic into the archive. It keeps each history blob under `history/` until the blob is processed or quarantined. While attachment downloads are on it also holds a sealed media reference for each captured attachment, which the master key opens. |
-| Fetched attachments (memory and `spool/`) | The bytes of an attachment a client asked for, until its job ends: at most 10 minutes after it is ready in memory, or 30 minutes on disk. One over 16 MiB is staged in `spool/` as AES-256-GCM ciphertext under a key held only in memory, in a `0600` file whose name is removed at once on the `local` profile; a backup never includes `spool/`. |
+| Fetched attachments (memory and `spool/`) | The bytes of an attachment a client asked for, until its job ends: at most its life of 10 minutes after it turned ready in memory, or 30 minutes on disk, and then until the next minute's sweep erases it. One over 16 MiB is staged in `spool/` as AES-256-GCM ciphertext under a key held only in memory, in a `0600` file whose name is removed at once on the `local` profile; a backup never includes `spool/`. |
 | Admin credential | Gates the admin listener; [The admin token](#the-admin-token) lists what it guards. It does not expire. The service holds only its SHA-256. |
 | Client tokens | Bearer credentials: whoever holds one and can reach the client listener has its access. The service stores only their SHA-256 digests. A token is shown once, in the answer that creates its client. |
 | Master key (`keys/master` in the data directory) | Every purpose key is derived from it. [The master key](#the-master-key) says what its holder, and the holder of a retired key, can do. |
@@ -2966,9 +2966,10 @@ This subsection is the canonical statement of what the protocol library
 - **Two clients can keep attachment downloads busy.** A client may hold two
   attachment jobs fetching or ready, and at most four jobs hold fetched bytes
   across the service. Two clients with `allow_media` can therefore take every
-  slot, and every other fetch answers `busy` until their jobs are delivered or
-  their life ends: 10 minutes after a job turned ready when its bytes are held
-  in memory, 30 when they are on disk. The admin
+  slot, and every other fetch answers `busy` until their jobs are delivered,
+  or are erased after their life ends, by the next minute's sweep at the
+  latest. A job's life ends 10 minutes after it turned ready when its bytes
+  are held in memory, 30 when they are on disk. The admin
   [pause](api.md#pausing-downloads) erases every job at once; revoking one of
   the clients drops its jobs at the next minute's sweep.
 
@@ -3274,9 +3275,10 @@ This subsection is the canonical statement of what the protocol library
 - **Fetched attachments outlive their message for a while.** The bytes of an
   attachment fetched for a client are outside I-8. They stay in memory, or in
   `spool/` as ciphertext under a key held only in memory, until their job
-  ends: at most 10 minutes after the job turned ready in memory, or 30 minutes
-  on disk. The minute sweep drops a job whose message is no longer eligible or
-  whose client was revoked, so a revoke or an expiry ends it within a minute.
+  ends: at most its life of 10 minutes after it turned ready in memory, or
+  30 minutes on disk, and then until the next minute's sweep erases it. The
+  minute sweep drops a job whose message is no longer eligible or whose client
+  was revoked, so a revoke or an expiry ends it within a minute.
   Two more cases:
   - an in-memory spool dropped without clearing when a `get_attachment`
     client left before its result was written stays on the heap until the

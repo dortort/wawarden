@@ -76,8 +76,9 @@ One client's fetch of one message's attachment, started by
 `POST /v1/messages/{mref}/media` or by `get_attachment` and shared by both. It
 fetches the file from WhatsApp once, passes it through the
 [content policy](#content-policy), and serves it until it is erased: at its
-first whole delivery, at the end of its life, by the minute sweep or by a
-[download pause](#download-pause). See [Attachments](api.md#attachments).
+first whole delivery, by the first request for it after the end of its life,
+by the minute sweep or by a [download pause](#download-pause). See
+[Attachments](api.md#attachments).
 
 ## Audit anchor
 
