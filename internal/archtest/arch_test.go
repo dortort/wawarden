@@ -57,6 +57,7 @@ var rules = []rule{
 	confinementRule, databaseFileRule, constantSQLRule, sqliteStatementRule, protocolCallRule, protocolClientCallRule, mediaDownloadRule, offlineTestRule, rawHandleRule,
 	notifyEventRule, execRule, ageRecipientOnlyRule, backupsDirectoryRule, spoolDirectoryRule, devOnlyRule, fakeImportRule, scopedGrantRule, scopedReadPathRule, analyzeRule,
 	mcpLoggerRule, mcpRegistrationRule, grantDecisionRule, sendGrantRule, sentByRule, auditDeleteRule, auditAnchorRule, auditPruneCallerRule, verifierFenceRule, buildVersionRule,
+	sealedRefRule, mediaFetchCallerRule,
 }
 
 var majorVersion = regexp.MustCompile(`^v([2-9]|[1-9][0-9]+)$`)
