@@ -220,14 +220,21 @@ docker exec wawarden /wawarden healthcheck
 - `--read-only` leaves `/data` as the only writable path, and
   `--cap-drop=ALL` with `no-new-privileges` removes what the process never
   uses (<https://docs.docker.com/reference/cli/docker/container/run/>).
-- `--memory`: size it as at least (2·H + 1 MiB + R) / 0.8, where H is
-  `WAWARDEN_HISTORY_MAX_BYTES` and R is 128 MiB. History sync needs at most
-  2 times `WAWARDEN_HISTORY_MAX_BYTES` plus 1 MiB to decompress a blob, about
-  65 MiB at the default ([history sync](internals.md#history-sync)). R is a
-  reserve for the process baseline and the memory to decode the blob; it is an
-  estimate, not a measurement. The rule gives about 241 MiB at the default, so
-  512 MiB leaves room, and about 801 MiB at the 256 MiB maximum: raise
-  `--memory` with the cap.
+- `--memory`: size it as at least (A + 2·H + 1 MiB + R) / 0.8, where H is
+  `WAWARDEN_HISTORY_MAX_BYTES`, R is 128 MiB, and A is 0 while
+  `WAWARDEN_MEDIA_MAX_BYTES` is 0 and about 251 MiB above it. History sync needs
+  at most 2 times `WAWARDEN_HISTORY_MAX_BYTES` plus 1 MiB to decompress a blob,
+  about 65 MiB at the default ([history sync](internals.md#history-sync)). A
+  covers up to 4 attachments in memory at up to 16 MiB each; one image
+  normalisation at a time within its 128 MiB budget; one `get_attachment` inline
+  result or part at a time, an 8 MiB copy plus an encoding of at most 6 times
+  it; and about 3.4 MiB of buffers ([attachments](internals.md#attachments)). R
+  is a reserve for the process baseline and the memory to decode the blob; it is
+  an estimate, not a measurement. With downloads off the rule gives about 241
+  MiB at the default, so `--memory=512m` holds, and about 801 MiB with H at its
+  256 MiB maximum. With downloads on it gives about 555 MiB at the defaults, so
+  use `--memory=768m`, and about 1115 MiB with H at its maximum, so 1.25 GiB.
+  Raise `--memory` with either cap.
 - The 0.8 in that rule is the soft memory limit's share of the container's
   memory. When `GOMEMLIMIT` is unset or empty, WaWarden sets the Go runtime's
   soft memory limit at start to 80% of the container's cgroup memory limit,
