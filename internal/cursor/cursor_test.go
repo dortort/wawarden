@@ -580,6 +580,9 @@ func TestMediaRefusesOtherKeys(t *testing.T) {
 }
 
 func TestTheLongestMediaReferenceFitsItsCap(t *testing.T) {
+	if cursor.MaxMediaRef != 2048 || longestMediaRef != 1503 {
+		t.Fatalf("the media reference cap is %d characters for a %d-byte descriptor, want 2048 for 1503", cursor.MaxMediaRef, longestMediaRef)
+	}
 	s := sealer(t, key, keyID)
 	text, err := s.SealMedia(mediaID, make([]byte, longestMediaRef))
 	if err != nil || len(text) != cursor.MaxMediaRef {
