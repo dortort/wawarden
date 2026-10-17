@@ -592,7 +592,13 @@ func TestAttachmentsDownloadThroughTheApp(t *testing.T) {
 	}
 }
 
-func onlyChatMessages(t *testing.T, to netip.AddrPort, auth http.Header) []string {
+type listedMessage struct {
+	Ref  string `json:"mref"`
+	TS   string `json:"ts"`
+	Kind string `json:"kind"`
+}
+
+func onlyChatMessages(t *testing.T, to netip.AddrPort, auth http.Header) []listedMessage {
 	t.Helper()
 	var chats struct {
 		Chats []struct {
@@ -603,18 +609,12 @@ func onlyChatMessages(t *testing.T, to netip.AddrPort, auth http.Header) []strin
 		t.Fatalf("GET /v1/chats = %d %s", r.status, r.body)
 	}
 	var page struct {
-		Messages []struct {
-			Ref string `json:"mref"`
-		} `json:"messages"`
+		Messages []listedMessage `json:"messages"`
 	}
 	if r := mustDo(t, http.MethodGet, to, "/v1/chats/"+chats.Chats[0].ID+"/messages", auth); r.status != http.StatusOK || json.Unmarshal([]byte(r.body), &page) != nil {
 		t.Fatalf("GET messages = %d %s", r.status, r.body)
 	}
-	var refs []string
-	for _, m := range page.Messages {
-		refs = append(refs, m.Ref)
-	}
-	return refs
+	return page.Messages
 }
 
 func TestThePauseHoldsDownloadsUntilItIsLifted(t *testing.T) {
@@ -662,7 +662,7 @@ func TestThePauseHoldsDownloadsUntilItIsLifted(t *testing.T) {
 	}
 	status(`"media_refs_live":1,"media_refs_expired":0,"revoke_tombstones":2}`)
 	status(`"downloads":"on"`)
-	path := "/v1/messages/" + onlyChatMessages(t, to, auth)[0] + "/media"
+	path := "/v1/messages/" + onlyChatMessages(t, to, auth)[0].Ref + "/media"
 	if r := post(t, admin, "/admin/v1/media", bearer(adminToken), `{"paused":true}`); r.status != http.StatusOK || r.body != `{"paused":true}` {
 		t.Fatalf("pause = %d %s", r.status, r.body)
 	}
