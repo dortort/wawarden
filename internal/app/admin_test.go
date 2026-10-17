@@ -97,7 +97,12 @@ func TestAdminRoutesDriveTheEngine(t *testing.T) {
 	if r.status != http.StatusOK || r.body != want {
 		t.Fatalf("status = %d %s, want %s", r.status, r.body, want)
 	}
-
+	if r := post(t, admin, "/admin/v1/media", bearer(adminToken), `{"paused":true}`); r.status != http.StatusOK || r.body != `{"paused":true}` {
+		t.Fatalf("pause while downloads are off = %d %s", r.status, r.body)
+	}
+	if r := mustDo(t, http.MethodGet, admin, "/admin/v1/status", bearer(adminToken)); r.body != want {
+		t.Fatalf("status with the pause held while downloads are off = %s, want %s", r.body, want)
+	}
 	if r := post(t, admin, "/admin/v1/reconnect", bearer(adminToken), "{}"); r.status != http.StatusConflict || r.body != `{"error":"not_paired"}` {
 		t.Fatalf("reconnect while unpaired = %d %s", r.status, r.body)
 	}
@@ -120,7 +125,7 @@ func TestAdminRoutesDriveTheEngine(t *testing.T) {
 	for _, rec := range logs.find("admin_mutation") {
 		mutations = append(mutations, rec["action"].(string)+":"+rec["outcome"].(string))
 	}
-	if got := strings.Join(mutations, " "); got != "reconnect:not_paired pair:ok" {
+	if got := strings.Join(mutations, " "); got != "media_pause:ok reconnect:not_paired pair:ok" {
 		t.Fatalf("admin_mutation events %q", got)
 	}
 	if f := logs.find("admin_auth_failure"); len(f) != 1 || f[0]["count"] != float64(1) {

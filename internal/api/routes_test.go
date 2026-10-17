@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -37,6 +38,8 @@ type fakeAdmin struct {
 	truncated  bool
 	match      string
 	limit      int
+
+	paused []bool
 
 	backfillID     string
 	backfillErr    error
@@ -85,6 +88,13 @@ func (f *fakeAdmin) Pair(ctx context.Context) (string, error) {
 		panic(secretPanic{text: panicCanary})
 	}
 	return f.code, f.pairErr
+}
+
+func (f *fakeAdmin) PauseMedia(paused bool) {
+	f.record("pause")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.paused = append(f.paused, paused)
 }
 
 func (f *fakeAdmin) Reconnect(context.Context) error {
@@ -217,22 +227,22 @@ func TestStatusAnswersAFixedShape(t *testing.T) {
 		t.Fatalf("status with both kinds of client = %s, want both warnings", rec.Body)
 	}
 	for _, tt := range []struct {
-		downloads bool
-		want      string
+		downloads, paused bool
+		want              string
 	}{
-		{want: downloadsOff}, {downloads: true, want: downloadsOn},
+		{want: downloadsOff}, {paused: true, want: downloadsOff}, {downloads: true, want: downloadsOn}, {downloads: true, paused: true, want: downloadsPaused},
 	} {
-		f.service.status.Downloads = tt.downloads
+		f.service.status.Downloads, f.service.status.MediaPaused = tt.downloads, tt.paused
 		rec = adminRequest(t, f, http.MethodGet, "/admin/v1/status", "", "")
 		if !strings.Contains(rec.Body.String(), `"downloads":"`+tt.want+`"`) {
-			t.Fatalf("status with downloads %v = %s, want downloads %s", tt.downloads, rec.Body, tt.want)
+			t.Fatalf("status with downloads %v and the pause %v = %s, want downloads %s", tt.downloads, tt.paused, rec.Body, tt.want)
 		}
 	}
 	if got := f.events.recorded(); len(got) != 0 {
 		t.Fatalf("status emitted admin_mutation events %v: it changes nothing", got)
 	}
 	requireError(t, adminRequest(t, f, http.MethodPost, "/admin/v1/status", jsonType, "{}"), http.StatusMethodNotAllowed, codeMethodNotAllowed)
-	for _, path := range []string{"/admin/v1/pair", "/admin/v1/reconnect"} {
+	for _, path := range []string{"/admin/v1/pair", "/admin/v1/reconnect", "/admin/v1/media"} {
 		requireError(t, adminRequest(t, f, http.MethodGet, path, "", ""), http.StatusMethodNotAllowed, codeMethodNotAllowed)
 	}
 }
@@ -370,10 +380,58 @@ func TestReconnectAccepts(t *testing.T) {
 	}
 }
 
+func TestMediaPauseSetsTheSwitchAndEmitsItsOutcome(t *testing.T) {
+	f := newAdminFixture(t)
+	for _, paused := range []bool{true, false} {
+		body := `{"paused":` + strconv.FormatBool(paused) + `}`
+		rec := adminRequest(t, f, http.MethodPost, "/admin/v1/media", jsonType, body)
+		if rec.Code != http.StatusOK || rec.Body.String() != body {
+			t.Fatalf("POST /admin/v1/media %s = %d %s", body, rec.Code, rec.Body)
+		}
+		requireSecurityHeaders(t, rec.Header())
+	}
+	f.service.mu.Lock()
+	set := slices.Clone(f.service.paused)
+	f.service.mu.Unlock()
+	if !slices.Equal(set, []bool{true, false}) {
+		t.Fatalf("the service was paused with %v, want true then false", set)
+	}
+	if got := f.events.recorded(); !slices.Equal(got, [][2]string{{actionMediaPause, outcomeOK}, {actionMediaPause, outcomeOK}}) {
+		t.Fatalf("admin_mutation events %v", got)
+	}
+}
+
+func TestMediaPauseTakesOneBooleanOnly(t *testing.T) {
+	tests := []struct {
+		name, contentType, body string
+		status                  int
+		code                    string
+	}{
+		{name: "no content type", body: `{"paused":true}`, status: http.StatusUnsupportedMediaType, code: codeUnsupportedMediaType},
+		{name: "empty object", contentType: jsonType, body: "{}", status: http.StatusBadRequest, code: codeInvalidBody},
+		{name: "null", contentType: jsonType, body: `{"paused":null}`, status: http.StatusBadRequest, code: codeInvalidBody},
+		{name: "a string", contentType: jsonType, body: `{"paused":"true"}`, status: http.StatusBadRequest, code: codeInvalidBody},
+		{name: "another field", contentType: jsonType, body: `{"paused":true,"for":"60s"}`, status: http.StatusBadRequest, code: codeInvalidBody},
+		{name: "trailing data", contentType: jsonType, body: `{"paused":true}{}`, status: http.StatusBadRequest, code: codeInvalidBody},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newAdminFixture(t)
+			requireError(t, adminRequest(t, f, http.MethodPost, "/admin/v1/media", tt.contentType, tt.body), tt.status, tt.code)
+			if calls := f.service.called(); len(calls) != 0 {
+				t.Fatalf("the service was called %v for a refused body", calls)
+			}
+			if got := f.events.recorded(); !slices.Equal(got, [][2]string{{actionMediaPause, tt.code}}) {
+				t.Fatalf("admin_mutation events %v, want one %s with outcome %s", got, actionMediaPause, tt.code)
+			}
+		})
+	}
+}
+
 func TestAdminRoutesNeedTheAdminToken(t *testing.T) {
 	f := newAdminFixture(t)
 	for _, route := range []struct{ method, path string }{
-		{http.MethodGet, "/admin/v1/status"}, {http.MethodPost, "/admin/v1/pair"}, {http.MethodPost, "/admin/v1/reconnect"},
+		{http.MethodGet, "/admin/v1/status"}, {http.MethodPost, "/admin/v1/pair"}, {http.MethodPost, "/admin/v1/reconnect"}, {http.MethodPost, "/admin/v1/media"},
 	} {
 		r := newRequest(t, route.method, route.path, bearer("wwadm_synthetic"))
 		r.Header.Set("Content-Type", jsonType)
@@ -382,8 +440,8 @@ func TestAdminRoutesNeedTheAdminToken(t *testing.T) {
 	if calls := f.service.called(); len(calls) != 0 {
 		t.Fatalf("the service was called %v without the admin token", calls)
 	}
-	if got := f.events.recorded(); len(got) != 0 || f.events.authFailures() != 3 {
-		t.Fatalf("events %v and %d authentication failures, want no mutation and three failures", got, f.events.authFailures())
+	if got := f.events.recorded(); len(got) != 0 || f.events.authFailures() != 4 {
+		t.Fatalf("events %v and %d authentication failures, want no mutation and four failures", got, f.events.authFailures())
 	}
 }
 

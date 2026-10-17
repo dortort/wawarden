@@ -40,6 +40,7 @@ func TestRoutesMatchTheGoldenList(t *testing.T) {
 			{pattern: "POST /admin/v1/pair", class: classAdmin},
 			{pattern: "POST /admin/v1/reconnect", class: classAdmin},
 			{pattern: "POST /admin/v1/backfill", class: classAdmin},
+			{pattern: "POST /admin/v1/media", class: classAdmin},
 			{pattern: "POST /admin/v1/clients", class: classAdmin},
 			{pattern: "GET /admin/v1/clients", class: classAdmin},
 			{pattern: "GET /admin/v1/clients/{id}", class: classAdmin},

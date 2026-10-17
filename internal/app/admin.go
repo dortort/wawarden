@@ -17,6 +17,7 @@ type adminService struct {
 	archive   *ingest.Store
 	version   string
 	now       func() time.Time
+	pause     *api.MediaPause
 	downloads bool
 }
 
@@ -60,11 +61,14 @@ func (s adminService) Status(ctx context.Context) (api.AdminStatus, error) {
 		MediaRefsExpired: refs.RefsExpired,
 		RevokeTombstones: refs.Tombstones,
 		Downloads:        s.downloads,
+		MediaPaused:      s.pause.Paused(),
 		Clients:          api.ClientCounts{Active: n.Active, Expired: n.Expired, Revoked: n.Revoked, AllChatsActive: n.AllChatsActive, MediaWriteActive: media},
 		LastIngest:       c.LastIngest,
 		Version:          s.version,
 	}, nil
 }
+
+func (s adminService) PauseMedia(paused bool) { s.pause.Set(paused) }
 
 func (s adminService) Pair(ctx context.Context) (string, error) {
 	code, err := s.engine.Pair(ctx)

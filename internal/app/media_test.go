@@ -16,6 +16,7 @@ import (
 	"maps"
 	"math"
 	"net/http"
+	"net/netip"
 	"os"
 	"reflect"
 	"slices"
@@ -34,6 +35,7 @@ import (
 	"github.com/dortort/wawarden/internal/store/admin"
 	"github.com/dortort/wawarden/internal/store/ingest"
 	"github.com/dortort/wawarden/internal/store/scoped"
+	"github.com/dortort/wawarden/internal/token"
 )
 
 type memStaged struct {
@@ -587,6 +589,104 @@ func TestAttachmentsDownloadThroughTheApp(t *testing.T) {
 	case <-a.media.stopped:
 	default:
 		t.Fatal("the attachment jobs were not stopped")
+	}
+}
+
+func onlyChatMessages(t *testing.T, to netip.AddrPort, auth http.Header) []string {
+	t.Helper()
+	var chats struct {
+		Chats []struct {
+			ID string `json:"id"`
+		} `json:"chats"`
+	}
+	if r := mustDo(t, http.MethodGet, to, "/v1/chats", auth); r.status != http.StatusOK || json.Unmarshal([]byte(r.body), &chats) != nil || len(chats.Chats) != 1 {
+		t.Fatalf("GET /v1/chats = %d %s", r.status, r.body)
+	}
+	var page struct {
+		Messages []struct {
+			Ref string `json:"mref"`
+		} `json:"messages"`
+	}
+	if r := mustDo(t, http.MethodGet, to, "/v1/chats/"+chats.Chats[0].ID+"/messages", auth); r.status != http.StatusOK || json.Unmarshal([]byte(r.body), &page) != nil {
+		t.Fatalf("GET messages = %d %s", r.status, r.body)
+	}
+	var refs []string
+	for _, m := range page.Messages {
+		refs = append(refs, m.Ref)
+	}
+	return refs
+}
+
+func TestThePauseHoldsDownloadsUntilItIsLifted(t *testing.T) {
+	adminToken := token.NewAdmin()
+	cfg := testConfig(t, adminToken)
+	cfg.MediaMaxBytes = 16 << 20
+	pdf := []byte("%PDF-1.4\n% synthetic document\n%%EOF\n")
+	client := newStubClient()
+	client.media = func(engine.MediaRequest) (engine.Staged, error) { return newMemStaged(pdf), nil }
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(&syncBuffer{}), testMaster(t), nil, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
+	if err != nil {
+		t.Fatalf("newAppWith: %v", err)
+	}
+	peer := mustNormalize("15550100101@s.whatsapp.net")
+	if err := a.archive.Write(t.Context(), "test.inbound", func(tx *ingest.Tx) error {
+		_, _, err := tx.InsertMessage(ingest.Message{Chat: peer, ID: "SYNTHETIC-PDF", Sender: peer, Origin: ingest.OriginLive,
+			Timestamp: time.Now().Add(-time.Minute), Kind: ingest.KindMedia, MediaType: "application/pdf", Ingested: time.Now(),
+			Media: &ingest.Media{Ref: "SYNTHETIC-SEALED-PDF", Kind: ingest.MediaDocument, Declared: int64(len(pdf)), Retention: time.Hour}})
+		return err
+	}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	_, credential, err := a.archive.Clients().Create(t.Context(), policy.ClientSpec{Name: "synthetic media reader", Read: []string{peer.JID()}, AllowMedia: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	stop := run(t, a)
+	<-client.connected
+	if !client.emit(engine.Connected{}) {
+		t.Fatal("the engine did not register its event handler")
+	}
+	waitUntil(t, "the engine is ready", a.engine.Ready)
+	to, admin, auth := addr(t, a, listenerClient), addr(t, a, listenerAdmin), bearer(credential)
+	status := func(want string) {
+		t.Helper()
+		if r := mustDo(t, http.MethodGet, admin, "/admin/v1/status", bearer(adminToken)); !strings.Contains(r.body, want) {
+			t.Fatalf("status = %d %s, want %s", r.status, r.body, want)
+		}
+	}
+	status(`"media_refs_live":1,"media_refs_expired":0,"revoke_tombstones":0}`)
+	status(`"downloads":"on"`)
+	path := "/v1/messages/" + onlyChatMessages(t, to, auth)[0] + "/media"
+	if r := post(t, admin, "/admin/v1/media", bearer(adminToken), `{"paused":true}`); r.status != http.StatusOK || r.body != `{"paused":true}` {
+		t.Fatalf("pause = %d %s", r.status, r.body)
+	}
+	status(`"downloads":"paused"`)
+	if r := mustDo(t, http.MethodPost, to, path, auth); r.status != http.StatusServiceUnavailable || r.body != `{"error":"busy"}` || r.header.Get("Retry-After") != "60" {
+		t.Fatalf("POST while paused = %d %s Retry-After %q", r.status, r.body, r.header.Get("Retry-After"))
+	}
+	client.mu.Lock()
+	fetched := len(client.fetches)
+	client.mu.Unlock()
+	if fetched != 0 {
+		t.Fatalf("the engine was asked for %d attachments while paused", fetched)
+	}
+	if r := post(t, admin, "/admin/v1/media", bearer(adminToken), `{"paused":false}`); r.status != http.StatusOK || r.body != `{"paused":false}` {
+		t.Fatalf("resume = %d %s", r.status, r.body)
+	}
+	status(`"downloads":"on"`)
+	if r := mustDo(t, http.MethodPost, to, path, auth); r.status != http.StatusAccepted {
+		t.Fatalf("POST once resumed = %d %s", r.status, r.body)
+	}
+	var got reply
+	waitUntil(t, "the job", func() bool {
+		got = mustDo(t, http.MethodGet, to, path, auth)
+		return got.status != http.StatusAccepted
+	})
+	if got.status != http.StatusOK || got.body != string(pdf) || got.header.Get("Content-Type") != "application/pdf" {
+		t.Fatalf("GET once resumed = %d %v %q", got.status, got.header, got.body)
+	}
+	if err := stop(); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
 }
 
