@@ -1003,8 +1003,9 @@ accepts from an MCP server. The same file is also available through `POST` then
 
 A result carries the status in `structuredContent` and its `content` is, in
 order: a constant text that introduces the attachment as third-party content,
-the status as JSON text, the block when the file comes inline, and a constant
-closing text. The block carries `_meta` `{"wawarden/untrusted": true}`. When
+the status as JSON text, the block when the result carries the file or a part,
+and a constant closing text. The block carries `_meta`
+`{"wawarden/untrusted": true}`. When
 the file comes inline, `delivery` is `inline`, `offset` is `0` and `length` is
 the file's size; for a part, `delivery` is `part` and they are the part's;
 otherwise `delivery` is `part` or `metadata` and both are `0`. No argument
