@@ -6,16 +6,19 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
 	"image/png"
 	"io"
+	"maps"
 	"math"
 	"net/http"
 	"os"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -460,30 +463,41 @@ func TestClientLivenessFollowsTheClientTable(t *testing.T) {
 func TestAttachmentsDownloadThroughTheApp(t *testing.T) {
 	cfg := testConfig(t, "")
 	cfg.MediaMaxBytes = 100 << 20
+	inputs := refusedImages(t)
+	names := slices.Sorted(maps.Keys(inputs))
+	data := map[string][]byte{}
+	for i, name := range names {
+		data[fmt.Sprintf("SYNTHETIC-DOC%d", i)], data[fmt.Sprintf("SYNTHETIC-IMG%d", i)] = inputs[name], inputs[name]
+	}
 	client := newStubClient()
-	data := corruptPNG(t)
-	client.media = func(engine.MediaRequest) (engine.Staged, error) { return newMemStaged(data), nil }
-	logs := &syncBuffer{}
-	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(logs), testMaster(t), nil, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
+	client.media = func(req engine.MediaRequest) (engine.Staged, error) {
+		return newMemStaged(data[strings.TrimPrefix(req.Ref, "SYNTHETIC-SEALED-")]), nil
+	}
+	a, err := newAppWith(t.Context(), cfg, logx.NewWriter(&syncBuffer{}), testMaster(t), nil, fixed(engineParts{client: client, versions: stubVersions{}, decoder: stubDecoder{}}))
 	if err != nil {
 		t.Fatalf("newAppWith: %v", err)
 	}
-	if err := a.archive.Write(t.Context(), "test.inbound", func(tx *ingest.Tx) error {
-		for i, kind := range []ingest.MediaKind{ingest.MediaDocument, ingest.MediaImage} {
-			id := []string{"SYNTHETIC-DOC", "SYNTHETIC-IMG"}[i]
-			if _, _, err := tx.InsertMessage(ingest.Message{Chat: mediaAlice, ID: id, Sender: mediaAlice, Origin: ingest.OriginLive,
-				Timestamp: time.Now().Add(time.Duration(i-2) * time.Minute), Kind: ingest.KindMedia, MediaType: "image/png", Ingested: time.Now(),
-				Media: &ingest.Media{Ref: "SYNTHETIC-SEALED-" + id, Kind: kind, Declared: int64(len(data)), Retention: time.Hour}}); err != nil {
-				return err
+	var credentials []string
+	for i := range names {
+		peer := mustNormalize(fmt.Sprintf("1555010010%d@s.whatsapp.net", i))
+		if err := a.archive.Write(t.Context(), "test.inbound", func(tx *ingest.Tx) error {
+			for j, kind := range []ingest.MediaKind{ingest.MediaDocument, ingest.MediaImage} {
+				id := fmt.Sprintf("SYNTHETIC-%s%d", []string{"DOC", "IMG"}[j], i)
+				if _, _, err := tx.InsertMessage(ingest.Message{Chat: peer, ID: id, Sender: peer, Origin: ingest.OriginLive,
+					Timestamp: time.Now().Add(time.Duration(j-2) * time.Minute), Kind: ingest.KindMedia, MediaType: "image/png", Ingested: time.Now(),
+					Media: &ingest.Media{Ref: "SYNTHETIC-SEALED-" + id, Kind: kind, Declared: int64(len(data[id])), Retention: time.Hour}}); err != nil {
+					return err
+				}
 			}
+			return nil
+		}); err != nil {
+			t.Fatalf("Write: %v", err)
 		}
-		return nil
-	}); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-	_, credential, err := a.archive.Clients().Create(t.Context(), policy.ClientSpec{Name: "synthetic media reader", Read: []string{mediaAlice.JID()}, AllowMedia: true})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
+		_, credential, err := a.archive.Clients().Create(t.Context(), policy.ClientSpec{Name: fmt.Sprintf("synthetic media reader %d", i), Read: []string{peer.JID()}, AllowMedia: true})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		credentials = append(credentials, credential)
 	}
 	stop := run(t, a)
 	<-client.connected
@@ -492,56 +506,56 @@ func TestAttachmentsDownloadThroughTheApp(t *testing.T) {
 	}
 	waitUntil(t, "the engine is ready", a.engine.Ready)
 	to := addr(t, a, listenerClient)
-	auth := bearer(credential)
-	var chats struct {
-		Chats []struct {
-			ID string `json:"id"`
-		} `json:"chats"`
-	}
-	if r := mustDo(t, http.MethodGet, to, "/v1/chats", auth); r.status != http.StatusOK || json.Unmarshal([]byte(r.body), &chats) != nil || len(chats.Chats) != 1 {
-		t.Fatalf("GET /v1/chats = %d %s", r.status, r.body)
-	}
-	var page struct {
-		Messages []struct {
-			Ref string `json:"mref"`
-		} `json:"messages"`
-	}
-	if r := mustDo(t, http.MethodGet, to, "/v1/chats/"+chats.Chats[0].ID+"/messages", auth); r.status != http.StatusOK || json.Unmarshal([]byte(r.body), &page) != nil || len(page.Messages) != 2 {
-		t.Fatalf("GET messages = %d %s", r.status, r.body)
-	}
-	imagePath, document := "/v1/messages/"+page.Messages[0].Ref+"/media", "/v1/messages/"+page.Messages[1].Ref+"/media"
-	for _, path := range []string{document, imagePath} {
+	settle := func(path string, auth http.Header) reply {
+		t.Helper()
 		if r := mustDo(t, http.MethodPost, to, path, auth); r.status != http.StatusAccepted {
 			t.Fatalf("POST %s = %d %s", path, r.status, r.body)
 		}
+		var got reply
+		waitUntil(t, "the job", func() bool {
+			got = mustDo(t, http.MethodGet, to, path, auth)
+			return got.status != http.StatusAccepted
+		})
+		return got
 	}
-	var got reply
-	waitUntil(t, "the document job", func() bool {
-		got = mustDo(t, http.MethodGet, to, document, auth)
-		return got.status != http.StatusAccepted
-	})
-	if got.status != http.StatusOK || got.body != string(data) || got.header.Get("Content-Type") != "application/octet-stream" ||
-		got.header.Get("Content-Disposition") != `attachment; filename="wawarden-document.bin"` {
-		t.Fatalf("GET the document = %d %v with %d bytes", got.status, got.header, len(got.body))
-	}
-	if r := mustDo(t, http.MethodGet, to, document, auth); r.status != http.StatusConflict {
-		t.Fatalf("GET after the whole-body delivery = %d %s", r.status, r.body)
-	}
-	waitUntil(t, "the image job", func() bool {
-		got = mustDo(t, http.MethodGet, to, imagePath, auth)
-		return got.status != http.StatusAccepted
-	})
-	if got.status != http.StatusUnprocessableEntity || got.body != `{"error":"media_unsupported"}` {
-		t.Fatalf("GET the image = %d %s", got.status, got.body)
+	for i, name := range names {
+		auth := bearer(credentials[i])
+		var chats struct {
+			Chats []struct {
+				ID string `json:"id"`
+			} `json:"chats"`
+		}
+		if r := mustDo(t, http.MethodGet, to, "/v1/chats", auth); r.status != http.StatusOK || json.Unmarshal([]byte(r.body), &chats) != nil || len(chats.Chats) != 1 {
+			t.Fatalf("GET /v1/chats = %d %s", r.status, r.body)
+		}
+		var page struct {
+			Messages []struct {
+				Ref string `json:"mref"`
+			} `json:"messages"`
+		}
+		if r := mustDo(t, http.MethodGet, to, "/v1/chats/"+chats.Chats[0].ID+"/messages", auth); r.status != http.StatusOK || json.Unmarshal([]byte(r.body), &page) != nil || len(page.Messages) != 2 {
+			t.Fatalf("GET messages = %d %s", r.status, r.body)
+		}
+		imagePath, document := "/v1/messages/"+page.Messages[0].Ref+"/media", "/v1/messages/"+page.Messages[1].Ref+"/media"
+		got := settle(document, auth)
+		if got.status != http.StatusOK || got.body != string(inputs[name]) || got.header.Get("Content-Type") != "application/octet-stream" ||
+			got.header.Get("Content-Disposition") != `attachment; filename="wawarden-document.bin"` {
+			t.Fatalf("GET %s as a document = %d %v with %d bytes", name, got.status, got.header, len(got.body))
+		}
+		if r := mustDo(t, http.MethodGet, to, document, auth); r.status != http.StatusConflict {
+			t.Fatalf("GET after the whole-body delivery = %d %s", r.status, r.body)
+		}
+		if got := settle(imagePath, auth); got.status != http.StatusUnprocessableEntity || got.body != `{"error":"media_unsupported"}` {
+			t.Fatalf("GET %s as an image = %d %s", name, got.status, got.body)
+		}
 	}
 	client.mu.Lock()
-	refs := []string{}
+	var refs []string
 	for _, req := range client.fetches {
 		refs = append(refs, req.Ref)
 	}
 	client.mu.Unlock()
-	slices.Sort(refs)
-	if !slices.Equal(refs, []string{"SYNTHETIC-SEALED-SYNTHETIC-DOC", "SYNTHETIC-SEALED-SYNTHETIC-IMG"}) {
+	if len(refs) != 2*len(names) || !strings.HasPrefix(refs[0], "SYNTHETIC-SEALED-SYNTHETIC-DOC") {
 		t.Fatalf("the engine was asked for %q", refs)
 	}
 	if err := stop(); err != nil {
