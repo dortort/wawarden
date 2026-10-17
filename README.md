@@ -90,6 +90,11 @@ The same pages are in this repository:
   pre-key uploads (see [residual risks](docs/threat-model.md#residual-risks)).
 - **A message refused or interrupted before it is stored is lost**, not
   redelivered (see [residual risks](docs/threat-model.md#residual-risks)).
+- **Attachments are third-party content.** Downloads are off by default. When
+  they are on, text in an image, speech or a document can steer an agent that
+  reads it, and a copy an MCP host saves of an attachment is outside
+  WaWarden's revocation and expiry (see
+  [clients and agents](docs/threat-model.md#clients-and-agents)).
 
 ## Install
 
@@ -290,11 +295,16 @@ the engine rejects and logs out. Release builds refuse
   pages, within per-client budgets (see [the client API](docs/api.md#client-api)
   and [MCP](docs/api.md#mcp)).
 - **Attachments.** Off by default. With `WAWARDEN_MEDIA_MAX_BYTES` set, a
-  client created with `allow_media` downloads a media message's attachment
-  over REST, or through the MCP tool `get_attachment`, inline when it is small
-  enough or else in 8 MiB parts, fetched only when it asks, within per-client and global budgets
-  (see [attachments](docs/api.md#attachments) and
-  [get_attachment](docs/api.md#get_attachment)).
+  client created with `allow_media` downloads the attachment of a photo,
+  video, voice note or other audio, document or sticker over REST, or through
+  the MCP tool `get_attachment`, inline when it is small enough or else in
+  8 MiB parts. It is fetched only when the client asks, within per-client and
+  global budgets, with images re-encoded without their metadata, and the
+  operator can pause downloads at once (see
+  [attachments](docs/api.md#attachments),
+  [get_attachment](docs/api.md#get_attachment) and
+  [pausing downloads](docs/api.md#pausing-downloads)). A revocation removes
+  the whole message, its attachment reference included.
 - **Sending.** A client with write chats sends text, once per idempotency key,
   behind a pacer and send budgets (see [sending](docs/api.md#sending) and
   [ban risk](docs/ban-risk.md)).
@@ -313,8 +323,10 @@ the engine rejects and logs out. Release builds refuse
   [pseudonyms](docs/observability.md#pseudonyms-and-dropped-lines)).
 
 Not built: sending anything but text, optionally as a reply in the same chat
-(no media, reactions, edits or deletions); a restore command, since a backup
-is restored by hand (see [the runbook](docs/runbook.md#restoring-a-backup)).
+(no media, reactions, edits or deletions); fetching view-once media; asking
+the owner's phone to upload again an attachment WhatsApp no longer holds
+(media retry); a restore command, since a backup is restored by hand (see
+[the runbook](docs/runbook.md#restoring-a-backup)).
 
 ## Releases
 
@@ -359,7 +371,7 @@ their own licences:
 | Apache-2.0 | `github.com/petermattis/goid`, and the MCP library `github.com/modelcontextprotocol/go-sdk`, whose code contributed before its move to Apache-2.0 stays under MIT unless its authors relicensed it (its licence file carries both texts) |
 | ISC | `github.com/coder/websocket` |
 | MIT | `github.com/beeper/argo-go`, `github.com/dustin/go-humanize`, `github.com/elliotchance/orderedmap/v3`, `github.com/mattn/go-colorable`, `github.com/mattn/go-isatty`, `github.com/rs/zerolog`, `github.com/vektah/gqlparser/v2`, and with the MCP library `github.com/google/jsonschema-go`, `github.com/segmentio/asm`, `github.com/segmentio/encoding`, and `github.com/ncruces/go-strftime` (macOS binaries only) |
-| BSD-3-Clause | the Go standard library, the backup encryption `filippo.io/age` with `filippo.io/hpke`, `filippo.io/edwards25519`, `github.com/google/uuid`, `github.com/remyoudompheng/bigfft`, `github.com/yosida95/uritemplate/v3`, `golang.org/x/crypto`, `golang.org/x/exp`, `golang.org/x/net`, `golang.org/x/oauth2`, `golang.org/x/sync`, `golang.org/x/sys`, `golang.org/x/text`, `golang.org/x/time`, `google.golang.org/protobuf`, and the SQLite driver `modernc.org/sqlite` with `modernc.org/libc`, `modernc.org/mathutil` and `modernc.org/memory`, which also carry the licences of the C code they translate, SQLite's public-domain dedication among them |
+| BSD-3-Clause | the Go standard library, the backup encryption `filippo.io/age` with `filippo.io/hpke`, `filippo.io/edwards25519`, `github.com/google/uuid`, `github.com/remyoudompheng/bigfft`, `github.com/yosida95/uritemplate/v3`, `golang.org/x/crypto`, `golang.org/x/exp`, the image library `golang.org/x/image`, `golang.org/x/net`, `golang.org/x/oauth2`, `golang.org/x/sync`, `golang.org/x/sys`, `golang.org/x/text`, `golang.org/x/time`, `google.golang.org/protobuf`, and the SQLite driver `modernc.org/sqlite` with `modernc.org/libc`, `modernc.org/mathutil` and `modernc.org/memory`, which also carry the licences of the C code they translate, SQLite's public-domain dedication among them |
 
 The macOS binaries also link `github.com/ncruces/go-strftime`, under MIT; the
 Linux binaries do not.
