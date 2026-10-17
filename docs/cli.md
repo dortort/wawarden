@@ -213,8 +213,9 @@ line per write chat, each with the chat's identifier, its kind, `seen` or
 `not yet seen`, and its name when the archive knows one.
 
 `--allow-media` asks for the client's
-[`allow_media`](api.md#creating-a-client); the flag is stored and printed, but
-grants nothing in this build. While an active client holds it and at least one
+[`allow_media`](api.md#creating-a-client), which lets the client download
+[attachments](api.md#attachments) while `WAWARDEN_MEDIA_MAX_BYTES` is above 0
+and grants nothing while it is 0. While an active client holds it and at least one
 write chat, `admin status` warns `media_write_client`.
 
 `--read` and `--write` can be repeated, and `--expires-days` defaults to 90.

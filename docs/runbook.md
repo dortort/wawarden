@@ -79,8 +79,9 @@ clients depend on the service
 - `WAWARDEN_MEDIA_MAX_BYTES`, `0` by default, which keeps attachment downloads
   off. Above 0 (`104857600`, 100 MiB, is the suggested value), the service
   keeps a sealed reference to each attachment up to that size for
-  `WAWARDEN_MEDIA_REF_RETENTION_DAYS` (30 by default); this build fetches no
-  attachment yet. At or below `16777216` (16 MiB), no attachment byte will be
+  `WAWARDEN_MEDIA_REF_RETENTION_DAYS` (30 by default), and a client created
+  with `--allow-media` can download it (see
+  [Attachments](api.md#attachments)). At or below `16777216` (16 MiB), no attachment byte will be
   written to disk. Give the container `--memory=768m` with downloads on.
   Setting it back to 0 removes every stored reference within a minute.
 

@@ -59,8 +59,8 @@ The process opens at most three listeners, all plain HTTP, and nothing else:
 | Health | `WAWARDEN_HEALTH_LISTEN`, default `127.0.0.1:8081`; loopback addresses only | `/healthz`, without authentication |
 
 Outbound traffic is limited to the WhatsApp websocket, the protocol version
-fetch and history downloads from WhatsApp's hosts, and an optional
-notification webhook. [Secure defaults](#secure-defaults) says when the
+fetch, history downloads and the attachment fetches clients ask for from
+WhatsApp's hosts, and an optional notification webhook. [Secure defaults](#secure-defaults) says when the
 service first connects to WhatsApp.
 
 WaWarden does not restrict who can reach its listeners and does not terminate
@@ -499,9 +499,11 @@ alert on.
 - **All-chats clients.** A client that reads every chat is created only by
   asking for it explicitly. The CLI warns. The admin status reports the number
   of active ones, and the `all_chats_client` warning while one is active.
-- **Media and write clients.** A client's `allow_media` flag grants nothing in
-  this build. The admin status gives the `media_write_client` warning while an
-  active client holds it and at least one write chat; tested in
+- **Media and write clients.** A client's `allow_media` flag lets it download
+  attachments while downloads are on, and grants nothing while they are off
+  (see [Attachments](api.md#attachments)). The admin status gives the
+  `media_write_client` warning while an active client holds it and at least one
+  write chat; tested in
   `internal/store/admin/writers_test.go` and `internal/app/admin_test.go`.
 - **Rotation.** A token is never renewed or shown again. Rotating it means
   creating a client with the same scope under a new name, switching the agent
@@ -584,7 +586,7 @@ Keep the admin listener reachable from fewer places than the client listener.
   once the body is sent, with the bytes the connection accepted, only after
   its first row committed. The answer is already out by then, so a completion
   row that cannot be written is logged as `audit_failed` and counted, and the
-  chain lacks it. No route of this build writes one.
+  chain lacks it. Only an attachment delivery writes one, `rest.media.sent`.
 - **What it does not record.** Failed authentications and requests refused by
   the read budget write no row. Guessing and flooding therefore cannot grow
   the table faster than the budget allows.
@@ -1814,7 +1816,10 @@ those packages (`internal/archtest/imports_test.go`), and `depguard`.
     unexported in its own package: only `downloadable` fills one, from a
     sealed reference that `FetchMedia` opened, and the seam refuses an empty
     one before the library is called. So an attachment is downloaded only
-    when `FetchMedia` is asked for it, never at receipt.
+    when `FetchMedia` is asked for it, never at receipt, and the rule
+    `media-fetch-callers` lets only the engine's own `FetchMedia` and the
+    app's media service, behind the attachment routes' admission and
+    budgets, reach it.
   - A protocol library update that adds a method finds it refused.
 
 **Protects.** I-5, I-6, account standing.
