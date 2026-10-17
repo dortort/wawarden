@@ -172,6 +172,7 @@ type mediaFixture struct {
 	reg     *metrics.Registry
 	handler http.Handler
 	m       *mediaRegistry
+	reads   *reads
 	refs    *cursor.Sealer
 	clients fakeAuthenticator
 	stop    context.CancelFunc
@@ -221,7 +222,7 @@ func newMediaFixture(t *testing.T, o mediaOptions) *mediaFixture {
 		}
 	}
 	p, s := newClientHandler(deps)
-	f.handler, f.m = p, s.media
+	f.handler, f.m, f.reads = p, s.media, s
 	return f
 }
 
