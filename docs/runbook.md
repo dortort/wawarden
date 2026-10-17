@@ -55,6 +55,7 @@ Exit codes are listed under [exit codes](cli.md#exit-codes).
 | Move to a new release or a new host | [Upgrading](#upgrading), [Moving to a new host](#moving-to-a-new-host) |
 | `serve` exits `1` or `2` at start: `startup_refused`, `startup_failed` | [Startup refusals](#startup-refusals) |
 | `disconnected`, `unpaired`, a ban | [Disconnect reasons](#disconnect-reasons), [suspected ban](#suspected-ban) |
+| Stop attachment downloads at once: a suspected ban, throttled fetches, two clients holding every download | [Pausing downloads](#pausing-downloads) |
 | `pair_rejected`, `logout_failed` | [Pairing rejected](#pairing-rejected) |
 | A token may have leaked, `admin_auth_failure` | [Token leak](#token-leak), [Failed admin authentication](#failed-admin-authentication) |
 | A send answered `504` or `500`, `send_outcome_unknown`, `send_unrecorded` | [Uncertain sends](#uncertain-sends) |
@@ -668,22 +669,55 @@ Signs: `disconnected` with `temporary_ban` or `connect_failure`, or a
 
 1. Revoke every client that can send:
    `wawarden admin clients revoke --id <id> --token-file admin.token`.
-2. Look at the owner's phone and in WhatsApp for a notice of a restriction or
+2. With downloads on, pause them, as each fetch reaches WhatsApp's servers:
+   see [Pausing downloads](#pausing-downloads).
+3. Look at the owner's phone and in WhatsApp for a notice of a restriction or
    ban. WaWarden does not report WhatsApp's reason.
-3. Check what was sent before:
+4. Check what was sent before:
    - the audit lines with the actions `rest.send` and `mcp.send_message`;
    - `wawarden_sends_rejected_total` by reason;
    - the archive's messages with `origin` `gateway:<client id>`, as a read
      client sees them, which also hold a send whose audit row the busy archive
      could not take;
    - the chats themselves on the phone.
-4. For a temporary ban, wait for its end, then
+5. For a temporary ban, wait for its end, then
    `wawarden admin reconnect --token-file admin.token`. After a logout, pair
    again only once the phone works normally. Pairing is limited to 3 attempts
    an hour.
-5. Recreate clients with write chats, narrower than before.
+6. Recreate clients with write chats, narrower than before, and resume
+   downloads when the account works normally again.
 
 [Ban risk](ban-risk.md#what-happens-on-a-ban-or-a-logout) explains the causes.
+
+### Pausing downloads
+
+Pause [attachment downloads](api.md#attachments) when a ban is suspected, when
+fetches keep ending `throttled` (`wawarden_media_fetches_total{result="throttled"}`
+grows), or when two clients keep every download slot and the others get
+`busy`; revoking such a client also ends its jobs. There is no command for
+it: send the request to the admin listener with the token from `admin.token`,
+which `printf`, a shell builtin, keeps out of the process list:
+
+```sh
+printf 'Authorization: Bearer %s\n' "$(cat admin.token)" |
+  curl -sS -H @- -H 'Content-Type: application/json' \
+    --data '{"paused":true}' http://127.0.0.1:8082/admin/v1/media
+```
+
+It answers `{"paused":true}`. The pause:
+
+- erases every attachment job at once, fetching or ready, so clients ask
+  again once downloads resume;
+- makes every new fetch answer `busy`: `503` with `Retry-After: 60` on the
+  attachment route, and the error `busy` from `get_attachment`, which stays
+  listed;
+- shows as `downloads: paused` in `wawarden admin status`, and is logged as
+  `admin_mutation` with the action `media_pause`;
+- lives in memory only: a restart resumes downloads.
+
+Send `{"paused":false}` the same way to resume. To keep downloads off across
+restarts, set `WAWARDEN_MEDIA_MAX_BYTES=0` and restart; the minute sweep then
+removes every stored media reference.
 
 ### Pairing rejected
 
