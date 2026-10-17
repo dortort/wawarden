@@ -998,7 +998,10 @@ scoped-read-path rule cannot see.
   - the image library `golang.org/x/image`, which outside test files only
     `internal/attach` may import, to decode WebP. The standard library's
     `image/jpeg`, `image/png` and `image/gif` decoders are confined to
-    `internal/attach` the same way;
+    `internal/attach` the same way, and no file outside the tests,
+    `internal/attach` included, calls `image.Decode`, `image.DecodeConfig`
+    or `image.RegisterFormat`, which would reach a registered decoder
+    without importing it;
   - the MCP library, `github.com/modelcontextprotocol/go-sdk`, and its JSON
     Schema library, `github.com/google/jsonschema-go`, which outside test
     files only `internal/api` may import;
