@@ -1591,6 +1591,54 @@ func (f *mediaFixture) awaitTheLibraryLettingGoOfTheCall() {
 	})
 }
 
+func TestACallWhoseClientLeftDuringAnInMemoryFetchPublishesNothing(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	settles := make(chan time.Time)
+	f.probe(settles)
+	t.Cleanup(func() { close(settles) })
+	f.attach("MEDIA1", "document", smallSize)
+	spool := mediaSpool(smallSize, "application/pdf", false)
+	rt := &wireTransport{handler: f.handler, key: keyMedia}
+	cs := connectWire(t, rt, probeMCPURL, protocols[0])
+	ctx, cancel := context.WithCancel(t.Context())
+	errs := make(chan error, 1)
+	go func() {
+		_, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: toolGetAttachment, Arguments: f.attachmentArgs(keyMedia, "MEDIA1")})
+		errs <- err
+	}()
+	f.fetches(1)
+	cancel()
+	f.awaitTheLibraryLettingGoOfTheCall()
+	f.media.answer("MEDIA1", fetchAnswer{spool: spool})
+	if err := <-errs; err == nil {
+		t.Fatal("the cancelled call returned a result")
+	}
+	<-rt.last().served
+	v := f.view(keyMedia, "MEDIA1")
+	if v.state != mediaReady {
+		t.Fatalf("the job settled in state %d, want ready", v.state)
+	}
+	if f.holds(v.job) != 0 || f.permits() != 0 {
+		t.Fatalf("after the request: %d holds and %d permits, want both released without the settle", f.holds(v.job), f.permits())
+	}
+	if erasures, intact := spool.state(); erasures != 0 || !intact {
+		t.Fatalf("the spool of a ready job was cleared: %d erasures, intact %v", erasures, intact)
+	}
+	if got := f.metric(`wawarden_media_deliveries_total{transport="mcp",result="ok"}`); got != "0" {
+		t.Fatalf("a call whose client had left counted %s deliveries", got)
+	}
+	var got []ReadEvent
+	for _, e := range f.audit.recorded() {
+		if e.Action == "mcp."+toolGetAttachment {
+			got = append(got, e)
+		}
+	}
+	message := cursor.Ref{Chat: groupChat.JID(), ID: "MEDIA1", Sender: aliceChat.JID()}
+	if len(got) != 1 || got[0].Chat != groupChat || !got[0].OK || got[0].Reason != deliveryMetadata || got[0].Message != message || got[0].Bytes != 0 {
+		t.Fatalf("audit rows %+v, want one metadata row with no bytes", got)
+	}
+}
+
 func TestAnOrphanedHoldWaitsForItsHandlerToReturn(t *testing.T) {
 	f := newMCPMediaFixture(t, mediaOptions{})
 	f.attach("MEDIA1", "document", smallSize)
@@ -1617,9 +1665,12 @@ func TestAnOrphanedHoldWaitsForItsHandlerToReturn(t *testing.T) {
 }
 
 func TestAHandlerThatFindsTheExchangeClosedPublishesNothing(t *testing.T) {
+	ended, end := context.WithCancel(context.Background())
+	end()
 	for name, x := range map[string]*exchange{
-		"closed":                   {returned: make(chan struct{}), closed: true, extend: func() error { return nil }},
-		"the deadline not renewed": {returned: make(chan struct{}), extend: func() error { return http.ErrNotSupported }},
+		"closed":                   {returned: make(chan struct{}), live: context.Background(), closed: true, extend: func() error { return nil }},
+		"the deadline not renewed": {returned: make(chan struct{}), live: context.Background(), extend: func() error { return http.ErrNotSupported }},
+		"the request ended":        {returned: make(chan struct{}), live: ended, extend: func() error { return nil }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newMCPMediaFixture(t, mediaOptions{})

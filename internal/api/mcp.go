@@ -94,7 +94,7 @@ func (m *mcpEndpoint) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
-	x := &exchange{action: actionMCP, reason: codeBadRequest, returned: make(chan struct{})}
+	x := &exchange{action: actionMCP, reason: codeBadRequest, live: r.Context(), returned: make(chan struct{})}
 	out := &mcpWriter{ResponseWriter: w, x: x, note: note}
 	rc := http.NewResponseController(out)
 	x.extend = func() error { return rc.SetWriteDeadline(m.now().Add(deliveryWindow)) }
@@ -160,6 +160,7 @@ type exchange struct {
 	message  cursor.Ref
 	bytes    int64
 	closed   bool
+	live     context.Context
 	hold     *deliveryHold
 	extend   func() error
 	returned chan struct{}
@@ -206,7 +207,7 @@ func (x *exchange) publish(ctx context.Context, hold *deliveryHold) bool {
 	}
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	if x.closed || ctx.Err() != nil || x.extend() != nil {
+	if x.closed || ctx.Err() != nil || x.live.Err() != nil || x.extend() != nil {
 		return false
 	}
 	x.hold = hold
