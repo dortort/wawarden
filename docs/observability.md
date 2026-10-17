@@ -441,7 +441,7 @@ The [WhatsApp engine](internals.md#whatsapp-engine) adds these:
 | `wawarden_paired` | gauge | | `1` while a device is paired, `0` otherwise. |
 | `wawarden_connected` | gauge | | `1` while the engine is `connected`, `0` otherwise. |
 | `wawarden_messages_ingested_total` | counter | | Messages, reactions and poll votes stored in the archive, live and from history. |
-| `wawarden_ingest_dropped_total` | counter | `reason` | Events dropped by an [ingest rule](internals.md#ingest) or a [history-sync](internals.md#history-sync) check: `chat_rejected`, `sender_rejected`, `invalid`, `unknown_kind`, `no_target`, `foreign_reference`, `target_unknown`, `target_kind`, `stale_edit`, `not_original_sender`, `not_admin`, `admin_unknown`, `owner_unknown`, `not_paired`, `too_large`, `history_not_primary`. |
+| `wawarden_ingest_dropped_total` | counter | `reason` | Events dropped by an [ingest rule](internals.md#ingest) or a [history-sync](internals.md#history-sync) check: `chat_rejected`, `sender_rejected`, `invalid`, `unknown_kind`, `no_target`, `foreign_reference`, `target_unknown`, `target_kind`, `stale_edit`, `not_original_sender`, `not_admin`, `admin_unknown`, `owner_unknown`, `not_paired`, `too_large`, `history_not_primary`. A revocation of a target not stored yet counts `target_unknown` even when it is kept as a tombstone rather than dropped (see [Ingest](internals.md#ingest)), and one the check refuses also counts the check's own reason, so one event counts twice. |
 | `wawarden_ingest_refused_total` | counter | `reason` | Events the engine refused to write and left unacknowledged, which loses them (see [Delivery](internals.md#delivery)): `backlog_full`, `paused`, `store_error`. |
 | `wawarden_ingest_quarantined_total` | counter | `queue` | Inbox rows (`inbox`) and history blobs (`history`) quarantined. |
 | `wawarden_rekey_conflicts_total` | counter | `conflict` | LID mappings refused, by conflict as in `rekey_conflict`. |
@@ -453,7 +453,7 @@ above 0), the client handler adds these:
 |---|---|---|---|
 | `wawarden_media_fetches_total` | counter | `result` | Requests that tried to start an attachment fetch, by result. A job that ended counts `ok`, `expired`, `failed`, `too_large`, `unsupported`, `unavailable`, `throttled` (WhatsApp throttled it) or `not_connected`; a request refused before any fetch counts `too_large`, `not_connected`, `busy` (also while [downloads are paused](api.md#pausing-downloads)), `rate_limited` (the client's two jobs or its budget) or `global_limited` (the count or bytes of all clients). A status answer counts nothing. Every result is present from the start, at `0`. |
 | `wawarden_media_fetched_bytes_total` | counter | | Bytes fetched from WhatsApp for jobs that turned ready, before the content policy. |
-| `wawarden_media_deliveries_total` | counter | `transport`, `result` | Attachment deliveries: `transport` is `rest` for the routes and `mcp` for `get_attachment`, where an inline result and each part count one delivery; `result` is `ok` (every planned byte written), `incomplete` (stopped early; for `mcp`, a result read from the file but not written in full) or `over_cap` (refused by a per-job cap). A `HEAD`, a `416` and an MCP call that never reads the file count nothing. Every result is present from the start, at `0`, for both transports. |
+| `wawarden_media_deliveries_total` | counter | `transport`, `result` | Attachment deliveries: `transport` is `rest` for the routes and `mcp` for `get_attachment`, where an inline result and each part count one delivery; `result` is `ok` (every planned byte written), `incomplete` (stopped early; for `mcp`, a result read from the file but not written in full) or `over_cap` (refused by a per-job cap). A delivery a per-job cap refuses counts `over_cap` on either transport before any byte is read; a `HEAD`, a `416` and a `get_attachment` answer that carries only the status count nothing. Every result is present from the start, at `0`, for both transports. |
 | `wawarden_media_delivered_bytes_total` | counter | `transport` | Attachment bytes the connections accepted; for `mcp`, the file's or the part's bytes of a result written in full. |
 | `wawarden_media_jobs` | gauge | | Attachment jobs fetching or ready. |
 
@@ -474,12 +474,16 @@ EMF lines, which need no token, for alerting.
 ### Panic names
 
 Panic names: `api.client`, `api.admin` and `api.health` for the handlers,
-`api.mcp` for an MCP tool call, `api.media.job` for an attachment fetch job,
-which then fails with `media_failed`, and `api.media.sweep` for one pass of the
-attachment sweep, which skips the rest of that pass;
+`api.mcp` for an MCP tool call, `api.mcp.orphan` for the wait that releases a
+`get_attachment` result's hold after its client left, `api.media.job` for an
+attachment fetch job, which then fails with `media_failed`, and
+`api.media.sweep` for one pass of the attachment sweep, which skips the rest of
+that pass; `stage.sweep` for the hourly sweep of stray files in `spool/`;
+`admin.clients_reload` for the background reload of the client list;
 `listeners.client`, `listeners.admin`, `listeners.health`, `listeners.shutdown`
 and `signals` for goroutines. The engine adds `engine.supervisor`,
-`engine.ingest` and `engine.logout`; the first two also count a panic of one
+`engine.ingest`, `engine.logout` and `engine.media`, which fails the
+attachment fetch it ran; the first two also count a panic of one
 version fetch, connection attempt, or pairing's dial or code request
 (`engine.supervisor`) or of one inbox row's or history blob's attempt
 (`engine.ingest`), which the engine treats as a failed attempt. A panic while a
@@ -496,7 +500,7 @@ goroutines that the protocol library starts itself is not covered: a panic there
 `metrics.emf`, the [backup](configuration.md#backups) scheduler `backup.schedule`, and each
 database call the watcher `db.deadline`, which logs a call that runs past its
 deadline. In development builds, the [fake engine](internals.md#fake-engine) adds
-`fake.connection`.
+`fake.connection` and `fake.backfill`.
 
 ### Embedded metric format
 
