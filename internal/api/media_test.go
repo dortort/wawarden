@@ -45,6 +45,7 @@ type fakeMedia struct {
 	fetches    []MediaFetch
 	waits      map[string]chan fetchAnswer
 	during     func()
+	deaf       bool
 }
 
 func (f *fakeMedia) Precheck(declared int64) error {
@@ -73,7 +74,12 @@ func (f *fakeMedia) wait(id string) chan fetchAnswer {
 func (f *fakeMedia) Fetch(ctx context.Context, _ scoped.SealedRef, req MediaFetch) (MediaSpool, error) {
 	f.mu.Lock()
 	f.fetches = append(f.fetches, req)
+	deaf := f.deaf
 	f.mu.Unlock()
+	if deaf {
+		a := <-f.wait(req.ID)
+		return a.spool, a.err
+	}
 	select {
 	case a := <-f.wait(req.ID):
 		if a.panic {
@@ -649,15 +655,30 @@ func TestALostConnectionEndsTheJobWithoutATombstone(t *testing.T) {
 func TestAWaiterWakesWhenTheJobSettlesOrIsErased(t *testing.T) {
 	for _, c := range []struct {
 		name   string
+		deaf   bool
 		settle func(f *mediaFixture)
+		after  func(f *mediaFixture)
 	}{
-		{"ready", func(f *mediaFixture) { f.media.answer("MEDIA1", fetchAnswer{spool: newFakeSpool(smallSize, true)}) }},
-		{"failed", func(f *mediaFixture) { f.media.answer("MEDIA1", fetchAnswer{err: errMediaExpired}) }},
-		{"erased while fetching", func(f *mediaFixture) { f.m.drop(f.key(keyMedia, "MEDIA1")) }},
+		{name: "ready", settle: func(f *mediaFixture) { f.media.answer("MEDIA1", fetchAnswer{spool: newFakeSpool(smallSize, true)}) }},
+		{name: "failed", settle: func(f *mediaFixture) { f.media.answer("MEDIA1", fetchAnswer{err: errMediaExpired}) }},
+		{
+			name: "erased while fetching", deaf: true,
+			settle: func(f *mediaFixture) { f.m.drop(f.key(keyMedia, "MEDIA1")) },
+			after:  func(f *mediaFixture) { f.media.answer("MEDIA1", fetchAnswer{err: ErrMediaFailed}) },
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newMediaFixture(t, mediaOptions{})
 			f.attach("MEDIA1", "document", smallSize)
+			f.media.mu.Lock()
+			f.media.deaf = c.deaf
+			f.media.mu.Unlock()
+			after := sync.OnceFunc(func() {
+				if c.after != nil {
+					c.after(f)
+				}
+			})
+			t.Cleanup(after)
 			if w := f.post(keyMedia, "MEDIA1"); w.Code != http.StatusAccepted {
 				t.Fatalf("POST = %d", w.Code)
 			}
@@ -674,6 +695,7 @@ func TestAWaiterWakesWhenTheJobSettlesOrIsErased(t *testing.T) {
 			if !closedWithin(woke, 10*time.Second) {
 				t.Fatal("the waiter did not wake")
 			}
+			after()
 			f.await("the fetch to end", func() bool { fetching, _ := f.slots(); return fetching == 0 })
 		})
 	}
