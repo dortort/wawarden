@@ -293,6 +293,29 @@ func TestBackupVerifyPrintsNoForeignVersionOrControlCharacter(t *testing.T) {
 	}
 }
 
+func TestBackupVerifyPrintsEachCountUnderItsLabel(t *testing.T) {
+	counted := inspect.Integrity{OK: true, Counted: true}
+	ext := backup.Extracted{Format: 1, Version: "v1.0.0-test", Created: time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC),
+		Members: [2]backup.Member{{SchemaVersion: 5}, {SchemaVersion: 7}}}
+	archive := inspect.Archive{Integrity: counted, SchemaVersion: 5, Chats: 101, Messages: 102, BlobsPending: 103, BlobsQuarantined: 104,
+		InboxBacklog: 105, InboxQuarantined: 106, ClientsActive: 107, AuditRows: 108, MediaRefsLive: 109, MediaRefsExpired: 110, RevokeTombstones: 111}
+	device := inspect.Device{Integrity: counted, SchemaVersion: 7, Paired: true, PreKeys: 112, Sessions: 113}
+	var out bytes.Buffer
+	if !report(&out, ext, archive, device) {
+		t.Fatalf("a sound copy was not verified:\n%s", out.String())
+	}
+	want := "format: 1\nwritten by: v1.0.0-test\ncreated: 2026-10-05T12:00:00Z\n" +
+		"archive integrity: ok\narchive schema version: 5\narchive schema: ok\n" +
+		"archive chats: 101\narchive messages: 102\narchive history blobs pending: 103\narchive history blobs quarantined: 104\n" +
+		"archive inbox backlog: 105\narchive inbox quarantined: 106\narchive active clients: 107\narchive audit rows: 108\n" +
+		"archive media references live: 109\narchive media references expired: 110\narchive revoke tombstones: 111\n" +
+		"device store integrity: ok\ndevice store schema version: 7\ndevice store schema: ok\n" +
+		"device store paired: yes\ndevice store pre-keys: 112\ndevice store sessions: 113\nverified: yes\n"
+	if out.String() != want {
+		t.Fatalf("report printed\n%s\nwant\n%s", out.String(), want)
+	}
+}
+
 func TestBackupVerifyUsageErrors(t *testing.T) {
 	work := privateDir(t)
 	for _, args := range [][]string{
