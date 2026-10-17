@@ -291,8 +291,10 @@ the engine rejects and logs out. Release builds refuse
   and [MCP](docs/api.md#mcp)).
 - **Attachments.** Off by default. With `WAWARDEN_MEDIA_MAX_BYTES` set, a
   client created with `allow_media` downloads a media message's attachment
-  over REST, fetched only when it asks, within per-client and global budgets
-  (see [attachments](docs/api.md#attachments)).
+  over REST, or inline through the MCP tool `get_attachment` when it is small
+  enough, fetched only when it asks, within per-client and global budgets
+  (see [attachments](docs/api.md#attachments) and
+  [get_attachment](docs/api.md#get_attachment)).
 - **Sending.** A client with write chats sends text, once per idempotency key,
   behind a pacer and send budgets (see [sending](docs/api.md#sending) and
   [ban risk](docs/ban-risk.md)).

@@ -65,7 +65,9 @@ headers, 15 seconds to read the whole request, 30 seconds to write the response,
 60 seconds of idle time on a kept-alive connection, and 16 KiB of request
 headers. An attachment delivery is the one exception to the write limit: it
 renews a 30-second write deadline before each 256 KiB chunk, never past the
-job's end (see [Attachments](#attachments)).
+job's end (see [Attachments](#attachments)), and a `get_attachment` call that
+returns the file renews it once, to 30 seconds, before its result is written
+(see [MCP tools](#mcp-tools)).
 
 ### Outbound connections
 
@@ -138,7 +140,9 @@ write and publishes it once that write commits and before the change returns,
 so a revocation takes effect on the next request; a request that was already authenticated finishes with the
 grant it holds, within the 2-second read deadline, except an attachment
 delivery, which runs until the minute sweep drops its job (see
-[Attachments](#attachments)). A request that arrives while
+[Attachments](#attachments)), and a `get_attachment` result that already
+carries the file, which is still written, at most 25 seconds after the call
+started plus 30 seconds to write it (see [MCP tools](#mcp-tools)). A request that arrives while
 a change is being published, or after a change that did not commit and before
 the copy has been reloaded in the background, waits for the new copy for up to
 2 seconds and is then answered `503` (`busy`) with `Retry-After: 1`, whatever
@@ -296,8 +300,9 @@ revoked, origin, untrusted}`:
 
 No answer carries a database sequence number, an alternate sender identifier,
 raw protocol data or other media metadata; only an [attachment](#attachments)
-status carries `kind`, `variant`, `served_type`, `format`, `normalised` and
-`bytes`, all derived by WaWarden. `session` is `{state}` alone, one of
+status, on the routes or in a `get_attachment` result, carries `kind`,
+`variant`, `served_type`, `format`, `normalised` and `bytes`, all derived by
+WaWarden. `session` is `{state}` alone, one of
 `unpaired`, `connecting`, `connected` and `disconnected`, as under
 [Engine states](internals.md#engine-states).
 
@@ -543,7 +548,10 @@ revoked, or its reference is past its expiry. A request that finds the message
 no longer eligible also drops the client's job for it.
 
 A job belongs to one client and one message; two clients asking for the same
-attachment get two jobs and two fetches. `POST` answers:
+attachment get two jobs and two fetches. The MCP tool
+[`get_attachment`](#get_attachment) uses the same jobs: a job it started is
+reported and served by these routes, and a job a `POST` started is answered by
+the tool. `POST` answers:
 
 | Answer | When |
 |---|---|
@@ -646,7 +654,9 @@ WaWarden; it carries no reference, message id or third-party string:
   is `gif` or `video_note` for a video, `voice_note` for audio, `animated` or
   `lottie` for a sticker, or empty.
 - `state` is `fetching` or `ready`; `reason` is `fetching` while it fetches,
-  otherwise `null`.
+  otherwise `null`. A `get_attachment` answer for a file over its inline limit
+  starts no job: its `state` is empty and its `reason` is
+  `too_large_for_inline`.
 - Once ready, `served_type` is the delivery's `Content-Type`, `format` a word
   for the bytes (`image`, `audio`, `video`, `pdf`, `text`, `zip`, `ole2`,
   `archive`, `executable` or `unknown`), `normalised` whether the content
@@ -654,7 +664,9 @@ WaWarden; it carries no reference, message id or third-party string:
   8 MiB parts, rounded up, and `expires_at` the end of the job's life. While it
   fetches they are empty, `false`, `0` and `null`.
 - `size_declared` is the size the message declared.
-- `delivery` is `metadata`, and `offset` and `length` are `0`.
+- On the routes `delivery` is `metadata`, and `offset` and `length` are `0`. A
+  `get_attachment` result sets them as described under
+  [get_attachment](#get_attachment).
 - `rest_route` is `/v1/messages/{mref}/media`.
 - `retry_after_seconds` is `2` while the job fetches, and absent once it is
   ready.
@@ -761,8 +773,9 @@ the first row committed, and also when the client has left. A completion row
 that cannot be written does not change the answer, which is already out: it is
 counted in `wawarden_audit_failures_total` and logged as `audit_failed` (see
 [Logging](observability.md#logging)). A `206` is recorded as `ok` and a `416`
-as `range_not_satisfiable`. Only the [attachment](#attachments) routes name a
-message: their rows carry the message once it is found in scope. A
+as `range_not_satisfiable`. Only the [attachment](#attachments) routes and
+the `get_attachment` tool name a message: their rows carry the message once it
+is found in scope. A
 `rest.media.fetch` row records the declared size when its request started, and
 was charged for, a job, and `0` otherwise. A `rest.media` row of a `GET` that delivers
 records the planned body length, and its completion row, `rest.media.sent`,
@@ -830,12 +843,16 @@ nosniff`. The MCP library's own log output is discarded.
 ### MCP tools
 
 The tool definitions are constants: their names, descriptions and schemas never
-contain a chat name or anything else read from the archive. A client that holds
-a write grant at the time of the request gets the five read tools and
-`send_message`; every other client gets the five read tools, and its call of
-`send_message` is answered exactly as a call of a tool that does not exist,
-byte for byte, with the audit reason `unknown_tool`. The endpoint holds the two
-lists as two servers built at start and picks one for each request. Each tool
+contain a chat name or anything else read from the archive. Every client gets
+the five read tools. A client that holds a write grant at the time of the
+request also gets `send_message`, and a client created with
+[`allow_media`](#creating-a-client) also gets `get_attachment` while downloads
+are on (`WAWARDEN_MEDIA_MAX_BYTES` above 0). A call of a tool the client does
+not get is answered exactly as a call of a tool that does not exist, byte for
+byte, with the audit reason `unknown_tool`. The endpoint holds the four lists
+as four servers built at start, one for each combination of the two grants,
+and picks one for each request; the 2026-07-28 revision lets `tools/list` vary
+with the authorization a request presents. Each tool but `get_attachment`
 calls the same code as its route and answers the same JSON, which the
 [client API](#client-api) describes:
 
@@ -847,6 +864,7 @@ calls the same code as its route and answers the same JSON, which the
 | `search_messages` | `query` (required), `chat`, `cursor`, `limit` | As `GET /v1/search`: `{messages, next, more, truncated, session}` |
 | `get_changes` | `since`, `chat`, `limit` | As `GET /v1/changes`: `{messages, next, more, truncated, session}` |
 | `send_message` | `chat`, `text`, `idempotency_key` (all required), `reply_to` | As `POST /v1/chats/{ref}/messages`: `{message, replayed, session}` |
+| `get_attachment` | `message` (required) | The attachment's [status](#status), and the file when it comes inline; see [get_attachment](#get_attachment) |
 
 There is no tool for `GET /v1/me` or `GET /v1/messages/{mref}`.
 
@@ -859,19 +877,23 @@ There is no tool for `GET /v1/me` or `GET /v1/messages/{mref}`.
 | `limit` | integer, 1 to 200 | Items per page; 50 when omitted. |
 | `text` | string, 1 to 4096 characters | The message to send, under the [text rules](#sending). |
 | `reply_to` | string, 1 to 640 characters | The `mref` of a message of the same chat to reply to. |
+| `message` | string, 1 to 640 characters | A message's `mref` as `get_messages`, `search_messages` or `get_changes` return it. |
 | `idempotency_key` | string, 8 to 128 characters matching `^[\x21-\x7e]{8,128}$` | The key `Idempotency-Key` carries on the route: unique per intended message, repeated only to retry the same call. |
 
 Each input schema is an object that allows no other property, and the arguments
 are checked against it before anything is read. Omitted or `null` arguments are
 an empty object. Cursors are the route's: a `next` value from a tool continues
 on its route and the other way round, under the same [cursor](#cursors-and-message-references) rules.
-Every read tool carries the annotation `readOnlyHint: true`; `send_message`
-carries `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: true`
-and `openWorldHint: true`, and its description asks for at most one send per
-trigger. Every tool has an `outputSchema` inferred from the answer's type.
+Every read tool carries the annotation `readOnlyHint: true`, and
+`get_attachment` also `idempotentHint: true` and `openWorldHint: true`;
+`send_message` carries `readOnlyHint: false`, `destructiveHint: false`,
+`idempotentHint: true` and `openWorldHint: true`, and its description asks for
+at most one send per trigger. Every tool has an `outputSchema` inferred from
+the answer's type.
 
 A result carries the answer in `structuredContent` and the same JSON as text in
-`content[0]`. A refused call is a result with `isError: true`, the fixed code
+`content[0]`; a `get_attachment` result is laid out as described under
+[get_attachment](#get_attachment). A refused call is a result with `isError: true`, the fixed code
 alone as the text of `content[0]`, and in `structuredContent` the answer's shape
 with empty data and the current `session`, for example
 `{"chats":null,"next":null,"truncated":false,"session":{"state":"connected"}}`.
@@ -880,7 +902,10 @@ result. A refused `send_message` call carries `retry_after_seconds`, the whole
 seconds the route's `Retry-After` would give, in its `structuredContent` for
 `request_in_progress`, `rate_limited`, `busy` and `not_connected`, and
 `replayed: true` when it repeats the stored `send_rejected` or
-`send_outcome_unknown` of an earlier call with the same key.
+`send_outcome_unknown` of an earlier call with the same key. A refused
+`get_attachment` call carries the empty status, with only `rest_route`,
+`untrusted` and `notice` set, and `retry_after_seconds` when the route would
+send `Retry-After`.
 
 | Code | Answered when |
 |---|---|
@@ -888,9 +913,10 @@ seconds the route's `Retry-After` would give, in its `structuredContent` for
 | `invalid_arguments` | The arguments do not fit the input schema: a missing required argument, another property, a wrong type, an empty string, a value out of bounds or a non-integral `limit`. |
 | `invalid_query` | The query passes the schema but not the search rules. |
 | `invalid_cursor` | As on the routes. |
-| `rate_limited` | The client's search budget is spent, or for `send_message` a [send limit](#send-limits). A tool result carries no `Retry-After`; at the default rate a search is admitted again within a second. A spent read budget refuses the whole `POST` with `429` before the call. |
-| `busy` | As on the routes, or the call passed its deadline: 10 seconds for a read tool, 25 seconds for `send_message`. |
-| `invalid_text`, `invalid_idempotency_key`, `first_contact_refused`, `request_in_progress`, `idempotency_key_reused`, `not_connected`, `send_rejected`, `send_outcome_unknown` | `send_message` only, when the route would answer that code. A text or key that breaks the input schema, such as an empty text or a seven-character key, is `invalid_arguments` instead; control characters and the 8192-byte cap reach the text check. |
+| `rate_limited` | The client's search budget is spent, for `send_message` a [send limit](#send-limits), or for `get_attachment` the client's two jobs, an [attachment budget](#attachments) or a per-job delivery cap. A tool result carries no `Retry-After`; at the default rate a search is admitted again within a second. A spent read budget refuses the whole `POST` with `429` before the call. |
+| `busy` | As on the routes, or the call passed its deadline: 10 seconds for a read tool, 25 seconds for `send_message` and `get_attachment`. For `get_attachment` also while another call's inline result is built or written, since one is handled at a time across the service, or when the job ended while the call read it. |
+| `media_unavailable`, `media_expired`, `media_failed`, `media_unsupported`, `media_too_large` | `get_attachment` only, when the [attachment routes](#attachments) would answer that code. |
+| `invalid_text`, `invalid_idempotency_key`, `first_contact_refused`, `request_in_progress`, `idempotency_key_reused`, `not_connected`, `send_rejected`, `send_outcome_unknown` | `send_message` only, when the route would answer that code; `not_connected` also for `get_attachment` when a fetch would start while WhatsApp is not connected. A text or key that breaks the input schema, such as an empty text or a seven-character key, is `invalid_arguments` instead; control characters and the 8192-byte cap reach the text check. |
 | `internal_error` | Anything else failed, a panic in the tool included; the panic is counted as `api.mcp` and the endpoint keeps serving. |
 
 Pages and texts are cut as on the routes. Because a result carries the page
@@ -898,11 +924,86 @@ twice, as structured content and as text, a full page makes an answer of about
 twice its size; Claude Code saves a tool result over 50,000 characters to a file
 instead of passing it to the model, so a smaller `limit` keeps answers inline.
 
+#### get_attachment
+
+`get_attachment` takes a message's `mref` and runs the checks of the
+[attachment routes](#attachments): it opens the reference, decides the
+client's grant again and looks the message up in scope, so a missing, foreign
+or out-of-scope message is `not_found` and a message without a usable
+reference `media_unavailable`. It then uses the client's job for the message:
+
+- No job: a file declared over its inline limit (the smaller of
+  `WAWARDEN_MEDIA_MAX_BYTES` and 16 MiB for an image, 1 MiB for a sticker and
+  8 MiB for anything else) is answered with its status alone, `delivery`
+  `part` and `reason` `too_large_for_inline`; nothing is fetched and nothing is
+  charged, and the file is fetched through the routes instead. Otherwise the
+  call starts a job exactly as `POST` does, with the same refusals and budgets,
+  and waits for it.
+- A job fetching in memory (declared at most 16 MiB): the call waits for it
+  within its 25-second deadline, and answers the fetching status if it has not
+  ended by then. A job fetching to disk is answered with its fetching status at
+  once.
+- A failed job: its code, as on the routes.
+- A ready job: the file comes inline when its bytes are held in memory and its
+  served type and size allow a block; otherwise the status alone, with
+  `delivery` `part`, and `reason` `too_large_for_inline` when the size is over
+  the inline cap. When `delivery` is `part`, fetch the file with
+  `POST` then `GET /v1/messages/{mref}/media` and the same token.
+
+The block follows the served type, never the sender's:
+
+| Served type | Inline cap | Block |
+|---|---|---|
+| `image/jpeg`, `image/png`, only when the content policy re-encoded the image (`normalised` `true`): images, stickers other than Lottie ones, and documents whose bytes are an image | 3.5 MiB | `image` |
+| `audio/ogg`, `audio/mpeg`, `audio/mp4` | 8 MiB | `audio`; an embedded `resource` blob of the same type for a client on the 2024-11-05 protocol, which has no audio block |
+| `video/mp4`, `application/pdf`, `application/octet-stream` | 8 MiB | an embedded `resource` blob of that type with the URI `wawarden:attachment` |
+
+An image the content policy did not re-encode never comes as an image block:
+an image served as `image/jpeg` or `image/png` without `normalised` gets its
+status alone, and a document whose image bytes the normaliser refused is
+served as `application/octet-stream`, with `format` `image` and `normalised`
+`false`, as a blob. Audio served as `application/octet-stream` comes as a blob
+too. Some MCP hosts write a blob to a file; Claude Code does so for PDF, Office
+and audio blobs.
+
+A result carries the status in `structuredContent` and its `content` is, in
+order: a constant text that introduces the attachment as third-party content,
+the status as JSON text, the block when the file comes inline, and a constant
+closing text. The block carries `_meta` `{"wawarden/untrusted": true}`. When
+the file comes inline, `delivery` is `inline`, `offset` is `0` and `length` is
+the file's size; otherwise `delivery` is `part` or `metadata` and both are
+`0`. No argument value and no text read from the message appears in the
+result.
+
+The service handles one inline result at a time: a call that would return a
+file while another call's inline result is built or written answers `busy`, so
+an agent should ask for one attachment at a time. Before such a result is
+returned the call renews the connection's write deadline to 30 seconds; when it
+cannot, or the request has ended, the call answers the status alone. A result
+that carries the file counts toward the job's per-job delivery caps, shared
+with the routes, and completes the job, which is then erased, once the MCP
+library has written it in full and its audit row has committed; a result that
+was not written in full leaves the job ready. When the request ends before the
+result is written, the call's hold on the job ends 2 seconds after the call
+returns, without completing the job, and the job's bytes are later dropped
+without being overwritten, since the MCP library may still have been reading
+them. A job erased while a result that
+carries its file is being written, by a whole-body `GET`, its end of life, the
+sweep, a revocation or shutdown, keeps its bytes in memory until that write
+ends, at most 25 seconds after the call started plus 30 seconds to write; the
+result is still written.
+
+The server has no resources capability, although the MCP specification
+recommends one for embedded resources: a blob is not a resource a client can
+read again, and `resources/read` is answered as method not found. There is no
+resource link either, since the route needs the bearer token.
+
 ### MCP audit
 
 Every `POST /mcp` that the read budget admits writes one [audit](#read-audit)
 row. The action is `mcp.list_chats`, `mcp.get_chat`, `mcp.get_messages`,
-`mcp.search_messages`, `mcp.get_changes` or `mcp.send_message` for a call of that tool, and
+`mcp.search_messages`, `mcp.get_changes`, `mcp.send_message` or
+`mcp.get_attachment` for a call of that tool, and
 `mcp.protocol` for everything else: the handshake, `tools/list`, `ping`,
 notifications, refused methods, unknown tools and refused bodies. The reason is
 `ok`, the tool's code, the body refusal (`unsupported_media_type`,
@@ -910,7 +1011,12 @@ notifications, refused methods, unknown tools and refused bodies. The reason is
 `bad_request` for a message the MCP library refused before it reached the server. A
 notification answered `202` is `ok`. A row names a chat only for a successful
 `get_chat` or `get_messages`, and for a `send_message` call once the chat is
-found in the write scope. When the client has left before the answer, the
+found in the write scope. A `get_attachment` row names the chat and the
+message once the message is found in scope, whatever the answer. Its reason is
+`inline` when the result carries the file, with the file's size as its bytes;
+`metadata` for the status alone and `too_large_for_inline` for a file over its
+inline limit, both with `0` bytes; all three are recorded as allowed. Otherwise
+it is the tool's code. When the client has left before the answer, the
 MCP library writes none, and the row records the call's own outcome.
 
 ## Registering with Claude Code
