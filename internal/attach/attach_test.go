@@ -895,6 +895,28 @@ func TestWebPFrameStream(t *testing.T) {
 	}
 }
 
+func TestWebPChunkWalkIsBounded(t *testing.T) {
+	vp8 := riffChunk("VP8 ", []byte("synthetic-vp8"))
+	few := production
+	few.units = 6
+	for _, tt := range []struct {
+		name string
+		data []byte
+	}{
+		{"still", webpFile(vp8xChunk(0, 5, 3), bytes.Repeat(riffChunk("ICCP", []byte("x")), 8), vp8)},
+		{"framed", animatedWebP(9, 9, anmfChunk(0, 0, 5, 3, bytes.Repeat(riffChunk("XMP ", []byte("x")), 8), vp8))},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := parseWebP(&source{ctx: t.Context(), s: newSpool(tt.data)}, production); err != nil {
+				t.Fatalf("parseWebP with the production limits = %v, want it parsed", err)
+			}
+			if _, err := parseWebP(&source{ctx: t.Context(), s: newSpool(tt.data)}, few); !errors.Is(err, errMalformed) {
+				t.Fatalf("parseWebP with %d units = %v, want it refused as malformed", few.units, err)
+			}
+		})
+	}
+}
+
 func TestWebPBitstreamMustMatchTheDeclaredSize(t *testing.T) {
 	big := riffChunk("VP8L", vp8lSolid(3000, 3000, color.NRGBA{R: 0xff, A: 0xff}))
 	for _, tt := range []struct {
