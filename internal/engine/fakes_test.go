@@ -187,6 +187,7 @@ type fakeClient struct {
 	onAck        func(HistoryRef)
 	onWrite      func()
 	onConnect    func()
+	onPaired     func()
 	onPair       func()
 	onDisconnect func()
 	acks         []string
@@ -254,8 +255,19 @@ func (f *fakeClient) Disconnect() {
 
 func (f *fakeClient) Paired() bool {
 	f.mu.Lock()
+	p, hook := f.paired, f.onPaired
+	f.onPaired = nil
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return p
+}
+
+func (f *fakeClient) holdNextPaired(paired bool, hook func()) {
+	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.paired
+	f.paired, f.onPaired = paired, hook
 }
 
 func (f *fakeClient) setPaired(p bool) {
