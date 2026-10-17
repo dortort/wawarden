@@ -216,6 +216,18 @@ func TestAFailedKeyReadFailsClosedEvenWhenTheNameReadSucceeds(t *testing.T) {
 	}
 }
 
+func TestEraseClosesTheSpoolFile(t *testing.T) {
+	for _, local := range []bool{true, false} {
+		s := testSpool(t, t.TempDir(), local, 0, math.MaxUint64)
+		f, _ := testAdmit(t, s, 10)
+		fh := f.f
+		f.Erase()
+		if _, err := fh.Stat(); !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("Stat of an erased spool file (local %v) = %v, want it closed", local, err)
+		}
+	}
+}
+
 func TestSectorsAreSealedUnderTheRandomKeyAndTheirOwnNonce(t *testing.T) {
 	seed := make([]byte, keyBytes+nameBytes)
 	for i := range seed {
