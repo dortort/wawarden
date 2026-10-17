@@ -712,14 +712,16 @@ whether it pairs the wrong account.
   a poison blob that the fake's decoder refuses. The last two fail three times
   and are quarantined, each with a `quarantine` event.
 - **Attachments.** With `WAWARDEN_MEDIA_MAX_BYTES` above `0`, the engine
-  keeps the references of the photo and of the seven attachments, and a
+  keeps the references of the photo and of the eight attachments, and a
   [fetch](api.md#attachments) returns synthetic bytes built in memory: an 8x8
   grey JPEG for the photo and, whole, for the JPEG document; its first half for
   the corrupt one, which the normaliser refuses so that it is served raw; an
-  Ogg Opus voice note without audio; a 16x16 WebP sticker; and a video and a
+  Ogg Opus voice note without audio; a 16x16 WebP sticker; a video and a
   PDF of 8 MiB and 64 KiB each, so that `get_attachment` sends them in two
-  parts. The last attachment answers expired, and a fetch while not connected
-  answers not connected.
+  parts; and a PDF of 8 MiB less 64 KiB, which `get_attachment` sends inline
+  as a blob. The fake has no near-cap normalised image, because image encoders
+  are confined to `internal/attach`. The image attachment answers expired, and
+  a fetch while not connected answers not connected.
 - **Identity.** The script opens with the owner's identity: the owner's number
   paired with the synthetic LID `100000000000020@lid`.
 - **Sends and history requests.** While connected for the owner, a send to
@@ -735,7 +737,7 @@ whether it pairs the wrong account.
 
 When the script has played, within about 15 seconds of pairing, the fake stays
 connected and sends nothing more: `wawarden admin status` reports `connected`,
-3 chats, 24 messages and 2 history blobs quarantined. Every identity the fake
+3 chats, 25 messages and 2 history blobs quarantined. Every identity the fake
 uses is synthetic: its contacts are `+15550100021`, `+15550100022` and
 `+15550100023`, its LIDs are `100000000000020` to `100000000000022`, and an
 owner number among the contacts, or `+15550100029`, stops the start with
