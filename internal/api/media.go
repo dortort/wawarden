@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"io"
+	"math/bits"
 	"net/http"
 	"strings"
 	"sync"
@@ -38,6 +39,8 @@ const (
 	mediaImageCeiling   = 16 << 20
 	mediaStickerCeiling = 1 << 20
 	mediaPartSize       = 8 << 20
+	mediaMaxParts       = 256
+	wholeFile           = -1
 
 	mediaFetchSlots  = 2
 	mediaStagedSlots = 4
@@ -79,6 +82,7 @@ var (
 	ErrMediaFailed      error = errMediaFailed
 
 	errDeliveryCompleted = errors.New("api: the attachment job was completed by another delivery")
+	errPartOutOfRange    = &codedError{status: http.StatusRequestedRangeNotSatisfiable, code: codeRangeNotSatisfiable}
 
 	fetchResults = []string{fetchOK, fetchExpired, fetchFailed, fetchTooLarge, fetchUnsupported, fetchUnavailable, fetchBusy, fetchThrottled,
 		fetchRateLimited, fetchGlobalLimited, fetchNotConnected}
@@ -173,6 +177,7 @@ type mediaJob struct {
 	running   int
 	reserved  int64
 	delivered int64
+	parts     [mediaMaxParts / 64]uint64
 }
 
 type mediaView struct {
@@ -599,6 +604,14 @@ func (h *mediaHold) end(keep bool) {
 }
 
 func (m *mediaRegistry) startDelivery(j *mediaJob, transport string, length int64) (func(sent int64, complete bool), error) {
+	return m.reserveDelivery(j, transport, wholeFile, length)
+}
+
+func (m *mediaRegistry) startPart(j *mediaJob, part int, length int64) (func(sent int64, complete bool), error) {
+	return m.reserveDelivery(j, transportMCP, part, length)
+}
+
+func (m *mediaRegistry) reserveDelivery(j *mediaJob, transport string, part int, length int64) (func(sent int64, complete bool), error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	switch {
@@ -612,11 +625,11 @@ func (m *mediaRegistry) startDelivery(j *mediaJob, transport string, length int6
 	j.reserved += length
 	var once sync.Once
 	return func(sent int64, complete bool) {
-		once.Do(func() { m.finishDelivery(j, transport, length, sent, complete) })
+		once.Do(func() { m.finishDelivery(j, transport, part, length, sent, complete) })
 	}, nil
 }
 
-func (m *mediaRegistry) finishDelivery(j *mediaJob, transport string, length, sent int64, complete bool) {
+func (m *mediaRegistry) finishDelivery(j *mediaJob, transport string, part int, length, sent int64, complete bool) {
 	var after cleanups
 	defer after.run()
 	m.mu.Lock()
@@ -624,7 +637,7 @@ func (m *mediaRegistry) finishDelivery(j *mediaJob, transport string, length, se
 	j.running--
 	j.reserved -= length
 	j.delivered += sent
-	if complete {
+	if complete && j.completedBy(part) {
 		after.add(m.eraseLocked(j, errDeliveryCompleted))
 	}
 	result := deliveryOK
@@ -633,6 +646,22 @@ func (m *mediaRegistry) finishDelivery(j *mediaJob, transport string, length, se
 	}
 	m.deliveries.With(transport, result).Inc()
 	m.deliveredBytes.With(transport).Add(uint64(max(sent, 0)))
+}
+
+func (j *mediaJob) completedBy(part int) bool {
+	if part == wholeFile {
+		return true
+	}
+	j.parts[part/64] |= 1 << (part % 64)
+	n := 0
+	for _, word := range j.parts {
+		n += bits.OnesCount64(word)
+	}
+	return n == partsOf(j.size)
+}
+
+func partsOf(size int64) int {
+	return int((size + mediaPartSize - 1) / mediaPartSize)
 }
 
 type jobReader struct {
@@ -738,7 +767,7 @@ func (v mediaView) status() dto.MediaStatus {
 		return st
 	}
 	st.State, st.ServedType, st.Format, st.Normalised, st.Bytes = dto.MediaReady, v.servedType, v.format, v.normalised, v.size
-	st.Parts, st.ExpiresAt = int((v.size+mediaPartSize-1)/mediaPartSize), optionalReadTime(v.expires)
+	st.Parts, st.ExpiresAt = partsOf(v.size), optionalReadTime(v.expires)
 	return st
 }
 
@@ -888,11 +917,14 @@ type mediaAnswer struct {
 }
 
 func (a mediaAnswer) metadata() (dto.AttachmentInfo, string) {
-	if a.info.Delivery != deliveryInline {
+	if a.outcome != deliveryInline && a.outcome != deliveryPart {
 		return a.info, a.outcome
 	}
 	info := a.info
-	info.Delivery, info.Offset, info.Length = deliveryMetadata, 0, 0
+	if info.Delivery == deliveryInline {
+		info.Delivery = deliveryMetadata
+	}
+	info.Offset, info.Length = 0, 0
 	return info, deliveryMetadata
 }
 
@@ -941,7 +973,7 @@ func (m *mediaRegistry) inlineLimit(kind string, limits inlineLimits) int64 {
 	return min(m.max, limits.blob)
 }
 
-func (s *reads) attachmentCall(ctx context.Context, g policy.ReadGrant, mref string, limits inlineLimits) (answer mediaAnswer, _ policy.CanonicalChat, err error) {
+func (s *reads) attachmentCall(ctx context.Context, g policy.ReadGrant, mref string, part *int, limits inlineLimits) (answer mediaAnswer, _ policy.CanonicalChat, err error) {
 	chat, id, sender, ok := s.openRef(g, mref)
 	if !ok {
 		return mediaAnswer{}, policy.CanonicalChat{}, errNotFound
@@ -968,7 +1000,7 @@ func (s *reads) attachmentCall(ctx context.Context, g policy.ReadGrant, mref str
 	v, hold := s.media.lookup(key, true)
 	if v.state == 0 {
 		req := MediaFetch{Chat: a.Chat, ID: a.ID, Sender: a.Sender, Kind: a.Kind, Variant: a.Variant, Declared: a.Declared}
-		if req.Declared > s.media.inlineLimit(req.Kind, limits) {
+		if part == nil && req.Declared > s.media.inlineLimit(req.Kind, limits) {
 			return tooLargeForInline(req), a.Chat, nil
 		}
 		if v, _, err = s.media.admit(g, key, req, func(ctx context.Context) (MediaSpool, error) {
@@ -992,7 +1024,11 @@ func (s *reads) attachmentCall(ctx context.Context, g policy.ReadGrant, mref str
 	case mediaFailed:
 		return mediaAnswer{}, a.Chat, v.refusal(s.now())
 	}
-	answer, err = s.media.inline(v, hold, limits)
+	if part != nil {
+		answer, err = s.media.part(v, hold, *part)
+	} else {
+		answer, err = s.media.inline(v, hold, limits)
+	}
 	return answer, a.Chat, err
 }
 
@@ -1000,7 +1036,7 @@ func tooLargeForInline(req MediaFetch) mediaAnswer {
 	reason := reasonTooLargeForInline
 	return mediaAnswer{info: dto.AttachmentInfo{
 		Kind: req.Kind, Variant: req.Variant, SizeDeclared: req.Declared, Delivery: deliveryPart, Reason: &reason,
-		Parts: int((req.Declared + mediaPartSize - 1) / mediaPartSize), RestRoute: mediaRoute, Untrusted: true, Notice: mediaNotice,
+		Parts: partsOf(req.Declared), RestRoute: mediaRoute, Untrusted: true, Notice: mediaNotice,
 	}, outcome: reasonTooLargeForInline}
 }
 
@@ -1042,6 +1078,42 @@ func (m *mediaRegistry) inline(v mediaView, hold *mediaHold, limits inlineLimits
 	d.job = hold
 	info.Delivery, info.Length = deliveryInline, v.size
 	return mediaAnswer{info: info, data: data, hold: d, outcome: deliveryInline}, nil
+}
+
+func (m *mediaRegistry) part(v mediaView, hold *mediaHold, k int) (answer mediaAnswer, err error) {
+	if k < 0 || k >= partsOf(v.size) {
+		return mediaAnswer{}, errPartOutOfRange
+	}
+	offset := int64(k) * mediaPartSize
+	length := min(mediaPartSize, v.size-offset)
+	d := &deliveryHold{m: m}
+	defer func() {
+		if answer.hold == nil {
+			d.release(false)
+		}
+	}()
+	select {
+	case m.permit <- struct{}{}:
+		d.permit = true
+	default:
+		return mediaAnswer{}, errBusy
+	}
+	finish, err := m.startPart(v.job, k, length)
+	switch {
+	case errors.Is(err, errMediaNotRequested):
+		return mediaAnswer{}, errBusy
+	case err != nil:
+		return mediaAnswer{}, err
+	}
+	d.finish, d.length = finish, length
+	data := make([]byte, length)
+	if n, err := (jobReader{m: m, job: v.job}).ReadAt(data, offset); int64(n) < length || err != nil && !errors.Is(err, io.EOF) {
+		return mediaAnswer{}, readRefusal(err)
+	}
+	d.job = hold
+	info := v.status().AttachmentInfo
+	info.Delivery, info.Offset, info.Length = deliveryPart, offset, length
+	return mediaAnswer{info: info, data: data, hold: d, outcome: deliveryPart}, nil
 }
 
 func readRefusal(err error) error {

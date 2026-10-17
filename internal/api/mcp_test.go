@@ -1123,6 +1123,12 @@ func (f *mediaFixture) attachmentArgs(key, id string) map[string]any {
 	return map[string]any{"message": f.mref(key, id)}
 }
 
+func (f *mediaFixture) partArgs(key, id string, part any) map[string]any {
+	args := f.attachmentArgs(key, id)
+	args["part"] = part
+	return args
+}
+
 func (f *mediaFixture) permits() int { return len(f.m.permit) }
 
 type attachmentView struct {
@@ -1671,29 +1677,35 @@ func TestAHandlerThatFindsTheExchangeClosedPublishesNothing(t *testing.T) {
 		"the deadline not renewed": {returned: make(chan struct{}), live: context.Background(), extend: func() error { return http.ErrNotSupported }},
 		"the request ended":        {returned: make(chan struct{}), live: ended, extend: func() error { return nil }},
 	} {
-		t.Run(name, func(t *testing.T) {
-			f := newMCPMediaFixture(t, mediaOptions{})
-			f.attach("MEDIA1", "document", smallSize)
-			job := f.ready(keyMedia, "MEDIA1", mediaSpool(smallSize, "application/pdf", false)).job
-			k := &toolkit{reads: f.reads, now: f.clock.now, media: defaultInlineLimits()}
-			resolved, err := inputSchema[getAttachmentArgs]().Resolve(nil)
-			if err != nil {
-				t.Fatalf("resolve: %v", err)
-			}
-			raw, _ := json.Marshal(f.attachmentArgs(keyMedia, "MEDIA1"))
-			ctx := context.WithValue(withClient(t.Context(), f.clients[keyMedia]), exchangeKey{}, x)
-			req := &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{Name: toolGetAttachment, Arguments: raw}}
-			res, chat, reason, n := runMediaTool(ctx, k, resolved, req, func(ctx context.Context, g policy.ReadGrant, in getAttachmentArgs) (mediaAnswer, policy.CanonicalChat, error) {
-				return f.reads.attachmentCall(ctx, g, in.Message, k.media)
+		for _, part := range []*int{nil, new(0)} {
+			t.Run(fmt.Sprintf("%s, part %v", name, part != nil), func(t *testing.T) {
+				f := newMCPMediaFixture(t, mediaOptions{})
+				f.attach("MEDIA1", "document", smallSize)
+				job := f.ready(keyMedia, "MEDIA1", mediaSpool(smallSize, "application/pdf", false)).job
+				k := &toolkit{reads: f.reads, now: f.clock.now, media: defaultInlineLimits()}
+				resolved, err := inputSchema[getAttachmentArgs]().Resolve(nil)
+				if err != nil {
+					t.Fatalf("resolve: %v", err)
+				}
+				args, delivery := f.attachmentArgs(keyMedia, "MEDIA1"), deliveryMetadata
+				if part != nil {
+					args, delivery = f.partArgs(keyMedia, "MEDIA1", *part), deliveryPart
+				}
+				raw, _ := json.Marshal(args)
+				ctx := context.WithValue(withClient(t.Context(), f.clients[keyMedia]), exchangeKey{}, x)
+				req := &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{Name: toolGetAttachment, Arguments: raw}}
+				res, chat, reason, n := runMediaTool(ctx, k, resolved, req, func(ctx context.Context, g policy.ReadGrant, in getAttachmentArgs) (mediaAnswer, policy.CanonicalChat, error) {
+					return f.reads.attachmentCall(ctx, g, in.Message, in.Part, k.media)
+				})
+				v := attachmentOf(t, res)
+				if v.block != nil || v.info.Delivery != delivery || v.info.Offset != 0 || v.info.Length != 0 || chat != groupChat || reason != deliveryMetadata || n != 0 {
+					t.Fatalf("answered %+v (%s, %d bytes) with %T", v.info, reason, n, v.block)
+				}
+				if f.holds(job) != 0 || f.permits() != 0 || x.hold != nil || f.view(keyMedia, "MEDIA1").state != mediaReady {
+					t.Fatal("the handler kept its hold or the permit, published a hold, or ended the job")
+				}
 			})
-			v := attachmentOf(t, res)
-			if v.block != nil || v.info.Delivery != deliveryMetadata || v.info.Length != 0 || chat != groupChat || reason != deliveryMetadata || n != 0 {
-				t.Fatalf("answered %+v (%s, %d bytes) with %T", v.info, reason, n, v.block)
-			}
-			if f.holds(job) != 0 || f.permits() != 0 || x.hold != nil || f.view(keyMedia, "MEDIA1").state != mediaReady {
-				t.Fatal("the handler kept its hold or the permit, published a hold, or ended the job")
-			}
-		})
+		}
 	}
 }
 
@@ -1902,4 +1914,378 @@ func (f *mediaFixture) serveAttachmentCall(w *mcpWire, arguments string) {
 	r := httptest.NewRequestWithContext(f.t.Context(), http.MethodPost, "/mcp", strings.NewReader(body))
 	r.Header = http.Header{"Content-Type": {"application/json"}, "Accept": {"application/json, text/event-stream"}, "Authorization": {"Bearer " + keyMedia}, "Mcp-Protocol-Version": {legacyProtocol}}
 	f.handler.ServeHTTP(w, r)
+}
+
+const twoParts = mediaPartSize + 1<<20
+
+func partOf(t *testing.T, res *mcp.CallToolResult) (dto.AttachmentInfo, []byte) {
+	t.Helper()
+	v := attachmentOf(t, res)
+	b, ok := v.block.(*mcp.EmbeddedResource)
+	if !ok || b.Resource.URI != attachmentPartURI || b.Resource.MIMEType != partMIMEType || len(b.Meta) != 1 || b.Meta[untrustedMeta] != true {
+		t.Fatalf("a part came as a %T, not an octet-stream blob with the constant part URI and the untrusted mark", v.block)
+	}
+	if v.info.Delivery != deliveryPart || v.info.Length != int64(len(b.Resource.Blob)) {
+		t.Fatalf("a part of %d bytes carries the status %+v", len(b.Resource.Blob), v.info)
+	}
+	return v.info, b.Resource.Blob
+}
+
+func mcpAuditRows(f *mediaFixture) []ReadEvent {
+	var rows []ReadEvent
+	for _, e := range f.audit.recorded() {
+		if e.Action == "mcp."+toolGetAttachment {
+			rows = append(rows, e)
+		}
+	}
+	return rows
+}
+
+func TestPartsJoinToTheServedBytes(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		declared int64
+		spool    *fakeSpool
+	}{
+		{"a job in memory", twoParts, mediaSpool(twoParts, "video/mp4", false)},
+		{"a job on disk", diskSize, newFakeSpool(mediaPartSize+5, false)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newMCPMediaFixture(t, mediaOptions{})
+			f.attach("MEDIA1", "video", c.declared)
+			job := f.ready(keyMedia, "MEDIA1", c.spool).job
+			cs, _ := f.session(keyMedia, protocols[0])
+			size, parts := c.spool.Size(), partsOf(c.spool.Size())
+			var joined []byte
+			for k := range parts {
+				res := call(t, cs, toolGetAttachment, f.partArgs(keyMedia, "MEDIA1", k))
+				info, data := partOf(t, res)
+				if info.Offset != int64(k)*mediaPartSize || info.Length != min(mediaPartSize, size-info.Offset) || info.Bytes != size || info.Parts != parts ||
+					info.State != dto.MediaReady || info.Reason != nil || info.ServedType != c.spool.served || info.ExpiresAt == nil {
+					t.Fatalf("part %d: status = %+v", k, info)
+				}
+				var fields map[string]json.RawMessage
+				if err := json.Unmarshal(structured(t, res), &fields); err != nil || fields["part"] != nil {
+					t.Fatalf("part %d: the status echoes the part index or does not decode: %v", k, err)
+				}
+				joined = append(joined, data...)
+			}
+			if int64(len(joined)) != size || !bytes.Equal(joined, c.spool.orig) {
+				t.Fatalf("the %d parts joined to %d bytes that differ from the %d served", parts, len(joined), size)
+			}
+			f.await("the release of the last part", func() bool { erasures, _ := c.spool.state(); return erasures == 1 })
+			if f.view(keyMedia, "MEDIA1").state != 0 || f.holds(job) != 0 || f.permits() != 0 {
+				t.Fatal("the last part did not complete the job, or left a hold or the permit")
+			}
+			if _, staged := f.slots(); staged != 0 || len(f.media.fetched()) != 1 {
+				t.Fatalf("%d staged slots and %d fetches after the parts, want none and the one fetch", staged, len(f.media.fetched()))
+			}
+			if ok, sent := f.metric(`wawarden_media_deliveries_total{transport="mcp",result="ok"}`), f.metric(`wawarden_media_delivered_bytes_total{transport="mcp"}`); ok != strconv.Itoa(parts) || sent != strconv.FormatInt(size, 10) {
+				t.Fatalf("mcp deliveries %s with %s bytes, want %d with %d", ok, sent, parts, size)
+			}
+			rows := mcpAuditRows(f)
+			if len(rows) != parts {
+				t.Fatalf("audit rows %+v, want one per part", rows)
+			}
+			for k, e := range rows {
+				if !e.OK || e.Reason != deliveryPart || e.Chat != groupChat || e.Bytes != min(mediaPartSize, size-int64(k)*mediaPartSize) {
+					t.Fatalf("row %d = %+v, want reason part with the part's length", k, e)
+				}
+			}
+		})
+	}
+}
+
+func TestAPartAtOrPastPartsIsNotSatisfiable(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA1", "document", smallSize)
+	spool := mediaSpool(smallSize, "application/pdf", false)
+	job := f.ready(keyMedia, "MEDIA1", spool).job
+	cs, rt := f.session(keyMedia, protocols[0])
+	for _, k := range []int{1, mediaMaxParts - 1} {
+		requireAttachmentError(t, call(t, cs, toolGetAttachment, f.partArgs(keyMedia, "MEDIA1", k)), codeRangeNotSatisfiable)
+		if _, _, body := rt.last().trace(); bytes.Contains(body, []byte(strconv.Itoa(mediaMaxParts-1))) {
+			t.Fatalf("the refusal echoes the part index: %s", body)
+		}
+	}
+	if f.holds(job) != 0 || f.permits() != 0 || f.view(keyMedia, "MEDIA1").state != mediaReady {
+		t.Fatal("a refused part kept a hold or the permit, or ended the job")
+	}
+	if erasures, intact := spool.state(); erasures != 0 || !intact {
+		t.Fatal("a refused part touched the spool")
+	}
+	info, data := partOf(t, call(t, cs, toolGetAttachment, f.partArgs(keyMedia, "MEDIA1", 0)))
+	if info.Parts != 1 || info.Offset != 0 || info.Length != smallSize || !bytes.Equal(data, spool.orig) {
+		t.Fatalf("the only part answered %+v", info)
+	}
+	rows := mcpAuditRows(f)
+	if len(rows) != 3 || rows[0].OK || rows[0].Reason != codeRangeNotSatisfiable || rows[0].Bytes != 0 || rows[2].Reason != deliveryPart || rows[2].Bytes != smallSize {
+		t.Fatalf("audit rows %+v", rows)
+	}
+}
+
+func TestGetAttachmentRefusesAPartOutsideItsBounds(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA1", "document", smallSize)
+	f.ready(keyMedia, "MEDIA1", mediaSpool(smallSize, "application/pdf", false))
+	for _, p := range protocols {
+		cs, _ := f.session(keyMedia, p)
+		for _, part := range []any{-1, mediaMaxParts, 2.5, nil, "0", argCanary, map[string]any{argCanary: 1}} {
+			res := call(t, cs, toolGetAttachment, f.partArgs(keyMedia, "MEDIA1", part))
+			requireAttachmentError(t, res, codeInvalidArguments)
+			if wire, _ := json.Marshal(res); bytes.Contains(wire, []byte(argCanary)) {
+				t.Fatalf("part %v was echoed: %s", part, wire)
+			}
+		}
+	}
+	if len(f.media.fetched()) != 1 || f.view(keyMedia, "MEDIA1").state != mediaReady || f.permits() != 0 {
+		t.Fatal("a refused argument reached the job")
+	}
+}
+
+func TestAPartCallStartsAJobWithTheRoutesAdmission(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{perHour: 1})
+	f.attach("VIDEO1", "video", twoParts)
+	f.attach("VIDEO2", "video", smallSize)
+	f.attach("IMAGE1", "image", mediaImageCeiling+1)
+	cs, _ := f.session(keyMedia, protocols[0])
+	requireAttachmentError(t, call(t, cs, toolGetAttachment, f.partArgs(keyMedia, "IMAGE1", 0)), codeMediaTooLarge)
+	spool := mediaSpool(twoParts, "video/mp4", false)
+	f.media.answer("VIDEO1", fetchAnswer{spool: spool})
+	if _, data := partOf(t, call(t, cs, toolGetAttachment, f.partArgs(keyMedia, "VIDEO1", 1))); !bytes.Equal(data, spool.orig[mediaPartSize:]) {
+		t.Fatal("the part of a job a part call started differs from the fetched bytes")
+	}
+	partOf(t, call(t, cs, toolGetAttachment, f.partArgs(keyMedia, "VIDEO1", 1)))
+	f.media.mu.Lock()
+	prechecked := slices.Clone(f.media.prechecked)
+	f.media.mu.Unlock()
+	if fetched := f.media.fetched(); len(fetched) != 1 || fetched[0].ID != "VIDEO1" || !slices.Equal(prechecked, []int64{twoParts}) {
+		t.Fatalf("fetches %+v and prechecks %v, want the one admission", fetched, prechecked)
+	}
+	if w := f.post(keyMedia, "VIDEO2"); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("POST after the only hourly fetch = %d, want 429", w.Code)
+	}
+	requireAttachmentError(t, call(t, cs, toolGetAttachment, f.partArgs(keyMedia, "VIDEO2", 0)), codeRateLimited)
+	if got := f.metric(`wawarden_media_fetches_total{result="global_limited"}`); got != "2" {
+		t.Fatalf("global_limited fetches = %s, want the POST and the part call", got)
+	}
+}
+
+func TestAPartCallOnAFetchOnDiskAnswersItsState(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("DISK1", "document", diskSize)
+	cs, _ := f.session(keyMedia, protocols[0])
+	for range 2 {
+		v := attachmentOf(t, call(t, cs, toolGetAttachment, f.partArgs(keyMedia, "DISK1", 1)))
+		if v.block != nil || v.info.State != dto.MediaFetching || v.info.Delivery != deliveryMetadata || v.info.Reason == nil || *v.info.Reason != reasonFetching ||
+			v.info.RetryAfterSeconds == nil || *v.info.RetryAfterSeconds != 2 || v.info.Offset != 0 || v.info.Length != 0 {
+			t.Fatalf("a part call on a disk fetch answered %+v", v.info)
+		}
+	}
+	f.fetches(1)
+	spool := newFakeSpool(mediaPartSize+5, false)
+	f.media.answer("DISK1", fetchAnswer{spool: spool})
+	f.settled(keyMedia, "DISK1")
+	if info, data := partOf(t, call(t, cs, toolGetAttachment, f.partArgs(keyMedia, "DISK1", 1))); info.Offset != mediaPartSize || !bytes.Equal(data, spool.orig[mediaPartSize:]) {
+		t.Fatalf("the second part answered %+v", info)
+	}
+	if rows := mcpAuditRows(f); len(rows) != 3 || rows[0].Reason != deliveryMetadata || rows[0].Bytes != 0 || rows[2].Reason != deliveryPart {
+		t.Fatalf("audit rows %+v", rows)
+	}
+}
+
+func TestOnlyTheLastOutstandingPartCompletesTheJob(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("DISK1", "document", diskSize)
+	spool := newFakeSpool(mediaPartSize+5, false)
+	f.ready(keyMedia, "DISK1", spool)
+	cs, _ := f.session(keyMedia, protocols[0])
+	for range 2 {
+		partOf(t, call(t, cs, toolGetAttachment, f.partArgs(keyMedia, "DISK1", 1)))
+		if f.view(keyMedia, "DISK1").state != mediaReady {
+			t.Fatal("a repeated part ended the job while part 0 was outstanding")
+		}
+	}
+	if erasures, _ := spool.state(); erasures != 0 {
+		t.Fatal("the spool was erased before the last outstanding part")
+	}
+	partOf(t, call(t, cs, toolGetAttachment, f.partArgs(keyMedia, "DISK1", 0)))
+	if erasures, _ := spool.state(); erasures != 1 || f.view(keyMedia, "DISK1").state != 0 {
+		t.Fatal("the last outstanding part did not erase the job")
+	}
+	if v := attachmentOf(t, call(t, cs, toolGetAttachment, f.partArgs(keyMedia, "DISK1", 0))); v.info.State != dto.MediaFetching {
+		t.Fatalf("a part after the completed job answered %+v, want a new fetch", v.info)
+	}
+	f.fetches(2)
+}
+
+func TestAPartHoldOutlivesEveryEraseUntilTheResultIsWritten(t *testing.T) {
+	for _, trigger := range eraseTriggers {
+		t.Run(trigger.name, func(t *testing.T) {
+			f := newMCPMediaFixture(t, mediaOptions{})
+			f.attach("MEDIA1", "video", twoParts)
+			spool := mediaSpool(twoParts, "video/mp4", false)
+			job := f.ready(keyMedia, "MEDIA1", spool).job
+			cs, rt := f.session(keyMedia, protocols[0])
+			paused := f.pausedCall(t.Context(), cs, rt, f.partArgs(keyMedia, "MEDIA1", 1))
+			if f.holds(job) != 1 || f.permits() != 1 {
+				t.Fatalf("published with %d holds and %d permits, want 1 and 1", f.holds(job), f.permits())
+			}
+			trigger.trigger(f)
+			if v, _ := f.m.lookup(f.key(keyMedia, "MEDIA1"), false); v.state != 0 {
+				t.Fatal("the trigger did not erase the job")
+			}
+			if erasures, intact := spool.state(); erasures != 0 || !intact {
+				t.Fatalf("the spool was cleared while a published part referenced it: %d erasures, intact %v", erasures, intact)
+			}
+			cleared := make(chan bool, 1)
+			rt.last().mu.Lock()
+			rt.last().onWrite = func() {
+				erasures, _ := spool.state()
+				cleared <- erasures != 0 || f.permits() != 1 || f.holds(job) != 1
+			}
+			rt.last().mu.Unlock()
+			info, data := partOf(t, paused.finish(t))
+			if early := <-cleared; early {
+				t.Fatal("the hold, the permit or the spool was released before the library wrote the part")
+			}
+			if info.Offset != mediaPartSize || !bytes.Equal(data, spool.orig[mediaPartSize:]) {
+				t.Fatalf("the written part differs from the source: %+v", info)
+			}
+			f.await("the release after the write", func() bool {
+				erasures, _ := spool.state()
+				return erasures == 1 && f.holds(job) == 0 && f.permits() == 0
+			})
+			if _, staged := f.slots(); staged != 0 {
+				t.Fatalf("%d staged slots after the release", staged)
+			}
+		})
+	}
+}
+
+func TestPerJobDeliveryCapsAreSharedByBothTransports(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA1", "video", twoParts)
+	f.ready(keyMedia, "MEDIA1", mediaSpool(twoParts, "video/mp4", false))
+	cs, _ := f.session(keyMedia, protocols[0])
+	ranged := func(last int64) *deadlineWriter {
+		return f.get(keyMedia, "MEDIA1", http.Header{"Range": {"bytes=0-" + strconv.FormatInt(last, 10)}})
+	}
+	partOf(t, call(t, cs, toolGetAttachment, f.partArgs(keyMedia, "MEDIA1", 0)))
+	for range mediaShare - 1 {
+		if w := ranged(twoParts - 2); w.Code != http.StatusPartialContent {
+			t.Fatalf("a range within the share = %d", w.Code)
+		}
+	}
+	rest := int64(mediaShare*twoParts - mediaPartSize - (mediaShare-1)*(twoParts-1))
+	requireWriterError(t, ranged(rest), http.StatusTooManyRequests, codeRateLimited)
+	if w := ranged(rest - 1); w.Code != http.StatusPartialContent {
+		t.Fatalf("a range that fits the share's rest = %d", w.Code)
+	}
+	requireAttachmentError(t, call(t, cs, toolGetAttachment, f.partArgs(keyMedia, "MEDIA1", 1)), codeRateLimited)
+	if rest, mcp := f.metric(`wawarden_media_deliveries_total{transport="rest",result="over_cap"}`), f.metric(`wawarden_media_deliveries_total{transport="mcp",result="over_cap"}`); rest != "1" || mcp != "1" {
+		t.Fatalf("over_cap deliveries: rest %s, mcp %s, want 1 and 1", rest, mcp)
+	}
+	if f.view(keyMedia, "MEDIA1").state != mediaReady || f.permits() != 0 {
+		t.Fatal("a refused part ended the job or kept the permit")
+	}
+}
+
+func TestAConcurrentPartCallAnswersBusy(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		declared int64
+		spool    *fakeSpool
+		holds    int
+	}{
+		{"in memory, under a job hold", smallSize, mediaSpool(smallSize, "video/mp4", false), 1},
+		{"on disk, without a job hold", diskSize, newFakeSpool(smallSize, false), 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newMCPMediaFixture(t, mediaOptions{})
+			f.attach("MEDIA1", "video", c.declared)
+			job := f.ready(keyMedia, "MEDIA1", c.spool).job
+			cs, rt := f.session(keyMedia, protocols[0])
+			paused := f.pausedCall(t.Context(), cs, rt, f.partArgs(keyMedia, "MEDIA1", 0))
+			other, _ := f.session(keyMedia, protocols[1])
+			requireAttachmentError(t, call(t, other, toolGetAttachment, f.partArgs(keyMedia, "MEDIA1", 0)), codeBusy)
+			if f.holds(job) != c.holds || f.permits() != 1 {
+				t.Fatalf("the busy call left %d holds and %d permits, want %d and the first call's permit", f.holds(job), f.permits(), c.holds)
+			}
+			if _, data := partOf(t, paused.finish(t)); !bytes.Equal(data, c.spool.orig) {
+				t.Fatal("the published part differs from the source")
+			}
+			f.await("the release", func() bool { return f.holds(job) == 0 && f.permits() == 0 })
+			if f.view(keyMedia, "MEDIA1").state != 0 {
+				t.Fatal("the only part did not complete the job")
+			}
+		})
+	}
+}
+
+func TestAnUnwrittenPartIsNotDelivered(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA1", "video", twoParts)
+	spool := mediaSpool(twoParts, "video/mp4", false)
+	job := f.ready(keyMedia, "MEDIA1", spool).job
+	cs, rt := f.session(keyMedia, protocols[0])
+	rt.mu.Lock()
+	rt.prepare = func(w *mcpWire) { w.failWrites = true }
+	rt.mu.Unlock()
+	if res, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: toolGetAttachment, Arguments: f.partArgs(keyMedia, "MEDIA1", 1)}); err == nil && !res.IsError {
+		t.Fatal("the client received the part")
+	}
+	f.await("the release", func() bool { return f.holds(job) == 0 && f.permits() == 0 })
+	fresh, _ := f.session(keyMedia, protocols[0])
+	partOf(t, call(t, fresh, toolGetAttachment, f.partArgs(keyMedia, "MEDIA1", 0)))
+	if f.view(keyMedia, "MEDIA1").state != mediaReady {
+		t.Fatal("a part the client never received counted toward completing the job")
+	}
+	partOf(t, call(t, fresh, toolGetAttachment, f.partArgs(keyMedia, "MEDIA1", 1)))
+	if f.view(keyMedia, "MEDIA1").state != 0 {
+		t.Fatal("the written parts did not complete the job")
+	}
+	if ok, incomplete := f.metric(`wawarden_media_deliveries_total{transport="mcp",result="ok"}`), f.metric(`wawarden_media_deliveries_total{transport="mcp",result="incomplete"}`); ok != "2" || incomplete != "1" {
+		t.Fatalf("deliveries ok %s, incomplete %s, want 2 and 1", ok, incomplete)
+	}
+}
+
+func TestAPanicOnThePartPathReleasesTheHoldAndThePermit(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	logs := installPanicReporter(t, metrics.NewRegistry())
+	f.attach("MEDIA1", "video", twoParts)
+	spool := mediaSpool(twoParts, "video/mp4", false)
+	job := f.ready(keyMedia, "MEDIA1", spool).job
+	spool.mu.Lock()
+	spool.hook = func(int) { panic(secretPanic{text: panicCanary}) }
+	spool.mu.Unlock()
+	cs, _ := f.session(keyMedia, protocols[0])
+	requireAttachmentError(t, call(t, cs, toolGetAttachment, f.partArgs(keyMedia, "MEDIA1", 1)), codeInternal)
+	if f.holds(job) != 0 || f.permits() != 0 {
+		t.Fatalf("a panic left %d holds and %d permits", f.holds(job), f.permits())
+	}
+	if strings.Contains(logs.String(), panicCanary) {
+		t.Fatal("the panic value leaked")
+	}
+	f.m.mu.Lock()
+	running, reserved := job.running, job.reserved
+	f.m.mu.Unlock()
+	if running != 0 || reserved != 0 || f.view(keyMedia, "MEDIA1").state != mediaReady {
+		t.Fatalf("a panic left %d running and %d reserved, or ended the job", running, reserved)
+	}
+}
+
+func TestAnEightMiBPartsWholeResponseStaysUnder16MiB(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA1", "video", 2*mediaPartSize)
+	f.ready(keyMedia, "MEDIA1", mediaSpool(2*mediaPartSize, "video/mp4", false))
+	w := newMCPWire()
+	f.serveAttachmentCall(w, `{"message":"`+f.mref(keyMedia, "MEDIA1")+`","part":1}`)
+	_, _, body := w.trace()
+	if w.code != http.StatusOK || !bytes.Contains(body, []byte(attachmentPartURI)) || len(body) < 4*mediaPartSize/3 {
+		t.Fatalf("the part call answered %d with %d bytes", w.code, len(body))
+	}
+	if len(body) >= 16<<20 {
+		t.Fatalf("the JSON-RPC response of an 8 MiB part is %d bytes, at or over 16 MiB", len(body))
+	}
 }
