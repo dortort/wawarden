@@ -26,6 +26,7 @@ func samples() []dto.Response {
 		dto.Health{Status: "ok"},
 		dto.Metrics(metrics.NewRegistry()),
 		dto.Status{State: "connected", Paired: true, Counts: dto.StatusCounts{Chats: 1}, Clients: dto.StatusClients{AllChatsActive: 1}, Warnings: []string{"all_chats_client"}, Downloads: "paused", LastIngestAt: &last, Version: "dev"},
+		dto.MediaPause{Paused: true},
 		dto.Pairing{Code: "ABCD1234"},
 		dto.Accepted{Status: "accepted"},
 		sampleClient(),
@@ -130,7 +131,12 @@ func TestEncode(t *testing.T) {
 			wantContentType: "application/json; charset=utf-8",
 			wantBody:        `{"state":"disconnected","reason":"replaced","paired":true,"counts":{"chats":2,"messages":3,"history_blobs_pending":4,"history_blobs_quarantined":5,"inbox_backlog":6,"inbox_quarantined":7,"backfills_today":11,"media_refs_live":12,"media_refs_expired":13,"revoke_tombstones":14},"clients":{"active":8,"expired":9,"revoked":10,"all_chats_active":1},"warnings":["all_chats_client"],"downloads":"on","last_ingest_at":null,"version":"v0.2.0"}`,
 		},
-
+		{
+			name:            "media pause",
+			response:        dto.MediaPause{Paused: true},
+			wantContentType: "application/json; charset=utf-8",
+			wantBody:        `{"paused":true}`,
+		},
 		{
 			name:            "pairing",
 			response:        dto.Pairing{Code: "ABCD1234"},

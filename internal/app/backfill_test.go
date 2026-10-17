@@ -213,7 +213,7 @@ func TestTheStatusCountsOnlyTheBackfillsRequestedSinceUTCMidnight(t *testing.T) 
 			t.Fatalf("requestBackfill at %v: %v", at, err)
 		}
 	}
-	st, err := adminService{engine: a.engine, archive: a.archive, now: func() time.Time { return midnight.Add(time.Hour) }}.Status(t.Context())
+	st, err := adminService{engine: a.engine, archive: a.archive, now: func() time.Time { return midnight.Add(time.Hour) }, pause: &api.MediaPause{}}.Status(t.Context())
 	if err != nil || st.BackfillsToday != 1 {
 		t.Fatalf("Status = %d backfills today, %v; want 1", st.BackfillsToday, err)
 	}

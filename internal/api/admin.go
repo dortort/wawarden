@@ -15,9 +15,11 @@ const (
 	actionPair       = "pair"
 	actionReconnect  = "reconnect"
 	actionBackfill   = "backfill"
+	actionMediaPause = "media_pause"
 	chatRefChars     = 32
 	downloadsOff     = "off"
 	downloadsOn      = "on"
+	downloadsPaused  = "paused"
 	maxBackfillCount = 50
 	outcomeOK        = "ok"
 	warningAllChats  = "all_chats_client"
@@ -58,6 +60,7 @@ type AdminStatus struct {
 	MediaRefsExpired int64
 	RevokeTombstones int64
 	Downloads        bool
+	MediaPaused      bool
 	Clients          ClientCounts
 	LastIngest       time.Time
 	Version          string
@@ -76,12 +79,17 @@ type AdminService interface {
 	Pair(ctx context.Context) (code string, err error)
 	Reconnect(ctx context.Context) error
 	Backfill(g policy.AdminGrant, ctx context.Context, chat policy.CanonicalChat, count int) (requestID string, err error)
+	PauseMedia(paused bool)
 	ClientService
 }
 
 type backfillRequest struct {
 	Chat  string `json:"chat"`
 	Count *int   `json:"count"`
+}
+
+type mediaPauseRequest struct {
+	Paused *bool `json:"paused"`
 }
 
 type AdminEvents interface {
@@ -131,6 +139,13 @@ func registerAdmin(rt *router, svc AdminService, events AdminEvents) {
 			return nil, err
 		}
 		return dto.BackfillRequested{RequestID: id}, nil
+	}))
+	rt.admin("POST /admin/v1/media", decodedMutation(events, actionMediaPause, maxBodyBytes, func(_ context.Context, _ policy.AdminGrant, _ *Request, body mediaPauseRequest) (dto.Response, error) {
+		if body.Paused == nil {
+			return nil, errBadBody
+		}
+		svc.PauseMedia(*body.Paused)
+		return dto.MediaPause{Paused: *body.Paused}, nil
 	}))
 	registerClients(rt, svc, events)
 }
@@ -192,7 +207,10 @@ func statusResponse(s AdminStatus) dto.Status {
 		warnings = append(warnings, warningMedia)
 	}
 	downloads := downloadsOff
-	if s.Downloads {
+	switch {
+	case s.Downloads && s.MediaPaused:
+		downloads = downloadsPaused
+	case s.Downloads:
 		downloads = downloadsOn
 	}
 	var last *string

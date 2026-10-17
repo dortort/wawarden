@@ -30,7 +30,7 @@ const (
 )
 
 var surfaceFloors = map[string]int{
-	"command": 16, "default": 1, "emf-metric": 8, "env": 31, "event": 16, "exit-code": 6, "flag": 56, "mcp-tool": 35, "metric": 21, "route": 22,
+	"command": 16, "default": 1, "emf-metric": 8, "env": 31, "event": 16, "exit-code": 6, "flag": 56, "mcp-tool": 35, "metric": 21, "route": 23,
 }
 
 type constDecl struct {

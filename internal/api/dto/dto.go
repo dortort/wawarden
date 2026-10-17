@@ -99,6 +99,12 @@ type StatusCounts struct {
 
 func (s Status) encode() (string, []byte, error) { return encodeJSON(s) }
 
+type MediaPause struct {
+	Paused bool `json:"paused"`
+}
+
+func (p MediaPause) encode() (string, []byte, error) { return encodeJSON(p) }
+
 type Pairing struct {
 	Code string `json:"code"`
 }
