@@ -1529,6 +1529,7 @@ func TestAnOrphanedResultIsReleasedAfterTheHandlerAndTheSettle(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			paused := f.pausedCall(ctx, cs, rt, keyMedia, "MEDIA1")
 			cancel()
+			f.awaitTheLibraryLettingGoOfTheCall()
 			_, transient := f.m.lookup(f.key(keyMedia, "MEDIA1"), true)
 			if erased {
 				f.clock.advance(mediaRAMLife)
@@ -1541,6 +1542,9 @@ func TestAnOrphanedResultIsReleasedAfterTheHandlerAndTheSettle(t *testing.T) {
 				t.Fatal("the cancelled call returned a result")
 			}
 			<-rt.last().served
+			if events, _, _ := rt.last().trace(); slices.Contains(events, "write") {
+				t.Fatalf("the library wrote the result of a call whose client had left: %v", events)
+			}
 			for range 20 {
 				if f.holds(job) != 2 || f.permits() != 1 {
 					t.Fatalf("before the settle: %d holds and %d permits, want 2 and 1", f.holds(job), f.permits())
@@ -1571,6 +1575,20 @@ func TestAnOrphanedResultIsReleasedAfterTheHandlerAndTheSettle(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The library's stateless serve waits for the handler, so only the call's stack shows it has let go of the response.
+func (f *mediaFixture) awaitTheLibraryLettingGoOfTheCall() {
+	f.t.Helper()
+	buf := make([]byte, 4<<20)
+	f.await("the library to let go of the cancelled call", func() bool {
+		for g := range bytes.SplitSeq(buf[:runtime.Stack(buf, true)], []byte("\n\n")) {
+			if bytes.Contains(g, []byte("mcp.(*ClientSession).CallTool(")) && bytes.Contains(g, []byte("mcp.(*ServerSession).Close(")) {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 func TestAHandlerThatFindsTheExchangeClosedPublishesNothing(t *testing.T) {
