@@ -648,9 +648,14 @@ func (m *mediaRegistry) sweepOn(tick <-chan time.Time) {
 			m.shutdown()
 			return
 		case <-tick:
-			m.sweep(m.root)
+			m.sweepOnce()
 		}
 	}
+}
+
+func (m *mediaRegistry) sweepOnce() {
+	defer safego.Recover(mediaSweepPanic)
+	m.sweep(m.root)
 }
 
 func (m *mediaRegistry) sweep(ctx context.Context) {
