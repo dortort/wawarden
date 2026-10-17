@@ -128,9 +128,9 @@ its image digest and the commands to verify and reproduce it.
   as untrusted.
 - An attachment over 16 MiB is staged in `spool/` only as AES-GCM ciphertext
   under a key held in memory, in a private file erased when its job ends.
-  `spool/` must be private to the service's user, every start empties it, and
-  no backup includes it. At or below 16 MiB no attachment byte touches the
-  disk.
+  `spool/` must be private to the service's user, every start removes every
+  regular file in it, and no backup includes it. At or below 16 MiB no
+  attachment byte touches the disk.
 - The deletion guarantee covers the media type and media reference of revoked
   and expired messages, including messages revoked before the upgrade. A
   revocation of a message not stored yet is refused for a target its sender

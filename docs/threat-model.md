@@ -361,12 +361,12 @@ These are stated so that nobody relies on WaWarden for them:
      touches the disk. Above it, an attachment over 16 MiB is staged in
      `spool/` as AES-GCM sector ciphertext under a key drawn for the file and
      held only in memory, in a `0600` file whose name is removed at once on
-     the `local` profile, and erased when its job ends. Every start empties
-     `spool/`, and backups exclude it. Outside `internal/stage` and tests,
-     the `spool-directory` architecture rule refuses a literal path element
-     `spool`, in a string literal, a run of concatenated literals or a run
-     assembled from the file's constants, and any use of `stage.Dir` except
-     the start-time check in `internal/config`
+     the `local` profile, and erased when its job ends. Every start removes
+     every regular file in `spool/`, and backups exclude it. Outside
+     `internal/stage` and tests, the `spool-directory` architecture rule
+     refuses a literal path element `spool`, in a string literal, a run of
+     concatenated literals or a run assembled from the file's constants, and
+     any use of `stage.Dir` except the start-time check in `internal/config`
      (`internal/archtest/spooldir_test.go`).
    - Backups are encrypted to an operator-supplied age recipient, so the
      service can write them but not read them. Before each backup, `backups/`

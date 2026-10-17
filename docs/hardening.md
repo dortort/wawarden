@@ -344,8 +344,8 @@ taken or old ones are pruned instead:
   the next backup prunes again.
 
 `spool/` holds only the files the service stages there, each with mode `0600`
-and sealed under a key held in memory, and `serve` empties it at every start
-([data directory](configuration.md#data-directory)).
+and sealed under a key held in memory, and `serve` removes every regular file
+in it at every start ([data directory](configuration.md#data-directory)).
 
 Mechanisms that add group bits, such as Kubernetes `fsGroup` or a setgid
 parent directory, fail the checks.
