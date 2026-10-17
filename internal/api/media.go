@@ -150,6 +150,7 @@ type mediaJob struct {
 	disk     bool
 	tag      [16]byte
 	cancel   context.CancelFunc
+	done     chan struct{}
 
 	state   mediaState
 	failure *codedError
@@ -339,7 +340,7 @@ func (m *mediaRegistry) admit(g policy.ReadGrant, key mediaKey, req MediaFetch, 
 	ctx, cancel := context.WithCancel(m.root)
 	j := &mediaJob{
 		key: key, grant: g, kind: req.Kind, variant: req.Variant, declared: req.Declared, disk: disk, cancel: cancel,
-		state: mediaFetching, staged: true,
+		state: mediaFetching, staged: true, done: make(chan struct{}),
 	}
 	rand.Read(j.tag[:])
 	m.jobs[key] = j
@@ -444,8 +445,24 @@ func (m *mediaRegistry) settle(j *mediaJob, spool MediaSpool, err error) {
 	} else {
 		result = m.failedLocked(j, err, &after)
 	}
+	j.wake()
 	m.fetches.With(result).Inc()
 	m.liveLocked()
+}
+
+func (j *mediaJob) wake() {
+	select {
+	case <-j.done:
+	default:
+		close(j.done)
+	}
+}
+
+func (j *mediaJob) await(ctx context.Context) {
+	select {
+	case <-j.done:
+	case <-ctx.Done():
+	}
 }
 
 func (m *mediaRegistry) readyLocked(j *mediaJob, spool MediaSpool, after *cleanups) {
@@ -494,6 +511,7 @@ func (m *mediaRegistry) eraseLocked(j *mediaJob, cause error) func() {
 		delete(m.jobs, j.key)
 	}
 	j.cancel()
+	j.wake()
 	m.liveLocked()
 	if j.state != mediaReady {
 		return nil
