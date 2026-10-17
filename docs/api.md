@@ -977,11 +977,12 @@ an image served as `image/jpeg` or `image/png` without `normalised` gets its
 status alone, and a document whose image bytes the normaliser refused is
 served as `application/octet-stream`, with `format` `image` and `normalised`
 `false`, as a blob. Audio served as `application/octet-stream` comes as a blob
-too. Some MCP hosts write a blob to a file. Claude Code 2.1.286, for one, saves
-every blob that is not an image and every audio block to a file, decoded, with
-an extension taken from its type; it shows an image to the model and saves it
-too, and shows an image over 2000 pixels a side scaled down while the saved
-file keeps the original.
+too. Some MCP hosts write a blob to a file. Claude Code 2.1.286, for one,
+negotiates the 2026-07-28 protocol, so it receives audio as an audio block. It
+saves every blob that is not an image and every audio block to a file,
+decoded, with an extension taken from its type; it shows an image to the model
+and saves it too, and shows an image over 2000 pixels a side scaled down while
+the saved file keeps the original.
 
 ##### Parts
 
