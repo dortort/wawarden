@@ -574,6 +574,19 @@ func (m *mediaRegistry) drop(key mediaKey) {
 	}
 }
 
+func (m *mediaRegistry) dropExpired(key mediaKey) bool {
+	var after cleanups
+	defer after.run()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	j := m.currentLocked(key, &after)
+	if j == nil || j.state != mediaFailed || j.failure != errMediaExpired {
+		return false
+	}
+	after.add(m.eraseLocked(j, errDeliveryDropped))
+	return true
+}
+
 func (m *mediaRegistry) dropJob(j *mediaJob) {
 	var after cleanups
 	defer after.run()
@@ -880,6 +893,9 @@ func (s *reads) mediaRead(ctx context.Context, g policy.ReadGrant, r *Request) (
 	}
 	noteMessage(ctx, a.Chat, a.ID, a.Sender)
 	key := mediaKey{client: g.Client(), chat: a.Chat, id: a.ID, sender: a.Sender}
+	if !a.Usable && s.media != nil && s.media.dropExpired(key) {
+		return nil, a.Chat, errMediaExpired
+	}
 	if !s.eligible(key, a.Usable) {
 		return nil, a.Chat, errMediaUnavailable
 	}
