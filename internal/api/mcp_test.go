@@ -1514,8 +1514,14 @@ func TestAPausedDownloadAnswersBusyOverMCPAndKeepsTheTool(t *testing.T) {
 	if err != nil || !slices.ContainsFunc(tools.Tools, func(tool *mcp.Tool) bool { return tool.Name == toolGetAttachment }) {
 		t.Fatalf("the tools listed while paused lack %s: %v", toolGetAttachment, err)
 	}
-	requireAttachmentError(t, call(t, cs, toolGetAttachment, f.attachmentArgs(keyMedia, "MEDIA1")), codeBusy)
-	requireAttachmentError(t, call(t, cs, toolGetAttachment, f.partArgs(keyMedia, "MEDIA1", 0)), codeBusy)
+	for _, args := range []map[string]any{f.attachmentArgs(keyMedia, "MEDIA1"), f.partArgs(keyMedia, "MEDIA1", 0)} {
+		res := call(t, cs, toolGetAttachment, args)
+		requireAttachmentError(t, res, codeBusy)
+		var info dto.AttachmentInfo
+		if err := json.Unmarshal(structured(t, res), &info); err != nil || info.RetryAfterSeconds == nil || *info.RetryAfterSeconds != 60 {
+			t.Fatalf("a paused call answered %s, want retry_after_seconds 60", structured(t, res))
+		}
+	}
 	if len(f.media.fetched()) != 0 || f.metric(`wawarden_media_fetches_total{result="busy"}`) != "2" {
 		t.Fatalf("%d fetches and %s busy refusals while paused", len(f.media.fetched()), f.metric(`wawarden_media_fetches_total{result="busy"}`))
 	}
