@@ -373,13 +373,13 @@ func probeWrites(f *readFixture, archive ReadArchive) *writes {
 
 func probeEndpoint(t *testing.T, f *readFixture, archive ReadArchive, deadline time.Duration) string {
 	t.Helper()
-	f.handler.(*pipeline).router.mcp("POST /probe/mcp", newMCPEndpoint(probeReads(f, archive), probeWrites(f, archive), fixedNow, deadline))
+	f.handler.(*pipeline).router.mcp("POST /probe/mcp", newMCPEndpoint(probeReads(f, archive), probeWrites(f, archive), fixedNow, deadline, defaultInlineLimits()))
 	return "http://wawarden.invalid/probe/mcp"
 }
 
 func TestMCPEndpointRefusesARequestWithoutThePipelinesClient(t *testing.T) {
 	f := newMCPFixture(t)
-	endpoint := newMCPEndpoint(probeReads(f, f.archive), probeWrites(f, f.archive), fixedNow, mcpCallDeadline)
+	endpoint := newMCPEndpoint(probeReads(f, f.archive), probeWrites(f, f.archive), fixedNow, mcpCallDeadline, defaultInlineLimits())
 	rec := rawMCP(t, endpoint, keyGroup, legacyCall("tools/list", "{}"), legacyHeader)
 	if rec.Code != http.StatusUnauthorized || strings.Contains(rec.Body.String(), toolListChats) {
 		t.Fatalf("an endpoint reached without the pipeline = %d %s, want 401", rec.Code, rec.Body.String())

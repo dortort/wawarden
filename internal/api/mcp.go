@@ -15,7 +15,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/dortort/wawarden/internal/buildinfo"
+	"github.com/dortort/wawarden/internal/cursor"
 	"github.com/dortort/wawarden/internal/policy"
+	"github.com/dortort/wawarden/internal/safego"
 )
 
 const (
@@ -24,6 +26,8 @@ const (
 	maxMCPBodyBytes = 64 << 10
 	maxMCPDepth     = 16
 	mcpCallDeadline = 10 * time.Second
+	mcpOrphanSettle = 2 * time.Second
+	mcpOrphanPanic  = "api.mcp.orphan"
 
 	actionMCP = "mcp.protocol"
 
@@ -37,28 +41,35 @@ var mcpMethods = []string{"initialize", "notifications/initialized", "ping", "se
 
 type mcpEndpoint struct {
 	handler http.Handler
+	now     func() time.Time
+	settles <-chan time.Time
 }
 
-func newMCPEndpoint(s *reads, w *writes, now func() time.Time, deadline time.Duration) *mcpEndpoint {
+type mcpClass struct{ write, media bool }
+
+func newMCPEndpoint(s *reads, w *writes, now func() time.Time, deadline time.Duration, media inlineLimits) *mcpEndpoint {
 	version := buildinfo.Read().Version
-	read := mcp.NewServer(&mcp.Implementation{Name: mcpServerName, Version: version}, &mcp.ServerOptions{
-		Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{}},
-	})
-	readKit := &toolkit{reads: s, writes: w, now: now, deadline: deadline}
-	registerTools(read, readKit)
-	read.AddReceivingMiddleware(allowedMethods(readKit.names))
-	write := mcp.NewServer(&mcp.Implementation{Name: mcpServerName, Version: version}, &mcp.ServerOptions{
-		Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{}},
-	})
-	writeKit := &toolkit{reads: s, writes: w, now: now, deadline: deadline}
-	registerTools(write, writeKit)
-	registerWriteTools(write, writeKit)
-	write.AddReceivingMiddleware(allowedMethods(writeKit.names))
-	serverFor := func(r *http.Request) *mcp.Server {
-		if _, ok := policy.DecideWrite(clientFrom(r.Context()), now()); ok {
-			return write
+	servers := map[mcpClass]*mcp.Server{}
+	for _, class := range []mcpClass{{}, {write: true}, {media: true}, {write: true, media: true}} {
+		server := mcp.NewServer(&mcp.Implementation{Name: mcpServerName, Version: version}, &mcp.ServerOptions{
+			Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{}},
+		})
+		kit := &toolkit{reads: s, writes: w, now: now, deadline: deadline, media: media}
+		registerTools(server, kit)
+		if class.media {
+			registerMediaTools(server, kit)
 		}
-		return read
+		if class.write {
+			registerWriteTools(server, kit)
+		}
+		server.AddReceivingMiddleware(allowedMethods(kit.names))
+		servers[class] = server
+	}
+	serverFor := func(r *http.Request) *mcp.Server {
+		c := clientFrom(r.Context())
+		_, write := policy.DecideWrite(c, now())
+		g, _ := policy.DecideRead(c, now())
+		return servers[mcpClass{write: write, media: s.media != nil && g.Media()}]
 	}
 	sdk := mcp.NewStreamableHTTPHandler(serverFor, &mcp.StreamableHTTPOptions{
 		Stateless:                  true,
@@ -66,7 +77,7 @@ func newMCPEndpoint(s *reads, w *writes, now func() time.Time, deadline time.Dur
 		MaxRequestBodyBytes:        maxMCPBodyBytes,
 		DisableLocalhostProtection: true,
 	})
-	return &mcpEndpoint{handler: auth.RequireBearerToken(pipelineClient, nil)(sdk)}
+	return &mcpEndpoint{handler: auth.RequireBearerToken(pipelineClient, nil)(sdk), now: now}
 }
 
 func (m *mcpEndpoint) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -83,18 +94,40 @@ func (m *mcpEndpoint) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
-	x := &exchange{action: actionMCP, reason: codeBadRequest}
+	x := &exchange{action: actionMCP, reason: codeBadRequest, returned: make(chan struct{})}
 	out := &mcpWriter{ResponseWriter: w, x: x, note: note}
+	rc := http.NewResponseController(out)
+	x.extend = func() error { return rc.SetWriteDeadline(m.now().Add(deliveryWindow)) }
 	m.handler.ServeHTTP(out, r.WithContext(context.WithValue(r.Context(), exchangeKey{}, x)))
-	switch {
-	case out.started:
+	hold := x.close()
+	if out.started {
+		hold.release(!out.failed && auditCommitted(w))
 		return
-	case r.Context().Err() != nil:
+	}
+	m.orphan(x, hold)
+	if r.Context().Err() != nil {
 		// The client has left, so the header only commits the audit row of the call's outcome.
 		out.WriteHeader(http.StatusOK)
 		return
 	}
 	writeError(out, http.StatusInternalServerError, codeInternal)
+}
+
+func (m *mcpEndpoint) orphan(x *exchange, hold *deliveryHold) {
+	if hold == nil {
+		return
+	}
+	safego.Go(mcpOrphanPanic, func() {
+		defer hold.orphan()
+		<-x.returned
+		if m.settles != nil {
+			<-m.settles
+			return
+		}
+		t := time.NewTimer(mcpOrphanSettle)
+		defer t.Stop()
+		<-t.C
+	})
 }
 
 func mcpBody(w http.ResponseWriter, r *http.Request) ([]byte, *codedError) {
@@ -120,10 +153,17 @@ func pipelineClient(ctx context.Context, _ string, _ *http.Request) (*auth.Token
 
 // The library answers a tool call on its own goroutine, which may still run after the request has ended.
 type exchange struct {
-	mu     sync.Mutex
-	action string
-	chat   policy.CanonicalChat
-	reason string
+	mu       sync.Mutex
+	action   string
+	chat     policy.CanonicalChat
+	reason   string
+	message  cursor.Ref
+	bytes    int64
+	closed   bool
+	hold     *deliveryHold
+	extend   func() error
+	returned chan struct{}
+	ended    sync.Once
 }
 
 type exchangeKey struct{}
@@ -142,10 +182,59 @@ func (x *exchange) settle(action string, chat policy.CanonicalChat, reason strin
 	x.action, x.chat, x.reason = action, chat, reason
 }
 
+func (x *exchange) settleMedia(action string, chat policy.CanonicalChat, reason string, bytes int64) {
+	if x == nil {
+		return
+	}
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.action, x.chat, x.reason, x.bytes = action, chat, reason, bytes
+}
+
+func (x *exchange) noteMessage(message cursor.Ref) {
+	if x == nil {
+		return
+	}
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.message = message
+}
+
+func (x *exchange) publish(ctx context.Context, hold *deliveryHold) bool {
+	if x == nil || hold == nil {
+		return false
+	}
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if x.closed || ctx.Err() != nil || x.extend() != nil {
+		return false
+	}
+	x.hold = hold
+	return true
+}
+
+func (x *exchange) close() *deliveryHold {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.closed = true
+	hold := x.hold
+	x.hold = nil
+	return hold
+}
+
+func (x *exchange) handlerReturned() {
+	if x != nil {
+		x.ended.Do(func() { close(x.returned) })
+	}
+}
+
 func (x *exchange) noteOn(n *auditNote, status int) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	n.action, n.chat, n.reason = x.action, x.chat, x.reason
+	if x.chat != (policy.CanonicalChat{}) {
+		n.message, n.bytes = x.message, x.bytes
+	}
 	if status == http.StatusAccepted {
 		n.reason = ""
 	}
@@ -156,6 +245,7 @@ type mcpWriter struct {
 	x       *exchange
 	note    *auditNote
 	started bool
+	failed  bool
 }
 
 func (m *mcpWriter) WriteHeader(status int) {
@@ -173,7 +263,11 @@ func (m *mcpWriter) Write(p []byte) (int, error) {
 	if !m.started {
 		m.WriteHeader(http.StatusOK)
 	}
-	return m.ResponseWriter.Write(p)
+	n, err := m.ResponseWriter.Write(p)
+	if err != nil || n < len(p) {
+		m.failed = true
+	}
+	return n, err
 }
 
 func (m *mcpWriter) Unwrap() http.ResponseWriter { return m.ResponseWriter }

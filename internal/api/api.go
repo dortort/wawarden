@@ -73,7 +73,7 @@ func newClientHandler(d ClientDeps) (http.Handler, *reads) {
 	w := &writes{reads: s, sender: d.Sender, rejected: d.SendRejected, now: now}
 	registerReads(p.router, s)
 	registerWrites(p.router, w)
-	p.router.mcp(mcpPattern, newMCPEndpoint(s, w, now, mcpCallDeadline))
+	p.router.mcp(mcpPattern, newMCPEndpoint(s, w, now, mcpCallDeadline, defaultInlineLimits()))
 	return p, s
 }
 
