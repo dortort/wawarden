@@ -2095,6 +2095,29 @@ func TestGetAttachmentRefusesAPartOutsideItsBounds(t *testing.T) {
 	}
 }
 
+func TestAShortReadSendsNoBlock(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA1", "document", smallSize)
+	spool := newFakeSpool(smallSize, true)
+	v := f.ready(keyMedia, "MEDIA1", spool)
+	spool.mu.Lock()
+	spool.data = spool.data[:smallSize-5]
+	spool.mu.Unlock()
+	cs, _ := f.session(keyMedia, protocols[0])
+	for _, c := range []struct {
+		name string
+		args map[string]any
+	}{
+		{"the whole file", f.attachmentArgs(keyMedia, "MEDIA1")},
+		{"part 0", f.partArgs(keyMedia, "MEDIA1", 0)},
+	} {
+		requireAttachmentError(t, call(t, cs, toolGetAttachment, c.args), codeInternal)
+		if f.holds(v.job) != 0 || f.permits() != 0 {
+			t.Fatalf("a short read of %s kept a hold or the permit", c.name)
+		}
+	}
+}
+
 func TestAPartCallStartsAJobWithTheRoutesAdmission(t *testing.T) {
 	f := newMCPMediaFixture(t, mediaOptions{perHour: 1})
 	f.attach("VIDEO1", "video", twoParts)
