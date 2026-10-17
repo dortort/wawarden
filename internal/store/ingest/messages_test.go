@@ -653,6 +653,20 @@ func TestPurgeMediaRefsRemovesExpiredAndAgedReferences(t *testing.T) {
 	}
 }
 
+func TestAPurgeSharesItsLimitBetweenExpiredAndAgedReferences(t *testing.T) {
+	s := openStore(t)
+	expiring := mediaMessage(t, alice, "E", alice, "", "sealed-E")
+	expiring.ExpiresAt = epoch.Add(time.Hour)
+	insert(t, s, expiring)
+	for _, id := range []string{"N1", "N2", "N3"} {
+		insert(t, s, mediaMessage(t, alice, id, alice, "", "sealed-"+id))
+	}
+	for i, want := range []int{2, 2, 0} {
+		if n := purgeRefs(t, s, epoch.Add(2*time.Hour), time.Hour, true, 2); n != want {
+			t.Fatalf("purge %d with a limit of 2 over one expired and three aged references removed %d, want %d", i+1, n, want)
+		}
+	}
+}
 func TestPurgeMediaRefsRemovesEveryReferenceWhileDownloadsAreOff(t *testing.T) {
 	s := openStore(t)
 	for i := range 3 {
