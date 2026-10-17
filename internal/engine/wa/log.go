@@ -30,7 +30,7 @@ const (
 
 var (
 	logQuotedURL  = regexp.MustCompile(`"((?i:https?|wss?)://(?:[^"\\]|\\.)*)"`)
-	logBareURL    = regexp.MustCompile("\\b((?i:https?|wss?)://[^" + logStop + "]*)")
+	logBareURL    = regexp.MustCompile("((?i:https?|wss?)://[^" + logStop + "]*)")
 	logCDNPath    = regexp.MustCompile("(/(?:o1/|m1/)?v/t[0-9][^" + logStop + "]*)")
 	logQueryPath  = regexp.MustCompile("(?:^|[^\\w.~%+/@-])(/[^" + logStop + "]*[?&][^" + logStop + "]*)")
 	logMediaParam = regexp.MustCompile("\\b(?:hash|mms-type|oh|oe|_nc_\\w+|__wa-mms)=([^&" + logStop + "]+)")

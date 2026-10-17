@@ -184,6 +184,7 @@ func TestScrubMedia(t *testing.T) {
 		"retry oh=01_Q5AaSynthetic&oe=6700AB12&_nc_sid=5e03e0 and hash=" + encHash + " mms-type=image": "retry oh=[param]&oe=[param]&_nc_sid=[param] and hash=[param] mms-type=[param]",
 		"dial wss://chat.example.test/ws/chat failed":                                                  "dial [url] failed",
 		"HTTPS://Media.Example/x?oh=1, then 'http://cdn.example.test/y'":                               "[url], then '[url]'",
+		"xhttps://media.example/plain/path done":                                                       "x[url] done",
 	} {
 		if got := scrubMedia(in); got != want {
 			t.Errorf("scrubMedia(%q) = %q, want %q", in, got, want)
