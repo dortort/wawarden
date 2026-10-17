@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"io/fs"
 	"log"
@@ -15,15 +16,21 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"runtime/debug"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/dortort/wawarden/internal/api/dto"
+	"github.com/dortort/wawarden/internal/cursor"
 	"github.com/dortort/wawarden/internal/metrics"
 	"github.com/dortort/wawarden/internal/policy"
 	"github.com/dortort/wawarden/internal/ratelimit"
@@ -446,7 +453,7 @@ func sampleArguments(t *testing.T, tool *mcp.Tool) map[string]any {
 	if err := json.Unmarshal(raw, &schema); err != nil {
 		t.Fatalf("decode the input schema of %s: %v", tool.Name, err)
 	}
-	samples := map[string]any{"chat": groupRef, "query": "synthetic", "text": "synthetic hello", "idempotency_key": "sample-key-0001"}
+	samples := map[string]any{"chat": groupRef, "query": "synthetic", "text": "synthetic hello", "idempotency_key": "sample-key-0001", "message": "m1_synthetic-sample"}
 	args := map[string]any{}
 	for _, name := range schema.Required {
 		v, ok := samples[name]
@@ -463,7 +470,7 @@ func TestEveryListedToolAnswersThroughItsHelper(t *testing.T) {
 		for _, class := range []struct {
 			key   string
 			names []string
-		}{{keyGroup, toolNames}, {keyAlice, writeNames}} {
+		}{{keyGroup, toolNames}, {keyAlice, writeNames}, {keyGroupMedia, mediaNames}, {keyAliceMedia, mediaWriteNames}} {
 			t.Run(p.name+"/"+class.key, func(t *testing.T) {
 				listedToolsAnswerThroughTheirHelper(t, p, class.key, class.names)
 			})
@@ -472,11 +479,18 @@ func TestEveryListedToolAnswersThroughItsHelper(t *testing.T) {
 }
 
 func listedToolsAnswerThroughTheirHelper(t *testing.T, p protocol, key string, names []string) {
-	f := newMCPFixture(t)
-	f.clients[keyRevoked] = &policy.Client{ID: "client-revoked", ReadAll: true, Revoked: true, ExpiresAt: mcpExpiry}
+	f := newMCPGrantFixture(t, true)
+	f.clients[keyRevoked] = &policy.Client{ID: "client-revoked", ReadAll: true, Revoked: true, AllowMedia: true, ExpiresAt: mcpExpiry}
 	logs := installPanicReporter(t, metrics.NewRegistry())
-	panicking := connectAt(t, f.handler, probeEndpoint(t, f, panickingArchive{}, mcpCallDeadline), key, p)
+	probe := probeReads(f, panickingArchive{})
+	probe.media = newMediaRegistry(*testMediaDeps(t, &fakeMedia{}), panickingArchive{}, metrics.NewRegistry(), fixedNow)
+	f.handler.(*pipeline).router.mcp("POST /probe/mcp", newMCPEndpoint(probe, probeWrites(f, panickingArchive{}), fixedNow, mcpCallDeadline, defaultInlineLimits()))
+	panicking := connectAt(t, f.handler, probeMCPURL, key, p)
 	reader, revoked := connect(t, f.handler, key, p), connect(t, f.handler, keyRevoked, p)
+	mref, err := f.refs.SealRef(f.clients[key].ID, cursor.Ref{Chat: groupChat.JID(), ID: "SYNTHETIC1", Sender: aliceChat.JID()})
+	if err != nil {
+		t.Fatalf("SealRef: %v", err)
+	}
 	tools, err := reader.ListTools(t.Context(), nil)
 	if err != nil || len(tools.Tools) != len(names) {
 		t.Fatalf("list tools = %v, %v", tools, err)
@@ -488,17 +502,23 @@ func listedToolsAnswerThroughTheirHelper(t *testing.T, p protocol, key string, n
 		if tool.Name != names[i] || tool.Annotations == nil || tool.Annotations.ReadOnlyHint != (tool.Name != toolSendMessage) || tool.OutputSchema == nil {
 			t.Errorf("%s is listed without the hint and output schema its helper gives it", tool.Name)
 		}
-		args := sampleArguments(t, tool)
-		if tool.Name == toolSendMessage {
+		args, refused := sampleArguments(t, tool), requireToolError
+		if tool.Name == toolGetAttachment {
+			args["message"], refused = mref, requireAttachmentError
+			if a := tool.Annotations; !a.IdempotentHint || a.OpenWorldHint == nil || !*a.OpenWorldHint {
+				t.Errorf("%s is listed without the idempotent and open-world hints of mediaTool", tool.Name)
+			}
+		}
+		if tool.Name == toolSendMessage || tool.Name == toolGetAttachment {
 			if _, err := revoked.CallTool(t.Context(), &mcp.CallToolParams{Name: tool.Name, Arguments: args}); err == nil || !strings.Contains(err.Error(), "unknown tool") {
 				t.Fatalf("a revoked client called %s: %v", tool.Name, err)
 			}
 		} else {
-			requireToolError(t, call(t, revoked, tool.Name, args), codeNotFound)
+			refused(t, call(t, revoked, tool.Name, args), codeNotFound)
 		}
-		requireToolError(t, call(t, panicking, tool.Name, args), codeInternal)
+		refused(t, call(t, panicking, tool.Name, args), codeInternal)
 		res := call(t, reader, tool.Name, args)
-		requireToolError(t, res, codeInternal)
+		refused(t, res, codeInternal)
 		if wire, _ := json.Marshal(res); bytes.Contains(wire, []byte(argCanary)) {
 			t.Fatalf("%s put the store error on the wire: %s", tool.Name, wire)
 		}
@@ -520,6 +540,10 @@ func TestOnlyToolsRegisteredThroughTheHelpersAreCallable(t *testing.T) {
 	if names := slices.Sorted(slices.Values(k.names)); !slices.Equal(names, writeNames) {
 		t.Fatalf("readTool and writeTool recorded %q, want %q", names, writeNames)
 	}
+	registerMediaTools(server, k)
+	if names := slices.Sorted(slices.Values(k.names)); !slices.Equal(names, mediaWriteNames) {
+		t.Fatalf("readTool, writeTool and mediaTool recorded %q, want %q", names, mediaWriteNames)
+	}
 	server.AddTool(&mcp.Tool{Name: "unrecorded", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: argCanary}}}, nil
 	})
@@ -540,6 +564,7 @@ func TestOnlyToolsRegisteredThroughTheHelpersAreCallable(t *testing.T) {
 	}
 	requireToolError(t, call(t, cs, toolListChats, nil), codeNotFound)
 	requireToolError(t, call(t, cs, toolSendMessage, map[string]any{"chat": aliceRef, "text": "synthetic", "idempotency_key": "no-client-0001"}), codeNotFound)
+	requireAttachmentError(t, call(t, cs, toolGetAttachment, map[string]any{"message": "m1_synthetic-sample"}), codeNotFound)
 	if calls := f.sender.requests(); len(calls) != 0 {
 		t.Fatalf("a call without a write grant reached the sender: %+v", calls)
 	}
@@ -824,20 +849,40 @@ func TestMCPToolListMatchesTheGoldenFiles(t *testing.T) {
 	}
 	f := newMCPFixture(t)
 	validName := regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
+	type listing struct {
+		key   string
+		names []string
+	}
 	for _, p := range protocols {
-		for class, c := range map[string]struct {
-			key   string
-			names []string
-		}{"read_chats": {keyGroup, toolNames}, "all_chats": {keyAll, toolNames}, "write_chats": {keyAlice, writeNames}} {
+		for class, c := range map[string]listing{"read_chats": {keyGroup, toolNames}, "all_chats": {keyAll, toolNames}, "write_chats": {keyAlice, writeNames}} {
 			t.Run(p.name+"/"+class, func(t *testing.T) {
-				toolListMatchesTheGoldenFile(t, f, p, class, c.key, c.names, validName)
+				toolListMatchesTheGoldenFile(t, f.handler, p, class, c.key, c.names, validName)
 			})
+		}
+		for _, downloads := range []bool{false, true} {
+			g := newMCPGrantFixture(t, downloads)
+			classes := map[string]listing{
+				"read_chats": {keyGroup, toolNames}, "all_chats": {keyAll, toolNames}, "write_chats": {keyAlice, writeNames},
+			}
+			media := map[string]listing{"read_chats": {keyGroupMedia, toolNames}, "all_chats": {keyAllMedia, toolNames}, "write_chats": {keyAliceMedia, writeNames}}
+			if downloads {
+				media = map[string]listing{
+					"read_chats_media": {keyGroupMedia, mediaNames}, "all_chats_media": {keyAllMedia, mediaNames}, "write_chats_media": {keyAliceMedia, mediaWriteNames},
+				}
+			}
+			for name, golden := range map[string]map[string]listing{"without allow_media": classes, "with allow_media": media} {
+				for class, c := range golden {
+					t.Run(fmt.Sprintf("%s/downloads %v/%s/%s", p.name, downloads, name, class), func(t *testing.T) {
+						toolListMatchesTheGoldenFile(t, g.handler, p, class, c.key, c.names, validName)
+					})
+				}
+			}
 		}
 	}
 }
 
-func toolListMatchesTheGoldenFile(t *testing.T, f *readFixture, p protocol, class, key string, names []string, validName *regexp.Regexp) {
-	rec := &recordingTransport{handlerTransport: handlerTransport{handler: f.handler, key: key}}
+func toolListMatchesTheGoldenFile(t *testing.T, h http.Handler, p protocol, class, key string, names []string, validName *regexp.Regexp) {
+	rec := &recordingTransport{handlerTransport: handlerTransport{handler: h, key: key}}
 	cs := connectThrough(t, rec, p)
 	if _, err := cs.ListTools(t.Context(), nil); err != nil {
 		t.Fatalf("list tools: %v", err)
@@ -883,5 +928,869 @@ func toolListMatchesTheGoldenFile(t *testing.T, f *readFixture, p protocol, clas
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("the %s tool list differs from %s (regenerate with -update-mcp-tools after review):\n%s", class, path, got)
+	}
+}
+
+const (
+	keyGroupMedia = "synthetic-group-media-reader"
+	keyAllMedia   = "synthetic-all-media-reader"
+	keyAliceMedia = "synthetic-alice-media-writer"
+	probeMCPURL   = "http://wawarden.invalid/probe/mcp"
+)
+
+var (
+	mediaNames      = []string{toolGetAttachment, toolGetChanges, toolGetChat, toolGetMessages, toolListChats, toolSearchMessages}
+	mediaWriteNames = []string{toolGetAttachment, toolGetChanges, toolGetChat, toolGetMessages, toolListChats, toolSearchMessages, toolSendMessage}
+	beforeAudio     = protocol{name: protocolNoAudio, opts: &mcp.ClientSessionOptions{ProtocolVersion: protocolNoAudio}}
+)
+
+func testMediaDeps(t *testing.T, service MediaService) *MediaDeps {
+	t.Helper()
+	root, stop := context.WithCancel(context.Background())
+	stopped := make(chan struct{})
+	t.Cleanup(func() {
+		stop()
+		<-stopped
+	})
+	return &MediaDeps{
+		Service: service, MaxBytes: 100 << 20, PerMinute: 30, GlobalPerHour: 600, GlobalBytesPerHour: 64 << 30, Root: root,
+		ClientLive: func(context.Context, string) (bool, error) { return true, nil }, Stopped: func() { close(stopped) }, sweeps: make(chan time.Time),
+	}
+}
+
+func withMedia(c *policy.Client) *policy.Client {
+	m := *c
+	m.ID, m.AllowMedia = c.ID+"-media", true
+	return &m
+}
+
+func newMCPGrantFixture(t *testing.T, downloads bool) *readFixture {
+	t.Helper()
+	f := newMCPFixture(t)
+	f.clients[keyGroupMedia], f.clients[keyAllMedia], f.clients[keyAliceMedia] = withMedia(f.clients[keyGroup]), withMedia(f.clients[keyAll]), withMedia(f.clients[keyAlice])
+	deps := testClientDeps(t, f.clients, f.clock.now)
+	deps.Archive, deps.Audit, deps.Cursors, deps.Refs, deps.Sender = f.archive, f.audit, f.cursors, f.refs, f.sender
+	if downloads {
+		deps.Media = testMediaDeps(t, &fakeMedia{})
+	}
+	f.handler = NewClientHandler(deps)
+	return f
+}
+
+func newMCPMediaFixture(t *testing.T, o mediaOptions) *mediaFixture {
+	t.Helper()
+	f := newMediaFixture(t, o)
+	for _, c := range f.clients {
+		c.ExpiresAt = mcpExpiry
+	}
+	return f
+}
+
+type mcpWire struct {
+	mu         sync.Mutex
+	header     http.Header
+	code       int
+	body       bytes.Buffer
+	events     []string
+	deadlines  []time.Time
+	onDeadline func()
+	onWrite    func()
+	failWrites bool
+	discard    bool
+	served     chan struct{}
+}
+
+func newMCPWire() *mcpWire { return &mcpWire{header: http.Header{}, served: make(chan struct{})} }
+
+func (w *mcpWire) Header() http.Header { return w.header }
+
+func (w *mcpWire) WriteHeader(code int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.code == 0 {
+		w.code = code
+	}
+	w.events = append(w.events, "header")
+}
+
+func (w *mcpWire) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	if w.code == 0 {
+		w.code = http.StatusOK
+	}
+	w.events = append(w.events, "write")
+	hook, fail, discard := w.onWrite, w.failWrites, w.discard
+	w.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	switch {
+	case fail:
+		return 0, errors.New("synthetic: the connection was reset")
+	case discard:
+		return len(p), nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.body.Write(p)
+}
+
+func (w *mcpWire) SetWriteDeadline(t time.Time) error {
+	w.mu.Lock()
+	w.deadlines = append(w.deadlines, t)
+	w.events = append(w.events, "deadline")
+	hook := w.onDeadline
+	w.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return nil
+}
+
+func (w *mcpWire) trace() ([]string, []time.Time, []byte) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.events), slices.Clone(w.deadlines), bytes.Clone(w.body.Bytes())
+}
+
+type wireTransport struct {
+	handler http.Handler
+	key     string
+	mu      sync.Mutex
+	prepare func(w *mcpWire)
+	calls   []*mcpWire
+}
+
+func (t *wireTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, err
+	}
+	r = r.Clone(r.Context())
+	r.Body = readCloser{bytes.NewReader(body)}
+	r.Header.Set("Authorization", "Bearer "+t.key)
+	var msg struct {
+		Method string `json:"method"`
+	}
+	_ = json.Unmarshal(body, &msg)
+	w := newMCPWire()
+	if msg.Method == "tools/call" {
+		t.mu.Lock()
+		prepare := t.prepare
+		t.calls = append(t.calls, w)
+		t.mu.Unlock()
+		if prepare != nil {
+			prepare(w)
+		}
+	}
+	t.handler.ServeHTTP(w, r)
+	close(w.served)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return &http.Response{StatusCode: w.code, Header: w.header.Clone(), Body: readCloser{bytes.NewReader(bytes.Clone(w.body.Bytes()))}, Request: r}, nil
+}
+
+func (t *wireTransport) last() *mcpWire {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.calls[len(t.calls)-1]
+}
+
+func connectWire(t *testing.T, rt http.RoundTripper, endpoint string, p protocol) *mcp.ClientSession {
+	t.Helper()
+	client := mcp.NewClient(&mcp.Implementation{Name: "wawarden-test", Version: "0"}, nil)
+	transport := &mcp.StreamableClientTransport{Endpoint: endpoint, HTTPClient: &http.Client{Transport: rt}, DisableStandaloneSSE: true}
+	cs, err := client.Connect(t.Context(), transport, p.opts)
+	if err != nil {
+		t.Fatalf("connect over %s: %v", p.name, err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+	return cs
+}
+
+func (f *mediaFixture) session(key string, p protocol) (*mcp.ClientSession, *wireTransport) {
+	rt := &wireTransport{handler: f.handler, key: key}
+	return connectWire(f.t, rt, mcpEndpointURL, p), rt
+}
+
+func (f *mediaFixture) probe(settles <-chan time.Time) {
+	e := newMCPEndpoint(f.reads, &writes{reads: f.reads, sender: &fakeSender{}, rejected: func(string) {}, now: f.clock.now}, f.clock.now, mcpCallDeadline, defaultInlineLimits())
+	e.settles = settles
+	f.handler.(*pipeline).router.mcp("POST /probe/mcp", e)
+}
+
+func (f *mediaFixture) attachmentArgs(key, id string) map[string]any {
+	return map[string]any{"message": f.mref(key, id)}
+}
+
+func (f *mediaFixture) permits() int { return len(f.m.permit) }
+
+type attachmentView struct {
+	info  dto.AttachmentInfo
+	block mcp.Content
+}
+
+func attachmentOf(t *testing.T, res *mcp.CallToolResult) attachmentView {
+	t.Helper()
+	if res.IsError {
+		t.Fatalf("get_attachment refused: %+v", res.Content[0])
+	}
+	var v attachmentView
+	if err := json.Unmarshal(structured(t, res), &v.info); err != nil {
+		t.Fatalf("decode the structured content: %v", err)
+	}
+	n := len(res.Content)
+	preface, ok1 := res.Content[0].(*mcp.TextContent)
+	status, ok2 := res.Content[1].(*mcp.TextContent)
+	closing, ok3 := res.Content[n-1].(*mcp.TextContent)
+	if n < 3 || n > 4 || !ok1 || !ok2 || !ok3 || preface.Text != attachmentPreface || closing.Text != attachmentClosing || normalised(t, []byte(status.Text)) != normalised(t, structured(t, res)) {
+		t.Fatalf("the result is not bracketed by the constant texts around the status: %+v", res.Content)
+	}
+	if n == 4 {
+		v.block = res.Content[2]
+	}
+	return v
+}
+
+func blockBytes(t *testing.T, block mcp.Content) (kind, mime string, data []byte, meta mcp.Meta) {
+	t.Helper()
+	switch b := block.(type) {
+	case *mcp.ImageContent:
+		return "image", b.MIMEType, b.Data, b.Meta
+	case *mcp.AudioContent:
+		return "audio", b.MIMEType, b.Data, b.Meta
+	case *mcp.EmbeddedResource:
+		if b.Resource.URI != attachmentURI {
+			t.Fatalf("a blob carries the URI %q, want the constant %q", b.Resource.URI, attachmentURI)
+		}
+		return "blob", b.Resource.MIMEType, b.Resource.Blob, b.Meta
+	}
+	t.Fatalf("the result carries no media block: %T", block)
+	return "", "", nil, nil
+}
+
+func requireAttachmentError(t *testing.T, res *mcp.CallToolResult, code string) {
+	t.Helper()
+	text, ok := res.Content[0].(*mcp.TextContent)
+	if !res.IsError || len(res.Content) != 1 || !ok || text.Text != code {
+		t.Fatalf("result = %+v, want the error %s", res, code)
+	}
+	var shape dto.AttachmentInfo
+	if err := json.Unmarshal(structured(t, res), &shape); err != nil || shape.RestRoute != mediaRoute || !shape.Untrusted || shape.Notice != mediaNotice || shape.Kind != "" || shape.Bytes != 0 {
+		t.Fatalf("structured content %s is not the empty attachment shape", structured(t, res))
+	}
+}
+
+type formatSpool struct {
+	*fakeSpool
+	format string
+}
+
+func (s formatSpool) Format() string { return s.format }
+
+func mediaSpool(n int, served string, normalised bool) *fakeSpool {
+	s := newFakeSpool(n, true)
+	s.served, s.normalised = served, normalised
+	return s
+}
+
+func TestAHiddenGetAttachmentAnswersLikeAnUnknownTool(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		downloads bool
+		key       string
+	}{{"a client without allow_media", true, keyGroup}, {"downloads off", false, keyGroupMedia}} {
+		for _, p := range protocols {
+			t.Run(c.name+"/"+p.name, func(t *testing.T) {
+				f := newMCPGrantFixture(t, c.downloads)
+				cs := connect(t, f.handler, c.key, p)
+				var refusals []string
+				for _, name := range []string{toolGetAttachment, "nope"} {
+					_, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: name, Arguments: map[string]any{"message": argCanary}})
+					if err == nil || strings.Contains(err.Error(), name) || strings.Contains(err.Error(), argCanary) {
+						t.Fatalf("calling %q = %v, want the fixed unknown tool error", name, err)
+					}
+					refusals = append(refusals, err.Error())
+				}
+				if refusals[0] != refusals[1] {
+					t.Fatalf("a hidden get_attachment and an unknown tool differ: %q", refusals)
+				}
+				rows := f.audit.recorded()
+				for _, e := range rows[len(rows)-2:] {
+					if e.Action != actionMCP || e.Reason != codeUnknownTool || e.OK || e.Chat != (policy.CanonicalChat{}) || e.Bytes != 0 {
+						t.Fatalf("a hidden call was audited as %+v", e)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestGetAttachmentAnswersEachFormWithItsBlock(t *testing.T) {
+	for _, c := range []struct {
+		name, kind, served string
+		normalised         bool
+		p                  protocol
+		want               string
+	}{
+		{"a normalised image", "image", "image/jpeg", true, protocols[0], "image"},
+		{"a normalised sticker", "sticker", "image/png", true, protocols[1], "image"},
+		{"a document normalised as an image", "document", "image/jpeg", true, protocols[0], "image"},
+		{"a voice note", "audio", "audio/ogg", false, protocols[0], "audio"},
+		{"audio on the 2025-11-25 path", "audio", "audio/mp4", false, protocols[1], "audio"},
+		{"audio before audio blocks existed", "audio", "audio/mpeg", false, beforeAudio, "blob"},
+		{"audio served as bytes", "audio", "application/octet-stream", false, protocols[0], "blob"},
+		{"a video", "video", "video/mp4", false, protocols[0], "blob"},
+		{"a PDF", "document", "application/pdf", false, protocols[0], "blob"},
+		{"a document without magic", "document", "application/octet-stream", false, protocols[1], "blob"},
+		{"a Lottie sticker", "sticker", "application/octet-stream", false, protocols[0], "blob"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newMCPMediaFixture(t, mediaOptions{})
+			f.attach("MEDIA1", c.kind, smallSize)
+			spool := mediaSpool(smallSize, c.served, c.normalised)
+			f.ready(keyMedia, "MEDIA1", spool)
+			cs, rt := f.session(keyMedia, c.p)
+			v := attachmentOf(t, call(t, cs, toolGetAttachment, f.attachmentArgs(keyMedia, "MEDIA1")))
+			kind, mime, data, meta := blockBytes(t, v.block)
+			if kind != c.want || mime != c.served || !bytes.Equal(data, spool.orig) {
+				t.Fatalf("block = %s %s with %d bytes, want %s %s with the spool's %d", kind, mime, len(data), c.want, c.served, len(spool.orig))
+			}
+			if len(meta) != 1 || meta[untrustedMeta] != true {
+				t.Fatalf("the block's _meta = %v, want only %s: true", meta, untrustedMeta)
+			}
+			i := v.info
+			if i.Delivery != deliveryInline || i.Reason != nil || i.Offset != 0 || i.Length != smallSize || i.Bytes != smallSize || i.State != dto.MediaReady ||
+				i.ServedType != c.served || i.Normalised != c.normalised || i.Kind != c.kind || i.Parts != 1 || i.RestRoute != mediaRoute || !i.Untrusted || i.Notice != mediaNotice {
+				t.Fatalf("status = %+v", i)
+			}
+			events, deadlines, body := rt.last().trace()
+			if len(deadlines) != 1 || !deadlines[0].Equal(f.clock.now().Add(deliveryWindow)) || slices.Index(events, "deadline") > slices.Index(events, "header") {
+				t.Fatalf("the write deadline was not renewed to +30 s before the result was written: %v %v", events, deadlines)
+			}
+			if bytes.Contains(body, []byte(f.mref(keyMedia, "MEDIA1"))) {
+				t.Fatal("the result echoes the message argument")
+			}
+			if f.view(keyMedia, "MEDIA1").state != 0 {
+				t.Fatal("an inline result did not complete the job")
+			}
+			f.await("the spool to be cleared", func() bool { erasures, _ := spool.state(); return erasures == 1 })
+			if fetching, staged := f.slots(); fetching != 0 || staged != 0 || f.permits() != 0 {
+				t.Fatalf("%d fetching, %d staged, %d permits after the delivery", fetching, staged, f.permits())
+			}
+		})
+	}
+}
+
+func TestGetAttachmentAuditsTheMessageAndTheInlineBytes(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA1", "document", smallSize)
+	f.attach("MEDIA2", "video", 9<<20)
+	f.ready(keyMedia, "MEDIA1", mediaSpool(smallSize, "application/pdf", false))
+	cs, _ := f.session(keyMedia, protocols[0])
+	call(t, cs, toolGetAttachment, f.attachmentArgs(keyMedia, "MEDIA1"))
+	call(t, cs, toolGetAttachment, f.attachmentArgs(keyMedia, "MEDIA2"))
+	requireAttachmentError(t, call(t, cs, toolGetAttachment, f.attachmentArgs(keyMedia, "MISSING1")), codeNotFound)
+	var got []ReadEvent
+	for _, e := range f.audit.recorded() {
+		if e.Action == "mcp."+toolGetAttachment {
+			got = append(got, e)
+		}
+	}
+	message := func(id string) cursor.Ref { return cursor.Ref{Chat: groupChat.JID(), ID: id, Sender: aliceChat.JID()} }
+	want := []ReadEvent{
+		{Action: "mcp." + toolGetAttachment, Chat: groupChat, OK: true, Reason: deliveryInline, Message: message("MEDIA1"), Bytes: smallSize},
+		{Action: "mcp." + toolGetAttachment, Chat: groupChat, OK: true, Reason: reasonTooLargeForInline, Message: message("MEDIA2")},
+		{Action: "mcp." + toolGetAttachment, OK: false, Reason: codeNotFound},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("audit rows %+v", got)
+	}
+	for i, e := range got {
+		w := want[i]
+		if e.Client != "client-media" || e.Chat != w.Chat || e.OK != w.OK || e.Reason != w.Reason || e.Message != w.Message || e.Bytes != w.Bytes {
+			t.Fatalf("row %d = %+v, want %+v", i, e, w)
+		}
+	}
+}
+
+func TestGetAttachmentOverItsInlineLimitFetchesNothing(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{max: 12 << 20})
+	f.attach("VIDEO1", "video", 9<<20)
+	f.attach("STICKER1", "sticker", 2<<20)
+	f.attach("IMAGE1", "image", 13<<20)
+	cs, _ := f.session(keyMedia, protocols[0])
+	for _, c := range []struct {
+		id    string
+		parts int
+	}{{"VIDEO1", 2}, {"STICKER1", 1}, {"IMAGE1", 2}} {
+		v := attachmentOf(t, call(t, cs, toolGetAttachment, f.attachmentArgs(keyMedia, c.id)))
+		if v.block != nil || v.info.Delivery != deliveryPart || v.info.Reason == nil || *v.info.Reason != reasonTooLargeForInline || v.info.State != "" ||
+			v.info.Parts != c.parts || v.info.Bytes != 0 || v.info.ExpiresAt != nil {
+			t.Fatalf("%s: status = %+v", c.id, v.info)
+		}
+	}
+	if fetched := f.media.fetched(); len(fetched) != 0 || len(f.media.prechecked) != 0 {
+		t.Fatalf("a call over its inline limit reached the media service: %v", fetched)
+	}
+	if got := f.metric(`wawarden_media_fetches_total{result="too_large"}`); got != "0" {
+		t.Fatalf("too_large fetches = %s, want none counted", got)
+	}
+	if w := f.post(keyMedia, "VIDEO1"); w.Code != http.StatusAccepted {
+		t.Fatalf("the REST route refused a size the cap allows: %d", w.Code)
+	}
+}
+
+func TestGetAttachmentWaitsOnAnInMemoryFetch(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA1", "document", smallSize)
+	spool := mediaSpool(smallSize, "application/pdf", false)
+	cs, _ := f.session(keyMedia, protocols[0])
+	done := make(chan *mcp.CallToolResult, 1)
+	go func() {
+		res, _ := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: toolGetAttachment, Arguments: f.attachmentArgs(keyMedia, "MEDIA1")})
+		done <- res
+	}()
+	f.fetches(1)
+	f.media.answer("MEDIA1", fetchAnswer{spool: spool})
+	v := attachmentOf(t, <-done)
+	if _, _, data, _ := blockBytes(t, v.block); !bytes.Equal(data, spool.orig) {
+		t.Fatal("the waiting call did not return the fetched bytes")
+	}
+	if got := f.metric(`wawarden_media_deliveries_total{transport="mcp",result="ok"}`); got != "1" {
+		t.Fatalf("mcp deliveries = %s, want 1", got)
+	}
+	if got := f.metric(`wawarden_media_delivered_bytes_total{transport="mcp"}`); got != strconv.Itoa(smallSize) {
+		t.Fatalf("mcp delivered bytes = %s", got)
+	}
+}
+
+func TestGetAttachmentReportsADiskJobWithoutWaiting(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("DISK1", "document", diskSize)
+	if w := f.post(keyMedia, "DISK1"); w.Code != http.StatusAccepted {
+		t.Fatalf("POST = %d", w.Code)
+	}
+	cs, _ := f.session(keyMedia, protocols[0])
+	v := attachmentOf(t, call(t, cs, toolGetAttachment, f.attachmentArgs(keyMedia, "DISK1")))
+	if v.block != nil || v.info.State != dto.MediaFetching || v.info.Delivery != deliveryMetadata || v.info.Reason == nil || *v.info.Reason != reasonFetching ||
+		v.info.RetryAfterSeconds == nil || *v.info.RetryAfterSeconds != 2 {
+		t.Fatalf("a disk fetch answered %+v", v.info)
+	}
+	spool := newFakeSpool(smallSize, false)
+	f.media.answer("DISK1", fetchAnswer{spool: spool})
+	f.settled(keyMedia, "DISK1")
+	v = attachmentOf(t, call(t, cs, toolGetAttachment, f.attachmentArgs(keyMedia, "DISK1")))
+	if v.block != nil || v.info.State != dto.MediaReady || v.info.Delivery != deliveryPart || v.info.Reason != nil || v.info.Bytes != smallSize {
+		t.Fatalf("a ready disk job answered %+v", v.info)
+	}
+	if view := f.view(keyMedia, "DISK1"); view.state != mediaReady || f.holds(view.job) != 0 || f.permits() != 0 {
+		t.Fatal("a metadata answer kept a hold or the permit, or ended the job")
+	}
+}
+
+func TestGetAttachmentNeverSendsAnImageBlockForBytesTheNormaliserDidNotProduce(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("RAW1", "image", smallSize)
+	f.attach("BIG1", "image", 4<<20)
+	f.ready(keyMedia, "RAW1", mediaSpool(smallSize, "image/jpeg", false))
+	f.ready(keyMedia, "BIG1", mediaSpool(4<<20, "image/png", true))
+	cs, _ := f.session(keyMedia, protocols[0])
+	for id, reason := range map[string]*string{"RAW1": nil, "BIG1": new(reasonTooLargeForInline)} {
+		v := attachmentOf(t, call(t, cs, toolGetAttachment, f.attachmentArgs(keyMedia, id)))
+		if v.block != nil || v.info.Delivery != deliveryPart || (v.info.Reason == nil) != (reason == nil) || v.info.Parts != 1 {
+			t.Fatalf("%s answered %+v with %T", id, v.info, v.block)
+		}
+		if view := f.view(keyMedia, id); view.state != mediaReady || f.holds(view.job) != 0 {
+			t.Fatalf("%s: a metadata answer ended the job or kept its hold", id)
+		}
+	}
+}
+
+type pausedCall struct {
+	published chan struct{}
+	resume    chan struct{}
+	resumed   sync.Once
+	done      chan *mcp.CallToolResult
+	errs      chan error
+}
+
+func (c *pausedCall) unblock() { c.resumed.Do(func() { close(c.resume) }) }
+
+func (f *mediaFixture) pausedCall(ctx context.Context, cs *mcp.ClientSession, rt *wireTransport, key, id string) *pausedCall {
+	c := &pausedCall{published: make(chan struct{}), resume: make(chan struct{}), done: make(chan *mcp.CallToolResult, 1), errs: make(chan error, 1)}
+	rt.mu.Lock()
+	rt.prepare = func(w *mcpWire) {
+		w.onDeadline = func() {
+			close(c.published)
+			<-c.resume
+		}
+	}
+	rt.mu.Unlock()
+	args := f.attachmentArgs(key, id)
+	f.t.Cleanup(c.unblock)
+	go func() {
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: toolGetAttachment, Arguments: args})
+		c.done <- res
+		c.errs <- err
+	}()
+	select {
+	case <-c.published:
+	case res := <-c.done:
+		f.t.Fatalf("the call returned without publishing a result: %+v, %v", res, <-c.errs)
+	}
+	rt.mu.Lock()
+	rt.prepare = nil
+	rt.mu.Unlock()
+	return c
+}
+
+func (c *pausedCall) finish(t *testing.T) *mcp.CallToolResult {
+	t.Helper()
+	c.unblock()
+	res, err := <-c.done, <-c.errs
+	if err != nil {
+		t.Fatalf("the paused call failed: %v", err)
+	}
+	return res
+}
+
+func TestADeliveryHoldOutlivesEveryEraseUntilTheResultIsWritten(t *testing.T) {
+	for _, trigger := range eraseTriggers {
+		t.Run(trigger.name, func(t *testing.T) {
+			f := newMCPMediaFixture(t, mediaOptions{})
+			f.attach("MEDIA1", "document", smallSize)
+			spool := mediaSpool(smallSize, "application/pdf", false)
+			job := f.ready(keyMedia, "MEDIA1", spool).job
+			cs, rt := f.session(keyMedia, protocols[0])
+			paused := f.pausedCall(t.Context(), cs, rt, keyMedia, "MEDIA1")
+			if f.holds(job) != 1 || f.permits() != 1 {
+				t.Fatalf("published with %d holds and %d permits, want 1 and 1", f.holds(job), f.permits())
+			}
+			trigger.trigger(f)
+			if v, _ := f.m.lookup(f.key(keyMedia, "MEDIA1"), false); v.state != 0 {
+				t.Fatal("the trigger did not erase the job")
+			}
+			if erasures, intact := spool.state(); erasures != 0 || !intact {
+				t.Fatalf("the spool was cleared while a published result referenced it: %d erasures, intact %v", erasures, intact)
+			}
+			cleared := make(chan bool, 1)
+			rt.last().mu.Lock()
+			rt.last().onWrite = func() {
+				erasures, _ := spool.state()
+				cleared <- erasures != 0 || f.permits() != 1 || f.holds(job) != 1
+			}
+			rt.last().mu.Unlock()
+			v := attachmentOf(t, paused.finish(t))
+			if early := <-cleared; early {
+				t.Fatal("the hold, the permit or the spool was released before the library wrote the result")
+			}
+			if _, _, data, _ := blockBytes(t, v.block); !bytes.Equal(data, spool.orig) {
+				t.Fatal("the delivered bytes differ from the source")
+			}
+			f.await("the release after the write", func() bool {
+				erasures, _ := spool.state()
+				return erasures == 1 && f.holds(job) == 0 && f.permits() == 0
+			})
+			if _, staged := f.slots(); staged != 0 {
+				t.Fatalf("%d staged slots after the release", staged)
+			}
+		})
+	}
+}
+
+func TestASecondInlineCallWhileOneIsPublishedAnswersBusy(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA1", "document", smallSize)
+	job := f.ready(keyMedia, "MEDIA1", mediaSpool(smallSize, "application/pdf", false)).job
+	cs, rt := f.session(keyMedia, protocols[0])
+	paused := f.pausedCall(t.Context(), cs, rt, keyMedia, "MEDIA1")
+	other, _ := f.session(keyMedia, protocols[1])
+	res := call(t, other, toolGetAttachment, f.attachmentArgs(keyMedia, "MEDIA1"))
+	requireAttachmentError(t, res, codeBusy)
+	if f.holds(job) != 1 || f.permits() != 1 {
+		t.Fatalf("the busy call left %d holds and %d permits, want the first call's 1 and 1", f.holds(job), f.permits())
+	}
+	attachmentOf(t, paused.finish(t))
+	f.await("the release", func() bool { return f.holds(job) == 0 && f.permits() == 0 })
+}
+
+func TestAnOrphanedResultIsReleasedAfterTheHandlerAndTheSettle(t *testing.T) {
+	for _, erased := range []bool{false, true} {
+		t.Run(fmt.Sprintf("erased %v", erased), func(t *testing.T) {
+			f := newMCPMediaFixture(t, mediaOptions{})
+			settles := make(chan time.Time)
+			f.probe(settles)
+			f.attach("MEDIA1", "document", smallSize)
+			spool := mediaSpool(smallSize, "application/pdf", false)
+			job := f.ready(keyMedia, "MEDIA1", spool).job
+			rt := &wireTransport{handler: f.handler, key: keyMedia}
+			cs := connectWire(t, rt, probeMCPURL, protocols[0])
+			ctx, cancel := context.WithCancel(t.Context())
+			paused := f.pausedCall(ctx, cs, rt, keyMedia, "MEDIA1")
+			cancel()
+			_, transient := f.m.lookup(f.key(keyMedia, "MEDIA1"), true)
+			if erased {
+				f.clock.advance(mediaRAMLife)
+				f.ticks <- testNow
+				f.ticks <- testNow
+			}
+			paused.unblock()
+			<-paused.done
+			if err := <-paused.errs; err == nil {
+				t.Fatal("the cancelled call returned a result")
+			}
+			<-rt.last().served
+			for range 20 {
+				if f.holds(job) != 2 || f.permits() != 1 {
+					t.Fatalf("before the settle: %d holds and %d permits, want 2 and 1", f.holds(job), f.permits())
+				}
+				time.Sleep(time.Millisecond)
+			}
+			settles <- time.Time{}
+			f.await("the orphan release", func() bool { return f.holds(job) == 1 && f.permits() == 0 })
+			transient.release()
+			erasures, intact := spool.state()
+			if erasures != 0 || !intact {
+				t.Fatalf("a spool the library may still read was cleared: %d erasures, intact %v", erasures, intact)
+			}
+			if got := f.metric(`wawarden_media_deliveries_total{transport="mcp",result="ok"}`); got != "0" {
+				t.Fatalf("an orphaned result counted %s deliveries", got)
+			}
+			f.m.mu.Lock()
+			delivered := job.delivered
+			f.m.mu.Unlock()
+			_, staged := f.slots()
+			switch {
+			case delivered != 0:
+				t.Fatalf("the job counted %d delivered bytes", delivered)
+			case erased && staged != 0:
+				t.Fatalf("%d staged slots after the dropped spool", staged)
+			case !erased && f.view(keyMedia, "MEDIA1").state != mediaReady:
+				t.Fatal("an orphaned delivery ended the job")
+			}
+		})
+	}
+}
+
+func TestAHandlerThatFindsTheExchangeClosedPublishesNothing(t *testing.T) {
+	for name, x := range map[string]*exchange{
+		"closed":                   {returned: make(chan struct{}), closed: true, extend: func() error { return nil }},
+		"the deadline not renewed": {returned: make(chan struct{}), extend: func() error { return http.ErrNotSupported }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newMCPMediaFixture(t, mediaOptions{})
+			f.attach("MEDIA1", "document", smallSize)
+			job := f.ready(keyMedia, "MEDIA1", mediaSpool(smallSize, "application/pdf", false)).job
+			k := &toolkit{reads: f.reads, now: f.clock.now, media: defaultInlineLimits()}
+			resolved, err := inputSchema[getAttachmentArgs]().Resolve(nil)
+			if err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
+			raw, _ := json.Marshal(f.attachmentArgs(keyMedia, "MEDIA1"))
+			ctx := context.WithValue(withClient(t.Context(), f.clients[keyMedia]), exchangeKey{}, x)
+			req := &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{Name: toolGetAttachment, Arguments: raw}}
+			res, chat, reason, n := runMediaTool(ctx, k, resolved, req, func(ctx context.Context, g policy.ReadGrant, in getAttachmentArgs) (mediaAnswer, policy.CanonicalChat, error) {
+				return f.reads.attachmentCall(ctx, g, in.Message, k.media)
+			})
+			v := attachmentOf(t, res)
+			if v.block != nil || v.info.Delivery != deliveryMetadata || v.info.Length != 0 || chat != groupChat || reason != deliveryMetadata || n != 0 {
+				t.Fatalf("answered %+v (%s, %d bytes) with %T", v.info, reason, n, v.block)
+			}
+			if f.holds(job) != 0 || f.permits() != 0 || x.hold != nil || f.view(keyMedia, "MEDIA1").state != mediaReady {
+				t.Fatal("the handler kept its hold or the permit, published a hold, or ended the job")
+			}
+		})
+	}
+}
+
+func TestAnUnwrittenOrUnauditedResultIsReleasedWithoutCompletingTheJob(t *testing.T) {
+	for name, spoil := range map[string]func(f *mediaFixture, rt *wireTransport){
+		"a failed write": func(_ *mediaFixture, rt *wireTransport) {
+			rt.prepare = func(w *mcpWire) { w.failWrites = true }
+		},
+		"a failed audit row": func(f *mediaFixture, _ *wireTransport) {
+			f.audit.mu.Lock()
+			f.audit.fail = true
+			f.audit.mu.Unlock()
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newMCPMediaFixture(t, mediaOptions{})
+			f.attach("MEDIA1", "document", smallSize)
+			spool := mediaSpool(smallSize, "application/pdf", false)
+			job := f.ready(keyMedia, "MEDIA1", spool).job
+			cs, rt := f.session(keyMedia, protocols[0])
+			spoil(f, rt)
+			res, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: toolGetAttachment, Arguments: f.attachmentArgs(keyMedia, "MEDIA1")})
+			if err == nil && !res.IsError {
+				t.Fatal("the client received the result")
+			}
+			f.await("the release", func() bool { return f.holds(job) == 0 && f.permits() == 0 })
+			if f.view(keyMedia, "MEDIA1").state != mediaReady {
+				t.Fatal("a result the client never received completed the job")
+			}
+			if erasures, _ := spool.state(); erasures != 0 {
+				t.Fatal("the spool of a live job was cleared")
+			}
+			if ok, incomplete := f.metric(`wawarden_media_deliveries_total{transport="mcp",result="ok"}`), f.metric(`wawarden_media_deliveries_total{transport="mcp",result="incomplete"}`); ok != "0" || incomplete != "1" {
+				t.Fatalf("deliveries ok %s, incomplete %s, want 0 and 1", ok, incomplete)
+			}
+		})
+	}
+}
+
+func TestAPanicAfterTheHoldIsTakenReleasesIt(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	logs := installPanicReporter(t, metrics.NewRegistry())
+	f.attach("MEDIA1", "document", smallSize)
+	spool := mediaSpool(smallSize, "application/pdf", false)
+	job := f.ready(keyMedia, "MEDIA1", spool).job
+	spool.mu.Lock()
+	spool.hook = func(int) { panic(secretPanic{text: panicCanary}) }
+	spool.mu.Unlock()
+	cs, _ := f.session(keyMedia, protocols[0])
+	requireAttachmentError(t, call(t, cs, toolGetAttachment, f.attachmentArgs(keyMedia, "MEDIA1")), codeInternal)
+	if f.holds(job) != 0 || f.permits() != 0 {
+		t.Fatalf("a panic left %d holds and %d permits", f.holds(job), f.permits())
+	}
+	if strings.Contains(logs.String(), panicCanary) {
+		t.Fatal("the panic value leaked")
+	}
+	f.m.drop(f.key(keyMedia, "MEDIA1"))
+	if erasures, _ := spool.state(); erasures != 1 {
+		t.Fatalf("the dropped spool was erased %d times", erasures)
+	}
+	if _, staged := f.slots(); staged != 0 {
+		t.Fatalf("%d staged slots after the drop", staged)
+	}
+}
+
+func (f *mediaFixture) readyWith(key, id string, spool MediaSpool) {
+	f.t.Helper()
+	if w := f.post(key, id); w.Code != http.StatusAccepted {
+		f.t.Fatalf("POST = %d %s, want 202", w.Code, w.Body.String())
+	}
+	f.media.answer(id, fetchAnswer{spool: spool})
+	if v := f.settled(key, id); v.state != mediaReady {
+		f.t.Fatalf("the job settled in state %d, want ready", v.state)
+	}
+}
+
+func TestBothTransportsServeTheJobsOneSpool(t *testing.T) {
+	t.Run("a POST then a call: the normaliser's image", func(t *testing.T) {
+		f := newMCPMediaFixture(t, mediaOptions{})
+		f.attach("DOC1", "document", smallSize)
+		normalisedJPEG := mediaSpool(smallSize, "image/jpeg", true)
+		f.readyWith(keyMedia, "DOC1", formatSpool{fakeSpool: normalisedJPEG, format: "image"})
+		cs, _ := f.session(keyMedia, protocols[0])
+		v := attachmentOf(t, call(t, cs, toolGetAttachment, f.attachmentArgs(keyMedia, "DOC1")))
+		if kind, _, data, _ := blockBytes(t, v.block); kind != "image" || !bytes.Equal(data, normalisedJPEG.orig) || !v.info.Normalised || v.info.Format != "image" {
+			t.Fatalf("a document normalised as an image answered %s %+v", kind, v.info)
+		}
+	})
+	t.Run("a call then a GET: the same bytes", func(t *testing.T) {
+		f := newMCPMediaFixture(t, mediaOptions{})
+		f.attach("DOC1", "document", smallSize)
+		normalisedJPEG := mediaSpool(smallSize, "image/jpeg", true)
+		f.media.answer("DOC1", fetchAnswer{spool: formatSpool{fakeSpool: normalisedJPEG, format: "image"}})
+		cs, rt := f.session(keyMedia, protocols[0])
+		paused := f.pausedCall(t.Context(), cs, rt, keyMedia, "DOC1")
+		rest := f.get(keyMedia, "DOC1", nil)
+		v := attachmentOf(t, paused.finish(t))
+		_, _, data, _ := blockBytes(t, v.block)
+		if rest.Code != http.StatusOK || rest.Header().Get("Content-Type") != "image/jpeg" || !bytes.Equal(rest.Body.Bytes(), normalisedJPEG.orig) || !bytes.Equal(data, rest.Body.Bytes()) {
+			t.Fatalf("GET = %d %s, and the call's bytes differ from it", rest.Code, rest.Header().Get("Content-Type"))
+		}
+	})
+	refused := func(t *testing.T, f *mediaFixture) []byte {
+		t.Helper()
+		raw := mediaSpool(smallSize, "application/octet-stream", false)
+		f.media.answer("DOC1", fetchAnswer{spool: formatSpool{fakeSpool: raw, format: "image"}})
+		return raw.orig
+	}
+	requireRefusedImageBlob := func(t *testing.T, v attachmentView, want []byte) {
+		t.Helper()
+		kind, mime, data, _ := blockBytes(t, v.block)
+		if kind != "blob" || mime != "application/octet-stream" || v.info.Normalised || v.info.Format != "image" || !bytes.Equal(data, want) {
+			t.Fatalf("a JPEG document the normaliser refused answered %s %s %+v", kind, mime, v.info)
+		}
+	}
+	t.Run("a refused JPEG document, the call first", func(t *testing.T) {
+		f := newMCPMediaFixture(t, mediaOptions{})
+		f.attach("DOC1", "document", smallSize)
+		want := refused(t, f)
+		cs, rt := f.session(keyMedia, protocols[0])
+		paused := f.pausedCall(t.Context(), cs, rt, keyMedia, "DOC1")
+		rest := f.get(keyMedia, "DOC1", nil)
+		requireRefusedImageBlob(t, attachmentOf(t, paused.finish(t)), rest.Body.Bytes())
+		if rest.Code != http.StatusOK || !bytes.Equal(rest.Body.Bytes(), want) {
+			t.Fatalf("GET = %d with other bytes", rest.Code)
+		}
+	})
+	t.Run("a refused JPEG document, the routes first", func(t *testing.T) {
+		f := newMCPMediaFixture(t, mediaOptions{})
+		f.attach("DOC1", "document", smallSize)
+		if w := f.post(keyMedia, "DOC1"); w.Code != http.StatusAccepted {
+			t.Fatalf("POST = %d", w.Code)
+		}
+		want := refused(t, f)
+		f.settled(keyMedia, "DOC1")
+		var rest []byte
+		for _, r := range []string{"bytes=0-999", "bytes=1000-"} {
+			w := f.get(keyMedia, "DOC1", http.Header{"Range": {r}})
+			if w.Code != http.StatusPartialContent {
+				t.Fatalf("GET %s = %d", r, w.Code)
+			}
+			rest = append(rest, w.Body.Bytes()...)
+		}
+		cs, _ := f.session(keyMedia, protocols[1])
+		requireRefusedImageBlob(t, attachmentOf(t, call(t, cs, toolGetAttachment, f.attachmentArgs(keyMedia, "DOC1"))), rest)
+		if !bytes.Equal(rest, want) {
+			t.Fatal("the ranges differ from the spool")
+		}
+	})
+}
+
+func TestTheMarshalOfAnInlineBlobStaysWithinItsMemoryBound(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("BIG1", "video", mcpBlobCap)
+	f.ready(keyMedia, "BIG1", mediaSpool(mcpBlobCap, "video/mp4", false))
+	previous := debug.SetGCPercent(1)
+	t.Cleanup(func() { debug.SetGCPercent(previous) })
+	var stopped atomic.Bool
+	peaks := make(chan uint64, 1)
+	var base uint64
+	w := newMCPWire()
+	w.discard = true
+	w.onDeadline = func() {
+		runtime.GC()
+		var ms runtime.MemStats
+		runtime.ReadMemStats(&ms)
+		base = ms.HeapAlloc
+		go func() {
+			var sample runtime.MemStats
+			peak := base
+			for !stopped.Load() {
+				runtime.ReadMemStats(&sample)
+				peak = max(peak, sample.HeapAlloc)
+			}
+			peaks <- peak
+		}()
+	}
+	body := legacyCall("tools/call", `{"name":"get_attachment","arguments":{"message":"`+f.mref(keyMedia, "BIG1")+`"}}`)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/mcp", strings.NewReader(body))
+	r.Header = http.Header{"Content-Type": {"application/json"}, "Accept": {"application/json, text/event-stream"}, "Authorization": {"Bearer " + keyMedia}, "Mcp-Protocol-Version": {legacyProtocol}}
+	f.handler.ServeHTTP(w, r)
+	stopped.Store(true)
+	peak := <-peaks
+	if events, _, _ := w.trace(); w.code != http.StatusOK || !slices.Contains(events, "write") || base == 0 {
+		t.Fatalf("the call answered %d %v", w.code, events)
+	}
+	if grown := peak - base; grown > 6*mcpBlobCap {
+		t.Fatalf("the library's marshal of an 8 MiB blob grew the heap by %d bytes, over 6 times the blob", grown)
+	}
+	if got := f.metric(`wawarden_media_delivered_bytes_total{transport="mcp"}`); got != strconv.Itoa(mcpBlobCap) {
+		t.Fatalf("delivered %s bytes", got)
 	}
 }
