@@ -613,6 +613,54 @@ func TestALostConnectionEndsTheJobWithoutATombstone(t *testing.T) {
 	}
 }
 
+func TestAWaiterWakesWhenTheJobSettlesOrIsErased(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		settle func(f *mediaFixture)
+	}{
+		{"ready", func(f *mediaFixture) { f.media.answer("MEDIA1", fetchAnswer{spool: newFakeSpool(smallSize, true)}) }},
+		{"failed", func(f *mediaFixture) { f.media.answer("MEDIA1", fetchAnswer{err: errMediaExpired}) }},
+		{"erased while fetching", func(f *mediaFixture) { f.m.drop(f.key(keyMedia, "MEDIA1")) }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newMediaFixture(t, mediaOptions{})
+			f.attach("MEDIA1", "document", smallSize)
+			if w := f.post(keyMedia, "MEDIA1"); w.Code != http.StatusAccepted {
+				t.Fatalf("POST = %d", w.Code)
+			}
+			job := f.view(keyMedia, "MEDIA1").job
+			woke := make(chan struct{})
+			go func() {
+				job.await(t.Context())
+				close(woke)
+			}()
+			if closedWithin(woke, 20*time.Millisecond) {
+				t.Fatal("the waiter woke while the job was fetching")
+			}
+			c.settle(f)
+			if !closedWithin(woke, 10*time.Second) {
+				t.Fatal("the waiter did not wake")
+			}
+			f.await("the fetch to end", func() bool { fetching, _ := f.slots(); return fetching == 0 })
+		})
+	}
+	f := newMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA1", "document", smallSize)
+	f.post(keyMedia, "MEDIA1")
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	f.view(keyMedia, "MEDIA1").job.await(ctx)
+}
+
+func closedWithin(ch <-chan struct{}, d time.Duration) bool {
+	select {
+	case <-ch:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
 func TestReadyJobsLiveTheirTTL(t *testing.T) {
 	for _, c := range []struct {
 		name     string
