@@ -1395,7 +1395,20 @@ func TestGetAttachmentReportsADiskJobWithoutWaiting(t *testing.T) {
 		t.Fatalf("POST = %d", w.Code)
 	}
 	cs, _ := f.session(keyMedia, protocols[0])
-	v := attachmentOf(t, call(t, cs, toolGetAttachment, f.attachmentArgs(keyMedia, "DISK1")))
+	var first *mcp.CallToolResult
+	var firstErr error
+	answered := make(chan struct{})
+	go func() {
+		defer close(answered)
+		first, firstErr = cs.CallTool(t.Context(), &mcp.CallToolParams{Name: toolGetAttachment, Arguments: f.attachmentArgs(keyMedia, "DISK1")})
+	}()
+	if !closedWithin(answered, 5*time.Second) {
+		t.Fatal("a call for a disk job still fetching waited for the fetch")
+	}
+	if firstErr != nil {
+		t.Fatalf("call %s: %v", toolGetAttachment, firstErr)
+	}
+	v := attachmentOf(t, first)
 	if v.block != nil || v.info.State != dto.MediaFetching || v.info.Delivery != deliveryMetadata || v.info.Reason == nil || *v.info.Reason != reasonFetching ||
 		v.info.RetryAfterSeconds == nil || *v.info.RetryAfterSeconds != 2 {
 		t.Fatalf("a disk fetch answered %+v", v.info)
