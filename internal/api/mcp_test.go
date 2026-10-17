@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"runtime/debug"
@@ -2012,13 +2013,24 @@ func TestPartsJoinToTheServedBytes(t *testing.T) {
 			for k := range parts {
 				res := call(t, cs, toolGetAttachment, f.partArgs(keyMedia, "MEDIA1", k))
 				info, data := partOf(t, res)
-				if info.Offset != int64(k)*mediaPartSize || info.Length != min(mediaPartSize, size-info.Offset) || info.Bytes != size || info.Parts != parts ||
-					info.State != dto.MediaReady || info.Reason != nil || info.ServedType != c.spool.served || info.ExpiresAt == nil {
-					t.Fatalf("part %d: status = %+v", k, info)
+				if info.ExpiresAt == nil {
+					t.Fatalf("part %d: status = %+v, want an expiry", k, info)
 				}
-				var fields map[string]json.RawMessage
-				if err := json.Unmarshal(structured(t, res), &fields); err != nil || fields["part"] != nil {
-					t.Fatalf("part %d: the status echoes the part index or does not decode: %v", k, err)
+				offset := int64(k) * mediaPartSize
+				want := dto.AttachmentInfo{
+					Kind: "video", State: dto.MediaReady, ServedType: c.spool.ServedType(), Format: c.spool.Format(), Normalised: c.spool.Normalised(),
+					Bytes: size, SizeDeclared: c.declared, Delivery: deliveryPart, Parts: parts, Offset: offset, Length: min(mediaPartSize, size-offset),
+					RestRoute: mediaRoute, ExpiresAt: info.ExpiresAt, Untrusted: true, Notice: mediaNotice,
+				}
+				if !reflect.DeepEqual(info, want) {
+					t.Fatalf("part %d: status = %+v, want %+v", k, info, want)
+				}
+				wire, err := json.Marshal(want)
+				if err != nil {
+					t.Fatalf("encode the wanted status: %v", err)
+				}
+				if got := normalised(t, structured(t, res)); got != normalised(t, wire) {
+					t.Fatalf("part %d: structured content %s, want %s", k, got, wire)
 				}
 				joined = append(joined, data...)
 			}
