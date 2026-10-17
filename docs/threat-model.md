@@ -55,7 +55,7 @@ The process opens at most three listeners, all plain HTTP, and nothing else:
 | Listener | Address | Serves |
 |---|---|---|
 | Client | `WAWARDEN_LISTEN`, default `127.0.0.1:8080` | The REST read API under `/v1` and the MCP tools at `POST /mcp`. A client with a write grant can also send, through `POST /v1/chats/{ref}/messages` and the MCP tool `send_message`. Every route needs a client token. |
-| Admin | `WAWARDEN_ADMIN_LISTEN`, default `127.0.0.1:8082`; opened only when an admin token hash is configured | Metrics, status, pairing, reconnection, client management and history backfill (`POST /admin/v1/backfill`); see [The admin token](#the-admin-token). |
+| Admin | `WAWARDEN_ADMIN_LISTEN`, default `127.0.0.1:8082`; opened only when an admin token hash is configured | Metrics, status, pairing, reconnection, client management, history backfill (`POST /admin/v1/backfill`) and the attachment download pause (`POST /admin/v1/media`); see [The admin token](#the-admin-token). |
 | Health | `WAWARDEN_HEALTH_LISTEN`, default `127.0.0.1:8081`; loopback addresses only | `/healthz`, without authentication |
 
 Outbound traffic is limited to the WhatsApp websocket, the protocol version
@@ -540,8 +540,9 @@ guards and how its misuse shows.
 - **It is a single factor.** Within whatever network boundary the deployer
   provides, anyone who can reach the admin listener and holds the token can:
   - read the Prometheus metrics;
-  - read the status: the engine's state, counts and the last ingest time,
-    never an identifier;
+  - read the status: the engine's state, counts, whether attachment
+    downloads are on, off or paused, and the last ingest time, never an
+    identifier;
   - request pairing codes for the owner's number while no device is paired,
     which shows a notification on the owner's phone. Pairing can link only the
     number in `WAWARDEN_OWNER_PHONE`, is refused while a device is paired, and
@@ -552,7 +553,11 @@ guards and how its misuse shows.
     WhatsApp again each time;
   - create and revoke clients, writing ones included, and list every chat's
     identifier and name;
-  - request a history backfill, within its quotas.
+  - request a history backfill, within its quotas;
+  - pause and resume attachment downloads. A pause erases every attachment
+    job at once and makes every new fetch answer `busy`. It is held in memory
+    only, so a restart resumes downloads (see
+    [Pausing downloads](api.md#pausing-downloads)).
 - **The pairing code crosses the network** in plain HTTP unless the deployer
   encrypts the path. A code is useful only to link the gateway itself, on the
   owner's phone, within WhatsApp's validity window.
@@ -2826,6 +2831,14 @@ This subsection is the canonical statement of what the protocol library
   `Allow: GET, HEAD, POST` before any grant is decided. A read-only client
   therefore learns that the route exists, which this documentation states
   anyway. A `POST` from a client without a write grant is the uniform `404`.
+- **Two clients can keep attachment downloads busy.** A client may hold two
+  attachment jobs fetching or ready, and at most four jobs hold fetched bytes
+  across the service. Two clients with `allow_media` can therefore take every
+  slot, and every other fetch answers `busy` until their jobs are delivered or
+  their life ends: 10 minutes after a job turned ready when its bytes are held
+  in memory, 30 when they are on disk. The admin
+  [pause](api.md#pausing-downloads) erases every job at once; revoking one of
+  the clients drops its jobs at the next minute's sweep.
 
 ### Audit chain limits
 
