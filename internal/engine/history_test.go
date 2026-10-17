@@ -670,14 +670,22 @@ func evaluate(e ast.Expr) constant.Value {
 
 func TestAttachmentMemoryBoundIsTheDocumentedOne(t *testing.T) {
 	const mib = 1 << 20
-	threshold := sourceConstant(t, "api/media.go", "mediaRAMThreshold")
+	threshold := sourceConstant(t, "engine/wa/media.go", "mediaRAMThreshold")
+	for _, file := range []string{"api/media.go", "app/media.go"} {
+		if other := sourceConstant(t, file, "mediaRAMThreshold"); other != threshold {
+			t.Fatalf("internal/%s keeps an attachment of up to %d bytes in memory but the adapter %d: the documented in-memory term no longer holds", file, other, threshold)
+		}
+	}
+	overhead := sourceConstant(t, "engine/wa/history.go", "mediaOverhead")
+	if spool := sourceConstant(t, "stage/stage.go", "overhead"); spool != overhead {
+		t.Fatalf("the adapter sizes an in-memory attachment at its declared length plus %d bytes but the spool plus %d: the documented in-memory term no longer holds", overhead, spool)
+	}
 	staged := sourceConstant(t, "api/media.go", "mediaStagedSlots")
 	fetches := sourceConstant(t, "api/media.go", "mediaFetchSlots")
 	deliveries := sourceConstant(t, "api/media.go", "mediaDeliveries")
 	part := sourceConstant(t, "api/media.go", "mediaPartSize")
 	blob := sourceConstant(t, "api/tools.go", "mcpBlobCap")
 	chunk := sourceConstant(t, "api/deliver.go", "deliveryChunk")
-	overhead := sourceConstant(t, "stage/stage.go", "overhead")
 	sector := sourceConstant(t, "stage/sealed.go", "sectorSize")
 	tag := sourceConstant(t, "stage/sealed.go", "tagSize")
 	budget := sourceConstant(t, "attach/image.go", "budget")
