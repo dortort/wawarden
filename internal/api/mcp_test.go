@@ -1591,6 +1591,31 @@ func (f *mediaFixture) awaitTheLibraryLettingGoOfTheCall() {
 	})
 }
 
+func TestAnOrphanedHoldWaitsForItsHandlerToReturn(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA1", "document", smallSize)
+	f.ready(keyMedia, "MEDIA1", mediaSpool(smallSize, "application/pdf", false))
+	v, held := f.m.lookup(f.key(keyMedia, "MEDIA1"), true)
+	a, err := f.m.inline(v, held, defaultInlineLimits())
+	if err != nil || a.hold == nil {
+		t.Fatalf("no inline answer: %v", err)
+	}
+	settles := make(chan time.Time)
+	x := &exchange{returned: make(chan struct{})}
+	(&mcpEndpoint{settles: settles}).orphan(x, a.hold)
+	select {
+	case settles <- time.Time{}:
+		t.Fatal("the settle began while the handler was still running")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if f.holds(v.job) != 1 || f.permits() != 1 {
+		t.Fatalf("while the handler runs: %d holds and %d permits, want 1 and 1", f.holds(v.job), f.permits())
+	}
+	x.handlerReturned()
+	settles <- time.Time{}
+	f.await("the orphan release", func() bool { return f.holds(v.job) == 0 && f.permits() == 0 })
+}
+
 func TestAHandlerThatFindsTheExchangeClosedPublishesNothing(t *testing.T) {
 	for name, x := range map[string]*exchange{
 		"closed":                   {returned: make(chan struct{}), closed: true, extend: func() error { return nil }},
