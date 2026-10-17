@@ -13,10 +13,11 @@ import (
 )
 
 type adminService struct {
-	engine  *engine.Engine
-	archive *ingest.Store
-	version string
-	now     func() time.Time
+	engine    *engine.Engine
+	archive   *ingest.Store
+	version   string
+	now       func() time.Time
+	downloads bool
 }
 
 func (s adminService) Status(ctx context.Context) (api.AdminStatus, error) {
@@ -30,6 +31,10 @@ func (s adminService) Status(ctx context.Context) (api.AdminStatus, error) {
 		return api.AdminStatus{}, err
 	}
 	media, err := s.archive.Clients().MediaWriters(ctx)
+	if err != nil {
+		return api.AdminStatus{}, err
+	}
+	refs, err := s.archive.Admin().MediaCounts(ctx, s.now())
 	if err != nil {
 		return api.AdminStatus{}, err
 	}
@@ -51,6 +56,10 @@ func (s adminService) Status(ctx context.Context) (api.AdminStatus, error) {
 		InboxBacklog:     c.InboxBacklog,
 		InboxQuarantined: c.InboxQuarantined,
 		BackfillsToday:   int64(backfills),
+		MediaRefsLive:    refs.RefsLive,
+		MediaRefsExpired: refs.RefsExpired,
+		RevokeTombstones: refs.Tombstones,
+		Downloads:        s.downloads,
 		Clients:          api.ClientCounts{Active: n.Active, Expired: n.Expired, Revoked: n.Revoked, AllChatsActive: n.AllChatsActive, MediaWriteActive: media},
 		LastIngest:       c.LastIngest,
 		Version:          s.version,

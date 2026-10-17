@@ -16,6 +16,8 @@ const (
 	actionReconnect  = "reconnect"
 	actionBackfill   = "backfill"
 	chatRefChars     = 32
+	downloadsOff     = "off"
+	downloadsOn      = "on"
 	maxBackfillCount = 50
 	outcomeOK        = "ok"
 	warningAllChats  = "all_chats_client"
@@ -52,6 +54,10 @@ type AdminStatus struct {
 	InboxBacklog     int64
 	InboxQuarantined int64
 	BackfillsToday   int64
+	MediaRefsLive    int64
+	MediaRefsExpired int64
+	RevokeTombstones int64
+	Downloads        bool
 	Clients          ClientCounts
 	LastIngest       time.Time
 	Version          string
@@ -185,6 +191,10 @@ func statusResponse(s AdminStatus) dto.Status {
 	if s.Clients.MediaWriteActive > 0 {
 		warnings = append(warnings, warningMedia)
 	}
+	downloads := downloadsOff
+	if s.Downloads {
+		downloads = downloadsOn
+	}
 	var last *string
 	if !s.LastIngest.IsZero() {
 		at := s.LastIngest.UTC().Format(time.RFC3339)
@@ -202,6 +212,9 @@ func statusResponse(s AdminStatus) dto.Status {
 			InboxBacklog:     s.InboxBacklog,
 			InboxQuarantined: s.InboxQuarantined,
 			BackfillsToday:   s.BackfillsToday,
+			MediaRefsLive:    s.MediaRefsLive,
+			MediaRefsExpired: s.MediaRefsExpired,
+			RevokeTombstones: s.RevokeTombstones,
 		},
 		Clients: dto.StatusClients{
 			Active:         s.Clients.Active,
@@ -210,6 +223,7 @@ func statusResponse(s AdminStatus) dto.Status {
 			AllChatsActive: s.Clients.AllChatsActive,
 		},
 		Warnings:     warnings,
+		Downloads:    downloads,
 		LastIngestAt: last,
 		Version:      s.Version,
 	}

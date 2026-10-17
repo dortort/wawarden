@@ -25,7 +25,7 @@ func samples() []dto.Response {
 		dto.Error{Code: "not_found"},
 		dto.Health{Status: "ok"},
 		dto.Metrics(metrics.NewRegistry()),
-		dto.Status{State: "connected", Paired: true, Counts: dto.StatusCounts{Chats: 1}, Clients: dto.StatusClients{AllChatsActive: 1}, Warnings: []string{"all_chats_client"}, LastIngestAt: &last, Version: "dev"},
+		dto.Status{State: "connected", Paired: true, Counts: dto.StatusCounts{Chats: 1}, Clients: dto.StatusClients{AllChatsActive: 1}, Warnings: []string{"all_chats_client"}, Downloads: "paused", LastIngestAt: &last, Version: "dev"},
 		dto.Pairing{Code: "ABCD1234"},
 		dto.Accepted{Status: "accepted"},
 		sampleClient(),
@@ -126,10 +126,11 @@ func TestEncode(t *testing.T) {
 		},
 		{
 			name:            "status",
-			response:        dto.Status{State: "disconnected", Reason: "replaced", Paired: true, Counts: dto.StatusCounts{Chats: 2, Messages: 3, BlobsPending: 4, BlobsQuarantined: 5, InboxBacklog: 6, InboxQuarantined: 7, BackfillsToday: 11}, Clients: dto.StatusClients{Active: 8, Expired: 9, Revoked: 10, AllChatsActive: 1}, Warnings: []string{"all_chats_client"}, Version: "v0.2.0"},
+			response:        dto.Status{State: "disconnected", Reason: "replaced", Paired: true, Counts: dto.StatusCounts{Chats: 2, Messages: 3, BlobsPending: 4, BlobsQuarantined: 5, InboxBacklog: 6, InboxQuarantined: 7, BackfillsToday: 11, MediaRefsLive: 12, MediaRefsExpired: 13, RevokeTombstones: 14}, Clients: dto.StatusClients{Active: 8, Expired: 9, Revoked: 10, AllChatsActive: 1}, Warnings: []string{"all_chats_client"}, Downloads: "on", Version: "v0.2.0"},
 			wantContentType: "application/json; charset=utf-8",
-			wantBody:        `{"state":"disconnected","reason":"replaced","paired":true,"counts":{"chats":2,"messages":3,"history_blobs_pending":4,"history_blobs_quarantined":5,"inbox_backlog":6,"inbox_quarantined":7,"backfills_today":11},"clients":{"active":8,"expired":9,"revoked":10,"all_chats_active":1},"warnings":["all_chats_client"],"last_ingest_at":null,"version":"v0.2.0"}`,
+			wantBody:        `{"state":"disconnected","reason":"replaced","paired":true,"counts":{"chats":2,"messages":3,"history_blobs_pending":4,"history_blobs_quarantined":5,"inbox_backlog":6,"inbox_quarantined":7,"backfills_today":11,"media_refs_live":12,"media_refs_expired":13,"revoke_tombstones":14},"clients":{"active":8,"expired":9,"revoked":10,"all_chats_active":1},"warnings":["all_chats_client"],"downloads":"on","last_ingest_at":null,"version":"v0.2.0"}`,
 		},
+
 		{
 			name:            "pairing",
 			response:        dto.Pairing{Code: "ABCD1234"},
