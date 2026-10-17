@@ -453,8 +453,8 @@ above 0), the client handler adds these:
 |---|---|---|---|
 | `wawarden_media_fetches_total` | counter | `result` | Requests that tried to start an attachment fetch, by result. A job that ended counts `ok`, `expired`, `failed`, `too_large`, `unsupported`, `unavailable`, `throttled` (WhatsApp throttled it) or `not_connected`; a request refused before any fetch counts `too_large`, `not_connected`, `busy`, `rate_limited` (the client's two jobs or its budget) or `global_limited` (the count or bytes of all clients). A status answer counts nothing. Every result is present from the start, at `0`. |
 | `wawarden_media_fetched_bytes_total` | counter | | Bytes fetched from WhatsApp for jobs that turned ready, before the content policy. |
-| `wawarden_media_deliveries_total` | counter | `transport`, `result` | Attachment deliveries: `transport` is `rest`; `result` is `ok` (every planned byte written), `incomplete` (stopped early) or `over_cap` (refused by a per-job cap). A `HEAD` and a `416` count nothing. Every result is present from the start, at `0`. |
-| `wawarden_media_delivered_bytes_total` | counter | `transport` | Attachment bytes the connections accepted. |
+| `wawarden_media_deliveries_total` | counter | `transport`, `result` | Attachment deliveries: `transport` is `rest` for the routes and `mcp` for `get_attachment`; `result` is `ok` (every planned byte written), `incomplete` (stopped early; for `mcp`, a result read from the file but not written in full) or `over_cap` (refused by a per-job cap). A `HEAD`, a `416` and an MCP call that never reads the file count nothing. Every result is present from the start, at `0`, for both transports. |
+| `wawarden_media_delivered_bytes_total` | counter | `transport` | Attachment bytes the connections accepted; for `mcp`, the file's bytes of a result written in full. |
 | `wawarden_media_jobs` | gauge | | Attachment jobs fetching or ready. |
 
 Other labelled counters appear once they count their first event.

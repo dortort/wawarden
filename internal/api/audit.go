@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/dortort/wawarden/internal/api/dto"
@@ -17,6 +18,8 @@ const (
 	maxPeer        = 64
 	auditWait      = 2 * time.Second
 )
+
+var allowedReasons = []string{outcomeOK, deliveryInline, deliveryPart, deliveryMetadata, reasonTooLargeForInline}
 
 type ReadEvent struct {
 	At      time.Time
@@ -75,7 +78,7 @@ func audited(w http.ResponseWriter, r *http.Request, audit Auditor, failed func(
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), auditWait)
 		defer cancel()
 		err := audit.Record(ctx, ReadEvent{
-			At: now(), Client: client.ID, Action: action, Chat: note.chat, OK: reason == outcomeOK, Reason: reason, Peer: peer(r.RemoteAddr),
+			At: now(), Client: client.ID, Action: action, Chat: note.chat, OK: slices.Contains(allowedReasons, reason), Reason: reason, Peer: peer(r.RemoteAddr),
 			Message: note.message, Bytes: bytes,
 		})
 		if err != nil && r.Context().Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {

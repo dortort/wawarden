@@ -11,15 +11,17 @@ const (
 	mcpEndpointFile = apiDir + "/mcp.go"
 	mcpReadHelper   = "readTool"
 	mcpWriteHelper  = "writeTool"
+	mcpMediaHelper  = "mediaTool"
 	mcpEndpointFunc = "newMCPEndpoint"
+	mcpBlockBuilder = "mediaBlock"
 )
 
-var mcpToolHelpers = []string{mcpReadHelper, mcpWriteHelper}
+var mcpToolHelpers = []string{mcpReadHelper, mcpWriteHelper, mcpMediaHelper}
 
 type mcpSite struct{ file, fn string }
 
 var mcpServerSurface = map[string][]mcpSite{
-	"AddTool":                  {{mcpToolsFile, mcpReadHelper}, {mcpToolsFile, mcpWriteHelper}},
+	"AddTool":                  {{mcpToolsFile, mcpReadHelper}, {mcpToolsFile, mcpWriteHelper}, {mcpToolsFile, mcpMediaHelper}},
 	"NewServer":                {{mcpEndpointFile, mcpEndpointFunc}},
 	"AddReceivingMiddleware":   {{mcpEndpointFile, mcpEndpointFunc}},
 	"AddSendingMiddleware":     {{mcpEndpointFile, mcpEndpointFunc}},
@@ -27,6 +29,13 @@ var mcpServerSurface = map[string][]mcpSite{
 	"AddResource":              nil,
 	"AddResourceTemplate":      nil,
 	"AddReceivingCustomMethod": nil,
+}
+
+var mcpMediaContent = map[string][]mcpSite{
+	"ImageContent":     {{mcpToolsFile, mcpBlockBuilder}},
+	"AudioContent":     {{mcpToolsFile, mcpBlockBuilder}},
+	"EmbeddedResource": {{mcpToolsFile, mcpBlockBuilder}},
+	"ResourceContents": {{mcpToolsFile, mcpBlockBuilder}},
 }
 
 var mcpRegistrationRule = rule{
@@ -176,6 +185,65 @@ func (registry) AddTool() {}
 
 func f(r registry) { r.AddTool() }
 `},
+		{name: "the media helper beside the other helpers", rel: mcpToolsFile, src: `package api
+
+import "github.com/modelcontextprotocol/go-sdk/mcp"
+
+func mediaTool[In any](server *mcp.Server, tool *mcp.Tool, h mcp.ToolHandler) { server.AddTool(tool, h) }
+
+func mediaBlock(data []byte, mime string, audio, image bool) mcp.Content {
+	switch {
+	case image:
+		return &mcp.ImageContent{Data: data, MIMEType: mime}
+	case audio:
+		return &mcp.AudioContent{Data: data, MIMEType: mime}
+	}
+	return &mcp.EmbeddedResource{Resource: &mcp.ResourceContents{URI: "x", Blob: data}}
+}
+`},
+		{name: "the media helper in another file", rel: apiDir + "/media.go", want: 1, src: `package api
+
+import "github.com/modelcontextprotocol/go-sdk/mcp"
+
+func mediaTool[In any](server *mcp.Server, tool *mcp.Tool, h mcp.ToolHandler) { server.AddTool(tool, h) }
+`},
+		{name: "media blocks built outside the block builder", rel: mcpToolsFile, want: 5, src: `package api
+
+import sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+func attachmentResult(data []byte) *sdk.CallToolResult {
+	image := &sdk.ImageContent{Data: data}
+	var audio sdk.AudioContent
+	resource := sdk.EmbeddedResource{Resource: new(sdk.ResourceContents)}
+	_ = []sdk.Content{image, &audio, &resource}
+	return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "x"}}}
+}
+
+func readTool(raw []byte) any { return sdk.ImageContent{Data: raw} }
+`},
+		{name: "the block builder moved to another file", rel: apiDir + "/media.go", want: 2, src: `package api
+
+import "github.com/modelcontextprotocol/go-sdk/mcp"
+
+func mediaBlock(data []byte) mcp.Content {
+	return &mcp.EmbeddedResource{Resource: &mcp.ResourceContents{Blob: data}}
+}
+`},
+		{name: "media blocks in a test and fields of the same names elsewhere", rel: apiDir + "/x_test.go", src: `package api
+
+import "github.com/modelcontextprotocol/go-sdk/mcp"
+
+func check(res *mcp.CallToolResult) bool {
+	_, ok := res.Content[0].(*mcp.ImageContent)
+	return ok
+}
+`},
+		{name: "a field named like a media block", rel: apiDir + "/x.go", src: `package api
+
+type answer struct{ ImageContent, AudioContent []byte }
+
+func f(a answer) int { return len(a.ImageContent) + len(a.AudioContent) }
+`},
 	},
 }
 
@@ -192,6 +260,12 @@ func checkMCPRegistration(f *sourceFile) []string {
 		ast.Inspect(decl, func(n ast.Node) bool {
 			sel, ok := n.(*ast.SelectorExpr)
 			if !ok {
+				return true
+			}
+			if allowed, built := mcpMediaContent[sel.Sel.Name]; built {
+				if _, p := f.ref(sel); p == mcpPackage && !slices.Contains(allowed, site) {
+					out = append(out, f.at(sel.Sel, "%s outside %s in %s builds an MCP media block that the result builder has not chosen", sel.Sel.Name, allowed[0].fn, allowed[0].file))
+				}
 				return true
 			}
 			allowed, guarded := mcpServerSurface[sel.Sel.Name]

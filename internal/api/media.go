@@ -29,6 +29,11 @@ const (
 	reasonFetching   = "fetching"
 	transportREST    = "rest"
 
+	deliveryInline          = "inline"
+	deliveryPart            = "part"
+	reasonTooLargeForInline = "too_large_for_inline"
+	transportMCP            = "mcp"
+
 	mediaRAMThreshold   = 16 << 20
 	mediaImageCeiling   = 16 << 20
 	mediaStickerCeiling = 1 << 20
@@ -205,6 +210,7 @@ type mediaRegistry struct {
 	bytes      *ratelimit.HourLog
 	root       context.Context
 	now        func() time.Time
+	permit     chan struct{}
 
 	fetches        *metrics.CounterVec
 	fetched        *metrics.Counter
@@ -242,7 +248,7 @@ func newMediaRegistry(d MediaDeps, archive ReadArchive, reg *metrics.Registry, n
 		perClient: ratelimit.New(d.PerMinute, min(mediaClientBurst, d.PerMinute), now),
 		count:     ratelimit.NewHourLog(int64(d.GlobalPerHour), now),
 		bytes:     ratelimit.NewHourLog(d.GlobalBytesPerHour, now),
-		root:      d.Root, now: now,
+		root:      d.Root, now: now, permit: make(chan struct{}, 1),
 		fetches:        reg.CounterVec("wawarden_media_fetches_total", "Attachment fetch requests, by result.", "result"),
 		fetched:        reg.Counter("wawarden_media_fetched_bytes_total", "Attachment bytes fetched from WhatsApp."),
 		deliveries:     reg.CounterVec("wawarden_media_deliveries_total", "Attachment deliveries, by transport and result.", "transport", "result"),
@@ -252,10 +258,12 @@ func newMediaRegistry(d MediaDeps, archive ReadArchive, reg *metrics.Registry, n
 	for _, result := range fetchResults {
 		m.fetches.With(result)
 	}
-	for _, result := range deliveryResults {
-		m.deliveries.With(transportREST, result)
+	for _, transport := range []string{transportREST, transportMCP} {
+		for _, result := range deliveryResults {
+			m.deliveries.With(transport, result)
+		}
+		m.deliveredBytes.With(transport)
 	}
-	m.deliveredBytes.With(transportREST)
 	safego.Go(mediaSweepPanic, func() {
 		defer d.Stopped()
 		tick := d.sweeps
@@ -870,4 +878,175 @@ func (s *reads) forget(key mediaKey) {
 	if s.media != nil {
 		s.media.drop(key)
 	}
+}
+
+type mediaAnswer struct {
+	info    dto.AttachmentInfo
+	data    []byte
+	hold    *deliveryHold
+	outcome string
+}
+
+func (a mediaAnswer) metadata() (dto.AttachmentInfo, string) {
+	if a.info.Delivery != deliveryInline {
+		return a.info, a.outcome
+	}
+	info := a.info
+	info.Delivery, info.Offset, info.Length = deliveryMetadata, 0, 0
+	return info, deliveryMetadata
+}
+
+type deliveryHold struct {
+	m      *mediaRegistry
+	permit bool
+	finish func(sent int64, complete bool)
+	length int64
+	job    *mediaHold
+	once   sync.Once
+}
+
+func (d *deliveryHold) release(delivered bool) {
+	if d != nil && delivered {
+		d.end(d.length, true, false)
+		return
+	}
+	d.end(0, false, false)
+}
+
+func (d *deliveryHold) orphan() { d.end(0, false, true) }
+
+func (d *deliveryHold) end(sent int64, complete, keep bool) {
+	if d == nil {
+		return
+	}
+	d.once.Do(func() {
+		if d.permit {
+			<-d.m.permit
+		}
+		if d.finish != nil {
+			d.finish(sent, complete)
+		}
+		if keep {
+			d.job.orphan()
+		} else {
+			d.job.release()
+		}
+	})
+}
+
+func (m *mediaRegistry) inlineLimit(kind string, limits inlineLimits) int64 {
+	if kind == "image" || kind == "sticker" {
+		return m.limit(kind)
+	}
+	return min(m.max, limits.blob)
+}
+
+func (s *reads) attachmentCall(ctx context.Context, g policy.ReadGrant, mref string, limits inlineLimits) (answer mediaAnswer, _ policy.CanonicalChat, err error) {
+	chat, id, sender, ok := s.openRef(g, mref)
+	if !ok {
+		return mediaAnswer{}, policy.CanonicalChat{}, errNotFound
+	}
+	a, found, err := s.archive.Attachment(g, ctx, chat, id, sender, s.now())
+	switch {
+	case err != nil:
+		return mediaAnswer{}, policy.CanonicalChat{}, err
+	case !found:
+		s.forget(mediaKey{client: g.Client(), chat: chat, id: id, sender: sender})
+		return mediaAnswer{}, policy.CanonicalChat{}, errNotFound
+	}
+	exchangeFrom(ctx).noteMessage(cursor.Ref{Chat: a.Chat.JID(), ID: a.ID, Sender: a.Sender.JID()})
+	key := mediaKey{client: g.Client(), chat: a.Chat, id: a.ID, sender: a.Sender}
+	if !s.eligible(key, a.Usable) {
+		return mediaAnswer{}, a.Chat, errMediaUnavailable
+	}
+	var hold *mediaHold
+	defer func() {
+		if answer.hold == nil {
+			hold.release()
+		}
+	}()
+	v, hold := s.media.lookup(key, true)
+	if v.state == 0 {
+		req := MediaFetch{Chat: a.Chat, ID: a.ID, Sender: a.Sender, Kind: a.Kind, Variant: a.Variant, Declared: a.Declared}
+		if req.Declared > s.media.inlineLimit(req.Kind, limits) {
+			return tooLargeForInline(req), a.Chat, nil
+		}
+		if v, _, err = s.media.admit(g, key, req, func(ctx context.Context) (MediaSpool, error) {
+			return s.media.service.Fetch(ctx, a.Ref, req)
+		}); err != nil {
+			return mediaAnswer{}, a.Chat, err
+		}
+	}
+	switch {
+	case v.state == mediaFetching && !v.job.disk:
+		v.job.await(ctx)
+		v, hold = s.media.lookup(key, true)
+	case v.state == mediaReady && hold == nil:
+		v, hold = s.media.lookup(key, true)
+	}
+	switch v.state {
+	case 0:
+		return mediaAnswer{}, a.Chat, errBusy
+	case mediaFetching:
+		return mediaAnswer{info: v.status().AttachmentInfo, outcome: deliveryMetadata}, a.Chat, nil
+	case mediaFailed:
+		return mediaAnswer{}, a.Chat, v.refusal(s.now())
+	}
+	answer, err = s.media.inline(v, hold, limits)
+	return answer, a.Chat, err
+}
+
+func tooLargeForInline(req MediaFetch) mediaAnswer {
+	reason := reasonTooLargeForInline
+	return mediaAnswer{info: dto.AttachmentInfo{
+		Kind: req.Kind, Variant: req.Variant, SizeDeclared: req.Declared, Delivery: deliveryPart, Reason: &reason,
+		Parts: int((req.Declared + mediaPartSize - 1) / mediaPartSize), RestRoute: mediaRoute, Untrusted: true, Notice: mediaNotice,
+	}, outcome: reasonTooLargeForInline}
+}
+
+func (m *mediaRegistry) inline(v mediaView, hold *mediaHold, limits inlineLimits) (answer mediaAnswer, err error) {
+	info := v.status().AttachmentInfo
+	form := inlineForm(v.servedType, v.normalised, v.size, limits)
+	if hold == nil || form == formNone {
+		info.Delivery = deliveryPart
+		if v.size > inlineCap(v.servedType, limits) {
+			reason := reasonTooLargeForInline
+			info.Reason = &reason
+		}
+		return mediaAnswer{info: info, outcome: deliveryMetadata}, nil
+	}
+	d := &deliveryHold{m: m}
+	defer func() {
+		if answer.hold == nil {
+			d.release(false)
+		}
+	}()
+	select {
+	case m.permit <- struct{}{}:
+		d.permit = true
+	default:
+		return mediaAnswer{}, errBusy
+	}
+	finish, err := m.startDelivery(v.job, transportMCP, v.size)
+	switch {
+	case errors.Is(err, errMediaNotRequested):
+		return mediaAnswer{}, errBusy
+	case err != nil:
+		return mediaAnswer{}, err
+	}
+	d.finish, d.length = finish, v.size
+	data := make([]byte, v.size)
+	if n, err := (jobReader{m: m, job: v.job}).ReadAt(data, 0); int64(n) < v.size || err != nil && !errors.Is(err, io.EOF) {
+		return mediaAnswer{}, readRefusal(err)
+	}
+	d.job = hold
+	info.Delivery, info.Length = deliveryInline, v.size
+	return mediaAnswer{info: info, data: data, hold: d, outcome: deliveryInline}, nil
+}
+
+func readRefusal(err error) error {
+	if errors.Is(err, errDeliveryCompleted) || errors.Is(err, errDeliveryExpired) || errors.Is(err, errDeliveryDropped) {
+		return errBusy
+	}
+	return err
 }
