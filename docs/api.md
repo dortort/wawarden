@@ -605,7 +605,8 @@ its status). It is erased at the first delivery of the whole file: a `200` or a
 `206` whose range covers every byte, an inline `get_attachment` result, or the
 last [part](#parts) not yet delivered; at the end of its life; by a sweep that
 runs every minute and drops a job whose message is no longer eligible or whose
-client was revoked or has expired; and at shutdown. Once erased, no request
+client was revoked or has expired; by a [pause](#pausing-downloads); and at
+shutdown. Once erased, no request
 finds it, and a delivery in flight stops at its next chunk.
 
 #### Delivery
