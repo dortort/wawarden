@@ -2240,6 +2240,14 @@ and account standing.
   `reply_to` opens only under the sending client's key. It must name a message
   of the same chat, in the client's read scope, that is not revoked and has
   text. Any failure is the uniform `404`.
+- **Media references.** While attachment downloads are on, the archive keeps
+  each captured attachment's media reference sealed under the `media-ref`
+  key, and it opens only for its own message (see
+  [Media reference](internals.md#media-reference)). The handlers hold it only
+  as a `scoped.SealedRef` and never read its text: an attachment from the
+  scoped lookup stays in a local variable and is used only through its
+  fields, and its reference goes only straight into the media service's
+  `Fetch`, which hands it to the engine to open.
 
 **Protects.** I-1, I-4.
 
@@ -2252,6 +2260,12 @@ and account standing.
   takes the same archive calls as a missing chat, and that misused cursors
   answer `400` (`invalid_cursor`) (`internal/api/reads_test.go`).
 - The HTTP property of [row 7](#7-property-tests).
+- The `sealed-ref` rule. In `internal/api`, outside tests, it refuses a read
+  of a sealed reference's text, `scoped.SealedRef` named anywhere but among
+  the parameters of a `MediaService` method, and an attachment from the
+  scoped lookup held outside a local variable, used whole, or whose
+  reference goes anywhere but straight into `MediaService.Fetch`
+  (`internal/archtest/sealedref_test.go`).
 - A pinned fingerprint that survives a re-key of the reply target's sender
   (`internal/store/ingest/key_test.go`), and an end-to-end retry after that
   re-key that sends once (`internal/app/rekeyreplay_test.go`).
