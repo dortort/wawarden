@@ -321,7 +321,7 @@ func (m *mediaRegistry) admit(g policy.ReadGrant, key mediaKey, req MediaFetch, 
 		return mediaView{}, false, errMediaTooLarge
 	}
 	if err := m.service.Precheck(req.Declared); err != nil {
-		return mediaView{}, false, m.unprechecked(err)
+		return mediaView{}, false, m.precheckRefusal(err)
 	}
 	var after cleanups
 	defer after.run()
@@ -355,7 +355,7 @@ func (m *mediaRegistry) admit(g policy.ReadGrant, key mediaKey, req MediaFetch, 
 	return j.view(), true, nil
 }
 
-func (m *mediaRegistry) unprechecked(err error) error {
+func (m *mediaRegistry) precheckRefusal(err error) error {
 	refusal, ok := errors.AsType[*codedError](err)
 	if !ok {
 		refusal = errBusy
