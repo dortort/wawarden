@@ -142,7 +142,7 @@ makes one request with the admin token and prints the answer:
 
 | Command | Request | Prints on standard output |
 |---|---|---|
-| `admin status` | `GET /admin/v1/status` | One `key: value` line each for `state`, `reason` (`none` when empty), `paired`, `chats`, `messages`, `history blobs pending`, `history blobs quarantined`, `inbox backlog`, `inbox quarantined`, `backfills today`, `clients active`, `clients expired`, `clients revoked`, `all-chats clients active`, `last ingest` (`never` before the first message) and `version`. |
+| `admin status` | `GET /admin/v1/status` | One `key: value` line each for `state`, `reason` (`none` when empty), `paired`, `downloads` (`off`, `on` or `paused`), `chats`, `messages`, `history blobs pending`, `history blobs quarantined`, `inbox backlog`, `inbox quarantined`, `backfills today`, `media references live`, `media references expired`, `revoke tombstones`, `clients active`, `clients expired`, `clients revoked`, `all-chats clients active`, `last ingest` (`never` before the first message) and `version`. |
 | `admin pair` | `POST /admin/v1/pair` with the body `{}` | `pairing code: <code>`. Standard error says where to enter it on the phone: Linked devices, Link a device, then Link with phone number instead. |
 | `admin reconnect` | `POST /admin/v1/reconnect` with the body `{}` | `reconnect requested` |
 

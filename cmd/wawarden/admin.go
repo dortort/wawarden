@@ -300,6 +300,9 @@ type statusAnswer struct {
 		InboxBacklog     int64  `json:"inbox_backlog"`
 		InboxQuarantined int64  `json:"inbox_quarantined"`
 		BackfillsToday   *int64 `json:"backfills_today"`
+		MediaRefsLive    *int64 `json:"media_refs_live"`
+		MediaRefsExpired *int64 `json:"media_refs_expired"`
+		RevokeTombstones *int64 `json:"revoke_tombstones"`
 	} `json:"counts"`
 	Clients *struct {
 		Active         int64 `json:"active"`
@@ -308,6 +311,7 @@ type statusAnswer struct {
 		AllChatsActive int64 `json:"all_chats_active"`
 	} `json:"clients"`
 	Warnings     *[]string `json:"warnings"`
+	Downloads    *string   `json:"downloads"`
 	LastIngestAt *string   `json:"last_ingest_at"`
 	Version      *string   `json:"version"`
 }
@@ -319,7 +323,9 @@ func printAnswer(command string, answer []byte, stdout, stderr io.Writer) error 
 	switch command {
 	case commandStatus:
 		var s statusAnswer
-		if json.Unmarshal(answer, &s) != nil || s.State == nil || s.Reason == nil || s.Paired == nil || s.Counts == nil || s.Counts.BackfillsToday == nil || s.Clients == nil || s.Warnings == nil || s.Version == nil {
+		if json.Unmarshal(answer, &s) != nil || s.State == nil || s.Reason == nil || s.Paired == nil || s.Counts == nil || s.Counts.BackfillsToday == nil ||
+			s.Counts.MediaRefsLive == nil || s.Counts.MediaRefsExpired == nil || s.Counts.RevokeTombstones == nil || s.Clients == nil || s.Warnings == nil ||
+			s.Downloads == nil || s.Version == nil {
 			return errBadAnswer
 		}
 		last := "never"
@@ -330,6 +336,7 @@ func printAnswer(command string, answer []byte, stdout, stderr io.Writer) error 
 			{"state", *s.State},
 			{"reason", orNone(*s.Reason)},
 			{"paired", strconv.FormatBool(*s.Paired)},
+			{"downloads", *s.Downloads},
 			{"chats", strconv.FormatInt(s.Counts.Chats, 10)},
 			{"messages", strconv.FormatInt(s.Counts.Messages, 10)},
 			{"history blobs pending", strconv.FormatInt(s.Counts.BlobsPending, 10)},
@@ -337,6 +344,9 @@ func printAnswer(command string, answer []byte, stdout, stderr io.Writer) error 
 			{"inbox backlog", strconv.FormatInt(s.Counts.InboxBacklog, 10)},
 			{"inbox quarantined", strconv.FormatInt(s.Counts.InboxQuarantined, 10)},
 			{"backfills today", strconv.FormatInt(*s.Counts.BackfillsToday, 10)},
+			{"media references live", strconv.FormatInt(*s.Counts.MediaRefsLive, 10)},
+			{"media references expired", strconv.FormatInt(*s.Counts.MediaRefsExpired, 10)},
+			{"revoke tombstones", strconv.FormatInt(*s.Counts.RevokeTombstones, 10)},
 			{"clients active", strconv.FormatInt(s.Clients.Active, 10)},
 			{"clients expired", strconv.FormatInt(s.Clients.Expired, 10)},
 			{"clients revoked", strconv.FormatInt(s.Clients.Revoked, 10)},
