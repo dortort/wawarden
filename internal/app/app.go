@@ -214,6 +214,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 	if err := a.backup.load(ctx); err != nil {
 		return nil, errors.Join(err, a.closeStores())
 	}
+	pause := &api.MediaPause{}
 	specs := []listeners.Spec{{
 		Name: listenerClient,
 		Addr: cfg.Listen,
@@ -222,7 +223,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 			Session: func() string { return string(a.engine.Status().State) }, Cursors: cursors, Refs: refs,
 			Limits: api.ReadLimits{ReadsPerMinute: cfg.ReadPerMinute, SearchesPerMinute: cfg.SearchPerMinute},
 			Sender: sendService{sender: newSender(cfg, archive, a.engine, notifier), rejected: rejected}, SendRejected: rejected,
-			AuditFailed: auditFailures(reg, alerts), Media: a.mediaDeps(ctx, cfg, media, archive),
+			AuditFailed: auditFailures(reg, alerts), Media: a.mediaDeps(ctx, cfg, media, archive, pause),
 		}),
 	}}
 	if cfg.AdminCredential != nil {
@@ -269,7 +270,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 	return a, nil
 }
 
-func (a *App) mediaDeps(ctx context.Context, cfg config.Config, media mediaParts, archive *ingest.Store) *api.MediaDeps {
+func (a *App) mediaDeps(ctx context.Context, cfg config.Config, media mediaParts, archive *ingest.Store, pause *api.MediaPause) *api.MediaDeps {
 	if media.maxBytes <= 0 {
 		return nil
 	}
@@ -279,7 +280,7 @@ func (a *App) mediaDeps(ctx context.Context, cfg config.Config, media mediaParts
 		Service: newMediaService(a.engine, media.spool, time.Now), MaxBytes: media.maxBytes,
 		PerMinute: cmp.Or(cfg.MediaPerMinute, config.DefaultMediaPerMinute), GlobalPerHour: cmp.Or(cfg.MediaGlobalPerHour, config.DefaultMediaGlobalPerHour),
 		GlobalBytesPerHour: cmp.Or(cfg.MediaGlobalBytesPerHour, config.DefaultMediaGlobalBytesPerHour), Root: root,
-		ClientLive: clientLive(archive.Clients()), Stopped: func() { close(a.media.stopped) },
+		ClientLive: clientLive(archive.Clients()), Stopped: func() { close(a.media.stopped) }, Pause: pause,
 	}
 }
 

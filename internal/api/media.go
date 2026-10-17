@@ -131,6 +131,7 @@ type MediaDeps struct {
 	Root               context.Context
 	ClientLive         func(ctx context.Context, client string) (bool, error)
 	Stopped            func()
+	Pause              *MediaPause
 
 	sweeps <-chan time.Time
 }
@@ -209,6 +210,7 @@ type mediaRegistry struct {
 	service    MediaService
 	archive    ReadArchive
 	clientLive func(ctx context.Context, client string) (bool, error)
+	pause      *MediaPause
 	max        int64
 	perClient  *ratelimit.Limiter
 	count      *ratelimit.HourLog
@@ -245,11 +247,11 @@ func (c *cleanups) run() {
 }
 
 func newMediaRegistry(d MediaDeps, archive ReadArchive, reg *metrics.Registry, now func() time.Time) *mediaRegistry {
-	if d.Service == nil || d.MaxBytes < 1 || d.Root == nil || d.ClientLive == nil || d.Stopped == nil {
-		panic("api: attachment downloads need a media service, a positive cap, a root context, a client check and a stop signal")
+	if d.Service == nil || d.MaxBytes < 1 || d.Root == nil || d.ClientLive == nil || d.Stopped == nil || d.Pause == nil {
+		panic("api: attachment downloads need a media service, a positive cap, a root context, a client check, a stop signal and a pause switch")
 	}
 	m := &mediaRegistry{
-		jobs: map[mediaKey]*mediaJob{}, service: d.Service, archive: archive, clientLive: d.ClientLive, max: d.MaxBytes,
+		jobs: map[mediaKey]*mediaJob{}, service: d.Service, archive: archive, clientLive: d.ClientLive, pause: d.Pause, max: d.MaxBytes,
 		perClient: ratelimit.New(d.PerMinute, min(mediaClientBurst, d.PerMinute), now),
 		count:     ratelimit.NewHourLog(int64(d.GlobalPerHour), now),
 		bytes:     ratelimit.NewHourLog(d.GlobalBytesPerHour, now),
@@ -269,6 +271,7 @@ func newMediaRegistry(d MediaDeps, archive ReadArchive, reg *metrics.Registry, n
 		}
 		m.deliveredBytes.With(transport)
 	}
+	d.Pause.onPause(func() { m.dropAll(false) })
 	safego.Go(mediaSweepPanic, func() {
 		defer d.Stopped()
 		tick := d.sweeps
@@ -334,6 +337,10 @@ func (m *mediaRegistry) admit(g policy.ReadGrant, key mediaKey, req MediaFetch, 
 		m.fetches.With(fetchTooLarge).Inc()
 		return mediaView{}, false, errMediaTooLarge
 	}
+	if m.pause.Paused() {
+		m.fetches.With(fetchBusy).Inc()
+		return mediaView{}, false, errMediaPaused
+	}
 	if err := m.service.Precheck(req.Declared); err != nil {
 		return mediaView{}, false, m.precheckRefusal(err)
 	}
@@ -386,6 +393,8 @@ func (m *mediaRegistry) refusalLocked(client string, disk bool, declared int64) 
 	switch {
 	case m.closed:
 		return fetchBusy, errBusy
+	case m.pause.Paused():
+		return fetchBusy, errMediaPaused
 	case m.liveJobsLocked(client) >= mediaClientJobs:
 		return fetchRateLimited, RateLimited(0)
 	case m.fetching >= mediaFetchSlots || m.staged >= mediaStagedSlots || disk && (m.fetchingDisk >= 1 || m.stagedDisk >= 1):
@@ -740,15 +749,19 @@ func (m *mediaRegistry) eligible(ctx context.Context, j *mediaJob, now time.Time
 }
 
 func (m *mediaRegistry) shutdown() {
+	m.dropAll(true)
+	m.runners.Wait()
+}
+
+func (m *mediaRegistry) dropAll(closing bool) {
 	var after cleanups
 	m.mu.Lock()
-	m.closed = true
+	m.closed = m.closed || closing
 	for _, j := range m.jobs {
 		after.add(m.eraseLocked(j, errDeliveryDropped))
 	}
 	m.mu.Unlock()
 	after.run()
-	m.runners.Wait()
 }
 
 func (v mediaView) status() dto.MediaStatus {
