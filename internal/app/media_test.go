@@ -636,7 +636,10 @@ func TestThePauseHoldsDownloadsUntilItIsLifted(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		return tx.PutRevokeTombstone(peer, "SYNTHETIC-REVOKED", peer, time.Now())
+		if err := tx.PutRevokeTombstone(peer, "SYNTHETIC-REVOKED", peer, time.Now()); err != nil {
+			return err
+		}
+		return tx.PutRevokeTombstone(peer, "SYNTHETIC-REVOKED-2", peer, time.Now())
 	}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -657,7 +660,7 @@ func TestThePauseHoldsDownloadsUntilItIsLifted(t *testing.T) {
 			t.Fatalf("status = %d %s, want %s", r.status, r.body, want)
 		}
 	}
-	status(`"media_refs_live":1,"media_refs_expired":0,"revoke_tombstones":1}`)
+	status(`"media_refs_live":1,"media_refs_expired":0,"revoke_tombstones":2}`)
 	status(`"downloads":"on"`)
 	path := "/v1/messages/" + onlyChatMessages(t, to, auth)[0] + "/media"
 	if r := post(t, admin, "/admin/v1/media", bearer(adminToken), `{"paused":true}`); r.status != http.StatusOK || r.body != `{"paused":true}` {
