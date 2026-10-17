@@ -1139,6 +1139,7 @@ client's `id` is its client id.
 | `GET /admin/v1/clients/{id}` | none | `200` with the client. |
 | `POST /admin/v1/clients/{id}/revoke` | exactly `{}` | `200` with the revoked client. Revoking a revoked client changes nothing and answers the same. |
 | `POST /admin/v1/backfill` | `{"chat":..., "count":...}`, below | `202` `{"request_id":"<id>"}`: the backfill went to WhatsApp under that id; the phone answers when it processes it. See [Backfill requests](#backfill-requests). |
+| `POST /admin/v1/media` | exactly `{"paused":true}` or `{"paused":false}` | `200` with the same object: attachment downloads are paused or resumed. See [Pausing downloads](#pausing-downloads). |
 | `GET /admin/v1/chats` | none; the query may hold one `match` | `200` `{"chats":[{"id","kind","ref","name"}...],"truncated":false}`: at most 100 chats, most recent message first, whose name contains `match` (ignoring the letter case of ASCII letters), whose identifier contains it, or whose reference is it; every chat without `match`. `truncated` is `true` when more match. |
 
 ### Client objects
@@ -1203,21 +1204,41 @@ create answers it with `known` `false`, and later answers say `true`. A write
 chat must also be a read chat; [Design rationale](internals.md#write-chats-must-be-readable)
 explains why.
 
+### Pausing downloads
+
+`POST /admin/v1/media` with `{"paused":true}` stops [attachment downloads](#attachments)
+at once, without a restart, for example when a ban is suspected or two
+clients hold every download slot. It erases every attachment job, fetching or
+ready; a file still being written to a client is cleared once that delivery
+ends. While the pause holds, nothing is fetched: a `POST` to the attachment
+route answers `503` `{"error":"busy"}` with `Retry-After: 60`, a
+`get_attachment` call that would fetch the file answers the error `busy` with
+`retry_after_seconds` 60, and each counts `busy` in
+`wawarden_media_fetches_total`. `get_attachment` stays listed, and the status
+object reports `downloads` as `paused`.
+`{"paused":false}` resumes. The switch lives in memory only: a restart resumes
+downloads, and `WAWARDEN_MEDIA_MAX_BYTES=0` with a restart turns them off for
+good. While downloads are off the route accepts the switch and holds it, and
+it has no effect. The body must hold `paused` as a JSON boolean and nothing
+else; anything else answers `400` `{"error":"invalid_body"}`. The route
+reports `admin_mutation` with the action `media_pause`.
+
 ### Status object
 
 The status object carries no identifier, name or text:
 
 ```json
-{"state":"connected","reason":"","paired":true,"counts":{"chats":12,"messages":3456,"history_blobs_pending":0,"history_blobs_quarantined":0,"inbox_backlog":0,"inbox_quarantined":0,"backfills_today":1},"clients":{"active":2,"expired":0,"revoked":1,"all_chats_active":1},"warnings":["all_chats_client"],"last_ingest_at":"2026-10-05T08:00:00Z","version":"v1.0.0"}
+{"state":"connected","reason":"","paired":true,"counts":{"chats":12,"messages":3456,"history_blobs_pending":0,"history_blobs_quarantined":0,"inbox_backlog":0,"inbox_quarantined":0,"backfills_today":1,"media_refs_live":310,"media_refs_expired":2,"revoke_tombstones":4},"clients":{"active":2,"expired":0,"revoked":1,"all_chats_active":1},"warnings":["all_chats_client"],"downloads":"on","last_ingest_at":"2026-10-05T08:00:00Z","version":"v1.0.0"}
 ```
 
 | Key | Content |
 |---|---|
 | `state`, `reason` | The [engine state](internals.md#engine-states); `reason` is empty unless the state is `disconnected`. |
 | `paired` | Whether a device is stored. |
-| `counts` | Chats and messages in the archive; history blobs waiting to be processed and quarantined; inbox rows waiting to be applied and quarantined; backfills requested since midnight UTC. |
+| `counts` | Chats and messages in the archive; history blobs waiting to be processed and quarantined; inbox rows waiting to be applied and quarantined; backfills requested since midnight UTC; stored [media references](internals.md#media-reference) that have not expired (`media_refs_live`) and those past their expiry that the minute sweep has not yet removed (`media_refs_expired`); and [revoke tombstones](internals.md#ingest) (`revoke_tombstones`). |
 | `clients` | Clients that are active, expired and not revoked, and revoked; and active clients that read every chat. |
 | `warnings` | Fixed codes, empty when nothing needs attention: `all_chats_client` while a client that reads every chat is active, and `media_write_client` while an active client holds `allow_media` and at least one write chat. |
+| `downloads` | `off` while `WAWARDEN_MEDIA_MAX_BYTES` is `0`, `paused` while [the pause](#pausing-downloads) holds, and `on` otherwise. |
 | `last_ingest_at` | When the engine last stored a message, in UTC to the second, or `null` before the first. |
 | `version` | The build's version, as `wawarden version` prints it. |
 
@@ -1254,6 +1275,7 @@ The routes refuse with fixed codes:
 | `429` `{"error":"rate_limited"}` | backfill | A send or another backfill is running; nothing was sent. `Retry-After: 1`. |
 | `502` `{"error":"send_rejected"}` | backfill | WhatsApp refused the request. It counts against the quota. |
 | `504` `{"error":"send_outcome_unknown"}` | backfill | The request was written and no acknowledgement came. It counts against the quota and is not repeated. |
+| `400` `{"error":"invalid_body"}` | media | The body is not exactly `{"paused":true}` or `{"paused":false}`. |
 | `400` `{"error":"invalid_query"}` | list chats | The query holds another key, `match` twice, a malformed escape, or a `match` longer than 64 characters, not UTF-8 or with a control character. |
 | `500` `{"error":"internal_error"}` | all | Anything else, such as an archive read that failed; the cause is never sent. |
 
