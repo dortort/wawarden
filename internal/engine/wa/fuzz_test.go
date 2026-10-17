@@ -28,6 +28,12 @@ var knownKinds = map[engine.Kind]bool{
 	engine.KindEdit: true, engine.KindRevoke: true, engine.KindOther: true,
 }
 
+func quotedImage() *waE2E.Message {
+	m := mediaFixtures[0].build(syntheticMedia(4096))
+	m.ImageMessage.ContextInfo = &waE2E.ContextInfo{StanzaID: proto.String("3EB0A1"), QuotedMessage: &waE2E.Message{Conversation: proto.String("quoted")}}
+	return m
+}
+
 func FuzzMessageBytes(f *testing.F) {
 	for _, evt := range []*events.Message{
 		textMessage(f, peer, peer, "3EB0A1", "synthetic"),
@@ -45,6 +51,7 @@ func FuzzMessageBytes(f *testing.F) {
 		live(f, peer, peer, "3EB0M2", mediaFixtures[3].build(syntheticMedia(1<<20))),
 		live(f, peer, peer, "3EB0M3", mediaFixtures[9].build(syntheticMedia(512))),
 		live(f, peer, peer, "3EB0M4", viewOnceWrapped(mediaFixtures[6].build(syntheticMedia(64)))),
+		live(f, peer, peer, "3EB0M5", quotedImage()),
 	} {
 		b, err := proto.Marshal(evt.RawMessage)
 		if err != nil {
