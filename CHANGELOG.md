@@ -40,7 +40,9 @@ its image digest and the commands to verify and reproduce it.
     re-encoded image up to 3.5 MiB as an image block, audio up to 8 MiB as an
     audio block, and video, PDF or another document up to 8 MiB as an
     embedded blob. Its optional `part` argument, from 0 to 255, returns any
-    ready attachment in 8 MiB parts to be joined in order.
+    ready attachment in 8 MiB parts to be joined in order; a part's result
+    gives the number of parts and the joined length, which can be shorter
+    than the declared size.
 
   Both transports share one job per client and message, the budgets and the
   per-job delivery caps.
@@ -132,9 +134,9 @@ its image digest and the commands to verify and reproduce it.
   and expired messages, including messages revoked before the upgrade. A
   revocation of a message not stored yet is refused for a target its sender
   could not revoke.
-- The protocol library's log lines no longer carry media URLs, media download
-  paths or encrypted-file hashes, and audit lines carry a keyed HMAC of a
-  message, never its id.
+- The protocol library's log lines no longer carry any `http`, `https`, `ws`
+  or `wss` URL, media download path or encrypted-file hash, and audit lines
+  carry a keyed HMAC of a message, never its id.
 - The threat model lists the new residuals: a delivery or a `get_attachment`
   result already under way when its client is revoked; copies an MCP host or
   an agent saves; two clients holding every download slot; prompt injection
@@ -171,15 +173,6 @@ its image digest and the commands to verify and reproduce it.
 
 - `wawarden_paired` and `wawarden_connected` could stay stale when the connect
   step's update and a `Connected` event's update overlapped.
-- The protocol library's log lines also lose a URL that directly follows a
-  letter or a digit.
-- `get_attachment`'s description says to take the number of parts and the
-  joined length from a part's result, which can be shorter than the declared
-  size.
-- The documents say what Claude Code saves of a result and passes to the
-  model: every blob that is not an image and every audio block become files,
-  and the result's text blocks are dropped when it carries
-  `structuredContent`.
 
 ### Upgrade notes
 
