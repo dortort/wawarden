@@ -289,6 +289,10 @@ the engine rejects and logs out. Release builds refuse
 - **Reading.** Clients read their chats over REST or as MCP tools, in sealed
   pages, within per-client budgets (see [the client API](docs/api.md#client-api)
   and [MCP](docs/api.md#mcp)).
+- **Attachments.** Off by default. With `WAWARDEN_MEDIA_MAX_BYTES` set, a
+  client created with `allow_media` downloads a media message's attachment
+  over REST, fetched only when it asks, within per-client and global budgets
+  (see [attachments](docs/api.md#attachments)).
 - **Sending.** A client with write chats sends text, once per idempotency key,
   behind a pacer and send budgets (see [sending](docs/api.md#sending) and
   [ban risk](docs/ban-risk.md)).
