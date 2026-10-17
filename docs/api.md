@@ -600,7 +600,11 @@ it gave none. Every request also costs one [read](#read-rate-limits).
 | `200`, `206` or `416` | The job is ready: the delivery below. |
 
 A failed job keeps its code for 30 minutes, the throttled one only until its
-`Retry-After`, and answers `POST` with it too, without a new fetch. A fetch
+`Retry-After`, and answers `POST` with it too, without a new fetch. An expired
+file is the exception: the failed fetch also marks the message's reference
+expired, so the first `GET` or `HEAD` to find the job answers `410` and drops
+it; a `POST`, or a `get_attachment` call that did not wait for the fetch,
+answers `media_unavailable` and drops it instead. A fetch
 that ends because the connection to WhatsApp dropped keeps no code: `GET` then
 answers `409`, and a new `POST` starts, and is charged as, a new job.
 

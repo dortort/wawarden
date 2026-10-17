@@ -1306,6 +1306,25 @@ func TestGetAttachmentForAMessageThatIsGoneDropsItsJob(t *testing.T) {
 	}
 }
 
+func TestGetAttachmentAnswersUnavailableForAJobWhoseFetchExpiredItsReference(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA1", "document", smallSize)
+	if w := f.post(keyMedia, "MEDIA1"); w.Code != http.StatusAccepted {
+		t.Fatalf("POST = %d %s, want 202", w.Code, w.Body.String())
+	}
+	f.withdraw("MEDIA1", true)
+	f.media.answer("MEDIA1", fetchAnswer{err: ErrMediaExpired})
+	if v := f.settled(keyMedia, "MEDIA1"); v.state != mediaFailed {
+		t.Fatalf("the job settled in state %d, want failed", v.state)
+	}
+	cs, _ := f.session(keyMedia, protocols[0])
+	requireAttachmentError(t, call(t, cs, toolGetAttachment, f.attachmentArgs(keyMedia, "MEDIA1")), codeMediaUnavailable)
+	if v := f.view(keyMedia, "MEDIA1"); v.state != 0 {
+		t.Fatalf("the job survived a call that found its reference expired, in state %d", v.state)
+	}
+	requireWriterError(t, f.get(keyMedia, "MEDIA1", nil), http.StatusNotFound, codeMediaUnavailable)
+}
+
 func TestGetAttachmentAuditsTheMessageAndTheInlineBytes(t *testing.T) {
 	f := newMCPMediaFixture(t, mediaOptions{})
 	f.attach("MEDIA1", "document", smallSize)

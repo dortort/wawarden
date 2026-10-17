@@ -600,6 +600,52 @@ func TestEachTerminalCodeIsKeptByItsTombstone(t *testing.T) {
 	}
 }
 
+func TestAnExpiredFileAnswersGoneOnceWhenTheFetchMarkedItsReferenceExpired(t *testing.T) {
+	cases := []struct {
+		name   string
+		answer fetchAnswer
+		wait   time.Duration
+		method string
+		status int
+		code   string
+	}{
+		{"a GET", fetchAnswer{err: ErrMediaExpired}, 0, http.MethodGet, http.StatusGone, codeMediaExpired},
+		{"a HEAD", fetchAnswer{err: ErrMediaExpired}, 0, http.MethodHead, http.StatusGone, ""},
+		{"a POST", fetchAnswer{err: ErrMediaExpired}, 0, http.MethodPost, http.StatusNotFound, codeMediaUnavailable},
+		{"another failure", fetchAnswer{err: ErrMediaFailed}, 0, http.MethodGet, http.StatusNotFound, codeMediaUnavailable},
+		{"a tombstone past its life", fetchAnswer{err: ErrMediaExpired}, mediaFailedLife, http.MethodGet, http.StatusNotFound, codeMediaUnavailable},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newMediaFixture(t, mediaOptions{})
+			f.attach("MEDIA1", "document", smallSize)
+			if w := f.post(keyMedia, "MEDIA1"); w.Code != http.StatusAccepted {
+				t.Fatalf("POST = %d %s, want 202", w.Code, w.Body.String())
+			}
+			f.withdraw("MEDIA1", true)
+			f.media.answer("MEDIA1", c.answer)
+			if v := f.settled(keyMedia, "MEDIA1"); v.state != mediaFailed {
+				t.Fatalf("the job settled in state %d, want failed", v.state)
+			}
+			f.clock.advance(c.wait)
+			w := f.request(c.method, keyMedia, f.mref(keyMedia, "MEDIA1"), nil)
+			if c.code != "" {
+				requireWriterError(t, w, c.status, c.code)
+			} else if w.Code != c.status {
+				t.Fatalf("%s = %d, want %d", c.method, w.Code, c.status)
+			}
+			if v := f.view(keyMedia, "MEDIA1"); v.state != 0 {
+				t.Fatalf("the job survived the first request after its reference expired, in state %d", v.state)
+			}
+			requireWriterError(t, f.get(keyMedia, "MEDIA1", nil), http.StatusNotFound, codeMediaUnavailable)
+			requireWriterError(t, f.post(keyMedia, "MEDIA1"), http.StatusNotFound, codeMediaUnavailable)
+			if got := len(f.media.fetched()); got != 1 {
+				t.Fatalf("%d fetches, want only the one that expired", got)
+			}
+		})
+	}
+}
+
 func TestALimitOfOneAMinuteHasABurstOfOne(t *testing.T) {
 	f := newMediaFixture(t, mediaOptions{perMinute: 1})
 	f.attach("MEDIA1", "document", smallSize)
