@@ -20,6 +20,10 @@ import (
 const mainHelper = "GO_TEST_RUN_MAIN_WITH_A_STUCK_DRAIN"
 
 func TestMain(m *testing.M) {
+	if err := os.Setenv("GOMEMLIMIT", "off"); err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "set GOMEMLIMIT:", err)
+		os.Exit(2)
+	}
 	if os.Getenv(mainHelper) == "1" {
 		runApp = func(_ *app.App, ctx context.Context) error {
 			_, _ = fmt.Fprintln(os.Stderr, "serving")
