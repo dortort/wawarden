@@ -287,14 +287,14 @@ func TestTheFakeEngineServesEveryAttachmentKindOverRESTAndMCP(t *testing.T) {
 		t.Fatalf("the near-cap PDF over MCP = %+v", a.info)
 	}
 
-	if a := f.call(expired, nil); a.err != "media_expired" {
-		t.Fatalf("the expired attachment over MCP = %s %+v, want media_expired", a.err, a.info)
-	}
-	if r := mustDo(t, http.MethodPost, f.to, "/v1/messages/"+f.mrefs[expired]+"/media", f.auth); r.status != http.StatusNotFound || r.body != `{"error":"media_unavailable"}` {
-		t.Fatalf("the expired attachment over REST afterwards = %d %s", r.status, r.body)
+	if r := f.rest(expired); r.status != http.StatusGone || r.body != `{"error":"media_expired"}` {
+		t.Fatalf("the expired attachment over REST = %d %s, want 410 media_expired", r.status, r.body)
 	}
 	if a := f.call(expired, nil); a.err != "media_unavailable" {
 		t.Fatalf("the expired attachment over MCP afterwards = %s, want media_unavailable", a.err)
+	}
+	if r := mustDo(t, http.MethodPost, f.to, "/v1/messages/"+f.mrefs[expired]+"/media", f.auth); r.status != http.StatusNotFound || r.body != `{"error":"media_unavailable"}` {
+		t.Fatalf("the expired attachment over REST afterwards = %d %s", r.status, r.body)
 	}
 	if counts, _ := f.status(); counts["media_refs_live"] != fakeAttachment-1 || counts["media_refs_expired"] != 1 {
 		t.Fatalf("status counts %v after the expiry, want eight live references and one expired", counts)
