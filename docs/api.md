@@ -986,9 +986,11 @@ the saved file keeps the original.
 
 ##### Parts
 
-When `delivery` is `part`, call `get_attachment` again with `part` from `0` to
-`parts` − 1, one call at a time, and join the parts in that order: the joined
-length equals `bytes`. Part k is the slice of the served file at offset k × 8
+When `delivery` is `part`, call `get_attachment` again with `part` `0`, then
+with `part` from `1` to that result's `parts` − 1, one call at a time, and join
+the parts in that order: the joined length equals a part result's `bytes`. An
+answer without a job takes `parts` from the declared size, and the served file
+can be shorter. Part k is the slice of the served file at offset k × 8
 MiB, 8 MiB long or the rest of the file for the last one. `part` works on any
 ready job, so a file that would also come inline is one part. A part comes as
 an embedded `resource` blob of type `application/octet-stream` with the URI

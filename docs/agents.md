@@ -101,10 +101,11 @@ WaWarden does not check what they say or do.
   answers `busy`.
 - **Join parts only with a fixed concatenation, then check the length.** When
   the status says `delivery` `part`, call `get_attachment` again with `part`
-  from `0` to `parts` − 1, one call at a time, and join the parts in that
-  order with a fixed command, such as `cat` with the saved parts' paths and
-  nothing else; never build the command from the attachment or the message.
-  The joined length must equal `bytes`. The joined file is still the
+  `0`, then with `part` from `1` to that result's `parts` − 1, one call at a
+  time, and join the parts in that order with a fixed command, such as `cat`
+  with the saved parts' paths and nothing else; never build the command from
+  the attachment or the message. The joined length must equal a part result's
+  `bytes`. The joined file is still the
   attachment the status described: `format` `image` with `normalised` `false`
   is still not a safe image. The same file is also available through `POST`
   then `GET /v1/messages/{mref}/media` with the same token.
