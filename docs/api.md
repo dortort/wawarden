@@ -66,7 +66,8 @@ headers, 15 seconds to read the whole request, 30 seconds to write the response,
 headers. An attachment delivery is the one exception to the write limit: it
 renews a 30-second write deadline before each 256 KiB chunk, never past the
 job's end (see [Attachments](#attachments)), and a `get_attachment` call that
-returns the file renews it once, to 30 seconds, before its result is written
+returns the file or a part renews it once, to 30 seconds, before its result is
+written
 (see [MCP tools](#mcp-tools)).
 
 ### Outbound connections
@@ -600,8 +601,9 @@ answers `409`, and a new `POST` starts, and is charged as, a new job.
 
 A ready job lives 10 minutes when its bytes are held in memory and 30 minutes
 when they are staged on disk, from the moment it turned ready (`expires_at` in
-its status). It is erased at the first delivery of the whole file, a `200` or a
-`206` whose range covers every byte; at the end of its life; by a sweep that
+its status). It is erased at the first delivery of the whole file: a `200` or a
+`206` whose range covers every byte, an inline `get_attachment` result, or the
+last [part](#parts) not yet delivered; at the end of its life; by a sweep that
 runs every minute and drops a job whose message is no longer eligible or whose
 client was revoked or has expired; and at shutdown. Once erased, no request
 finds it, and a delivery in flight stops at its next chunk.
@@ -629,10 +631,11 @@ Only one range is honoured, `bytes=a-b`, `bytes=a-` or `bytes=-n`; several
 ranges answer `200` with the whole file. `If-Range` is honoured only when it
 matches the `ETag` exactly, and no other conditional header is read. An
 unsatisfiable range answers `416` (`range_not_satisfiable`) with
-`Content-Range: bytes */<size>`. Per job, across requests, at most 2
-deliveries run at once and at most 4 times the file's size is delivered in
-all; beyond either, `GET` answers `429` (`rate_limited`) without
-`Retry-After`. A `HEAD` counts toward neither.
+`Content-Range: bytes */<size>`. Per job, across requests and `get_attachment`
+results, inline or in parts, at most 2 deliveries run at once and at most 4
+times the file's size is delivered in all; beyond either, `GET` answers `429`
+(`rate_limited`) without `Retry-After`, and `get_attachment` `rate_limited`. A
+`HEAD` counts toward neither.
 
 The body goes out in chunks of 256 KiB, each under a write deadline of 30
 seconds renewed before it and never later than the job's end. A reverse proxy
@@ -641,7 +644,8 @@ response buffering off (`proxy_buffering off` or `proxy_max_temp_file_size 0`
 on nginx, whose defaults otherwise spool up to 1 GiB of plaintext to its
 disk); allow a whole response at least 30 minutes; set no response-size limit
 below `WAWARDEN_MEDIA_MAX_BYTES`; pass `Range` and `If-Range` through; and
-neither cache nor compress the answer.
+neither cache nor compress the answer. On `POST /mcp` it should allow a
+response of at least 16 MiB, which a `get_attachment` part needs.
 
 #### Status
 
@@ -910,12 +914,13 @@ send `Retry-After`.
 | Code | Answered when |
 |---|---|
 | `not_found` | As on the routes: the chat is outside the client's scope or does not exist, including with a cursor or `since` value that does not open; or the client gets no read grant at the time of the call. A denied chat and a missing one give byte-identical answers. |
-| `invalid_arguments` | The arguments do not fit the input schema: a missing required argument, another property, a wrong type, an empty string, a value out of bounds or a non-integral `limit`. |
+| `invalid_arguments` | The arguments do not fit the input schema: a missing required argument, another property, a wrong type, an empty string, a value out of bounds or a non-integral `limit` or `part`. |
 | `invalid_query` | The query passes the schema but not the search rules. |
 | `invalid_cursor` | As on the routes. |
 | `rate_limited` | The client's search budget is spent, for `send_message` a [send limit](#send-limits), or for `get_attachment` the client's two jobs, an [attachment budget](#attachments) or a per-job delivery cap. A tool result carries no `Retry-After`; at the default rate a search is admitted again within a second. A spent read budget refuses the whole `POST` with `429` before the call. |
-| `busy` | As on the routes, or the call passed its deadline: 10 seconds for a read tool, 25 seconds for `send_message` and `get_attachment`. For `get_attachment` also while another call's inline result is built or written, since one is handled at a time across the service, or when the job ended while the call read it. |
+| `busy` | As on the routes, or the call passed its deadline: 10 seconds for a read tool, 25 seconds for `send_message` and `get_attachment`. For `get_attachment` also while another call's inline result or part is built or written, since one is handled at a time across the service, or when the job ended while the call read it. |
 | `media_unavailable`, `media_expired`, `media_failed`, `media_unsupported`, `media_too_large` | `get_attachment` only, when the [attachment routes](#attachments) would answer that code. |
+| `range_not_satisfiable` | `get_attachment` only, for a `part` at or past the ready job's `parts`. |
 | `invalid_text`, `invalid_idempotency_key`, `first_contact_refused`, `request_in_progress`, `idempotency_key_reused`, `not_connected`, `send_rejected`, `send_outcome_unknown` | `send_message` only, when the route would answer that code; `not_connected` also for `get_attachment` when a fetch would start while WhatsApp is not connected. A text or key that breaks the input schema, such as an empty text or a seven-character key, is `invalid_arguments` instead; control characters and the 8192-byte cap reach the text check. |
 | `internal_error` | Anything else failed, a panic in the tool included; the panic is counted as `api.mcp` and the endpoint keeps serving. |
 
@@ -926,29 +931,30 @@ instead of passing it to the model, so a smaller `limit` keeps answers inline.
 
 #### get_attachment
 
-`get_attachment` takes a message's `mref` and runs the checks of the
-[attachment routes](#attachments): it opens the reference, decides the
-client's grant again and looks the message up in scope, so a missing, foreign
-or out-of-scope message is `not_found` and a message without a usable
-reference `media_unavailable`. It then uses the client's job for the message:
+`get_attachment` takes a message's `mref`, and optionally a `part` from 0 to
+255, and runs the checks of the [attachment routes](#attachments): it opens the
+reference, decides the client's grant again and looks the message up in scope,
+so a missing, foreign or out-of-scope message is `not_found` and a message
+without a usable reference `media_unavailable`. It then uses the client's job
+for the message:
 
-- No job: a file declared over its inline limit (the smaller of
-  `WAWARDEN_MEDIA_MAX_BYTES` and 16 MiB for an image, 1 MiB for a sticker and
-  8 MiB for anything else) is answered with its status alone, `delivery`
+- No job: without `part`, a file declared over its inline limit (the smaller
+  of `WAWARDEN_MEDIA_MAX_BYTES` and 16 MiB for an image, 1 MiB for a sticker
+  and 8 MiB for anything else) is answered with its status alone, `delivery`
   `part` and `reason` `too_large_for_inline`; nothing is fetched and nothing is
-  charged, and the file is fetched through the routes instead. Otherwise the
-  call starts a job exactly as `POST` does, with the same refusals and budgets,
-  and waits for it.
+  charged, and the file is fetched in parts or through the routes instead.
+  Otherwise, and always with `part`, the call starts a job exactly as `POST`
+  does, with the same refusals and budgets, and waits for it.
 - A job fetching in memory (declared at most 16 MiB): the call waits for it
   within its 25-second deadline, and answers the fetching status if it has not
   ended by then. A job fetching to disk is answered with its fetching status at
   once.
 - A failed job: its code, as on the routes.
-- A ready job: the file comes inline when its bytes are held in memory and its
-  served type and size allow a block; otherwise the status alone, with
-  `delivery` `part`, and `reason` `too_large_for_inline` when the size is over
-  the inline cap. When `delivery` is `part`, fetch the file with
-  `POST` then `GET /v1/messages/{mref}/media` and the same token.
+- A ready job: with `part`, that part of the file, as described under
+  [Parts](#parts). Without it, the file comes inline when its bytes are held in
+  memory and its served type and size allow a block; otherwise the status
+  alone, with `delivery` `part`, and `reason` `too_large_for_inline` when the
+  size is over the inline cap.
 
 The block follows the served type, never the sender's:
 
@@ -957,6 +963,7 @@ The block follows the served type, never the sender's:
 | `image/jpeg`, `image/png`, only when the content policy re-encoded the image (`normalised` `true`): images, stickers other than Lottie ones, and documents whose bytes are an image | 3.5 MiB | `image` |
 | `audio/ogg`, `audio/mpeg`, `audio/mp4` | 8 MiB | `audio`; an embedded `resource` blob of the same type for a client on the 2024-11-05 protocol, which has no audio block |
 | `video/mp4`, `application/pdf`, `application/octet-stream` | 8 MiB | an embedded `resource` blob of that type with the URI `wawarden:attachment` |
+| any, for a call with `part` | 8 MiB per part | an embedded `resource` blob of type `application/octet-stream` with the URI `wawarden:attachment-part` |
 
 An image the content policy did not re-encode never comes as an image block:
 an image served as `image/jpeg` or `image/png` without `normalised` gets its
@@ -966,32 +973,52 @@ served as `application/octet-stream`, with `format` `image` and `normalised`
 too. Some MCP hosts write a blob to a file; Claude Code does so for PDF, Office
 and audio blobs.
 
+##### Parts
+
+When `delivery` is `part`, call `get_attachment` again with `part` from `0` to
+`parts` − 1, one call at a time, and join the parts in that order: the joined
+length equals `bytes`. Part k is the slice of the served file at offset k × 8
+MiB, 8 MiB long or the rest of the file for the last one. `part` works on any
+ready job, so a file that would also come inline is one part. A part comes as
+an embedded `resource` blob of type `application/octet-stream` with the URI
+`wawarden:attachment-part`, whatever the served type, and its status sets
+`delivery` `part` with the part's `offset` and `length`. A `part` at or past
+`parts` answers `range_not_satisfiable` and leaves the job as it was. A part is
+read from the job's bytes and fetches nothing; while a job fetches to disk, a
+call with `part` answers the fetching status, with `retry_after_seconds`. An 8
+MiB part makes a response of about 11 MiB, under the 16 MiB that Claude Code
+accepts from an MCP server. The same file is also available through `POST` then
+`GET /v1/messages/{mref}/media` with the same token.
+
 A result carries the status in `structuredContent` and its `content` is, in
 order: a constant text that introduces the attachment as third-party content,
 the status as JSON text, the block when the file comes inline, and a constant
 closing text. The block carries `_meta` `{"wawarden/untrusted": true}`. When
 the file comes inline, `delivery` is `inline`, `offset` is `0` and `length` is
-the file's size; otherwise `delivery` is `part` or `metadata` and both are
-`0`. No argument value and no text read from the message appears in the
-result.
+the file's size; for a part, `delivery` is `part` and they are the part's;
+otherwise `delivery` is `part` or `metadata` and both are `0`. No argument
+value, the part index included, and no text read from the message appears in
+the result.
 
-The service handles one inline result at a time: a call that would return a
-file while another call's inline result is built or written answers `busy`, so
-an agent should ask for one attachment at a time. Before such a result is
-returned the call renews the connection's write deadline to 30 seconds; when it
-cannot, or the request has ended, the call answers the status alone. A result
-that carries the file counts toward the job's per-job delivery caps, shared
-with the routes, and completes the job, which is then erased, once the MCP
-library has written it in full and its audit row has committed; a result that
-was not written in full leaves the job ready. When the request ends before the
-result is written, the call's hold on the job ends 2 seconds after the call
-returns, without completing the job, and the job's bytes are later dropped
-without being overwritten, since the MCP library may still have been reading
-them. A job erased while a result that
-carries its file is being written, by a whole-body `GET`, its end of life, the
-sweep, a revocation or shutdown, keeps its bytes in memory until that write
-ends, at most 25 seconds after the call started plus 30 seconds to write; the
-result is still written.
+The service handles one inline result or part at a time: a call that would
+return a file or a part while another call's inline result or part is built or
+written answers `busy`, so an agent should ask for one attachment or part at a
+time. Before such a result is returned the call renews the connection's write
+deadline to 30 seconds; when it cannot, or the request has ended, the call
+answers the status alone. A result that carries the file or a part counts
+toward the job's per-job delivery caps, shared with the routes. Once the MCP
+library has written it in full and its audit row has committed, an inline
+result completes the job, which is then erased, and a part joins the job's
+delivered parts; the last part not yet delivered completes the job, and a
+repeated part does not. A result that was not written in full leaves the job
+ready and its part undelivered. When the request ends before the result is
+written, the call's hold on the job ends 2 seconds after the call returns,
+without completing the job, and the job's bytes are later dropped without being
+overwritten, since the MCP library may still have been reading them. A job
+erased while a result that carries its file or a part is being written, by a
+whole-body `GET`, its end of life, the sweep, a revocation or shutdown, keeps
+its bytes in memory until that write ends, at most 25 seconds after the call
+started plus 30 seconds to write; the result is still written.
 
 The server has no resources capability, although the MCP specification
 recommends one for embedded resources: a blob is not a resource a client can
@@ -1014,8 +1041,9 @@ notification answered `202` is `ok`. A row names a chat only for a successful
 found in the write scope. A `get_attachment` row names the chat and the
 message once the message is found in scope, whatever the answer. Its reason is
 `inline` when the result carries the file, with the file's size as its bytes;
-`metadata` for the status alone and `too_large_for_inline` for a file over its
-inline limit, both with `0` bytes; all three are recorded as allowed. Otherwise
+`part` when it carries a part, with the part's length as its bytes; `metadata`
+for the status alone and `too_large_for_inline` for a file over its inline
+limit, both with `0` bytes; all four are recorded as allowed. Otherwise
 it is the tool's code. When the client has left before the answer, the
 MCP library writes none, and the row records the call's own outcome.
 

@@ -139,7 +139,8 @@ these constraints on the proxy:
   30-second write deadline before each 256 KiB chunk, so there the proxy turns
   response buffering off, allows a whole response at least 30 minutes, sets no
   response-size limit below `WAWARDEN_MEDIA_MAX_BYTES`, and passes `Range` and
-  `If-Range` through ([delivery](api.md#delivery)).
+  `If-Range` through ([delivery](api.md#delivery)). On `POST /mcp` it allows a
+  response of at least 16 MiB, which a `get_attachment` part needs.
 - **MCP is plain HTTP.** The endpoint is `POST /mcp` only, stateless and
   JSON-only: no server-sent events, no WebSocket upgrade, no session affinity.
 - **Logs.** Never log the `Authorization` header. The query string of
