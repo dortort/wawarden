@@ -10,6 +10,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/dortort/wawarden/internal/policy"
+	"github.com/dortort/wawarden/internal/store/ingest"
 )
 
 const syntheticRef = "SYNTHETIC-SEALED-MEDIA-REFERENCE"
@@ -115,7 +118,10 @@ func TestAttachmentFetchesNeedAConnectedPairedEngine(t *testing.T) {
 	if err != nil || out != Staged(staged) {
 		t.Fatalf("a ready fetch = %v, %v, want the client's staged bytes", out, err)
 	}
-	if got != mediaRequest("A") {
+	if canonical, ok := got.Canonical.(archiveCanonical); !ok || canonical.archive != e.pipe.archive {
+		t.Fatalf("the client was asked without the archive's canonicaliser: %+v", got)
+	}
+	if got.Canonical = nil; got != mediaRequest("A") {
 		t.Fatalf("the client was asked for %+v", got)
 	}
 	if staged.erasures() != 0 || out.Size() != int64(len("synthetic attachment")) {
@@ -331,7 +337,7 @@ func TestAnExpiredFetchLeadsToTheReferenceBeingSwept(t *testing.T) {
 	if _, err := e.FetchMedia(t.Context(), request("M2")); !errors.Is(err, ErrMediaFailed) || err.Error() != ErrMediaFailed.Error() {
 		t.Fatalf("a failed fetch = %v", err)
 	}
-	if got != request("M2") {
+	if got.Canonical = nil; got != request("M2") {
 		t.Fatalf("the client was asked for %+v", got)
 	}
 	r.client.stage(nil, fmt.Errorf("synthetic: %w", ErrMediaExpired))
@@ -366,5 +372,28 @@ func TestAFailedExpiryMarkIsLoggedWithoutContent(t *testing.T) {
 		if strings.Contains(r.logs.String(), secret) {
 			t.Fatalf("%q reached the logs:\n%s", secret, r.logs)
 		}
+	}
+}
+
+func TestTheMediaCanonicaliserFollowsTheArchivesMappings(t *testing.T) {
+	r, e := readyEngine(t)
+	pn, lid := chat(t, "15550100077@s.whatsapp.net"), chat(t, "100000000000077@lid")
+	r.write(func(tx *ingest.Tx) error {
+		_, err := tx.LearnLID(lid, pn, ingest.MappingHistory, epoch)
+		return err
+	})
+	c := archiveCanonical{archive: e.pipe.archive}
+	for _, tt := range []struct{ in, want policy.CanonicalChat }{
+		{pn, lid},
+		{lid, lid},
+		{chat(t, "15550100078@s.whatsapp.net"), chat(t, "15550100078@s.whatsapp.net")},
+		{chat(t, "120363000000000001@g.us"), chat(t, "120363000000000001@g.us")},
+	} {
+		if got, err := c.Canonical(t.Context(), tt.in); err != nil || got != tt.want {
+			t.Fatalf("Canonical(%s) = %v, %v, want %s", tt.in.JID(), got.JID(), err, tt.want.JID())
+		}
+	}
+	if _, err := c.Canonical(t.Context(), policy.CanonicalChat{}); err == nil {
+		t.Fatal("Canonical accepted an invalid chat")
 	}
 }

@@ -58,13 +58,30 @@ func RetryAfter(err error) time.Duration {
 }
 
 type MediaRequest struct {
-	ID       string
-	Ref      string
-	Kind     MediaKind
-	Declared int64
-	Deadline time.Time
-	Chat     policy.CanonicalChat
-	Sender   policy.CanonicalChat
+	ID        string
+	Ref       string
+	Kind      MediaKind
+	Declared  int64
+	Deadline  time.Time
+	Chat      policy.CanonicalChat
+	Sender    policy.CanonicalChat
+	Canonical Canonicaliser
+}
+
+type Canonicaliser interface {
+	Canonical(ctx context.Context, c policy.CanonicalChat) (policy.CanonicalChat, error)
+}
+
+type archiveCanonical struct{ archive *ingest.Store }
+
+func (a archiveCanonical) Canonical(ctx context.Context, c policy.CanonicalChat) (policy.CanonicalChat, error) {
+	var out policy.CanonicalChat
+	err := a.archive.Read(ctx, "engine.media_canonical", func(r *ingest.Reader) error {
+		var err error
+		out, err = r.Canonical(c)
+		return err
+	})
+	return out, err
 }
 
 type Staged interface {
@@ -79,6 +96,7 @@ func (e *Engine) FetchMedia(ctx context.Context, req MediaRequest) (Staged, erro
 	if !e.Ready() {
 		return nil, ErrNotConnected
 	}
+	req.Canonical = archiveCanonical{archive: e.pipe.archive}
 	var staged Staged
 	err := guarded("engine.media", func() error {
 		s, err := e.sup.client.FetchMedia(ctx, req)
