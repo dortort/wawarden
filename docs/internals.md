@@ -561,13 +561,14 @@ its name is removed at once; on `nfs` it stays until the job ends.
 The file holds only ciphertext: each 32 KiB sector is sealed with AES-256-GCM
 under a key drawn for the file and held only in memory, with a nonce made of the
 sector's index and a counter bumped at every write. The tags and counters stay
-in memory. A write past the declared length, one that would leave a hole, or a
-growth by truncation is refused and ends the job. Erasing the job drops the key
-and closes the file, and on `nfs` removes its name; a file a crash leaves behind
-cannot be read without the key, which died with the process. At every start,
-whatever `WAWARDEN_MEDIA_MAX_BYTES` is, the service removes every regular file
-in `spool/`, and while downloads are on it removes every hour the files no
-running job holds. A [backup](configuration.md#backups) never includes `spool/`.
+in memory. A write past the declared length plus 32 bytes, one that would leave
+a hole, or a growth by truncation is refused and ends the job. Erasing the job
+drops the key and closes the file, and on `nfs` removes its name; a file a crash
+leaves behind cannot be read without the key, which died with the process. At
+every start, whatever `WAWARDEN_MEDIA_MAX_BYTES` is, the service removes every
+regular file in `spool/`, and while downloads are on it removes every hour the
+files no running job holds. A [backup](configuration.md#backups) never includes
+`spool/`.
 
 ### Traffic the protocol library sends by itself
 
