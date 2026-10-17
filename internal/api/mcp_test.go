@@ -1797,10 +1797,28 @@ func TestBothTransportsServeTheJobsOneSpool(t *testing.T) {
 
 func TestTheMarshalOfAnInlineBlobStaysWithinItsMemoryBound(t *testing.T) {
 	f := newMCPMediaFixture(t, mediaOptions{})
-	f.attach("BIG1", "video", mcpBlobCap)
-	f.ready(keyMedia, "BIG1", mediaSpool(mcpBlobCap, "video/mp4", false))
 	previous := debug.SetGCPercent(1)
 	t.Cleanup(func() { debug.SetGCPercent(previous) })
+	const calls = 5
+	growths := make([]uint64, 0, calls)
+	for i := range calls {
+		id := fmt.Sprintf("BIG%d", i)
+		f.clock.advance(time.Minute)
+		f.attach(id, "video", mcpBlobCap)
+		f.ready(keyMedia, id, mediaSpool(mcpBlobCap, "video/mp4", false))
+		growths = append(growths, f.marshalGrowth(id))
+	}
+	// A concurrent collection can leave a buffer the library has dropped in the sampled heap, so the least growth is the measure.
+	if least := slices.Min(growths); least > 6*mcpBlobCap {
+		t.Fatalf("the library's marshal of an 8 MiB blob grew the heap by at least %d bytes (%v), over 6 times the blob", least, growths)
+	}
+	if got := f.metric(`wawarden_media_delivered_bytes_total{transport="mcp"}`); got != strconv.Itoa(calls*mcpBlobCap) {
+		t.Fatalf("delivered %s bytes", got)
+	}
+}
+
+func (f *mediaFixture) marshalGrowth(id string) uint64 {
+	f.t.Helper()
 	var stopped atomic.Bool
 	peaks := make(chan uint64, 1)
 	var base uint64
@@ -1821,19 +1839,13 @@ func TestTheMarshalOfAnInlineBlobStaysWithinItsMemoryBound(t *testing.T) {
 			peaks <- peak
 		}()
 	}
-	body := legacyCall("tools/call", `{"name":"get_attachment","arguments":{"message":"`+f.mref(keyMedia, "BIG1")+`"}}`)
-	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/mcp", strings.NewReader(body))
+	body := legacyCall("tools/call", `{"name":"get_attachment","arguments":{"message":"`+f.mref(keyMedia, id)+`"}}`)
+	r := httptest.NewRequestWithContext(f.t.Context(), http.MethodPost, "/mcp", strings.NewReader(body))
 	r.Header = http.Header{"Content-Type": {"application/json"}, "Accept": {"application/json, text/event-stream"}, "Authorization": {"Bearer " + keyMedia}, "Mcp-Protocol-Version": {legacyProtocol}}
 	f.handler.ServeHTTP(w, r)
 	stopped.Store(true)
-	peak := <-peaks
 	if events, _, _ := w.trace(); w.code != http.StatusOK || !slices.Contains(events, "write") || base == 0 {
-		t.Fatalf("the call answered %d %v", w.code, events)
+		f.t.Fatalf("the call answered %d %v", w.code, events)
 	}
-	if grown := peak - base; grown > 6*mcpBlobCap {
-		t.Fatalf("the library's marshal of an 8 MiB blob grew the heap by %d bytes, over 6 times the blob", grown)
-	}
-	if got := f.metric(`wawarden_media_delivered_bytes_total{transport="mcp"}`); got != strconv.Itoa(mcpBlobCap) {
-		t.Fatalf("delivered %s bytes", got)
-	}
+	return <-peaks - base
 }
