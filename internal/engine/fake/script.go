@@ -101,8 +101,9 @@ func script(owner string, bootstrap []byte) []engine.Event {
 	reaction.Text = "\U0001F44D"
 	disappearing := text(alice, "FAKE-L17", alice, "This message disappears after seven days")
 	disappearing.Expiration = week
-	media := engine.Message{Chat: alice, ID: "FAKE-L18", Sender: alice, Kind: engine.KindMedia, MediaType: "image/jpeg", Text: "A synthetic photo caption"}
-	return []engine.Event{
+	media := engine.Message{Chat: alice, ID: "FAKE-L18", Sender: alice, Kind: engine.KindMedia, MediaType: "image/jpeg", Text: "A synthetic photo caption",
+		MediaRef: refPhoto, MediaKind: engine.MediaImage, MediaBytes: int64(len(jpegFixture))}
+	events := []engine.Event{
 		engine.Identity{PN: owner + server, LID: ownerLID},
 		history(owner+server, bootstrapID, engine.HistoryRef{Inline: bootstrap}),
 		engine.Group{Chat: group, Subject: "Synthetic group", Members: members(owner)},
@@ -129,9 +130,14 @@ func script(owner string, bootstrap []byte) []engine.Event {
 		text(broadcast, "FAKE-L19", alice, "A status update"),
 		text(newsletter, "FAKE-L20", newsletter, "A newsletter post"),
 		engine.Message{Chat: alice, ID: "FAKE-L21", Sender: alice, Kind: engine.KindRevoke},
+	}
+	for _, m := range mediaMessages() {
+		events = append(events, m)
+	}
+	return append(events,
 		engine.Group{Chat: group, Subject: "Synthetic group, renamed", Joined: []engine.Participant{{User: carol}}},
 		history(owner+":5"+server, device5ID, engine.HistoryRef{Inline: bootstrap}),
 		history(owner+server, oversizedID, engine.HistoryRef{DirectPath: "/fake/history/oversized"}),
 		history(owner+server, poisonID, engine.HistoryRef{DirectPath: "/fake/history/poison"}),
-	}
+	)
 }
