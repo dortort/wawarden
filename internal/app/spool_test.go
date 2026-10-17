@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -228,4 +229,61 @@ func TestRunSweepsTheSpoolOnItsIntervalAndStops(t *testing.T) {
 		t.Fatalf("spool/ holds %v after the sweeps, want the subdirectory and the file not named like a staged one", got)
 	}
 	requireReleased(t, cfg.DataDir)
+}
+
+var stagedName = regexp.MustCompile(`^sealed-[0-9a-f]{32}$`)
+
+func TestTheSpoolFollowsTheStorageProfile(t *testing.T) {
+	for _, tt := range []struct {
+		profile config.StorageProfile
+		named   bool
+	}{
+		{profile: config.StorageLocal, named: false},
+		{profile: config.StorageNFS, named: true},
+	} {
+		t.Run(string(tt.profile), func(t *testing.T) {
+			cfg := mediaConfig(t, 32<<20)
+			cfg.StorageProfile = tt.profile
+			m, err := newMediaParts(cfg, cfg.DataDir, testMaster(t))
+			if err != nil {
+				t.Fatalf("newMediaParts: %v", err)
+			}
+			_, cancel := context.WithCancelCause(t.Context())
+			defer cancel(nil)
+			staged, err := m.spool.Admit(1024, cancel)
+			if err != nil {
+				t.Fatalf("Admit: %v", err)
+			}
+			dir := filepath.Join(cfg.DataDir, stage.Dir)
+			held := names(t, dir)
+			staged.Erase()
+			if tt.named && (len(held) != 1 || !stagedName.MatchString(held[0])) {
+				t.Fatalf("spool/ holds %v while a job stages on the %s profile, want one sealed file", held, tt.profile)
+			}
+			if !tt.named && len(held) != 0 {
+				t.Fatalf("spool/ holds %v while a job stages on the %s profile, want the file unlinked at creation", held, tt.profile)
+			}
+			if got := names(t, dir); len(got) != 0 {
+				t.Fatalf("spool/ holds %v after the job erased its file", got)
+			}
+		})
+	}
+}
+
+func TestADiskAdmissionKeepsTheFreeSpaceFloorOnLocal(t *testing.T) {
+	cfg := mediaConfig(t, 32<<20)
+	cfg.MinFreeBytes = 1 << 62
+	m, err := newMediaParts(cfg, cfg.DataDir, testMaster(t))
+	if err != nil {
+		t.Fatalf("newMediaParts: %v", err)
+	}
+	_, cancel := context.WithCancelCause(t.Context())
+	defer cancel(nil)
+	staged, err := m.spool.Admit(1024, cancel)
+	if err == nil {
+		staged.Erase()
+	}
+	if !errors.Is(err, stage.ErrSpace) {
+		t.Fatalf("Admit with a free-space floor beyond any disk = %v, want %v", err, stage.ErrSpace)
+	}
 }
