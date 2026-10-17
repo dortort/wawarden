@@ -24,6 +24,12 @@ type Counters struct {
 	LastIngest       time.Time
 }
 
+type MediaCounts struct {
+	RefsLive    int64
+	RefsExpired int64
+	Tombstones  int64
+}
+
 type Reader struct{ db *db.DB }
 
 func New(d *db.DB) *Reader { return &Reader{db: d} }
@@ -57,6 +63,22 @@ func (r *Reader) Counters(ctx context.Context) (Counters, error) {
 			return Counters{}, errors.New("admin: the last ingest time is not a number of milliseconds")
 		}
 		c.LastIngest = time.UnixMilli(ms).UTC()
+	}
+	return c, nil
+}
+
+const selectMediaCounts = `SELECT
+	(SELECT count(*) FROM media_refs WHERE expires_at > ?1),
+	(SELECT count(*) FROM media_refs WHERE expires_at <= ?1),
+	(SELECT count(*) FROM revoke_tombstones)`
+
+func (r *Reader) MediaCounts(ctx context.Context, now time.Time) (MediaCounts, error) {
+	var c MediaCounts
+	err := r.db.Read(ctx, "admin.media_counts", func(ctx context.Context, q db.Querier) error {
+		return q.QueryRowContext(ctx, selectMediaCounts, now.UnixMilli()).Scan(&c.RefsLive, &c.RefsExpired, &c.Tombstones)
+	})
+	if err != nil {
+		return MediaCounts{}, fmt.Errorf("admin: read the archive's media counts: %w", err)
 	}
 	return c, nil
 }
