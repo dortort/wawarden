@@ -829,7 +829,7 @@ func TestTombstonesExpireAfterSevenDays(t *testing.T) {
 func TestTombstonesAreCappedAtTheOldest100000(t *testing.T) {
 	s := openStore(t)
 	if err := execAll(t, s, fmt.Sprintf("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < %d) "+
-		"INSERT INTO revoke_tombstones (chat_jid, id, sender_jid, expires_at) SELECT '%s', 'T' || i, '%s', %d + i FROM n", tombstoneCap+5, groupJID, alice, ms(epoch))); err != nil {
+		"INSERT INTO revoke_tombstones (chat_jid, id, sender_jid, expires_at) SELECT '%s', 'T' || i, '%s', %d + i FROM n", 100005, groupJID, alice, ms(epoch))); err != nil {
 		t.Fatalf("seed the tombstones: %v", err)
 	}
 	if n := purgeRefs(t, s, epoch, refRetention, true, 3); n != 3 {
@@ -841,7 +841,7 @@ func TestTombstonesAreCappedAtTheOldest100000(t *testing.T) {
 	if n := purgeRefs(t, s, epoch, refRetention, true, 100); n != 0 {
 		t.Fatalf("a purge at the cap removed %d tombstones", n)
 	}
-	if n, oldest := scalar[int](t, s, "SELECT count(*) FROM revoke_tombstones"), scalar[string](t, s, "SELECT id FROM revoke_tombstones ORDER BY expires_at LIMIT 1"); n != tombstoneCap || oldest != "T6" {
-		t.Fatalf("%d tombstones remain, the oldest %s, want %d from T6", n, oldest, tombstoneCap)
+	if n, oldest := scalar[int](t, s, "SELECT count(*) FROM revoke_tombstones"), scalar[string](t, s, "SELECT id FROM revoke_tombstones ORDER BY expires_at LIMIT 1"); n != 100000 || oldest != "T6" {
+		t.Fatalf("%d tombstones remain, the oldest %s, want 100000 from T6", n, oldest)
 	}
 }
