@@ -8,6 +8,7 @@ to the document that describes the term in full.
 [Admin token](#admin-token) ·
 [All-chats client](#all-chats-client) ·
 [Archive](#archive) ·
+[Attachment job](#attachment-job) ·
 [Audit anchor](#audit-anchor) ·
 [Audit chain](#audit-chain) ·
 [Backfill](#backfill) ·
@@ -15,7 +16,9 @@ to the document that describes the term in full.
 [Chain head](#chain-head) ·
 [Chat reference](#chat-reference) ·
 [Client](#client) ·
+[Content policy](#content-policy) ·
 [Device store](#device-store) ·
+[Download pause](#download-pause) ·
 [EMF](#emf) ·
 [Engine](#engine) ·
 [First contact](#first-contact) ·
@@ -29,17 +32,21 @@ to the document that describes the term in full.
 [Linked device](#linked-device) ·
 [Master key](#master-key) ·
 [MCP](#mcp) ·
+[Media reference](#media-reference) ·
 [Message reference](#message-reference) ·
 [Owner](#owner) ·
 [Pacer](#pacer) ·
 [Pairing code](#pairing-code) ·
+[Part](#part) ·
 [Protocol library](#protocol-library) ·
 [Pseudonym](#pseudonym) ·
 [Quarantine](#quarantine) ·
 [Read chat](#read-chat) ·
 [Re-key](#re-key) ·
 [Retired key](#retired-key) ·
+[Revoke tombstone](#revoke-tombstone) ·
 [Shipped head](#shipped-head) ·
+[Spool](#spool) ·
 [Write chat](#write-chat)
 
 ## Admin token
@@ -62,6 +69,15 @@ clients under `all-chats clients active`.
 messages, the [inbox](#inbox), the clients and the [audit chain](#audit-chain).
 One connection holds it under an exclusive lock while the service runs. See
 [the message archive](configuration.md#message-archive).
+
+## Attachment job
+
+One client's fetch of one message's attachment, started by
+`POST /v1/messages/{mref}/media` or by `get_attachment` and shared by both. It
+fetches the file from WhatsApp once, passes it through the
+[content policy](#content-policy), and serves it until it is erased: at its
+first whole delivery, at the end of its life, by the minute sweep or by a
+[download pause](#download-pause). See [Attachments](api.md#attachments).
 
 ## Audit anchor
 
@@ -117,12 +133,27 @@ reads only its [read chats](#read-chat) and writes only to its
 side, WaWarden itself is a [linked device](#linked-device). See
 [the client API](api.md#client-api) and [the guide for agents](agents.md).
 
+## Content policy
+
+What the service does to an attachment's bytes before serving them, once per
+[attachment job](#attachment-job) and the same for both transports: it takes
+the served type from the bytes, re-encodes images without their metadata,
+blanks a video's metadata boxes, and serves audio and other documents as
+fetched. See [Delivery](api.md#delivery).
+
 ## Device store
 
 `session.db` in the data directory: the SQLite database where the
 [protocol library](#protocol-library) keeps the linked device's identity,
 session keys and pre-keys. Backups include it. See
 [the device store](configuration.md#device-store).
+
+## Download pause
+
+A switch on the admin listener, `POST /admin/v1/media`, that stops attachment
+downloads at once and erases every [attachment job](#attachment-job). It lives
+in memory, so a restart resumes downloads. See
+[Pausing downloads](api.md#pausing-downloads).
 
 ## EMF
 
@@ -215,6 +246,14 @@ The Model Context Protocol. The client listener serves the client API as MCP
 tools at `POST /mcp`, through the MCP library, for an MCP client such as
 Claude Code. See [MCP](api.md#mcp).
 
+## Media reference
+
+An attachment's download path, media key and hashes, sealed under a key
+derived from the [master key](#master-key) and kept beside its message while
+attachment downloads are on. Nothing is fetched until a client asks; a
+revocation or the message's expiry removes it. See
+[Media reference](internals.md#media-reference).
+
 ## Message reference
 
 A message's `mref`: a value sealed under a key derived from the
@@ -239,6 +278,12 @@ after the previous one was admitted. A send it refuses answers `429`
 The code that `wawarden admin pair` prints, to enter on the owner's phone
 under Linked devices, Link with phone number instead. It is never logged or
 kept. See [Getting started](getting-started.md#4-pair).
+
+## Part
+
+An 8 MiB slice of an attachment that `get_attachment` returns when the file is
+too large to come inline; part k starts at k times 8 MiB. Joined in order, the
+parts make the served file. See [Parts](api.md#parts).
 
 ## Protocol library
 
@@ -282,6 +327,13 @@ A former [master key](#master-key) kept in `keys/retired/`, named by its
 uses it only to open cursors and message references sealed under it, and to
 verify audit rows written under it.
 
+## Revoke tombstone
+
+A record that a message was revoked before the archive stored it, kept for
+7 days and only when the revocation came from the message's sender or a group
+admin the archive records. A copy of that message stored later is stored
+revoked. See [Ingest](internals.md#ingest).
+
 ## Shipped head
 
 A [chain head](#chain-head) that left the host in the service's standard
@@ -289,6 +341,13 @@ output, kept in a store the host cannot rewrite. `wawarden audit verify --log`
 reports every shipped head that a copy of the archive lacks, which detects
 rows removed from the end of the chain. See
 [shipped heads](cli.md#shipped-heads).
+
+## Spool
+
+`spool/` in the data directory, where an attachment over 16 MiB is staged
+while its [attachment job](#attachment-job) lives, as ciphertext under a key
+held only in memory. Every start empties it, and no backup includes it. See
+[Attachment staging](internals.md#attachment-staging).
 
 ## Write chat
 
