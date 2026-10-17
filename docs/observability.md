@@ -446,7 +446,18 @@ The [WhatsApp engine](internals.md#whatsapp-engine) adds these:
 | `wawarden_ingest_quarantined_total` | counter | `queue` | Inbox rows (`inbox`) and history blobs (`history`) quarantined. |
 | `wawarden_rekey_conflicts_total` | counter | `conflict` | LID mappings refused, by conflict as in `rekey_conflict`. |
 
-Labelled counters appear once they count their first event.
+With [attachment downloads](api.md#attachments) on (`WAWARDEN_MEDIA_MAX_BYTES`
+above 0), the client handler adds these:
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `wawarden_media_fetches_total` | counter | `result` | Requests that tried to start an attachment fetch, by result. A job that ended counts `ok`, `expired`, `failed`, `too_large`, `unsupported`, `unavailable`, `throttled` (WhatsApp throttled it) or `not_connected`; a request refused before any fetch counts `too_large`, `not_connected`, `busy`, `rate_limited` (the client's two jobs or its budget) or `global_limited` (the count or bytes of all clients). A status answer counts nothing. Every result is present from the start, at `0`. |
+| `wawarden_media_fetched_bytes_total` | counter | | Bytes fetched from WhatsApp for jobs that turned ready, before the content policy. |
+| `wawarden_media_deliveries_total` | counter | `transport`, `result` | Attachment deliveries: `transport` is `rest`; `result` is `ok` (every planned byte written), `incomplete` (stopped early) or `over_cap` (refused by a per-job cap). A `HEAD` and a `416` count nothing. Every result is present from the start, at `0`. |
+| `wawarden_media_delivered_bytes_total` | counter | `transport` | Attachment bytes the connections accepted. |
+| `wawarden_media_jobs` | gauge | | Attachment jobs fetching or ready. |
+
+Other labelled counters appear once they count their first event.
 
 Anything that scrapes `/metrics` holds the full admin token. That token can
 also start pairing, ask for a reconnect, read the status, list the chats with
@@ -457,7 +468,9 @@ EMF lines, which need no token, for alerting.
 ### Panic names
 
 Panic names: `api.client`, `api.admin` and `api.health` for the handlers,
-`api.mcp` for an MCP tool call;
+`api.mcp` for an MCP tool call, `api.media.job` for an attachment fetch job,
+which then fails with `media_failed`, and `api.media.sweep` for one pass of the
+attachment sweep, which skips the rest of that pass;
 `listeners.client`, `listeners.admin`, `listeners.health`, `listeners.shutdown`
 and `signals` for goroutines. The engine adds `engine.supervisor`,
 `engine.ingest` and `engine.logout`; the first two also count a panic of one
@@ -470,8 +483,8 @@ caller gave up, `wa.keepalive`, which closes a connection whose keepalives
 failed or that WhatsApp asked to log in again, `wa.event` for a panic while
 it translates one of the protocol library's events or the engine handles it,
 which refuses the event, and `wa.media.watchdog` for a panic in the watchdog
-of an attachment job, which ends the job; no code path in this build starts
-that watchdog (see [Media transport](internals.md#media-transport)). Other code on
+of an attachment fetch, which ends the fetch (see
+[Media transport](internals.md#media-transport)). Other code on
 goroutines that the protocol library starts itself is not covered: a panic there ends the process. The notifier adds
 `notify.flush` and `notify.webhook`, the EMF writer
 `metrics.emf`, the [backup](configuration.md#backups) scheduler `backup.schedule`, and each

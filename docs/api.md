@@ -22,6 +22,7 @@ reference, canonical identifier, LID and pacer are explained in the
   - [Sending](#sending)
   - [Query parameters and pages](#query-parameters-and-pages)
   - [Cursors and message references](#cursors-and-message-references)
+  - [Attachments](#attachments)
   - [Read rate limits](#read-rate-limits)
   - [Send limits](#send-limits)
   - [Busy reads](#busy-reads)
@@ -62,20 +63,24 @@ an address that is not loopback. The warning is written whatever
 Each listener's HTTP server has these limits: 5 seconds to read the request
 headers, 15 seconds to read the whole request, 30 seconds to write the response,
 60 seconds of idle time on a kept-alive connection, and 16 KiB of request
-headers.
+headers. An attachment delivery is the one exception to the write limit: it
+renews a 30-second write deadline before each 256 KiB chunk, never past the
+job's end (see [Attachments](#attachments)).
 
 ### Outbound connections
 
 Outbound, the service connects to WhatsApp, and only while a device is
 paired or pairing was requested: the websocket at `web.whatsapp.com`, the
-version fetch from the same host, and history downloads from the media hosts
-WhatsApp names. Its only other outbound connections go to the
+version fetch from the same host, and history and [attachment](#attachments)
+downloads from the media hosts WhatsApp names. Its only other outbound connections go to the
 [webhook](observability.md#webhook), when `WAWARDEN_NOTIFY_URL` is set. Each connection to
 WhatsApp is made directly: the proxy variables
 (`HTTPS_PROXY`, `HTTP_PROXY`) are ignored, every step has a timeout (10 seconds to
 connect and for the TLS handshake, 20 seconds for response headers; the
-websocket's opening 30 seconds, a version fetch 20 seconds and a download 2
-minutes in all), TLS is 1.2 or later, and redirects are refused, except to the
+websocket's opening 30 seconds, a version fetch 20 seconds, a history download 2
+minutes in all, and an attachment fetch 20 seconds when it is held in memory, or
+30 seconds plus one second per MiB declared, at most 40 minutes, when it is
+staged on disk, with no request left 60 seconds without a byte), TLS is 1.2 or later, and redirects are refused, except to the
 same host over HTTPS for the version fetch.
 
 ## Client and admin requests
@@ -230,6 +235,8 @@ writes.
 | `GET /v1/search` | `q`, `chat`, `cursor`, `limit` | `{messages:[Message], next, more, truncated, session}`, newest first by arrival, without rank or count |
 | `GET /v1/changes` | `since`, `chat`, `limit` | `{messages:[Message], next, more, truncated, session}`, every message in scope that was added, edited, revoked or expired, in the order of its latest change, oldest first |
 | `GET /v1/messages/{mref}` | none | one `Message` |
+| `POST /v1/messages/{mref}/media` | none | `202` or `200`, the [attachment](#attachments)'s status, starting a fetch job when there is none |
+| `GET /v1/messages/{mref}/media`, and `HEAD` | none | `202`, the [attachment](#attachments)'s status while it fetches, then `200` or `206` with its bytes |
 | `POST /v1/chats/{ref}/messages` | none; a body and an `Idempotency-Key` header, see [Sending](#sending) | `201` `{message, replayed, session}`, the sent `Message` |
 
 A `Chat` is `{id, kind, name, name_source, last_message_at}`:
@@ -286,7 +293,9 @@ revoked, origin, untrusted}`:
   sender name, is third-party text, a gateway send's included.
 
 No answer carries a database sequence number, an alternate sender identifier,
-raw protocol data or other media metadata. `session` is `{state}` alone, one of
+raw protocol data or other media metadata; only an [attachment](#attachments)
+status carries `kind`, `variant`, `served_type`, `format`, `normalised` and
+`bytes`, all derived by WaWarden. `session` is `{state}` alone, one of
 `unpaired`, `connecting`, `connected` and `disconnected`, as under
 [Engine states](internals.md#engine-states).
 
@@ -510,6 +519,146 @@ route, byte for byte. A request that names a chat checks the chat before its
 cursor: an invalid cursor with a chat outside the scope is `404`, not `400`.
 `404` means "not found or not yours".
 
+### Attachments
+
+A client created with [`allow_media`](#creating-a-client) fetches a media
+message's attachment in two steps while downloads are on
+(`WAWARDEN_MEDIA_MAX_BYTES` above 0; see the
+[environment variables](configuration.md#environment-variables)):
+`POST /v1/messages/{mref}/media` starts a fetch job, and `GET` or `HEAD` on the
+same path reports on the job and then delivers its bytes. Nothing is fetched
+when a message arrives. Both routes take no query (`400` `invalid_query`) and
+ignore a request body.
+
+Every request opens the message reference, decides the client's grant again
+and looks the message up in the client's scope. A client without
+`allow_media`, a chat outside the scope, a missing message and a foreign or
+malformed reference all get the same `404` (`not_found`) as an unknown route,
+whether downloads are on or off (see [Not found](#not-found)). A message in
+scope then answers `404` (`media_unavailable`) when downloads are off, or when
+it has no attachment reference: it is not a media message, it was view-once or
+revoked, or its reference is past its expiry. A request that finds the message
+no longer eligible also drops the client's job for it.
+
+A job belongs to one client and one message; two clients asking for the same
+attachment get two jobs and two fetches. `POST` answers:
+
+| Answer | When |
+|---|---|
+| `202` status with `Retry-After: 2` | A new job started, or the job is still fetching. |
+| `200` status | The job is ready. |
+| The job's code | The job failed; see the codes below. |
+| `422` `media_too_large` | The declared size is over the effective cap, the smaller of `WAWARDEN_MEDIA_MAX_BYTES` and 16 MiB for an image or 1 MiB for a sticker. |
+| `503` `not_connected` with `Retry-After: 5` | WhatsApp is not connected. |
+| `503` `busy` with `Retry-After` | WhatsApp throttled a fetch and the cool-down that follows is running (the seconds left of it); a fetch over 16 MiB would leave less free disk space than staging keeps (see [Free space](configuration.md#free-space); 60 seconds); or the fetch slots or staged objects below are taken (1 second). |
+| `429` `rate_limited` | The client already has two jobs fetching or ready (no `Retry-After`), or a budget below is spent (`Retry-After`, the whole seconds until it admits the fetch). |
+
+A status answer, a refusal and a failed job's code charge nothing; only a
+`POST` that starts a job is charged. The budgets are kept in memory, so a
+restart refills them, and `WAWARDEN_UNSAFE_RATE_CAPS` lifts none of them:
+
+| Budget | Limit |
+|---|---|
+| Each client | `WAWARDEN_MEDIA_PER_CLIENT_PER_MINUTE`, 6 jobs a minute, evenly, with a burst of 2 |
+| All clients, count | `WAWARDEN_MEDIA_GLOBAL_PER_HOUR`, 60 jobs in any hour |
+| All clients, bytes | `WAWARDEN_MEDIA_GLOBAL_BYTES_PER_HOUR`, 4 GiB in any hour, charged with the declared size when the job starts; bytes fetched beyond it are charged when the fetch ends |
+
+All three are checked before any is charged. At most 2 fetches run at once, at
+most 1 of them over 16 MiB, and at most 4 jobs hold fetched bytes, at most 1 of
+them on disk. When WhatsApp throttles a fetch, every new fetch waits for its
+`Retry-After`, clamped to between 30 seconds and 10 minutes, or 60 seconds when
+it gave none. Every request also costs one [read](#read-rate-limits).
+
+`GET` and `HEAD` answer:
+
+| Answer | When |
+|---|---|
+| `409` `media_not_requested` | The client has no job for the message: none was started, or it was erased. |
+| `202` status with `Retry-After: 2` | The job is still fetching. |
+| `410` `media_expired` | WhatsApp no longer holds the file. |
+| `502` `media_failed` | The fetch failed: an integrity check, a size or time limit, or a staging error. |
+| `422` `media_unsupported` | The content policy refused an image, a sticker or a video. |
+| `422` `media_too_large` | The adapter refused the file's declared size as over its cap. |
+| `404` `media_unavailable` | The reference no longer opens for the message. |
+| `503` `busy` with `Retry-After` | WhatsApp throttled the fetch; the code lasts until the cool-down ends. |
+| `200`, `206` or `416` | The job is ready: the delivery below. |
+
+A failed job keeps its code for 30 minutes, the throttled one only until its
+`Retry-After`, and answers `POST` with it too, without a new fetch. A fetch
+that ends because the connection to WhatsApp dropped keeps no code: `GET` then
+answers `409`, and a new `POST` starts, and is charged as, a new job.
+
+A ready job lives 10 minutes when its bytes are held in memory and 30 minutes
+when they are staged on disk, from the moment it turned ready (`expires_at` in
+its status). It is erased at the first delivery of the whole file, a `200` or a
+`206` whose range covers every byte; at the end of its life; by a sweep that
+runs every minute and drops a job whose message is no longer eligible or whose
+client was revoked or has expired; and at shutdown. Once erased, no request
+finds it, and a delivery in flight stops at its next chunk.
+
+#### Delivery
+
+A delivery carries the job's bytes as fetched and passed through the content
+policy, the same for every request: images, stickers other than Lottie ones,
+and documents whose bytes are an image re-encoded without their metadata; a
+video's metadata boxes blanked; and a document whose image bytes the
+normaliser refuses kept as it arrived, served as `application/octet-stream`.
+Its headers are:
+
+- `Content-Type`, the served type that the content policy derived from the
+  bytes, never the sender's; `Content-Length`; `Content-Range` on a `206`;
+  `Accept-Ranges: bytes`;
+- `ETag`, 128 random bits drawn for the job;
+- `Content-Disposition: attachment; filename="wawarden-<kind>.<ext>"`, with the
+  extension of the served type;
+- `Content-Security-Policy: default-src 'none'; sandbox; frame-ancestors 'none'`
+  and `Cross-Origin-Resource-Policy: same-origin`, besides `no-store` and
+  `nosniff`. No `Content-Encoding` and no `Last-Modified`.
+
+Only one range is honoured, `bytes=a-b`, `bytes=a-` or `bytes=-n`; several
+ranges answer `200` with the whole file. `If-Range` is honoured only when it
+matches the `ETag` exactly, and no other conditional header is read. An
+unsatisfiable range answers `416` (`range_not_satisfiable`) with
+`Content-Range: bytes */<size>`. Per job, across requests, at most 2
+deliveries run at once and at most 4 times the file's size is delivered in
+all; beyond either, `GET` answers `429` (`rate_limited`) without
+`Retry-After`. A `HEAD` counts toward neither.
+
+The body goes out in chunks of 256 KiB, each under a write deadline of 30
+seconds renewed before it and never later than the job's end. A reverse proxy
+in front of the client listener should, on `GET /v1/messages/*/media`: turn
+response buffering off (`proxy_buffering off` or `proxy_max_temp_file_size 0`
+on nginx, whose defaults otherwise spool up to 1 GiB of plaintext to its
+disk); allow a whole response at least 30 minutes; set no response-size limit
+below `WAWARDEN_MEDIA_MAX_BYTES`; pass `Range` and `If-Range` through; and
+neither cache nor compress the answer.
+
+#### Status
+
+A status is `{kind, variant, state, served_type, format, normalised, bytes,
+size_declared, delivery, reason, parts, offset, length, rest_route,
+expires_at, retry_after_seconds, untrusted, notice}`, every value derived by
+WaWarden; it carries no reference, message id or third-party string:
+
+- `kind` is `image`, `video`, `audio`, `document` or `sticker`, and `variant`
+  is `gif` or `video_note` for a video, `voice_note` for audio, `animated` or
+  `lottie` for a sticker, or empty.
+- `state` is `fetching` or `ready`; `reason` is `fetching` while it fetches,
+  otherwise `null`.
+- Once ready, `served_type` is the delivery's `Content-Type`, `format` a word
+  for the bytes (`image`, `audio`, `video`, `pdf`, `text`, `zip`, `ole2`,
+  `archive`, `executable` or `unknown`), `normalised` whether the content
+  policy re-encoded an image, `bytes` the served size, `parts` that size in
+  8 MiB parts, rounded up, and `expires_at` the end of the job's life. While it
+  fetches they are empty, `false`, `0` and `null`.
+- `size_declared` is the size the message declared.
+- `delivery` is `metadata`, and `offset` and `length` are `0`.
+- `rest_route` is `/v1/messages/{mref}/media`.
+- `retry_after_seconds` is `2` while the job fetches, and absent once it is
+  ready.
+- `untrusted` is always `true`, and `notice` is a fixed sentence: the bytes
+  are third-party content.
+
 ### Read rate limits
 
 Each client has a read budget and a search budget, kept in memory and never
@@ -576,7 +725,7 @@ ends.
 Every request the read budget admits writes one [audit](observability.md#audit-chain) row and
 one standard-output line before it is answered, allowed or not. The action is
 `rest.me`, `rest.chats`, `rest.chat`, `rest.messages`, `rest.search`,
-`rest.changes`, `rest.message` or `rest.send` for the routes above, in that order, and
+`rest.changes`, `rest.message`, `rest.media.fetch`, `rest.media` or `rest.send` for the routes above, in that order, and
 `rest.unrouted` for an unknown path or method, a send of a client without a
 write grant included; the reason is `ok` (for a `201` too) or the error
 code of the answer (`not_found`, `invalid_query`, `invalid_cursor`,
@@ -584,8 +733,9 @@ code of the answer (`not_found`, `invalid_query`, `invalid_cursor`,
 codes, or `internal_error`, which a handler
 that panics also records). The row names
 a chat only when the answer is about one chat (`rest.chat`, `rest.messages` and
-`rest.message` that succeed, and `rest.send` once the chat is found in the
-write scope, whatever the send's outcome); a `404` names none. No row holds the
+`rest.message` that succeed, `rest.media.fetch` and `rest.media` once the message
+is found in scope, whatever the answer, and `rest.send` once the chat is found in the
+write scope, whatever the send's outcome); a `404` `not_found` names none. No row holds the
 text or the idempotency key. Every `POST /mcp` writes one
 row too, with the actions and reasons listed under [MCP audit](#mcp-audit). A request whose row cannot be
 written within 2 seconds is answered `503` (`busy`) with `Retry-After: 1`, and
@@ -609,8 +759,14 @@ the first row committed, and also when the client has left. A completion row
 that cannot be written does not change the answer, which is already out: it is
 counted in `wawarden_audit_failures_total` and logged as `audit_failed` (see
 [Logging](observability.md#logging)). A `206` is recorded as `ok` and a `416`
-as `range_not_satisfiable`. No route of this build names a message, records a
-byte count, writes a completion row, or answers `206` or `416`.
+as `range_not_satisfiable`. Only the [attachment](#attachments) routes name a
+message: their rows carry the message once it is found in scope. A
+`rest.media.fetch` row records the declared size when its request started, and
+was charged for, a job, and `0` otherwise. A `rest.media` row of a `GET` that delivers
+records the planned body length, and its completion row, `rest.media.sent`,
+the bytes the connection accepted, with the reason `ok`, `client_gone`,
+`write_timeout`, `expired` (the job's life ended), `revoked` (the job was
+dropped) or `read_failed`.
 
 ## MCP
 
@@ -875,7 +1031,7 @@ optional:
 | `write_chats` | The chats the client may [send](#sending) to: at most 256, each also in `read_chats`. |
 | `all_chats` | `true` lets the client read every chat, including chats that appear later; then `read_chats` and `write_chats` must be empty. |
 | `allow_first_contact` | `true` lets a write chat be a direct chat the archive has not seen yet. |
-| `allow_media` | `true` marks the client as one that may download attachments; no key means `false`. The flag is stored and reported, but grants nothing in this build: no route or tool serves an attachment yet. While an active client holds it and at least one write chat, the [status](#status-object) carries the `media_write_client` warning. |
+| `allow_media` | `true` lets the client download [attachments](#attachments) while downloads are on (`WAWARDEN_MEDIA_MAX_BYTES` above 0); no key means `false`. While downloads are off it is stored and reported but grants nothing. While an active client holds it and at least one write chat, the [status](#status-object) carries the `media_write_client` warning. |
 | `expires_in_days` | 1 to 365; `0` or no key means 90. A client never lives longer than 365 days, so a token cannot be made that never expires. |
 
 ### Backfill requests
@@ -1000,16 +1156,17 @@ an `Access-Control-*` header. Their error bodies are fixed JSON objects with
 | `{"error":"not_found"}` | `404` |
 | `{"error":"method_not_allowed"}` | `405` |
 | `{"error":"internal_error"}` | `500`, when a handler fails or panics, or a client request's [audit row](#read-audit) fails for a reason other than its 2-second wait |
-| `{"error":"busy"}` | `503` with `Retry-After: 1`, from the client listener: a [busy read](#busy-reads), a request whose audit row cannot be written within 2 seconds, or a client list being republished (see [Client authentication](#client-authentication)) |
+| `{"error":"busy"}` | `503` with `Retry-After: 1`, from the client listener: a [busy read](#busy-reads), a request whose audit row cannot be written within 2 seconds, or a client list being republished (see [Client authentication](#client-authentication)); the [attachment](#attachments) routes also answer it with a longer `Retry-After` |
 | `{"error":"unsupported_media_type"}`, `{"error":"body_too_large"}`, `{"error":"invalid_body"}` | `415`, `413`, `400`, from a route that reads a body (`pair`, `reconnect`, `POST /admin/v1/clients`, `POST /admin/v1/clients/{id}/revoke`, `POST /admin/v1/backfill` and `POST /v1/chats/{ref}/messages`) and from `POST /mcp`; see [Request bodies](#request-bodies) and [MCP requests](#mcp-requests) |
 
 The other codes belong to particular routes and are listed with them:
 
 | Codes | Listed under |
 |---|---|
-| `rate_limited` | [Read rate limits](#read-rate-limits) and [Send limits](#send-limits) on the client listener; pairing and backfill under [Admin refusals](#admin-refusals) |
+| `rate_limited` | [Read rate limits](#read-rate-limits), [Send limits](#send-limits) and [Attachments](#attachments) on the client listener; pairing and backfill under [Admin refusals](#admin-refusals) |
+| `media_unavailable`, `media_not_requested`, `media_expired`, `media_too_large`, `media_unsupported`, `media_failed`, `range_not_satisfiable` | [Attachments](#attachments) |
 | `invalid_query`, `invalid_cursor` | [Query parameters and pages](#query-parameters-and-pages) and [Cursors and message references](#cursors-and-message-references); `invalid_query` also from `GET /admin/v1/chats` |
-| `invalid_idempotency_key`, `invalid_text`, `first_contact_refused`, `request_in_progress`, `idempotency_key_reused`, `not_connected`, `send_rejected`, `send_outcome_unknown` | [Sending](#sending); the last three also from `POST /admin/v1/backfill` |
+| `invalid_idempotency_key`, `invalid_text`, `first_contact_refused`, `request_in_progress`, `idempotency_key_reused`, `not_connected`, `send_rejected`, `send_outcome_unknown` | [Sending](#sending); the last three also from `POST /admin/v1/backfill`, and `not_connected` also from [Attachments](#attachments) |
 | `already_paired`, `already_connected`, `not_paired`, `owner_phone_missing`, `owner_mismatch`, `pair_failed`, `engine_unavailable`, the client refusals, `backfill_quota`, `backfill_no_anchor` | [Admin refusals](#admin-refusals) |
 | MCP tool codes such as `invalid_arguments` | [MCP tools](#mcp-tools) |
 
