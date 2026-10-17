@@ -954,7 +954,8 @@ func testMediaDeps(t *testing.T, service MediaService) *MediaDeps {
 	})
 	return &MediaDeps{
 		Service: service, MaxBytes: 100 << 20, PerMinute: 30, GlobalPerHour: 600, GlobalBytesPerHour: 64 << 30, Root: root,
-		ClientLive: func(context.Context, string) (bool, error) { return true, nil }, Stopped: func() { close(stopped) }, sweeps: make(chan time.Time),
+		ClientLive: func(context.Context, string) (bool, error) { return true, nil }, Stopped: func() { close(stopped) }, Pause: &MediaPause{},
+		sweeps: make(chan time.Time),
 	}
 }
 
@@ -1501,6 +1502,22 @@ func TestADeliveryHoldOutlivesEveryEraseUntilTheResultIsWritten(t *testing.T) {
 				t.Fatalf("%d staged slots after the release", staged)
 			}
 		})
+	}
+}
+
+func TestAPausedDownloadAnswersBusyOverMCPAndKeepsTheTool(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA1", "document", smallSize)
+	f.pause.Set(true)
+	cs, _ := f.session(keyMedia, protocols[0])
+	tools, err := cs.ListTools(t.Context(), nil)
+	if err != nil || !slices.ContainsFunc(tools.Tools, func(tool *mcp.Tool) bool { return tool.Name == toolGetAttachment }) {
+		t.Fatalf("the tools listed while paused lack %s: %v", toolGetAttachment, err)
+	}
+	requireAttachmentError(t, call(t, cs, toolGetAttachment, f.attachmentArgs(keyMedia, "MEDIA1")), codeBusy)
+	requireAttachmentError(t, call(t, cs, toolGetAttachment, f.partArgs(keyMedia, "MEDIA1", 0)), codeBusy)
+	if len(f.media.fetched()) != 0 || f.metric(`wawarden_media_fetches_total{result="busy"}`) != "2" {
+		t.Fatalf("%d fetches and %s busy refusals while paused", len(f.media.fetched()), f.metric(`wawarden_media_fetches_total{result="busy"}`))
 	}
 }
 

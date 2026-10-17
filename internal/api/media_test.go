@@ -44,13 +44,18 @@ type fakeMedia struct {
 	prechecked []int64
 	fetches    []MediaFetch
 	waits      map[string]chan fetchAnswer
+	during     func()
 }
 
 func (f *fakeMedia) Precheck(declared int64) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.prechecked = append(f.prechecked, declared)
-	return f.precheck
+	err, during := f.precheck, f.during
+	f.mu.Unlock()
+	if during != nil {
+		during()
+	}
+	return err
 }
 
 func (f *fakeMedia) wait(id string) chan fetchAnswer {
@@ -178,6 +183,7 @@ type mediaFixture struct {
 	stop    context.CancelFunc
 	stopped chan struct{}
 	ticks   chan time.Time
+	pause   *MediaPause
 
 	mu         sync.Mutex
 	revoked    map[string]bool
@@ -195,7 +201,7 @@ func newMediaFixture(t *testing.T, o mediaOptions) *mediaFixture {
 	t.Helper()
 	f := &mediaFixture{
 		t: t, clock: newClock(), archive: &fakeArchive{}, audit: &fakeAuditor{}, media: &fakeMedia{}, reg: metrics.NewRegistry(),
-		stopped: make(chan struct{}), ticks: make(chan time.Time), revoked: map[string]bool{},
+		stopped: make(chan struct{}), ticks: make(chan time.Time), pause: &MediaPause{}, revoked: map[string]bool{},
 	}
 	f.clients = fakeAuthenticator{
 		keyMedia:      mediaClient("client-media", groupChat),
@@ -218,7 +224,7 @@ func newMediaFixture(t *testing.T, o mediaOptions) *mediaFixture {
 		deps.Media = &MediaDeps{
 			Service: f.media, MaxBytes: cmpOr(o.max, 100<<20), PerMinute: cmpOr(o.perMinute, 30), GlobalPerHour: cmpOr(o.perHour, 600),
 			GlobalBytesPerHour: cmpOr(o.bytesPerHour, 64<<30), Root: root, ClientLive: f.clientLive, Stopped: func() { close(f.stopped) },
-			sweeps: f.ticks,
+			Pause: f.pause, sweeps: f.ticks,
 		}
 	}
 	p, s := newClientHandler(deps)
@@ -1120,6 +1126,9 @@ var eraseTriggers = []eraseTrigger{
 		f.ticks <- testNow
 		f.ticks <- testNow
 	}},
+	{name: "a runtime pause", reopens: false, cause: errDeliveryDropped, trigger: func(f *mediaFixture) {
+		f.pause.Set(true)
+	}},
 	{name: "shutdown", reopens: false, cause: errDeliveryDropped, trigger: func(f *mediaFixture) {
 		f.stop()
 		<-f.stopped
@@ -1314,6 +1323,47 @@ func TestShutdownEndsFetchesAndErasesJobs(t *testing.T) {
 	requireWriterError(t, f.get(keyMedia, "MEDIA1", nil), http.StatusConflict, codeMediaNotRequested)
 	if got := f.metric("wawarden_media_jobs"); got != "0" {
 		t.Fatalf("wawarden_media_jobs = %q after shutdown", got)
+	}
+}
+
+func TestAPauseErasesEveryJobAndAnswersBusyUntilItIsLifted(t *testing.T) {
+	f := newMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA1", "document", smallSize)
+	f.attach("MEDIA2", "document", smallSize)
+	spool := newFakeSpool(smallSize, true)
+	f.ready(keyMedia, "MEDIA1", spool)
+	f.post(keyMedia, "MEDIA2")
+	f.pause.Set(true)
+	if erasures, _ := spool.state(); erasures != 1 {
+		t.Fatalf("the pause left the ready spool with %d erasures", erasures)
+	}
+	f.await("the cancelled fetch to settle", func() bool { fetching, staged := f.slots(); return fetching == 0 && staged == 0 })
+	if got := f.metric("wawarden_media_jobs"); got != "0" {
+		t.Fatalf("wawarden_media_jobs = %q after the pause", got)
+	}
+	requireWriterError(t, f.get(keyMedia, "MEDIA1", nil), http.StatusConflict, codeMediaNotRequested)
+	f.media.refuse(ErrNotConnected)
+	prechecks := len(f.media.prechecked)
+	w := f.post(keyMedia, "MEDIA1")
+	requireWriterError(t, w, http.StatusServiceUnavailable, codeBusy)
+	if w.Header().Get("Retry-After") != "60" || f.metric(`wawarden_media_fetches_total{result="busy"}`) != "1" || len(f.media.prechecked) != prechecks {
+		t.Fatalf("a POST while paused answered Retry-After %q, counted busy %s and prechecked %d times", w.Header().Get("Retry-After"),
+			f.metric(`wawarden_media_fetches_total{result="busy"}`), len(f.media.prechecked)-prechecks)
+	}
+	f.media.refuse(nil)
+	f.pause.Set(false)
+	if w := f.post(keyMedia2, "MEDIA1"); w.Code != http.StatusAccepted {
+		t.Fatalf("a POST once the pause is lifted = %d", w.Code)
+	}
+}
+
+func TestAPauseDuringAnAdmissionStartsNoJob(t *testing.T) {
+	f := newMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA1", "document", smallSize)
+	f.media.during = func() { f.pause.Set(true) }
+	requireWriterError(t, f.post(keyMedia, "MEDIA1"), http.StatusServiceUnavailable, codeBusy)
+	if fetching, staged := f.slots(); fetching != 0 || staged != 0 || len(f.media.fetched()) != 0 || f.view(keyMedia, "MEDIA1").state != 0 {
+		t.Fatalf("a pause during the admission left %d fetch and %d staged slots and %d fetches", fetching, staged, len(f.media.fetched()))
 	}
 }
 
