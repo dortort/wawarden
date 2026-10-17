@@ -136,7 +136,9 @@ chat from a phone number to the LID WhatsApp uses for it (see
 [Ingest](internals.md#ingest)). Each change rebuilds the copy inside its own
 write and publishes it once that write commits and before the change returns,
 so a revocation takes effect on the next request; a request that was already authenticated finishes with the
-grant it holds, within the 2-second read deadline. A request that arrives while
+grant it holds, within the 2-second read deadline, except an attachment
+delivery, which runs until the minute sweep drops its job (see
+[Attachments](#attachments)). A request that arrives while
 a change is being published, or after a change that did not commit and before
 the copy has been reloaded in the background, waits for the new copy for up to
 2 seconds and is then answered `503` (`busy`) with `Retry-After: 1`, whatever

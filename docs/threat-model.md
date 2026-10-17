@@ -483,7 +483,11 @@ alert on.
     reloaded from the archive in the background, and authentications answer
     `503` until it is.
   - A request already authenticated finishes with the grant it holds, within
-    the 2-second read deadline.
+    the 2-second read deadline. An attachment delivery is the exception: it
+    runs until the sweep that runs every minute drops the job of a revoked or
+    expired client, then stops at its next chunk
+    ([Attachments](api.md#attachments)); tested in
+    `internal/api/media_test.go`.
   - Tested with the real client list in `internal/store/admin/cache_test.go`,
     `internal/store/scoped/auth_http_test.go` and
     `internal/api/pipeline_test.go`.
@@ -2686,7 +2690,10 @@ This subsection is the canonical statement of what the protocol library
 - **The admin credential is a single factor.** See
   [The admin token](#the-admin-token).
 - **Revocation in flight.** A request authenticated just before a revocation
-  commits finishes with its grant, within the 2-second read deadline.
+  commits finishes with its grant, within the 2-second read deadline. An
+  attachment delivery in flight keeps sending until the next minute's sweep
+  drops its job, and the chunk it is writing then can take up to 30 more
+  seconds.
 
 ### Timing and volume
 
