@@ -108,11 +108,12 @@ its image digest and the commands to verify and reproduce it.
   and re-checks the client's grant and scope, and every denial gets the same
   `404` as an unknown route, whether downloads are on or off. Jobs are never
   shared between clients.
-- A fetch makes at most 6 requests and moves at most twice the declared length
-  plus 32 bytes, and stops after a complete body. A 429 or 5xx ends it and
-  holds every new fetch for WhatsApp's `Retry-After`, kept between 30 seconds
-  and 10 minutes. Fetch slots, staged objects, per-client jobs, the three
-  budgets and the per-job delivery caps bound what clients can start or pull.
+- A fetch moves at most the declared length plus 32 bytes per response and
+  twice that over its at most 6 requests, and stops after a complete body. A
+  429 or 5xx ends it and holds every new fetch for WhatsApp's `Retry-After`,
+  kept between 30 seconds and 10 minutes. Fetch slots, staged objects,
+  per-client jobs, the three budgets and the per-job delivery caps bound what
+  clients can start or pull.
 - The content policy runs once per job before any byte is served, the same for
   both transports: the served type comes from the bytes, never the sender;
   images, stickers and image documents are re-encoded without their metadata
