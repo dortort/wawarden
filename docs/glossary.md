@@ -346,8 +346,8 @@ rows removed from the end of the chain. See
 
 `spool/` in the data directory, where an attachment over 16 MiB is staged
 while its [attachment job](#attachment-job) lives, as ciphertext under a key
-held only in memory. Every start empties it, and no backup includes it. See
-[Attachment staging](internals.md#attachment-staging).
+held only in memory. Every start removes every regular file in it, and no
+backup includes it. See [Attachment staging](internals.md#attachment-staging).
 
 ## Write chat
 
