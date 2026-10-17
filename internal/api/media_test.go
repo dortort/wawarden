@@ -1049,6 +1049,49 @@ func TestPerJobDeliveryCaps(t *testing.T) {
 	}
 }
 
+func TestOnlyWrittenPartsJoinTheDeliveredSet(t *testing.T) {
+	f := newMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA1", "video", 9<<20)
+	spool := newFakeSpool(2*mediaPartSize+5, true)
+	job := f.ready(keyMedia, "MEDIA1", spool).job
+	key := f.key(keyMedia, "MEDIA1")
+	deliver := func(k int, end func(d *deliveryHold)) {
+		t.Helper()
+		v, held := f.m.lookup(key, true)
+		a, err := f.m.part(v, held, k)
+		if err != nil || a.hold == nil || a.outcome != deliveryPart || a.info.Offset != int64(k)*mediaPartSize ||
+			!bytes.Equal(a.data, spool.orig[a.info.Offset:a.info.Offset+a.info.Length]) {
+			t.Fatalf("part %d: %+v, %v", k, a.info, err)
+		}
+		end(a.hold)
+	}
+	written := func(d *deliveryHold) { d.release(true) }
+	for _, step := range []struct {
+		part int
+		end  func(d *deliveryHold)
+	}{
+		{0, written}, {0, written}, {2, written}, {1, func(d *deliveryHold) { d.release(false) }}, {1, (*deliveryHold).orphan},
+	} {
+		deliver(step.part, step.end)
+		if f.view(keyMedia, "MEDIA1").state != mediaReady {
+			t.Fatalf("part %d ended the job while part 1 was not written", step.part)
+		}
+	}
+	deliver(1, written)
+	f.m.mu.Lock()
+	erased, cause := job.erased, job.cause
+	f.m.mu.Unlock()
+	if !erased || !errors.Is(cause, errDeliveryCompleted) || f.permits() != 0 || f.holds(job) != 0 {
+		t.Fatalf("after the last written part: erased %v by %v", erased, cause)
+	}
+	if _, staged := f.slots(); staged != 0 {
+		t.Fatalf("%d staged slots after the completed job", staged)
+	}
+	if ok, incomplete := f.metric(`wawarden_media_deliveries_total{transport="mcp",result="ok"}`), f.metric(`wawarden_media_deliveries_total{transport="mcp",result="incomplete"}`); ok != "4" || incomplete != "2" {
+		t.Fatalf("deliveries ok %s, incomplete %s, want 4 and 2", ok, incomplete)
+	}
+}
+
 type eraseTrigger struct {
 	name    string
 	reopens bool
