@@ -196,7 +196,7 @@ until ./wawarden-dev admin status --token-file "$dir/admin.token" |
 ./wawarden-dev admin status --token-file "$dir/admin.token"
 ```
 
-The status shows `state: connected`, `chats: 3`, `messages: 17` and
+The status shows `state: connected`, `chats: 3`, `messages: 24` and
 `history blobs quarantined: 2`. The metrics agree:
 
 ```sh
@@ -207,7 +207,7 @@ curl -s -H @"$dir/admin.header" http://127.0.0.1:8082/metrics |
 ```text
 wawarden_connected 1
 wawarden_ingest_quarantined_total{queue="history"} 2
-wawarden_messages_ingested_total 17
+wawarden_messages_ingested_total 24
 ```
 
 List the chats, then create a client that may read the synthetic group.
