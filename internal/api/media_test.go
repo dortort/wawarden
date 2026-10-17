@@ -594,6 +594,20 @@ func TestEachTerminalCodeIsKeptByItsTombstone(t *testing.T) {
 	}
 }
 
+func TestALimitOfOneAMinuteHasABurstOfOne(t *testing.T) {
+	f := newMediaFixture(t, mediaOptions{perMinute: 1})
+	f.attach("MEDIA1", "document", smallSize)
+	f.attach("MEDIA2", "document", smallSize)
+	if w := f.post(keyMedia, "MEDIA1"); w.Code != http.StatusAccepted {
+		t.Fatalf("the first POST = %d, want 202", w.Code)
+	}
+	w := f.post(keyMedia, "MEDIA2")
+	requireWriterError(t, w, http.StatusTooManyRequests, codeRateLimited)
+	if got := w.Header().Get("Retry-After"); got != "60" {
+		t.Fatalf("Retry-After = %q, want the minute until the next fetch", got)
+	}
+}
+
 func TestAThrottledFetchAnswersBusyUntilItsRetryAfter(t *testing.T) {
 	f := newMediaFixture(t, mediaOptions{})
 	f.attach("MEDIA1", "document", smallSize)
