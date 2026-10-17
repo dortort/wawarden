@@ -732,6 +732,15 @@ func TestAdmissionLimits(t *testing.T) {
 	})
 }
 
+func requireWholeClientBurst(t *testing.T, f *mediaFixture, client string) {
+	t.Helper()
+	for range mediaClientBurst {
+		if _, ok := f.m.perClient.Allow(client); !ok {
+			t.Fatal("a refused admission charged the client")
+		}
+	}
+}
+
 func TestBudgetsPeekAtAllBeforeCharging(t *testing.T) {
 	t.Run("per client", func(t *testing.T) {
 		f := newMediaFixture(t, mediaOptions{perMinute: 6})
@@ -752,6 +761,9 @@ func TestBudgetsPeekAtAllBeforeCharging(t *testing.T) {
 		if _, ok := f.m.count.Peek(598); !ok {
 			t.Fatal("a refused admission charged the global count")
 		}
+		if _, ok := f.m.bytes.Peek(64<<30 - 2*smallSize); !ok {
+			t.Fatal("a refused admission charged the global bytes")
+		}
 		f.clock.advance(10 * time.Second)
 		if w := f.post(keyMedia, "MEDIA3"); w.Code != http.StatusAccepted {
 			t.Fatalf("POST after the wait = %d", w.Code)
@@ -766,9 +778,7 @@ func TestBudgetsPeekAtAllBeforeCharging(t *testing.T) {
 		if w.Header().Get("Retry-After") != "3600" || f.metric(`wawarden_media_fetches_total{result="global_limited"}`) != "1" {
 			t.Fatalf("Retry-After = %q", w.Header().Get("Retry-After"))
 		}
-		if _, ok := f.m.perClient.Peek("client-media2"); !ok {
-			t.Fatal("a refused admission charged the client")
-		}
+		requireWholeClientBurst(t, f, "client-media2")
 		if _, ok := f.m.bytes.Peek(64<<30 - smallSize); !ok {
 			t.Fatal("a refused admission charged the global bytes")
 		}
@@ -789,9 +799,7 @@ func TestBudgetsPeekAtAllBeforeCharging(t *testing.T) {
 		if _, ok := f.m.count.Peek(599); !ok {
 			t.Fatal("a refused admission charged the global count")
 		}
-		if _, ok := f.m.perClient.Peek("client-media2"); !ok {
-			t.Fatal("a refused admission charged the client")
-		}
+		requireWholeClientBurst(t, f, "client-media2")
 		if got := f.metric("wawarden_media_fetched_bytes_total"); got != strconv.Itoa(2*smallSize+1) {
 			t.Fatalf("fetched bytes = %q", got)
 		}
