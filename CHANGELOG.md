@@ -199,8 +199,8 @@ its image digest and the commands to verify and reproduce it.
 - Run `wawarden admin status` and `wawarden admin clients` from the same
   release as the server. `admin status` refuses a status answer without
   `downloads` or the three new counts, and `admin clients` refuses a client
-  without `allow_media`, so against an earlier server `admin clients revoke`
-  revokes the client but reports a failure.
+  answer without the `allow_media` field, so against an earlier server
+  `admin clients revoke` revokes the client but reports a failure.
 
 ## [1.1.0] - 2026-10-15
 
