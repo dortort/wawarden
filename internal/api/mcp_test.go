@@ -430,6 +430,10 @@ func (panickingArchive) Search(policy.ReadGrant, context.Context, scoped.Query, 
 	panic(secretPanic{text: panicCanary})
 }
 
+func (panickingArchive) Attachment(policy.ReadGrant, context.Context, policy.CanonicalChat, string, policy.CanonicalChat, time.Time) (scoped.Attachment, bool, error) {
+	panic(secretPanic{text: panicCanary})
+}
+
 func sampleArguments(t *testing.T, tool *mcp.Tool) map[string]any {
 	t.Helper()
 	raw, err := json.Marshal(tool.InputSchema)

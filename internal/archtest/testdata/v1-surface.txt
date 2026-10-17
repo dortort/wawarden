@@ -157,6 +157,11 @@ metric wawarden_connected gauge
 metric wawarden_ingest_dropped_total counter labels=reason
 metric wawarden_ingest_quarantined_total counter labels=queue
 metric wawarden_ingest_refused_total counter labels=reason
+metric wawarden_media_delivered_bytes_total counter labels=transport
+metric wawarden_media_deliveries_total counter labels=result,transport
+metric wawarden_media_fetched_bytes_total counter
+metric wawarden_media_fetches_total counter labels=result
+metric wawarden_media_jobs gauge
 metric wawarden_messages_ingested_total counter
 metric wawarden_notify_dropped_total counter labels=reason
 metric wawarden_paired gauge
@@ -176,6 +181,7 @@ route GET /v1/chats/{ref} class=read
 route GET /v1/chats/{ref}/messages class=read
 route GET /v1/me class=read
 route GET /v1/messages/{mref} class=read
+route GET /v1/messages/{mref}/media class=read
 route GET /v1/search class=read
 route POST /admin/v1/backfill class=admin
 route POST /admin/v1/clients class=admin
@@ -184,3 +190,4 @@ route POST /admin/v1/pair class=admin
 route POST /admin/v1/reconnect class=admin
 route POST /mcp class=mcp
 route POST /v1/chats/{ref}/messages class=write
+route POST /v1/messages/{mref}/media class=read
