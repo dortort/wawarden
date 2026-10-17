@@ -546,7 +546,7 @@ func TestEachTerminalCodeIsKeptByItsTombstone(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			f := newMediaFixture(t, mediaOptions{})
-			logs := installPanicReporter(t, f.reg)
+			installPanicReporter(t, f.reg)
 			f.attach("MEDIA1", "document", smallSize)
 			f.post(keyMedia, "MEDIA1")
 			f.media.answer("MEDIA1", c.answer)
@@ -562,8 +562,8 @@ func TestEachTerminalCodeIsKeptByItsTombstone(t *testing.T) {
 			if fetching, staged := f.slots(); fetching != 0 || staged != 0 {
 				t.Fatalf("a tombstone holds %d fetch and %d staged slots", fetching, staged)
 			}
-			if c.answer.panic && f.metric(`wawarden_panics_total{name="api.media.job"}`) != "1" {
-				t.Fatalf("the job's panic was not counted: %s", logs.String())
+			if c.answer.panic {
+				f.await("the job's panic to be counted", func() bool { return f.metric(`wawarden_panics_total{name="api.media.job"}`) == "1" })
 			}
 			f.clock.advance(mediaFailedLife - time.Second)
 			requireWriterError(t, f.get(keyMedia, "MEDIA1", nil), c.status, c.code)
