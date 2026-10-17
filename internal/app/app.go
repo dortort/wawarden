@@ -233,7 +233,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 			Handler: api.NewAdminHandler(api.AdminDeps{
 				Credential: *cfg.AdminCredential,
 				Metrics:    reg,
-				Service:    adminService{engine: a.engine, archive: archive, version: info.Version, now: time.Now},
+				Service:    adminService{engine: a.engine, archive: archive, version: info.Version, now: time.Now, downloads: media.maxBytes > 0},
 				Events:     notifier,
 			}),
 		})

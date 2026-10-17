@@ -72,6 +72,7 @@ type Status struct {
 	Counts       StatusCounts  `json:"counts"`
 	Clients      StatusClients `json:"clients"`
 	Warnings     []string      `json:"warnings"`
+	Downloads    string        `json:"downloads"`
 	LastIngestAt *string       `json:"last_ingest_at"`
 	Version      string        `json:"version"`
 }
@@ -91,6 +92,9 @@ type StatusCounts struct {
 	InboxBacklog     int64 `json:"inbox_backlog"`
 	InboxQuarantined int64 `json:"inbox_quarantined"`
 	BackfillsToday   int64 `json:"backfills_today"`
+	MediaRefsLive    int64 `json:"media_refs_live"`
+	MediaRefsExpired int64 `json:"media_refs_expired"`
+	RevokeTombstones int64 `json:"revoke_tombstones"`
 }
 
 func (s Status) encode() (string, []byte, error) { return encodeJSON(s) }

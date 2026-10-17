@@ -186,12 +186,13 @@ func TestStatusAnswersAFixedShape(t *testing.T) {
 	f.service.status = AdminStatus{
 		State: "disconnected", Reason: "replaced", Paired: true,
 		Chats: 3, Messages: 120, BlobsPending: 1, BlobsQuarantined: 2, InboxBacklog: 4, InboxQuarantined: 5, BackfillsToday: 6,
+		MediaRefsLive: 7, MediaRefsExpired: 8, RevokeTombstones: 9,
 		LastIngest: time.Date(2026, 10, 5, 9, 30, 15, 123456789, time.FixedZone("synthetic", 3600)), Version: "v0.2.0",
 	}
 	rec := adminRequest(t, f, http.MethodGet, "/admin/v1/status", "", "")
 	want := `{"state":"disconnected","reason":"replaced","paired":true,"counts":{"chats":3,"messages":120,"history_blobs_pending":1,` +
-		`"history_blobs_quarantined":2,"inbox_backlog":4,"inbox_quarantined":5,"backfills_today":6},"clients":{"active":0,"expired":0,"revoked":0,"all_chats_active":0},` +
-		`"warnings":[],"last_ingest_at":"2026-10-05T08:30:15Z","version":"v0.2.0"}`
+		`"history_blobs_quarantined":2,"inbox_backlog":4,"inbox_quarantined":5,"backfills_today":6,"media_refs_live":7,"media_refs_expired":8,"revoke_tombstones":9},` +
+		`"clients":{"active":0,"expired":0,"revoked":0,"all_chats_active":0},"warnings":[],"downloads":"off","last_ingest_at":"2026-10-05T08:30:15Z","version":"v0.2.0"}`
 	if rec.Code != http.StatusOK || rec.Body.String() != want {
 		t.Fatalf("status = %d %s, want 200 %s", rec.Code, rec.Body, want)
 	}
@@ -214,6 +215,18 @@ func TestStatusAnswersAFixedShape(t *testing.T) {
 	rec = adminRequest(t, f, http.MethodGet, "/admin/v1/status", "", "")
 	if !strings.Contains(rec.Body.String(), `"warnings":["all_chats_client","media_write_client"]`) {
 		t.Fatalf("status with both kinds of client = %s, want both warnings", rec.Body)
+	}
+	for _, tt := range []struct {
+		downloads bool
+		want      string
+	}{
+		{want: downloadsOff}, {downloads: true, want: downloadsOn},
+	} {
+		f.service.status.Downloads = tt.downloads
+		rec = adminRequest(t, f, http.MethodGet, "/admin/v1/status", "", "")
+		if !strings.Contains(rec.Body.String(), `"downloads":"`+tt.want+`"`) {
+			t.Fatalf("status with downloads %v = %s, want downloads %s", tt.downloads, rec.Body, tt.want)
+		}
 	}
 	if got := f.events.recorded(); len(got) != 0 {
 		t.Fatalf("status emitted admin_mutation events %v: it changes nothing", got)
@@ -381,7 +394,7 @@ func TestStatusCarriesNoIdentifier(t *testing.T) {
 	if err := json.Unmarshal(adminRequest(t, f, http.MethodGet, "/admin/v1/status", "", "").Body.Bytes(), &body); err != nil {
 		t.Fatalf("status is not JSON: %v", err)
 	}
-	if keys := slices.Sorted(maps.Keys(body)); !slices.Equal(keys, []string{"clients", "counts", "last_ingest_at", "paired", "reason", "state", "version", "warnings"}) {
+	if keys := slices.Sorted(maps.Keys(body)); !slices.Equal(keys, []string{"clients", "counts", "downloads", "last_ingest_at", "paired", "reason", "state", "version", "warnings"}) {
 		t.Fatalf("status keys %q", keys)
 	}
 }
