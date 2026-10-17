@@ -446,6 +446,42 @@ func TestHourLogAdmitsExactlyItsLimitConcurrently(t *testing.T) {
 	}
 }
 
+func TestDebitAndPeekAreSafeConcurrently(t *testing.T) {
+	const workers, rounds = 16, 200
+	c := &clock{t: start}
+	h := ratelimit.NewHourLog(1000, c.now)
+	l := ratelimit.New(6, 2, c.now)
+	var committed, allowed atomic.Int64
+	var wg sync.WaitGroup
+	for w := range workers {
+		wg.Go(func() {
+			for range rounds {
+				if w%2 == 0 {
+					if _, ok := h.Commit(1); ok {
+						committed.Add(1)
+					}
+					if _, ok := l.Allow("alpha"); ok {
+						allowed.Add(1)
+					}
+				} else {
+					h.Debit(1)
+					l.Peek("alpha")
+				}
+			}
+		})
+	}
+	wg.Wait()
+	if n := committed.Load(); n > 1000 {
+		t.Fatalf("commits racing debits admitted %d, want at most 1000", n)
+	}
+	if n := allowed.Load(); n != 2 {
+		t.Fatalf("allows racing peeks admitted %d, want the burst of 2", n)
+	}
+	if _, ok := h.Peek(1); ok {
+		t.Fatal("the hour log admits more weight after its debits filled it")
+	}
+}
+
 func TestNewHourLogRefusesNonsense(t *testing.T) {
 	for _, tt := range []struct {
 		name  string
