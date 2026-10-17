@@ -153,6 +153,9 @@ its image digest and the commands to verify and reproduce it.
   tombstones, and `expiry_sweep_failed` covers them.
 - `audit` log lines always include `message_hmac` and `bytes`, `null` when the
   row names no message.
+- A `POST` to `/v1/messages/{mref}/media` is audited as `rest.media.fetch`,
+  and a `GET` or `HEAD` as `rest.media`, instead of `rest.unrouted`, whether
+  downloads are on or off.
 - `wawarden_ingest_dropped_total` counts a refused revocation of a message not
   stored yet under its refusal reason as well as `target_unknown`.
 - The MCP tool list depends on the media grant: a client with `allow_media`
