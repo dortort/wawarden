@@ -1289,6 +1289,22 @@ func TestGetAttachmentAnswersEachFormWithItsBlock(t *testing.T) {
 	}
 }
 
+func TestGetAttachmentForAMessageThatIsGoneDropsItsJob(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA2", "document", smallSize)
+	spool := newFakeSpool(smallSize, true)
+	f.ready(keyMedia, "MEDIA2", spool)
+	f.withdraw("MEDIA2", false)
+	cs, _ := f.session(keyMedia, protocols[0])
+	requireAttachmentError(t, call(t, cs, toolGetAttachment, f.attachmentArgs(keyMedia, "MEDIA2")), codeNotFound)
+	if v := f.view(keyMedia, "MEDIA2"); v.state != 0 {
+		t.Fatalf("the job survived a call that found no message, in state %d", v.state)
+	}
+	if erasures, _ := spool.state(); erasures != 1 {
+		t.Fatalf("a call that found no message erased the spool %d times, want once", erasures)
+	}
+}
+
 func TestGetAttachmentAuditsTheMessageAndTheInlineBytes(t *testing.T) {
 	f := newMCPMediaFixture(t, mediaOptions{})
 	f.attach("MEDIA1", "document", smallSize)

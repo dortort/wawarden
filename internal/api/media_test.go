@@ -440,6 +440,18 @@ func TestAMessageWithoutAUsableReferenceIsUnavailableAndDropsItsJob(t *testing.T
 	if v := f.view(keyMedia, "MEDIA1"); v.state != 0 {
 		t.Fatalf("the job survived a lookup that found no message, in state %d", v.state)
 	}
+	g := newMediaFixture(t, mediaOptions{})
+	g.attach("MEDIA2", "document", smallSize)
+	gone := newFakeSpool(smallSize, true)
+	g.ready(keyMedia, "MEDIA2", gone)
+	g.withdraw("MEDIA2", false)
+	requireWriterError(t, g.get(keyMedia, "MEDIA2", nil), http.StatusNotFound, codeNotFound)
+	if v := g.view(keyMedia, "MEDIA2"); v.state != 0 {
+		t.Fatalf("the job survived a GET that found no message, in state %d", v.state)
+	}
+	if erasures, _ := gone.state(); erasures != 1 {
+		t.Fatalf("a GET that found no message erased the spool %d times, want once", erasures)
+	}
 }
 
 func TestTheMediaRoutesTakeNoQuery(t *testing.T) {
