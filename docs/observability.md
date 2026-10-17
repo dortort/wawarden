@@ -301,7 +301,7 @@ the [webhook](#webhook).
 | `quarantine` | `WARN` | `queue`: `inbox`, `history`; `attempts` | An inbox row or a history blob was set aside after three failed attempts. |
 | `rekey_conflict` | `WARN` | `conflict`: `mapping_contradicts`, `both_chats_have_messages`, `message_collision`, `scoped_chat` | A LID mapping was refused; the event that carried it is still applied. Reported once per refused mapping, as described under [Ingest](internals.md#ingest). |
 | `ingest_paused` | `WARN` | `free_bytes`, `floor_bytes` | The data directory fell below its [free-space floor](configuration.md#free-space). |
-| `admin_mutation` | `INFO` | `action`: `pair`, `reconnect`, `backfill`, `client_create`, `client_revoke`; `outcome` | A `POST` [admin route](api.md#admin-routes) was called with the admin token; `outcome` is `ok` or the error code it answered, such as `already_paired`, `name_taken` or `invalid_body`. The event never names the client: the [audit chain](#audit-chain) records its id. |
+| `admin_mutation` | `INFO` | `action`: `pair`, `reconnect`, `backfill`, `media_pause`, `client_create`, `client_revoke`; `outcome` | A `POST` [admin route](api.md#admin-routes) was called with the admin token; `outcome` is `ok` or the error code it answered, such as `already_paired`, `name_taken` or `invalid_body`. The event never names the client: the [audit chain](#audit-chain) records its id. |
 | `backup_done` | `INFO` | `bytes`, `archive_bytes`, `session_bytes`, `duration_ms` | A [backup](configuration.md#backups) was written: `bytes` is the size of the encrypted file, the others the sizes of the two database copies and the time it took. |
 | `backup_failed` | `WARN` | `reason` | A [backup](configuration.md#backups) failed and what it had written was removed; `reason` as in the table under [Backups](configuration.md#backups). It is reported on every failure, retries included. |
 | `backup_pruned` | `INFO` | `removed`, `kept` | After a successful [backup](configuration.md#backups), backups beyond `WAWARDEN_BACKUP_KEEP` were deleted: `removed` files, `kept` remain. Not reported when nothing was deleted. |
@@ -451,7 +451,7 @@ above 0), the client handler adds these:
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `wawarden_media_fetches_total` | counter | `result` | Requests that tried to start an attachment fetch, by result. A job that ended counts `ok`, `expired`, `failed`, `too_large`, `unsupported`, `unavailable`, `throttled` (WhatsApp throttled it) or `not_connected`; a request refused before any fetch counts `too_large`, `not_connected`, `busy`, `rate_limited` (the client's two jobs or its budget) or `global_limited` (the count or bytes of all clients). A status answer counts nothing. Every result is present from the start, at `0`. |
+| `wawarden_media_fetches_total` | counter | `result` | Requests that tried to start an attachment fetch, by result. A job that ended counts `ok`, `expired`, `failed`, `too_large`, `unsupported`, `unavailable`, `throttled` (WhatsApp throttled it) or `not_connected`; a request refused before any fetch counts `too_large`, `not_connected`, `busy` (also while [downloads are paused](api.md#pausing-downloads)), `rate_limited` (the client's two jobs or its budget) or `global_limited` (the count or bytes of all clients). A status answer counts nothing. Every result is present from the start, at `0`. |
 | `wawarden_media_fetched_bytes_total` | counter | | Bytes fetched from WhatsApp for jobs that turned ready, before the content policy. |
 | `wawarden_media_deliveries_total` | counter | `transport`, `result` | Attachment deliveries: `transport` is `rest` for the routes and `mcp` for `get_attachment`, where an inline result and each part count one delivery; `result` is `ok` (every planned byte written), `incomplete` (stopped early; for `mcp`, a result read from the file but not written in full) or `over_cap` (refused by a per-job cap). A `HEAD`, a `416` and an MCP call that never reads the file count nothing. Every result is present from the start, at `0`, for both transports. |
 | `wawarden_media_delivered_bytes_total` | counter | `transport` | Attachment bytes the connections accepted; for `mcp`, the file's or the part's bytes of a result written in full. |
@@ -459,9 +459,15 @@ above 0), the client handler adds these:
 
 Other labelled counters appear once they count their first event.
 
+The [status object](api.md#status-object) adds counts that are not metrics:
+the stored media references, live and expired but not yet swept, and the
+revoke tombstones. Read them there to see how many references and tombstones
+a history sync created, and whether downloads are `on`, `off` or `paused`.
+
 Anything that scrapes `/metrics` holds the full admin token. That token can
 also start pairing, ask for a reconnect, read the status, list the chats with
-their identifiers and names, create and revoke clients, and request backfills.
+their identifiers and names, create and revoke clients, request backfills,
+and pause downloads.
 Treat a scrape configuration as holding the admin credential, and prefer the
 EMF lines, which need no token, for alerting.
 
