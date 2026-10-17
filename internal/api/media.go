@@ -741,7 +741,11 @@ func (m *mediaRegistry) attachment(v mediaView, r *Request) (dto.Response, error
 }
 
 func (s *reads) openMessage(g policy.ReadGrant, r *Request) (chat policy.CanonicalChat, id string, sender policy.CanonicalChat, ok bool) {
-	ref, err := s.refs.OpenRef(g.Client(), r.req.PathValue("mref"))
+	return s.openRef(g, r.req.PathValue("mref"))
+}
+
+func (s *reads) openRef(g policy.ReadGrant, mref string) (chat policy.CanonicalChat, id string, sender policy.CanonicalChat, ok bool) {
+	ref, err := s.refs.OpenRef(g.Client(), mref)
 	if err != nil {
 		return policy.CanonicalChat{}, "", policy.CanonicalChat{}, false
 	}
