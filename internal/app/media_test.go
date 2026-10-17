@@ -633,7 +633,10 @@ func TestThePauseHoldsDownloadsUntilItIsLifted(t *testing.T) {
 		_, _, err := tx.InsertMessage(ingest.Message{Chat: peer, ID: "SYNTHETIC-PDF", Sender: peer, Origin: ingest.OriginLive,
 			Timestamp: time.Now().Add(-time.Minute), Kind: ingest.KindMedia, MediaType: "application/pdf", Ingested: time.Now(),
 			Media: &ingest.Media{Ref: "SYNTHETIC-SEALED-PDF", Kind: ingest.MediaDocument, Declared: int64(len(pdf)), Retention: time.Hour}})
-		return err
+		if err != nil {
+			return err
+		}
+		return tx.PutRevokeTombstone(peer, "SYNTHETIC-REVOKED", peer, time.Now())
 	}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -654,7 +657,7 @@ func TestThePauseHoldsDownloadsUntilItIsLifted(t *testing.T) {
 			t.Fatalf("status = %d %s, want %s", r.status, r.body, want)
 		}
 	}
-	status(`"media_refs_live":1,"media_refs_expired":0,"revoke_tombstones":0}`)
+	status(`"media_refs_live":1,"media_refs_expired":0,"revoke_tombstones":1}`)
 	status(`"downloads":"on"`)
 	path := "/v1/messages/" + onlyChatMessages(t, to, auth)[0] + "/media"
 	if r := post(t, admin, "/admin/v1/media", bearer(adminToken), `{"paused":true}`); r.status != http.StatusOK || r.body != `{"paused":true}` {
