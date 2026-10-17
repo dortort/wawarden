@@ -126,6 +126,10 @@ raises the risk is likewise unknown.
 - Log out other linked devices that did the same job
   ([hardening](hardening.md#unlink-other-devices)).
 - Do not re-pair in a loop after a logout.
+- Pause attachment downloads when a ban is suspected or WhatsApp keeps
+  throttling fetches ([pausing downloads](runbook.md#pausing-downloads)). The
+  pause lasts until a restart; `WAWARDEN_MEDIA_MAX_BYTES=0` keeps downloads off
+  across restarts.
 - Leave `WAWARDEN_UNSAFE_SEND_CAPS` unset.
 
 ## What happens on a ban or a logout
@@ -162,9 +166,12 @@ Before pairing again:
    pairing attempts an hour.
 2. Revoke the clients that can send while the cause is unknown:
    `wawarden admin clients revoke --id <id> --token-file admin.token`.
-3. Keep a backup of the archive: it holds the history, and stays readable
+3. With attachment downloads on, pause them, so that nothing is fetched once
+   the device is paired again
+   ([pausing downloads](runbook.md#pausing-downloads)).
+4. Keep a backup of the archive: it holds the history, and stays readable
    whatever happens to the account.
-4. Contact WhatsApp support through the app if the account is restricted or
+5. Contact WhatsApp support through the app if the account is restricted or
    banned; the steps are WhatsApp's, not this project's.
-5. Pair again only once the phone works normally
+6. Pair again only once the phone works normally
    ([runbook](runbook.md#suspected-ban)).
