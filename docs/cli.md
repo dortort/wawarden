@@ -402,7 +402,7 @@ format: 1
 written by: v1.0.0
 created: 2026-10-05T03:00:00Z
 archive integrity: ok
-archive schema version: 4
+archive schema version: 5
 archive schema: ok
 archive chats: 212
 archive messages: 48210
@@ -412,6 +412,9 @@ archive inbox backlog: 0
 archive inbox quarantined: 0
 archive active clients: 2
 archive audit rows: 1204
+archive media references live: 37
+archive media references expired: 2
+archive revoke tombstones: 5
 device store integrity: ok
 device store schema version: 16
 device store schema: ok
@@ -425,7 +428,9 @@ A database that fails the integrity check prints `integrity: failed` and up to
 five of SQLite's problem lines as `integrity problem`, and no counts; one that
 passes but cannot be counted prints `counts: unreadable`. A schema version
 that differs prints `schema: differs from the manifest's N`, one too new
-`schema: newer than this build, which reads up to N`. `written by` is the
+`schema: newer than this build, which reads up to N`. A copy below schema
+version 5, which has no media tables, prints zero media references and revoke
+tombstones. `written by` is the
 manifest's build version, or `unrecognised` when it does not look like one. The
 counts use the same rules as [`admin status`](#admin-status-admin-pair-and-admin-reconnect),
 so they can be compared with the live service, whose counts are never lower

@@ -114,6 +114,9 @@ func report(out *bytes.Buffer, ext backup.Extracted, archive inspect.Archive, de
 		count("archive inbox quarantined", archive.InboxQuarantined)
 		count("archive active clients", archive.ClientsActive)
 		count("archive audit rows", archive.AuditRows)
+		count("archive media references live", archive.MediaRefsLive)
+		count("archive media references expired", archive.MediaRefsExpired)
+		count("archive revoke tombstones", archive.RevokeTombstones)
 	}
 	ok = integrity(line, "device store", device.Integrity) && ok
 	if device.Counted {
