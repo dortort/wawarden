@@ -133,14 +133,17 @@ these constraints on the proxy:
   ([request bodies](api.md#request-bodies)); a proxy limit below
   64 KiB breaks MCP calls and sends of long or escaped texts.
 - **Timeouts.** A send can take 25 seconds and the service writes a response
-  within 30, except an attachment delivery; give the proxy's upstream read
-  timeout at least 30 seconds.
+  within 30, except an attachment delivery and a `get_attachment` call, which
+  can wait 25 seconds for its file and take 30 more to write it; give the
+  proxy's upstream read timeout at least 30 seconds and allow a `POST /mcp`
+  response 55 seconds in all.
 - **Attachments.** On `GET /v1/messages/*/media`, a delivery renews a
   30-second write deadline before each 256 KiB chunk, so there the proxy turns
   response buffering off, allows a whole response at least 30 minutes, sets no
   response-size limit below `WAWARDEN_MEDIA_MAX_BYTES`, and passes `Range` and
   `If-Range` through ([delivery](api.md#delivery)). On `POST /mcp` it allows a
-  response of at least 16 MiB, which a `get_attachment` part needs.
+  response of at least 16 MiB, which a `get_attachment` part needs, lasting up
+  to 55 seconds.
 - **MCP is plain HTTP.** The endpoint is `POST /mcp` only, stateless and
   JSON-only: no server-sent events, no WebSocket upgrade, no session affinity.
 - **Logs.** Never log the `Authorization` header. The query string of
@@ -220,14 +223,21 @@ docker exec wawarden /wawarden healthcheck
 - `--read-only` leaves `/data` as the only writable path, and
   `--cap-drop=ALL` with `no-new-privileges` removes what the process never
   uses (<https://docs.docker.com/reference/cli/docker/container/run/>).
-- `--memory`: size it as at least (2·H + 1 MiB + R) / 0.8, where H is
-  `WAWARDEN_HISTORY_MAX_BYTES` and R is 128 MiB. History sync needs at most
-  2 times `WAWARDEN_HISTORY_MAX_BYTES` plus 1 MiB to decompress a blob, about
-  65 MiB at the default ([history sync](internals.md#history-sync)). R is a
-  reserve for the process baseline and the memory to decode the blob; it is an
-  estimate, not a measurement. The rule gives about 241 MiB at the default, so
-  512 MiB leaves room, and about 801 MiB at the 256 MiB maximum: raise
-  `--memory` with the cap.
+- `--memory`: size it as at least (A + 2·H + 1 MiB + R) / 0.8, where H is
+  `WAWARDEN_HISTORY_MAX_BYTES`, R is 128 MiB, and A is 0 while
+  `WAWARDEN_MEDIA_MAX_BYTES` is 0 and about 251 MiB above it. History sync needs
+  at most 2 times `WAWARDEN_HISTORY_MAX_BYTES` plus 1 MiB to decompress a blob,
+  about 65 MiB at the default ([history sync](internals.md#history-sync)). A
+  covers up to 4 attachments in memory at up to 16 MiB each; one image
+  normalisation at a time within its 128 MiB budget; one `get_attachment` inline
+  result or part at a time, an 8 MiB copy plus an encoding of at most 6 times
+  it; and about 3.4 MiB of buffers ([attachments](internals.md#attachments)). R
+  is a reserve for the process baseline and the memory to decode the blob; it is
+  an estimate, not a measurement. With downloads off the rule gives about 241
+  MiB at the default, so `--memory=512m` holds, and about 801 MiB with H at its
+  256 MiB maximum. With downloads on it gives about 555 MiB at the defaults, so
+  use `--memory=768m`, and about 1115 MiB with H at its maximum, so 1.25 GiB.
+  Raise `--memory` with either cap.
 - The 0.8 in that rule is the soft memory limit's share of the container's
   memory. When `GOMEMLIMIT` is unset or empty, WaWarden sets the Go runtime's
   soft memory limit at start to 80% of the container's cgroup memory limit,
@@ -314,7 +324,7 @@ anything it keeps is not private to its user
 ([startup refusals](configuration.md#startup-refusals)):
 
 - the data directory: exactly `0700`, owned by the service's user;
-- `keys/`, `keys/retired/`, `history/` and `backups/`: `0700`;
+- `keys/`, `keys/retired/`, `history/`, `backups/` and `spool/`: `0700`;
 - `keys/master` and each retired key: no access for group or others, such as
   `0600` or `0400`;
 - `archive.db`, `session.db` and their journals: no access for group or others.
@@ -332,6 +342,10 @@ taken or old ones are pruned instead:
   `unexpected_entry`). A file you put there, a backup of another mode or
   owner, a symbolic link or another directory all count. Remove the entry, and
   the next backup prunes again.
+
+`spool/` holds only the files the service stages there, each with mode `0600`
+and sealed under a key held in memory, and `serve` empties it at every start
+([data directory](configuration.md#data-directory)).
 
 Mechanisms that add group bits, such as Kubernetes `fsGroup` or a setgid
 parent directory, fail the checks.
@@ -457,12 +471,14 @@ controls a release controls the account; the
       `Authorization` nor query strings, allows 64 KiB bodies and 30-second
       responses, except on `GET /v1/messages/*/media`, where it buffers
       nothing, allows a whole response at least 30 minutes and passes `Range`
-      and `If-Range`, and limits callers per address.
+      and `If-Range`, and on `POST /mcp` allows 16 MiB responses that last
+      55 seconds, and limits callers per address.
 - [ ] Egress goes only to WhatsApp's names, the webhook and DNS, enforced or
       alerting.
 - [ ] The container runs read-only, without capabilities, with
-      `no-new-privileges`, a memory and process limit and
-      `--stop-timeout 15`; or the systemd unit sets the equivalent.
+      `no-new-privileges`, a process limit, a memory limit sized by the
+      `--memory` rule (`768m` with attachment downloads on at the defaults)
+      and `--stop-timeout 15`; or the systemd unit sets the equivalent.
 - [ ] The data volume is owned by the service's user with mode `0700`; no
       `fsGroup`.
 - [ ] The admin token's hash, not the token, is configured; the webhook secret

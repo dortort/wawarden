@@ -794,6 +794,8 @@ import (
 
 var imageDecoders = []string{"image/jpeg", "image/png", "image/gif", imageModule}
 
+var imageRegistry = map[string]bool{"Decode": true, "DecodeConfig": true, "RegisterFormat": true}
+
 var imageDecoderRule = rule{
 	name:  "image-decoders",
 	check: checkImageDecoders,
@@ -849,18 +851,58 @@ import (
 	"image/png"
 )
 `},
+		{name: "a registry decode", rel: "internal/app/x.go", want: 1, src: `package app
+
+import (
+	"image"
+	"io"
+)
+
+func decode(r io.Reader) (image.Image, string, error) { return image.Decode(r) }
+`},
+		{name: "a registry decode under the content policy", rel: "internal/attach/x.go", want: 1, src: `package attach
+
+import (
+	"image"
+	"io"
+)
+
+func size(r io.Reader) (image.Config, string, error) { return image.DecodeConfig(r) }
+`},
+		{name: "a format registration", rel: "internal/api/x.go", want: 1, src: `package api
+
+import "image"
+
+func register() { image.RegisterFormat("x", "x", nil, nil) }
+`},
+		{name: "an image that is not decoded", rel: "internal/app/x.go", src: `package app
+
+import "image"
+
+func canvas() *image.RGBA { return image.NewRGBA(image.Rect(0, 0, 1, 1)) }
+`},
 	},
 }
 
 func checkImageDecoders(f *sourceFile) []string {
-	if f.test || within(f.dir, attachDir) {
+	if f.test {
 		return nil
 	}
 	var out []string
-	for _, imp := range f.imports {
-		if slices.ContainsFunc(imageDecoders, func(d string) bool { return within(imp.path, d) }) {
-			out = append(out, f.at(imp.node, "%q may be imported only under %s: image decoders run only behind the content policy's magic and budget checks", imp.path, attachDir))
+	if !within(f.dir, attachDir) {
+		for _, imp := range f.imports {
+			if slices.ContainsFunc(imageDecoders, func(d string) bool { return within(imp.path, d) }) {
+				out = append(out, f.at(imp.node, "%q may be imported only under %s: image decoders run only behind the content policy's magic and budget checks", imp.path, attachDir))
+			}
 		}
 	}
+	ast.Inspect(f.file, func(n ast.Node) bool {
+		if e, ok := n.(*ast.SelectorExpr); ok {
+			if sel, p := f.ref(e); sel != nil && p == "image" && imageRegistry[sel.Sel.Name] {
+				out = append(out, f.at(sel, "image.%s is refused: it reaches every registered decoder without importing one, so a decoder is picked only by the content policy's magic check", sel.Sel.Name))
+			}
+		}
+		return true
+	})
 	return out
 }

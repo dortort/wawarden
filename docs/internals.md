@@ -19,6 +19,8 @@ such as LID and re-key are explained in the [glossary](glossary.md).
   - [Delivery](#delivery)
   - [History sync](#history-sync)
   - [Media transport](#media-transport)
+  - [Attachment downloads](#attachment-downloads)
+  - [Attachment staging](#attachment-staging)
   - [Traffic the protocol library sends by itself](#traffic-the-protocol-library-sends-by-itself)
   - [What a send does on the wire](#what-a-send-does-on-the-wire)
   - [Fake engine](#fake-engine)
@@ -488,6 +490,86 @@ recovery as the service's other goroutines, runs the deadline and stall timers
 and exits when the job ends; a panic in it is counted as `wa.media.watchdog`
 and ends the job.
 
+### Attachment downloads
+
+While `WAWARDEN_MEDIA_MAX_BYTES` is above 0, the adapter captures, at receipt,
+the reference of an attachment whose declared size is within the cap, in a
+message that is not view-once, and fetches nothing. It seals the descriptor as
+a [media reference](#media-reference), which the archive keeps beside the
+message.
+
+A fetch starts only when a client asks for the attachment, through the
+[attachment routes](api.md#attachments) or
+[`get_attachment`](api.md#get_attachment). Both go through one job registry in
+the API layer, which admits the request and charges its budgets, then calls the
+app's media service. The service checks the cool-down, the connection and, for
+an attachment over 16 MiB, the free space that staging keeps, and asks the
+engine. `FetchMedia` runs only while the engine is ready, under its panic
+recovery, and calls the adapter, which:
+
+1. opens the reference for the message id and checks its descriptor against
+   the requested row (see [Media reference](#media-reference));
+2. refuses a declared length over the cap;
+3. builds the protocol message of the recorded kind in `downloadable`, the only
+   place that builds one, and wraps it in a `mediasrc.Source`;
+4. stages the attachment in memory, in a buffer of its declared length plus
+   32 bytes, when that length is at most 16 MiB, and otherwise
+   [on disk](#attachment-staging);
+5. puts the job's limits on the request's context (see
+   [Media transport](#media-transport)) and calls the media seam.
+
+The adapter has two download seams, each typed for what it carries:
+`downloadToFile` takes only a history notification, which only
+`DownloadHistory` builds, and `downloadMediaFile` takes only a
+`mediasrc.Source`. They are the only callers of the protocol library's
+`DownloadToFile`. A `Source`'s one field is unexported in its own package, so
+only `downloadable` fills one, and the media seam refuses an empty one before
+the library is called. Architecture rules pin the seams and the callers of
+`FetchMedia` (see
+[the adapter](threat-model.md#17-the-protocol-library-behind-one-adapter)).
+
+A 403, 404 or 410 from the media host means WhatsApp no longer holds the file:
+the engine sets the reference's expiry to now, and the minute sweep removes
+it. A 429 or a 5xx ends the job with WhatsApp's `Retry-After`, and the media
+service holds every new fetch for it, clamped to between 30 seconds and
+10 minutes, or 1 minute when it gave none. Every other failure, a body that
+fails its hash or authentication check included, is `media_failed`. The error
+that leaves the adapter is one of a fixed set and carries no text from the
+protocol library.
+
+After a fetch, the media service applies the content policy of
+`internal/attach` once for the job, whichever transport started it or reads
+it, so both transports serve the same bytes. It takes the served type from the
+bytes, never from the sender; re-encodes images, stickers other than Lottie
+ones, and documents whose bytes are an image, within the budget given in
+[Attachments](#attachments) under memory bounds; blanks a video's metadata
+boxes; and keeps audio and every other document as fetched (see
+[Delivery](api.md#delivery)). Re-encoded bytes replace the fetched ones, which
+are erased. A document whose image bytes the normaliser refuses keeps them as
+fetched and is served as `application/octet-stream`.
+
+### Attachment staging
+
+An attachment over 16 MiB is staged in `spool/` under the data directory,
+which the first one creates with mode `0700`. The service stages at most one
+at a time, and only while the free space left after it stays at least
+1.25 times `WAWARDEN_MIN_FREE_BYTES` on the `local` profile, or 256 MiB on
+`nfs`, so staging never pauses ingest. The file is opened exclusively, without
+following a link, with mode `0600` and a random 128-bit name, and on `local`
+its name is removed at once; on `nfs` it stays until the job ends.
+
+The file holds only ciphertext: each 32 KiB sector is sealed with AES-256-GCM
+under a key drawn for the file and held only in memory, with a nonce made of the
+sector's index and a counter bumped at every write. The tags and counters stay
+in memory. A write past the declared length plus 32 bytes, one that would leave
+a hole, or a growth by truncation is refused and ends the job. Erasing the job
+drops the key and closes the file, and on `nfs` removes its name; a file a crash
+leaves behind cannot be read without the key, which died with the process. At
+every start, whatever `WAWARDEN_MEDIA_MAX_BYTES` is, the service removes every
+regular file in `spool/`, and while downloads are on it removes every hour the
+files no running job holds. A [backup](configuration.md#backups) never includes
+`spool/`.
+
 ### Traffic the protocol library sends by itself
 
 While connected, the protocol library sends WhatsApp, without being asked and
@@ -520,6 +602,13 @@ Around a send it also sends, by itself:
   256 sent messages, whose text stays in the process's memory until it leaves
   the cache; a message older than that, or sent before a restart, is not sent
   again.
+
+It never downloads an attachment by itself: a fetch happens only when a client
+asks for one (see [Attachment downloads](#attachment-downloads)), and consists
+only of HTTPS requests to WhatsApp's media hosts. It never sends a media retry
+receipt, which would ask the owner's phone to upload an attachment again, and
+an architecture test refuses that call; the request above for a message marked
+as unavailable is a different one.
 
 It never sends read receipts, presence, typing indicators or status updates on
 its own, and WaWarden never asks it to: an architecture test refuses those
@@ -623,14 +712,16 @@ whether it pairs the wrong account.
   a poison blob that the fake's decoder refuses. The last two fail three times
   and are quarantined, each with a `quarantine` event.
 - **Attachments.** With `WAWARDEN_MEDIA_MAX_BYTES` above `0`, the engine
-  keeps the references of the photo and of the seven attachments, and a
+  keeps the references of the photo and of the eight attachments, and a
   [fetch](api.md#attachments) returns synthetic bytes built in memory: an 8x8
   grey JPEG for the photo and, whole, for the JPEG document; its first half for
   the corrupt one, which the normaliser refuses so that it is served raw; an
-  Ogg Opus voice note without audio; a 16x16 WebP sticker; and a video and a
+  Ogg Opus voice note without audio; a 16x16 WebP sticker; a video and a
   PDF of 8 MiB and 64 KiB each, so that `get_attachment` sends them in two
-  parts. The last attachment answers expired, and a fetch while not connected
-  answers not connected.
+  parts; and a PDF of 8 MiB less 64 KiB, which `get_attachment` sends inline
+  as a blob. The fake has no near-cap normalised image, because image encoders
+  are confined to `internal/attach`. The image attachment answers expired, and
+  a fetch while not connected answers not connected.
 - **Identity.** The script opens with the owner's identity: the owner's number
   paired with the synthetic LID `100000000000020@lid`.
 - **Sends and history requests.** While connected for the owner, a send to
@@ -646,7 +737,7 @@ whether it pairs the wrong account.
 
 When the script has played, within about 15 seconds of pairing, the fake stays
 connected and sends nothing more: `wawarden admin status` reports `connected`,
-3 chats, 24 messages and 2 history blobs quarantined. Every identity the fake
+3 chats, 25 messages and 2 history blobs quarantined. Every identity the fake
 uses is synthetic: its contacts are `+15550100021`, `+15550100022` and
 `+15550100023`, its LIDs are `100000000000020` to `100000000000022`, and an
 owner number among the contacts, or `+15550100029`, stops the start with
@@ -789,6 +880,41 @@ the blob and holding its conversations while they are applied come on top of
 that and grow with the blob's content. Leave the process's memory limit well
 above this figure when raising the cap.
 
+### Attachments
+
+While `WAWARDEN_MEDIA_MAX_BYTES`, written MAX here, is above 0,
+[attachment downloads](#attachment-downloads) hold at most this much Go memory
+at once:
+
+4·(16 MiB + 32 B) + 128 MiB + 7·8 MiB + 2·70 KiB + 8·256 KiB +
+⌈MAX / 32 KiB⌉·20 B
+
+- 4·(16 MiB + 32 B): at most 4 attachments held in memory, each in a buffer
+  sized once to its declared length plus 32 bytes, at most 16 MiB plus
+  32 bytes, and never grown. An erased attachment whose buffer waits for a
+  `get_attachment` result to be written keeps its place until the buffer is
+  cleared, so the term covers every buffer still alive.
+- 128 MiB: one image normalisation at a time, whose budget counts the decoded
+  image, 4 bytes per sample of a progressive JPEG's coefficients and the
+  output; an image over it is refused. It fits a progressive JPEG of about
+  14 megapixels with 4:2:0 chroma, or a baseline one up to the 50-megapixel
+  cap.
+- 7·8 MiB: one `get_attachment` result that carries the file or a part at a
+  time: a part read from disk into its own 8 MiB buffer, while an attachment
+  held in memory is not copied, and the MCP library's encoding of the result,
+  estimated at 6 times 8 MiB. The result keeps its place until the library has
+  written it, or until 2 seconds after the call returned when the client left.
+- 2·70 KiB and 8·256 KiB: the protocol library's buffers for 2 fetches, and the
+  chunk buffers of 2 REST deliveries for each of 4 attachments.
+- ⌈MAX / 32 KiB⌉·20 B: the tag and counter of each 32 KiB sector of the one
+  attachment [staged on disk](#attachment-staging), about 1.25 MiB at the
+  2 GiB maximum.
+
+That is about 251 MiB whatever MAX is, and about 316 MiB together with one
+history blob at the default cap. [Container
+hardening](hardening.md#container-hardening) turns these figures into a
+`--memory` size.
+
 ## Byte layouts
 
 ### Audit row HMAC
@@ -844,8 +970,11 @@ base64url, at most 2048 characters, of, in this order:
 The additional data is the version byte and the key id, then the message id and
 the label `media`, each preceded by its length as an unsigned varint. A
 reference opens only for the message id it was sealed for, under the current
-key or a retired one; only the current key seals. The cap leaves room for a
-descriptor of at most 1503 bytes.
+key or a retired one; only the current key seals. `FetchMedia` also refuses a
+reference whose descriptor's kind or declared length differ from the requested
+row's, or whose chat and sender, each mapped to its current identifier through
+the archive's LID mappings, are not the requested row's chat and sender. The
+cap leaves room for a descriptor of at most 1503 bytes.
 
 The descriptor is the version byte `0x01`, then ten fields, each preceded by
 its length as an unsigned varint: the attachment's download path, its media

@@ -21,13 +21,14 @@ import (
 )
 
 const (
-	fakeChat       = "15550100021@s.whatsapp.net"
-	fakeLargeSize  = 8<<20 + 64<<10
-	fakePartSize   = 8 << 20
-	attachmentURI  = "wawarden:attachment"
-	partURI        = "wawarden:attachment-part"
-	octetStream    = "application/octet-stream"
-	fakeAttachment = 8
+	fakeChat        = "15550100021@s.whatsapp.net"
+	fakeLargeSize   = 8<<20 + 64<<10
+	fakeNearCapSize = 8<<20 - 64<<10
+	fakePartSize    = 8 << 20
+	attachmentURI   = "wawarden:attachment"
+	partURI         = "wawarden:attachment-part"
+	octetStream     = "application/octet-stream"
+	fakeAttachment  = 9
 )
 
 type bearerTransport struct {
@@ -178,32 +179,12 @@ func (f *fakeDownloads) parts(i int, served string, whole []byte) {
 	}
 }
 
-type listedMessage struct {
-	Ref  string `json:"mref"`
-	TS   string `json:"ts"`
-	Kind string `json:"kind"`
-}
-
 func fakeMediaRefs(t *testing.T, to netip.AddrPort, auth http.Header) []string {
 	t.Helper()
-	var chats struct {
-		Chats []struct {
-			ID string `json:"id"`
-		} `json:"chats"`
-	}
-	if r := mustDo(t, http.MethodGet, to, "/v1/chats", auth); r.status != http.StatusOK || json.Unmarshal([]byte(r.body), &chats) != nil || len(chats.Chats) != 1 {
-		t.Fatalf("GET /v1/chats = %d %s", r.status, r.body)
-	}
-	var page struct {
-		Messages []listedMessage `json:"messages"`
-	}
-	if r := mustDo(t, http.MethodGet, to, "/v1/chats/"+chats.Chats[0].ID+"/messages", auth); r.status != http.StatusOK || json.Unmarshal([]byte(r.body), &page) != nil {
-		t.Fatalf("GET messages = %d %s", r.status, r.body)
-	}
-	page.Messages = slices.DeleteFunc(page.Messages, func(m listedMessage) bool { return m.Kind != "media" })
-	slices.SortFunc(page.Messages, func(a, b listedMessage) int { return strings.Compare(a.TS, b.TS) })
+	listed := slices.DeleteFunc(onlyChatMessages(t, to, auth), func(m listedMessage) bool { return m.Kind != "media" })
+	slices.SortFunc(listed, func(a, b listedMessage) int { return strings.Compare(a.TS, b.TS) })
 	var refs []string
-	for _, m := range page.Messages {
+	for _, m := range listed {
 		refs = append(refs, m.Ref)
 	}
 	if len(refs) != fakeAttachment {
@@ -252,7 +233,7 @@ func TestTheFakeEngineServesEveryAttachmentKindOverRESTAndMCP(t *testing.T) {
 	t.Cleanup(func() { _ = session.Close() })
 	f.cs = session
 
-	const photo, voice, video, pdf, sticker, jpegDocument, corrupt, expired = 0, 1, 2, 3, 4, 5, 6, 7
+	const photo, voice, video, pdf, sticker, jpegDocument, corrupt, expired, nearCap = 0, 1, 2, 3, 4, 5, 6, 7, 8
 	served := func(i int, contentType string) reply {
 		t.Helper()
 		r := f.rest(i)
@@ -298,27 +279,39 @@ func TestTheFakeEngineServesEveryAttachmentKindOverRESTAndMCP(t *testing.T) {
 	if a := f.inline(corrupt, "blob", octetStream, []byte(raw.body)); a.info.Normalised || a.info.Format != "image" || a.info.ServedType != octetStream {
 		t.Fatalf("the refused JPEG document over MCP = %+v", a.info)
 	}
-
-	if a := f.call(expired, nil); a.err != "media_expired" {
-		t.Fatalf("the expired attachment over MCP = %s %+v, want media_expired", a.err, a.info)
+	nearCapDocument := served(nearCap, "application/pdf")
+	if len(nearCapDocument.body) != fakeNearCapSize || !strings.HasPrefix(nearCapDocument.body, "%PDF-") {
+		t.Fatalf("the near-cap PDF over REST holds %d bytes", len(nearCapDocument.body))
 	}
-	if r := mustDo(t, http.MethodPost, f.to, "/v1/messages/"+f.mrefs[expired]+"/media", f.auth); r.status != http.StatusNotFound || r.body != `{"error":"media_unavailable"}` {
-		t.Fatalf("the expired attachment over REST afterwards = %d %s", r.status, r.body)
+	if a := f.inline(nearCap, "blob", "application/pdf", []byte(nearCapDocument.body)); a.info.Bytes != fakeNearCapSize || a.info.Format != "pdf" {
+		t.Fatalf("the near-cap PDF over MCP = %+v", a.info)
+	}
+
+	expiredPath := "/v1/messages/" + f.mrefs[expired] + "/media"
+	if r := mustDo(t, http.MethodPost, f.to, expiredPath, f.auth); r.status != http.StatusAccepted {
+		t.Fatalf("POST the expired attachment = %d %s, want 202", r.status, r.body)
+	}
+	waitUntil(t, "the expired fetch to end", func() bool { return f.metric(`wawarden_media_fetches_total{result="expired"}`) == "1" })
+	if r := mustDo(t, http.MethodGet, f.to, expiredPath, f.auth); r.status != http.StatusGone || r.body != `{"error":"media_expired"}` {
+		t.Fatalf("the expired attachment over REST = %d %s, want 410 media_expired", r.status, r.body)
 	}
 	if a := f.call(expired, nil); a.err != "media_unavailable" {
 		t.Fatalf("the expired attachment over MCP afterwards = %s, want media_unavailable", a.err)
 	}
+	if r := mustDo(t, http.MethodPost, f.to, expiredPath, f.auth); r.status != http.StatusNotFound || r.body != `{"error":"media_unavailable"}` {
+		t.Fatalf("the expired attachment over REST afterwards = %d %s", r.status, r.body)
+	}
 	if counts, _ := f.status(); counts["media_refs_live"] != fakeAttachment-1 || counts["media_refs_expired"] != 1 {
-		t.Fatalf("status counts %v after the expiry, want seven live references and one expired", counts)
+		t.Fatalf("status counts %v after the expiry, want eight live references and one expired", counts)
 	}
 
 	for series, want := range map[string]string{
-		`wawarden_media_fetches_total{result="ok"}`:                     "14",
+		`wawarden_media_fetches_total{result="ok"}`:                     "16",
 		`wawarden_media_fetches_total{result="expired"}`:                "1",
 		`wawarden_media_fetches_total{result="rate_limited"}`:           "0",
-		`wawarden_media_fetched_bytes_total`:                            strconv.Itoa(2 * (377 + 120 + fakeLargeSize + fakeLargeSize + 32 + 377 + 188)),
-		`wawarden_media_deliveries_total{transport="rest",result="ok"}`: "7",
-		`wawarden_media_deliveries_total{transport="mcp",result="ok"}`:  "9",
+		`wawarden_media_fetched_bytes_total`:                            strconv.Itoa(2 * (377 + 120 + fakeLargeSize + fakeLargeSize + 32 + 377 + 188 + fakeNearCapSize)),
+		`wawarden_media_deliveries_total{transport="rest",result="ok"}`: "8",
+		`wawarden_media_deliveries_total{transport="mcp",result="ok"}`:  "10",
 		`wawarden_media_delivered_bytes_total{transport="rest"}`:        strconv.FormatInt(f.served["rest"], 10),
 		`wawarden_media_delivered_bytes_total{transport="mcp"}`:         strconv.FormatInt(f.served["mcp"], 10),
 		`wawarden_media_jobs`:                                           "0",

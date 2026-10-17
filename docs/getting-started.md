@@ -541,7 +541,8 @@ claude mcp add --transport http whatsapp https://<your-host>/mcp --header "Autho
 `claude mcp get whatsapp` shows it as connected. `/mcp` in a Claude Code
 session lists five tools: `get_changes`, `get_chat`, `get_messages`,
 `list_chats` and `search_messages`. A client with write chats also gets
-`send_message`.
+`send_message`, and a client created with `--allow-media` gets `get_attachment`
+while `WAWARDEN_MEDIA_MAX_BYTES` is above 0.
 
 This form stores the token itself in `~/.claude.json`.
 [Registering with Claude Code](api.md#registering-with-claude-code) says what

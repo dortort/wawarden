@@ -92,6 +92,13 @@ documented design are welcome.
   the admin route that requested it.
 - Message text left on disk after a revocation, an edit or an expiry beyond the
   exceptions the threat model lists.
+- Attachment leaks: an attachment's bytes or its media reference reaching
+  another client, a chat outside the client's scope, a log, a metric or a
+  notification; a client without `allow_media` obtaining an attachment; or an
+  image block carrying bytes the content policy did not re-encode.
+- A media reference or attachment bytes left after a revocation or an expiry
+  beyond the residuals the threat model lists, an attachment fetched without a
+  client's request, or a view-once attachment fetched at all.
 - Traffic to WhatsApp that the threat model says WaWarden never causes, such as
   read receipts or presence, or a connection from a service without a paired
   device before pairing is requested.
@@ -131,8 +138,9 @@ documented design are welcome.
   same user on a client host, a compromised device linked to the same account,
   whoever holds both a backup and the age identity it was encrypted to, delivery
   receipts and the other traffic the protocol library sends by itself, deletion
-  residuals in backups and filesystem blocks, and what an agent does with
-  message text it reads.
+  residuals in backups and filesystem blocks, what an agent does with message
+  text or attachments it reads, and copies of attachments that an MCP host or
+  an agent saves.
 
 ## Verifying a release
 

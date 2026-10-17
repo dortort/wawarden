@@ -433,6 +433,12 @@ func TestAReferenceIsWrittenWithANewRowOnly(t *testing.T) {
 	if _, inserted := insertNew(t, s, mediaMessage(t, groupJID, "T1", alice, "plain words", "sealed-text")); inserted || storedRef(t, s, text) != "" {
 		t.Fatal("a duplicate gave a reference to a stored message that is not media")
 	}
+	typedText := textMessage(t, groupJID, "T2", alice, "typed words")
+	typedText.MediaType = "image/jpeg"
+	typedTextRef := insert(t, s, typedText)
+	if _, inserted := insertNew(t, s, mediaMessage(t, groupJID, "T2", alice, "typed words", "sealed-typed-text")); inserted || storedRef(t, s, typedTextRef) != "" {
+		t.Fatal("a duplicate gave a reference to a stored text message that carries a media type")
+	}
 	untyped := mediaMessage(t, groupJID, "U1", alice, "", "unused")
 	untyped.Media, untyped.MediaType = nil, ""
 	untypedRef := insert(t, s, untyped)
@@ -647,6 +653,20 @@ func TestPurgeMediaRefsRemovesExpiredAndAgedReferences(t *testing.T) {
 	}
 }
 
+func TestAPurgeSharesItsLimitBetweenExpiredAndAgedReferences(t *testing.T) {
+	s := openStore(t)
+	expiring := mediaMessage(t, alice, "E", alice, "", "sealed-E")
+	expiring.ExpiresAt = epoch.Add(time.Hour)
+	insert(t, s, expiring)
+	for _, id := range []string{"N1", "N2", "N3"} {
+		insert(t, s, mediaMessage(t, alice, id, alice, "", "sealed-"+id))
+	}
+	for i, want := range []int{2, 2, 0} {
+		if n := purgeRefs(t, s, epoch.Add(2*time.Hour), time.Hour, true, 2); n != want {
+			t.Fatalf("purge %d with a limit of 2 over one expired and three aged references removed %d, want %d", i+1, n, want)
+		}
+	}
+}
 func TestPurgeMediaRefsRemovesEveryReferenceWhileDownloadsAreOff(t *testing.T) {
 	s := openStore(t)
 	for i := range 3 {
@@ -809,7 +829,7 @@ func TestTombstonesExpireAfterSevenDays(t *testing.T) {
 func TestTombstonesAreCappedAtTheOldest100000(t *testing.T) {
 	s := openStore(t)
 	if err := execAll(t, s, fmt.Sprintf("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < %d) "+
-		"INSERT INTO revoke_tombstones (chat_jid, id, sender_jid, expires_at) SELECT '%s', 'T' || i, '%s', %d + i FROM n", tombstoneCap+5, groupJID, alice, ms(epoch))); err != nil {
+		"INSERT INTO revoke_tombstones (chat_jid, id, sender_jid, expires_at) SELECT '%s', 'T' || i, '%s', %d + i FROM n", 100005, groupJID, alice, ms(epoch))); err != nil {
 		t.Fatalf("seed the tombstones: %v", err)
 	}
 	if n := purgeRefs(t, s, epoch, refRetention, true, 3); n != 3 {
@@ -821,7 +841,7 @@ func TestTombstonesAreCappedAtTheOldest100000(t *testing.T) {
 	if n := purgeRefs(t, s, epoch, refRetention, true, 100); n != 0 {
 		t.Fatalf("a purge at the cap removed %d tombstones", n)
 	}
-	if n, oldest := scalar[int](t, s, "SELECT count(*) FROM revoke_tombstones"), scalar[string](t, s, "SELECT id FROM revoke_tombstones ORDER BY expires_at LIMIT 1"); n != tombstoneCap || oldest != "T6" {
-		t.Fatalf("%d tombstones remain, the oldest %s, want %d from T6", n, oldest, tombstoneCap)
+	if n, oldest := scalar[int](t, s, "SELECT count(*) FROM revoke_tombstones"), scalar[string](t, s, "SELECT id FROM revoke_tombstones ORDER BY expires_at LIMIT 1"); n != 100000 || oldest != "T6" {
+		t.Fatalf("%d tombstones remain, the oldest %s, want 100000 from T6", n, oldest)
 	}
 }

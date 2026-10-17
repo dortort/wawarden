@@ -37,6 +37,7 @@ reference, canonical identifier, LID and pacer are explained in the
   - [Creating a client](#creating-a-client)
   - [Backfill requests](#backfill-requests)
   - [Chat identifiers in admin requests](#chat-identifiers-in-admin-requests)
+  - [Pausing downloads](#pausing-downloads)
   - [Status object](#status-object)
   - [Admin refusals](#admin-refusals)
 - [Health listener](#health-listener)
@@ -52,7 +53,7 @@ public internet.
 | Listener | Address | Opened | Serves |
 |---|---|---|---|
 | `client` | `WAWARDEN_LISTEN`, default `127.0.0.1:8080` | Always | The [client API](#client-api) and the [MCP endpoint](#mcp) `POST /mcp`, with a client token. |
-| `admin` | `WAWARDEN_ADMIN_LISTEN`, default `127.0.0.1:8082` | Only when an admin token hash is configured | `GET /metrics` and the [admin routes](#admin-routes): the status, pairing and reconnection, the clients (create, list, show, revoke), the chat lookup and backfill, all with the admin token. |
+| `admin` | `WAWARDEN_ADMIN_LISTEN`, default `127.0.0.1:8082` | Only when an admin token hash is configured | `GET /metrics` and the [admin routes](#admin-routes): the status, pairing and reconnection, the clients (create, list, show, revoke), the chat lookup and backfill, and the download pause, all with the admin token. |
 | `health` | `WAWARDEN_HEALTH_LISTEN`, default `127.0.0.1:8081`, loopback only | Always | `GET /healthz`, without authentication. |
 
 Every start logs a `listening` event for each listener with its bound address,
@@ -137,17 +138,18 @@ reads the archive. Three changes rebuild the copy: creating a client,
 revoking one, and a re-key that moves a client's chat. A re-key moves a direct
 chat from a phone number to the LID WhatsApp uses for it (see
 [Ingest](internals.md#ingest)). Each change rebuilds the copy inside its own
-write and publishes it once that write commits and before the change returns,
-so a revocation takes effect on the next request; a request that was already authenticated finishes with the
-grant it holds, within the 2-second read deadline, except an attachment
-delivery, which runs until the minute sweep drops its job (see
-[Attachments](#attachments)), and a `get_attachment` result that already
-carries the file, which is still written, at most 25 seconds after the call
-started plus 30 seconds to write it (see [MCP tools](#mcp-tools)). A request that arrives while
-a change is being published, or after a change that did not commit and before
-the copy has been reloaded in the background, waits for the new copy for up to
-2 seconds and is then answered `503` (`busy`) with `Retry-After: 1`, whatever
-token it presents; that answer is not a failure and spends no failure budget.
+write and publishes it once that write commits and before the change returns, so
+a revocation takes effect on the next request; a request that was already
+authenticated finishes with the grant it holds, within the 2-second read
+deadline, except an attachment delivery, which runs until the minute sweep drops
+its job (see [Attachments](#attachments)), and a `get_attachment` result that
+already carries the file or a part, which is still written, at most 25 seconds
+after the call started plus 30 seconds to write it (see [MCP
+tools](#mcp-tools)). A request that arrives while a change is being published,
+or after a change that did not commit and before the copy has been reloaded in
+the background, waits for the new copy for up to 2 seconds and is then answered
+`503` (`busy`) with `Retry-After: 1`, whatever token it presents; that answer is
+not a failure and spends no failure budget.
 An authenticated request goes on to the [client API](#client-api); every other
 request that passes checks 1 and 2 is answered `401` (or `429`):
 
@@ -211,7 +213,8 @@ count and nothing about the requests.
 
 The admin routes `pair`, `reconnect` and the client revoke route read their
 body, which must be the empty object `{}`, the client create route reads the
-client to create, the backfill route its request, and the client send route
+client to create, the backfill route its request, the media route its
+`{"paused":...}` switch, and the client send route
 `POST /v1/chats/{ref}/messages` the message, all with one decoder. No other
 client REST route reads a body. Only a
 route handler can call it, so it runs only after authentication and after the
@@ -546,7 +549,9 @@ whether downloads are on or off (see [Not found](#not-found)). A message in
 scope then answers `404` (`media_unavailable`) when downloads are off, or when
 it has no attachment reference: it is not a media message, it was view-once or
 revoked, or its reference is past its expiry. A request that finds the message
-no longer eligible also drops the client's job for it.
+no longer eligible also drops the client's job for it; when the message's chat
+or sender was re-keyed to a LID after the reference was issued, the next minute
+sweep drops it instead.
 
 A job belongs to one client and one message; two clients asking for the same
 attachment get two jobs and two fetches. The MCP tool
@@ -561,7 +566,7 @@ the tool. `POST` answers:
 | The job's code | The job failed; see the codes below. |
 | `422` `media_too_large` | The declared size is over the effective cap, the smaller of `WAWARDEN_MEDIA_MAX_BYTES` and 16 MiB for an image or 1 MiB for a sticker. |
 | `503` `not_connected` with `Retry-After: 5` | WhatsApp is not connected. |
-| `503` `busy` with `Retry-After` | WhatsApp throttled a fetch and the cool-down that follows is running (the seconds left of it); a fetch over 16 MiB would leave less free disk space than staging keeps (see [Free space](configuration.md#free-space); 60 seconds); or the fetch slots or staged objects below are taken (1 second). |
+| `503` `busy` with `Retry-After` | WhatsApp throttled a fetch and the cool-down that follows is running (the seconds left of it); a fetch over 16 MiB would leave less free disk space than staging keeps, or another attachment over 16 MiB is staged on disk (see [Free space](configuration.md#free-space); 60 seconds); or the fetch slots or staged objects below are taken (1 second). |
 | `429` `rate_limited` | The client already has two jobs fetching or ready (no `Retry-After`), or a budget below is spent (`Retry-After`, the whole seconds until it admits the fetch). |
 
 A status answer, a refusal and a failed job's code charge nothing; only a
@@ -570,7 +575,7 @@ restart refills them, and `WAWARDEN_UNSAFE_RATE_CAPS` lifts none of them:
 
 | Budget | Limit |
 |---|---|
-| Each client | `WAWARDEN_MEDIA_PER_CLIENT_PER_MINUTE`, 6 jobs a minute, evenly, with a burst of 2 |
+| Each client | `WAWARDEN_MEDIA_PER_CLIENT_PER_MINUTE`, 6 jobs a minute, evenly, with a burst of 2 (1 when the limit is 1) |
 | All clients, count | `WAWARDEN_MEDIA_GLOBAL_PER_HOUR`, 60 jobs in any hour |
 | All clients, bytes | `WAWARDEN_MEDIA_GLOBAL_BYTES_PER_HOUR`, 4 GiB in any hour, charged with the declared size when the job starts; bytes fetched beyond it are charged when the fetch ends |
 
@@ -586,7 +591,7 @@ it gave none. Every request also costs one [read](#read-rate-limits).
 |---|---|
 | `409` `media_not_requested` | The client has no job for the message: none was started, or it was erased. |
 | `202` status with `Retry-After: 2` | The job is still fetching. |
-| `410` `media_expired` | WhatsApp no longer holds the file. |
+| `410` `media_expired` | WhatsApp no longer holds the file: its media host answered `403`, `404` or `410`, and the message's reference is marked expired. |
 | `502` `media_failed` | The fetch failed: an integrity check, a size or time limit, or a staging error. |
 | `422` `media_unsupported` | The content policy refused an image, a sticker or a video. |
 | `422` `media_too_large` | The adapter refused the file's declared size as over its cap. |
@@ -595,7 +600,11 @@ it gave none. Every request also costs one [read](#read-rate-limits).
 | `200`, `206` or `416` | The job is ready: the delivery below. |
 
 A failed job keeps its code for 30 minutes, the throttled one only until its
-`Retry-After`, and answers `POST` with it too, without a new fetch. A fetch
+`Retry-After`, and answers `POST` with it too, without a new fetch. An expired
+file is the exception: the failed fetch also marks the message's reference
+expired, so the first `GET` or `HEAD` to find the failed job answers `410` and
+drops it; a `POST`, or a `get_attachment` call that did not wait for the fetch,
+answers `media_unavailable` and drops it instead. A fetch
 that ends because the connection to WhatsApp dropped keeps no code: `GET` then
 answers `409`, and a new `POST` starts, and is charged as, a new job.
 
@@ -869,7 +878,7 @@ calls the same code as its route and answers the same JSON, which the
 | `search_messages` | `query` (required), `chat`, `cursor`, `limit` | As `GET /v1/search`: `{messages, next, more, truncated, session}` |
 | `get_changes` | `since`, `chat`, `limit` | As `GET /v1/changes`: `{messages, next, more, truncated, session}` |
 | `send_message` | `chat`, `text`, `idempotency_key` (all required), `reply_to` | As `POST /v1/chats/{ref}/messages`: `{message, replayed, session}` |
-| `get_attachment` | `message` (required) | The attachment's [status](#status), and the file when it comes inline; see [get_attachment](#get_attachment) |
+| `get_attachment` | `message` (required), `part` | The attachment's [status](#status), and the file when it comes inline or the part asked for; see [get_attachment](#get_attachment) |
 
 There is no tool for `GET /v1/me` or `GET /v1/messages/{mref}`.
 
@@ -883,6 +892,7 @@ There is no tool for `GET /v1/me` or `GET /v1/messages/{mref}`.
 | `text` | string, 1 to 4096 characters | The message to send, under the [text rules](#sending). |
 | `reply_to` | string, 1 to 640 characters | The `mref` of a message of the same chat to reply to. |
 | `message` | string, 1 to 640 characters | A message's `mref` as `get_messages`, `search_messages` or `get_changes` return it. |
+| `part` | integer, 0 to 255 | With `get_attachment`, the index of the 8 MiB part to return, from `0` to the status's `parts` − 1; see [Parts](#parts). |
 | `idempotency_key` | string, 8 to 128 characters matching `^[\x21-\x7e]{8,128}$` | The key `Idempotency-Key` carries on the route: unique per intended message, repeated only to retry the same call. |
 
 Each input schema is an object that allows no other property, and the arguments
@@ -971,14 +981,20 @@ an image served as `image/jpeg` or `image/png` without `normalised` gets its
 status alone, and a document whose image bytes the normaliser refused is
 served as `application/octet-stream`, with `format` `image` and `normalised`
 `false`, as a blob. Audio served as `application/octet-stream` comes as a blob
-too. Some MCP hosts write a blob to a file; Claude Code does so for PDF, Office
-and audio blobs.
+too. Some MCP hosts write a blob to a file. Claude Code 2.1.286, for one,
+negotiates the 2026-07-28 protocol, so it receives audio as an audio block. It
+saves every blob that is not an image and every audio block to a file,
+decoded, with an extension taken from its type; it shows an image to the model
+and saves it too, and shows an image over 2000 pixels a side scaled down while
+the saved file keeps the original.
 
 ##### Parts
 
-When `delivery` is `part`, call `get_attachment` again with `part` from `0` to
-`parts` − 1, one call at a time, and join the parts in that order: the joined
-length equals `bytes`. Part k is the slice of the served file at offset k × 8
+When `delivery` is `part`, call `get_attachment` again with `part` `0`, then
+with `part` from `1` to that result's `parts` − 1, one call at a time, and join
+the parts in that order: the joined length equals a part result's `bytes`. An
+answer without a job takes `parts` from the declared size, and the served file
+can be shorter. Part k is the slice of the served file at offset k × 8
 MiB, 8 MiB long or the rest of the file for the last one. `part` works on any
 ready job, so a file that would also come inline is one part. A part comes as
 an embedded `resource` blob of type `application/octet-stream` with the URI
@@ -993,13 +1009,24 @@ accepts from an MCP server. The same file is also available through `POST` then
 
 A result carries the status in `structuredContent` and its `content` is, in
 order: a constant text that introduces the attachment as third-party content,
-the status as JSON text, the block when the file comes inline, and a constant
-closing text. The block carries `_meta` `{"wawarden/untrusted": true}`. When
+the status as JSON text, the block when the result carries the file or a part,
+and a constant closing text. The block carries `_meta`
+`{"wawarden/untrusted": true}`. When
 the file comes inline, `delivery` is `inline`, `offset` is `0` and `length` is
 the file's size; for a part, `delivery` is `part` and they are the part's;
 otherwise `delivery` is `part` or `metadata` and both are `0`. No argument
 value, the part index included, and no text read from the message appears in
 the result.
+
+A host may pass the model only part of a result. Claude Code 2.1.286, when
+`structuredContent` is present, drops the result's text blocks, the constant
+opening and closing texts included, and passes the model the status JSON and
+the non-text blocks it converted; without a non-text block, the status JSON
+alone. For such a host the status's `untrusted` and `notice` fields are the
+marking that reaches the model; the constant texts reach only a host that
+shows text content. Its limit on a tool result, `MAX_MCP_OUTPUT_TOKENS`
+(25,000 tokens by default), counts only what is left once a blob is saved to a
+file, so neither a large blob nor a part reaches it.
 
 The service handles one inline result or part at a time: a call that would
 return a file or a part while another call's inline result or part is built or
@@ -1094,13 +1121,14 @@ MCP library writes none, and the row records the call's own outcome.
    after a `401` or `403`. Claude Code asks once, when `claude` starts in that
    project, whether to use a server from `.mcp.json`; until it is approved,
    `claude mcp list` shows it as pending approval.
-3. `claude mcp get whatsapp` or `claude mcp list` shows the server as
-   connected (a server from `.mcp.json` once it is approved). `/mcp` in a
-   session lists its five tools: `get_changes`, `get_chat`, `get_messages`,
-   `list_chats` and `search_messages`, and `send_message` as a sixth for a
-   client with write chats. A wrong, expired or revoked token shows as a
-   failed connection rather than as a server that needs authentication: the
-   endpoint offers no OAuth flow.
+3. `claude mcp get whatsapp` or `claude mcp list` shows the server as connected
+   (a server from `.mcp.json` once it is approved). `/mcp` in a session lists
+   its five tools: `get_changes`, `get_chat`, `get_messages`, `list_chats` and
+   `search_messages`, and `send_message` as a sixth for a client with write
+   chats, and `get_attachment` for a client created with `allow_media` while
+   downloads are on. A wrong, expired or revoked token shows as a failed
+   connection rather than as a server that needs authentication: the endpoint
+   offers no OAuth flow.
 4. Rotate the token before it expires, as
    [Rotating a client token](runbook.md#rotating-a-client-token) describes.
    For this registration, switching to the new token means running
@@ -1316,7 +1344,7 @@ an `Access-Control-*` header. Their error bodies are fixed JSON objects with
 | `{"error":"method_not_allowed"}` | `405` |
 | `{"error":"internal_error"}` | `500`, when a handler fails or panics, or a client request's [audit row](#read-audit) fails for a reason other than its 2-second wait |
 | `{"error":"busy"}` | `503` with `Retry-After: 1`, from the client listener: a [busy read](#busy-reads), a request whose audit row cannot be written within 2 seconds, or a client list being republished (see [Client authentication](#client-authentication)); the [attachment](#attachments) routes also answer it with a longer `Retry-After` |
-| `{"error":"unsupported_media_type"}`, `{"error":"body_too_large"}`, `{"error":"invalid_body"}` | `415`, `413`, `400`, from a route that reads a body (`pair`, `reconnect`, `POST /admin/v1/clients`, `POST /admin/v1/clients/{id}/revoke`, `POST /admin/v1/backfill` and `POST /v1/chats/{ref}/messages`) and from `POST /mcp`; see [Request bodies](#request-bodies) and [MCP requests](#mcp-requests) |
+| `{"error":"unsupported_media_type"}`, `{"error":"body_too_large"}`, `{"error":"invalid_body"}` | `415`, `413`, `400`, from a route that reads a body (`pair`, `reconnect`, `POST /admin/v1/clients`, `POST /admin/v1/clients/{id}/revoke`, `POST /admin/v1/backfill`, `POST /admin/v1/media` and `POST /v1/chats/{ref}/messages`) and from `POST /mcp`; see [Request bodies](#request-bodies) and [MCP requests](#mcp-requests) |
 
 The other codes belong to particular routes and are listed with them:
 

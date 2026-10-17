@@ -583,6 +583,21 @@ func TestALiveMediaMessageCarriesItsReference(t *testing.T) {
 	}
 }
 
+func TestAShorterRetentionBoundsTheReference(t *testing.T) {
+	r := newHistRig(t, withDownloads(true, 24*time.Hour))
+	old := withMedia(dm("R1", alice, "older than a day"), MediaImage, "", 1234)
+	old.Timestamp = epoch.Add(-48 * time.Hour)
+	r.ingest(old, withMedia(dm("R2", alice, "fresh"), MediaImage, "", 1234))
+	for _, id := range []string{"R1", "R2"} {
+		r.must(alice, id, alice)
+	}
+	got := query[string](t, r.inspect(), `SELECT group_concat(id || ' ' || r.expires_at, ';')
+		FROM (SELECT m.id, r.* FROM media_refs r JOIN messages m USING (seq) ORDER BY m.id) r`)
+	if want := fmt.Sprintf("R2 %d", epoch.Add(24*time.Hour).UnixMilli()); got != want {
+		t.Fatalf("media references %q, want %q", got, want)
+	}
+}
+
 func TestNoReferenceIsCapturedWhileDownloadsAreOff(t *testing.T) {
 	r := newPipeRig(t)
 	if r.p.mediaOn || r.p.retention != DefaultMediaRefRetention {

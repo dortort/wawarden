@@ -47,6 +47,7 @@ func TestEachScriptedAttachmentGetsItsIntendedOutcome(t *testing.T) {
 		"FAKE-L25": {ServedType: "image/jpeg", Format: "image", Normalised: true},
 		"FAKE-L26": {ServedType: "image/jpeg", Format: "image", Normalised: true},
 		"FAKE-L27": {ServedType: "application/octet-stream", Format: "image"},
+		"FAKE-L29": {ServedType: "application/pdf", Format: "pdf"},
 	}
 	kinds := map[engine.MediaKind]bool{}
 	images := map[string][]byte{}
@@ -103,15 +104,24 @@ func TestTheVideoFixtureLosesItsMetadataAndKeepsItsSize(t *testing.T) {
 }
 
 func TestTheLargeFixturesComeInTwoParts(t *testing.T) {
-	for name, b := range map[string][]byte{"video": mp4Fixture(), "document": pdfFixture()} {
+	for name, b := range map[string][]byte{"video": mp4Fixture(), "document": pdfFixture(largeMediaSize)} {
 		if len(b) != largeMediaSize || largeMediaSize <= 8<<20 || largeMediaSize > 16<<20 {
 			t.Errorf("the %s fixture holds %d bytes, want %d: over one 8 MiB part and under the 16 MiB memory threshold", name, len(b), largeMediaSize)
 		}
 	}
+	if b := pdfFixture(nearCapMediaSize); len(b) != nearCapMediaSize || nearCapMediaSize >= 8<<20 {
+		t.Errorf("the near-cap document holds %d bytes, want %d: under the 8 MiB inline blob cap", len(b), nearCapMediaSize)
+	}
 }
 
 func TestThePDFFixtureIsAWellFormedDocument(t *testing.T) {
-	b := pdfFixture()
+	for _, size := range []int{largeMediaSize, nearCapMediaSize} {
+		wellFormedPDF(t, pdfFixture(size))
+	}
+}
+
+func wellFormedPDF(t *testing.T, b []byte) {
+	t.Helper()
 	if !bytes.HasPrefix(b, []byte("%PDF-1.4\n")) || !bytes.HasSuffix(b, []byte("\n%%EOF\n")) {
 		t.Fatal("the document lacks its header or its end marker")
 	}

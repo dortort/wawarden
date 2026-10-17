@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"runtime/debug"
@@ -1289,6 +1290,57 @@ func TestGetAttachmentAnswersEachFormWithItsBlock(t *testing.T) {
 	}
 }
 
+func TestGetAttachmentForAMessageThatIsGoneDropsItsJob(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA2", "document", smallSize)
+	spool := newFakeSpool(smallSize, true)
+	f.ready(keyMedia, "MEDIA2", spool)
+	f.withdraw("MEDIA2", false)
+	cs, _ := f.session(keyMedia, protocols[0])
+	requireAttachmentError(t, call(t, cs, toolGetAttachment, f.attachmentArgs(keyMedia, "MEDIA2")), codeNotFound)
+	if v := f.view(keyMedia, "MEDIA2"); v.state != 0 {
+		t.Fatalf("the job survived a call that found no message, in state %d", v.state)
+	}
+	if erasures, _ := spool.state(); erasures != 1 {
+		t.Fatalf("a call that found no message erased the spool %d times, want once", erasures)
+	}
+}
+
+func TestGetAttachmentAnswersUnavailableForAJobWhoseFetchExpiredItsReference(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA1", "document", smallSize)
+	if w := f.post(keyMedia, "MEDIA1"); w.Code != http.StatusAccepted {
+		t.Fatalf("POST = %d %s, want 202", w.Code, w.Body.String())
+	}
+	f.withdraw("MEDIA1", true)
+	f.media.answer("MEDIA1", fetchAnswer{err: ErrMediaExpired})
+	if v := f.settled(keyMedia, "MEDIA1"); v.state != mediaFailed {
+		t.Fatalf("the job settled in state %d, want failed", v.state)
+	}
+	cs, _ := f.session(keyMedia, protocols[0])
+	requireAttachmentError(t, call(t, cs, toolGetAttachment, f.attachmentArgs(keyMedia, "MEDIA1")), codeMediaUnavailable)
+	if v := f.view(keyMedia, "MEDIA1"); v.state != 0 {
+		t.Fatalf("the job survived a call that found its reference expired, in state %d", v.state)
+	}
+	requireWriterError(t, f.get(keyMedia, "MEDIA1", nil), http.StatusNotFound, codeMediaUnavailable)
+}
+
+func TestGetAttachmentAnswersMediaExpiredToTheCallThatWaitedForTheFetch(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA1", "document", smallSize)
+	cs, _ := f.session(keyMedia, protocols[0])
+	done := make(chan *mcp.CallToolResult, 1)
+	go func() {
+		res, _ := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: toolGetAttachment, Arguments: f.attachmentArgs(keyMedia, "MEDIA1")})
+		done <- res
+	}()
+	f.fetches(1)
+	f.withdraw("MEDIA1", true)
+	f.media.answer("MEDIA1", fetchAnswer{err: ErrMediaExpired})
+	requireAttachmentError(t, <-done, codeMediaExpired)
+	requireAttachmentError(t, call(t, cs, toolGetAttachment, f.attachmentArgs(keyMedia, "MEDIA1")), codeMediaUnavailable)
+}
+
 func TestGetAttachmentAuditsTheMessageAndTheInlineBytes(t *testing.T) {
 	f := newMCPMediaFixture(t, mediaOptions{})
 	f.attach("MEDIA1", "document", smallSize)
@@ -1379,7 +1431,20 @@ func TestGetAttachmentReportsADiskJobWithoutWaiting(t *testing.T) {
 		t.Fatalf("POST = %d", w.Code)
 	}
 	cs, _ := f.session(keyMedia, protocols[0])
-	v := attachmentOf(t, call(t, cs, toolGetAttachment, f.attachmentArgs(keyMedia, "DISK1")))
+	var first *mcp.CallToolResult
+	var firstErr error
+	answered := make(chan struct{})
+	go func() {
+		defer close(answered)
+		first, firstErr = cs.CallTool(t.Context(), &mcp.CallToolParams{Name: toolGetAttachment, Arguments: f.attachmentArgs(keyMedia, "DISK1")})
+	}()
+	if !closedWithin(answered, 5*time.Second) {
+		t.Fatal("a call for a disk job still fetching waited for the fetch")
+	}
+	if firstErr != nil {
+		t.Fatalf("call %s: %v", toolGetAttachment, firstErr)
+	}
+	v := attachmentOf(t, first)
 	if v.block != nil || v.info.State != dto.MediaFetching || v.info.Delivery != deliveryMetadata || v.info.Reason == nil || *v.info.Reason != reasonFetching ||
 		v.info.RetryAfterSeconds == nil || *v.info.RetryAfterSeconds != 2 {
 		t.Fatalf("a disk fetch answered %+v", v.info)
@@ -1983,13 +2048,24 @@ func TestPartsJoinToTheServedBytes(t *testing.T) {
 			for k := range parts {
 				res := call(t, cs, toolGetAttachment, f.partArgs(keyMedia, "MEDIA1", k))
 				info, data := partOf(t, res)
-				if info.Offset != int64(k)*mediaPartSize || info.Length != min(mediaPartSize, size-info.Offset) || info.Bytes != size || info.Parts != parts ||
-					info.State != dto.MediaReady || info.Reason != nil || info.ServedType != c.spool.served || info.ExpiresAt == nil {
-					t.Fatalf("part %d: status = %+v", k, info)
+				if info.ExpiresAt == nil {
+					t.Fatalf("part %d: status = %+v, want an expiry", k, info)
 				}
-				var fields map[string]json.RawMessage
-				if err := json.Unmarshal(structured(t, res), &fields); err != nil || fields["part"] != nil {
-					t.Fatalf("part %d: the status echoes the part index or does not decode: %v", k, err)
+				offset := int64(k) * mediaPartSize
+				want := dto.AttachmentInfo{
+					Kind: "video", State: dto.MediaReady, ServedType: c.spool.ServedType(), Format: c.spool.Format(), Normalised: c.spool.Normalised(),
+					Bytes: size, SizeDeclared: c.declared, Delivery: deliveryPart, Parts: parts, Offset: offset, Length: min(mediaPartSize, size-offset),
+					RestRoute: mediaRoute, ExpiresAt: info.ExpiresAt, Untrusted: true, Notice: mediaNotice,
+				}
+				if !reflect.DeepEqual(info, want) {
+					t.Fatalf("part %d: status = %+v, want %+v", k, info, want)
+				}
+				wire, err := json.Marshal(want)
+				if err != nil {
+					t.Fatalf("encode the wanted status: %v", err)
+				}
+				if got := normalised(t, structured(t, res)); got != normalised(t, wire) {
+					t.Fatalf("part %d: structured content %s, want %s", k, got, wire)
 				}
 				joined = append(joined, data...)
 			}
@@ -2063,6 +2139,29 @@ func TestGetAttachmentRefusesAPartOutsideItsBounds(t *testing.T) {
 	}
 	if len(f.media.fetched()) != 1 || f.view(keyMedia, "MEDIA1").state != mediaReady || f.permits() != 0 {
 		t.Fatal("a refused argument reached the job")
+	}
+}
+
+func TestAShortReadSendsNoBlock(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA1", "document", smallSize)
+	spool := newFakeSpool(smallSize, true)
+	v := f.ready(keyMedia, "MEDIA1", spool)
+	spool.mu.Lock()
+	spool.data = spool.data[:smallSize-5]
+	spool.mu.Unlock()
+	cs, _ := f.session(keyMedia, protocols[0])
+	for _, c := range []struct {
+		name string
+		args map[string]any
+	}{
+		{"the whole file", f.attachmentArgs(keyMedia, "MEDIA1")},
+		{"part 0", f.partArgs(keyMedia, "MEDIA1", 0)},
+	} {
+		requireAttachmentError(t, call(t, cs, toolGetAttachment, c.args), codeInternal)
+		if f.holds(v.job) != 0 || f.permits() != 0 {
+			t.Fatalf("a short read of %s kept a hold or the permit", c.name)
+		}
 	}
 }
 

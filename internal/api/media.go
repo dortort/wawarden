@@ -198,14 +198,13 @@ type mediaView struct {
 }
 
 type mediaRegistry struct {
-	mu           sync.Mutex
-	jobs         map[mediaKey]*mediaJob
-	fetching     int
-	fetchingDisk int
-	staged       int
-	stagedDisk   int
-	closed       bool
-	runners      sync.WaitGroup
+	mu         sync.Mutex
+	jobs       map[mediaKey]*mediaJob
+	fetching   int
+	staged     int
+	stagedDisk int
+	closed     bool
+	runners    sync.WaitGroup
 
 	service    MediaService
 	archive    ReadArchive
@@ -367,7 +366,6 @@ func (m *mediaRegistry) admit(g policy.ReadGrant, key mediaKey, req MediaFetch, 
 	m.fetching++
 	m.staged++
 	if disk {
-		m.fetchingDisk++
 		m.stagedDisk++
 	}
 	m.liveLocked()
@@ -397,7 +395,7 @@ func (m *mediaRegistry) refusalLocked(client string, disk bool, declared int64) 
 		return fetchBusy, errMediaPaused
 	case m.liveJobsLocked(client) >= mediaClientJobs:
 		return fetchRateLimited, RateLimited(0)
-	case m.fetching >= mediaFetchSlots || m.staged >= mediaStagedSlots || disk && (m.fetchingDisk >= 1 || m.stagedDisk >= 1):
+	case m.fetching >= mediaFetchSlots || m.staged >= mediaStagedSlots || disk && m.stagedDisk >= 1:
 		return fetchBusy, errBusy
 	}
 	charge := max(declared, 1)
@@ -458,9 +456,6 @@ func (m *mediaRegistry) settle(j *mediaJob, spool MediaSpool, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.fetching--
-	if j.disk {
-		m.fetchingDisk--
-	}
 	result := fetchOK
 	if err == nil {
 		m.readyLocked(j, spool, &after)
@@ -577,6 +572,19 @@ func (m *mediaRegistry) drop(key mediaKey) {
 	if j := m.jobs[key]; j != nil {
 		after.add(m.eraseLocked(j, errDeliveryDropped))
 	}
+}
+
+func (m *mediaRegistry) dropExpired(key mediaKey) bool {
+	var after cleanups
+	defer after.run()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	j := m.currentLocked(key, &after)
+	if j == nil || j.state != mediaFailed || j.failure != errMediaExpired {
+		return false
+	}
+	after.add(m.eraseLocked(j, errDeliveryDropped))
+	return true
 }
 
 func (m *mediaRegistry) dropJob(j *mediaJob) {
@@ -885,6 +893,9 @@ func (s *reads) mediaRead(ctx context.Context, g policy.ReadGrant, r *Request) (
 	}
 	noteMessage(ctx, a.Chat, a.ID, a.Sender)
 	key := mediaKey{client: g.Client(), chat: a.Chat, id: a.ID, sender: a.Sender}
+	if !a.Usable && s.media != nil && s.media.dropExpired(key) {
+		return nil, a.Chat, errMediaExpired
+	}
 	if !s.eligible(key, a.Usable) {
 		return nil, a.Chat, errMediaUnavailable
 	}

@@ -217,6 +217,7 @@ var (
 	outcome     = regexp.MustCompile(`\bpassed\b`)
 	runsTests   = regexp.MustCompile(`(?m)^\s*hack/offline-test\.sh(?:\s|$)`)
 	watchedList = regexp.MustCompile(`^\s*watched=\(([^)]*)\)\s*$`)
+	watchedDiff = regexp.MustCompile(`\bgit\b.*\bdiff\b.*--\s+"\$\{watched\[@\]\}"`)
 )
 
 var watchedPaths = []string{"socket/", "store/", "send.go", "download.go", "download-to-file.go", "mediaconn.go", "mediaretry.go", "upload.go", "message.go",
@@ -316,9 +317,12 @@ func bumpWorkflowProblems(config string) []string {
 
 func watchedPathProblems(config string) []string {
 	var watched []string
-	lists, description := 0, ""
+	lists, diffs, description := 0, 0, ""
 	for _, script := range workflowScripts(config) {
 		for line := range strings.Lines(script) {
+			if watchedDiff.MatchString(line) {
+				diffs++
+			}
 			if m := watchedList.FindStringSubmatch(line); m != nil {
 				lists++
 				for _, w := range strings.Fields(m[1]) {
@@ -334,6 +338,9 @@ func watchedPathProblems(config string) []string {
 		return []string{fmt.Sprintf("%d steps set the watched paths, want one, whose upstream diff the pull request shows", lists)}
 	}
 	var out []string
+	if diffs == 0 {
+		out = append(out, "the watched-path diff does not cover the watched paths, so a bump's pull request shows none of their changes")
+	}
 	for _, p := range watchedPaths {
 		if !slices.Contains(watched, strings.TrimSuffix(p, "/")) {
 			out = append(out, fmt.Sprintf("the watched paths leave out %s, so a bump's pull request does not show how the library changed it", p))
@@ -378,6 +385,7 @@ jobs:
           go build ./...
           hack/offline-test.sh
           watched=(socket store send.go download.go download-to-file.go mediaconn.go mediaretry.go upload.go message.go 'pair*.go' handshake.go msgsecret.go 'appstate*')
+          git diff a b -- "${watched[@]}" > watched-paths.diff
           printf "` + watchedDescription + `"
   propose:
     needs: prepare
@@ -440,6 +448,7 @@ jobs:
 		{name: "store/ missing from the description", old: "\\`store/\\`, ", want: 1},
 		{name: "no description of the watched paths", old: "### Watched paths", new: "### Paths", want: len(watchedPaths)},
 		{name: "no watched paths", old: "          watched=(", new: "          paths=(", want: 1},
+		{name: "the diff ignores the watched paths", old: `-- "${watched[@]}"`, new: "-- socket store", want: 1},
 		{name: "a second list of watched paths", old: "          go build ./...\n", new: "          watched=(socket)\n          go build ./...\n", want: 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

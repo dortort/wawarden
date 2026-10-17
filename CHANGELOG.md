@@ -16,11 +16,191 @@ its image digest and the commands to verify and reproduce it.
 
 ## Contents
 
+- [1.2.0 - 2026-10-17](#120---2026-10-17)
 - [1.1.0 - 2026-10-15](#110---2026-10-15)
 - [1.0.0 - 2026-10-12](#100---2026-10-12)
 - [0.3.0 - 2026-10-11](#030---2026-10-11)
 - [0.2.0 - 2026-10-06](#020---2026-10-06)
 - [0.1.0 - 2026-10-04](#010---2026-10-04)
+
+## [1.2.0] - 2026-10-17
+
+### Added
+
+- On-demand attachment downloads, off by default. With
+  `WAWARDEN_MEDIA_MAX_BYTES` above `0`, a client created with `allow_media`
+  (`wawarden admin clients create --allow-media`) downloads the attachment of
+  a photo, video, voice note or other audio, document or sticker, fetched from
+  WhatsApp only when it asks (see [Attachments](docs/api.md#attachments)):
+  - over REST, `POST /v1/messages/{mref}/media` starts a fetch job, and `GET`
+    or `HEAD` on the same path reports on it and then delivers the bytes, with
+    single-range support;
+  - over MCP, the tool `get_attachment` returns the attachment's status and,
+    when the file is small enough and held in memory, the file inline: a
+    re-encoded image up to 3.5 MiB as an image block, audio up to 8 MiB as an
+    audio block, and video, PDF or another document up to 8 MiB as an
+    embedded blob. Its optional `part` argument, from 0 to 255, returns any
+    ready attachment in 8 MiB parts to be joined in order.
+
+  Both transports share one job per client and message, the budgets and the
+  per-job delivery caps.
+- The settings, with their defaults: `WAWARDEN_MEDIA_MAX_BYTES` (`0`, off),
+  the reference retention `WAWARDEN_MEDIA_REF_RETENTION_DAYS` (30),
+  `WAWARDEN_MEDIA_PER_CLIENT_PER_MINUTE` (6, with a burst of 2, or 1 when the
+  limit is 1), `WAWARDEN_MEDIA_GLOBAL_PER_HOUR` (60) and
+  `WAWARDEN_MEDIA_GLOBAL_BYTES_PER_HOUR` (4 GiB), each with its own refusal
+  reason. Neither unsafe caps switch lifts them.
+- `spool/` in the data directory, where an attachment over 16 MiB is staged,
+  with the refusals `spool_dir_unusable`, `spool_dir_not_directory`,
+  `spool_dir_foreign_owner` and `spool_dir_permissions`, and the
+  `spool_sweep_failed` log event.
+- `POST /admin/v1/media` with `{"paused":true}` or `{"paused":false}`. It
+  pauses attachment downloads at once, without a restart, and erases every
+  attachment job, or it resumes them. While downloads are paused, a fetch
+  answers `busy` with a 60-second retry hint. The switch lives in memory, so a
+  restart resumes downloads, and `admin_mutation` reports it with the action
+  `media_pause` (see [Pausing downloads](docs/api.md#pausing-downloads)).
+- The admin status field `downloads` (`off`, `on` or `paused`), the counts
+  `media_refs_live`, `media_refs_expired` and `revoke_tombstones`, and the
+  warning `media_write_client` while an active client with `allow_media` has a
+  write chat. `wawarden admin status` prints them, and `wawarden backup
+  verify` prints the archive's live and expired media references and its
+  revoke tombstones.
+- The codes `media_unavailable`, `media_not_requested`, `media_expired`,
+  `media_too_large`, `media_unsupported`, `media_failed` and
+  `range_not_satisfiable`.
+- The audit actions `rest.media.fetch`, `rest.media`, `rest.media.sent` and
+  `mcp.get_attachment`. An audit row can name a message by a keyed
+  `message_hmac` and carry a byte count, and the `audit_failed` log event and
+  `wawarden_audit_failures_total` report a row that could not be written.
+- The metrics `wawarden_media_fetches_total`,
+  `wawarden_media_fetched_bytes_total`, `wawarden_media_deliveries_total`,
+  `wawarden_media_delivered_bytes_total` and `wawarden_media_jobs`, present
+  while downloads are on, and the panic names `api.media.job`,
+  `api.media.sweep`, `api.mcp.orphan`, `engine.media`, `wa.media.watchdog` and
+  `stage.sweep`.
+- A soft memory limit at start: with `GOMEMLIMIT` unset or empty, WaWarden
+  sets the Go runtime's soft limit to 80% of the container's cgroup memory
+  limit, and the start event `memory_limit` gives the value and its source.
+- A revocation of a message not stored yet leaves a 7-day tombstone when it
+  comes from the message's sender or a recorded group admin, so a later copy
+  of that message is stored already revoked.
+- Agent guidance on attachments as third-party content, on parts and on what
+  an MCP host keeps of a result, in [agents](docs/agents.md).
+- Dev builds: the fake engine serves synthetic attachments of every kind,
+  among them two that come in parts, one that the normaliser refuses and one
+  that answers expired.
+
+### Security
+
+- Nothing is fetched when a message arrives, and view-once media is never
+  fetched. Architecture rules confine the protocol client's downloads to two
+  typed seams, one for history and one for media, and the media seam's source
+  can be built only from a sealed reference that `FetchMedia` opened; only the
+  engine's `FetchMedia` and the media service reach it.
+- A media key reaches the engine only inside a media reference sealed under
+  the new `media-ref` key, which opens only for its own message. `FetchMedia`
+  also refuses a reference whose kind, declared length, chat or sender differ
+  from the requested message's.
+- Every attachment request and `get_attachment` call re-opens the reference
+  and re-checks the client's grant and scope, and every denial gets the same
+  `404` as an unknown route, whether downloads are on or off. Jobs are never
+  shared between clients.
+- A fetch makes at most 6 requests and moves at most twice the declared length
+  plus 32 bytes, and stops after a complete body. A 429 or 5xx ends it and
+  holds every new fetch for WhatsApp's `Retry-After`, kept between 30 seconds
+  and 10 minutes. Fetch slots, staged objects, per-client jobs, the three
+  budgets and the per-job delivery caps bound what clients can start or pull.
+- The content policy runs once per job before any byte is served, the same for
+  both transports: the served type comes from the bytes, never the sender;
+  images, stickers and image documents are re-encoded without their metadata
+  by decoders confined to `internal/attach`, within 50 megapixels and a
+  128 MiB budget; a video's metadata boxes are blanked; and a document the
+  normaliser refuses is served only as `application/octet-stream`.
+- Attachment bytes go out only with a fixed header set: an allow-listed type
+  per kind, `Content-Disposition: attachment`, `nosniff`, a sandboxing content
+  security policy and `Cross-Origin-Resource-Policy: same-origin`, after a
+  committed audit row and under a write deadline. An MCP image block is built
+  only from re-encoded bytes, and every `get_attachment` result marks the file
+  as untrusted.
+- An attachment over 16 MiB is staged in `spool/` only as AES-GCM ciphertext
+  under a key held in memory, in a private file erased when its job ends.
+  `spool/` must be private to the service's user, every start empties it, and
+  no backup includes it. At or below 16 MiB no attachment byte touches the
+  disk.
+- The deletion guarantee covers the media type and media reference of revoked
+  and expired messages, including messages revoked before the upgrade. A
+  revocation of a message not stored yet is refused for a target its sender
+  could not revoke.
+- The protocol library's log lines no longer carry media URLs, media download
+  paths or encrypted-file hashes, and audit lines carry a keyed HMAC of a
+  message, never its id.
+- The threat model lists the new residuals: a delivery or a `get_attachment`
+  result already under way when its client is revoked; copies an MCP host or
+  an agent saves; two clients holding every download slot; prompt injection
+  through pixels, speech and documents; and metadata in attachments served as
+  fetched.
+
+### Changed
+
+- The archive is at schema version 5 and new inbox rows are payload
+  version 2. A revocation removes the whole message, its media type and media
+  reference included, whether downloads are on or off; a revoked message, and
+  an expired one once the expiry pass reaches it, answers `media_type` `null`.
+- The minute expiry sweep also purges media references and revoke
+  tombstones, and `expiry_sweep_failed` covers them.
+- `audit` log lines always include `message_hmac` and `bytes`, `null` when the
+  row names no message.
+- `wawarden_ingest_dropped_total` counts a refused revocation of a message not
+  stored yet under its refusal reason as well as `target_unknown`.
+- The MCP tool list depends on the media grant: a client with `allow_media`
+  sees `get_attachment` while downloads are on, and every other client sees the
+  same list as before.
+- The refusal table in the [configuration](docs/configuration.md) is
+  renumbered; the reason strings are unchanged.
+- The [container hardening](docs/hardening.md#container-hardening) guide sizes
+  `--memory` by a stated rule: `512m` holds with downloads off, and with them
+  on at the defaults the container needs `--memory=768m`.
+- The runbook and the [ban-risk notes](docs/ban-risk.md) say to pause
+  downloads when a ban is suspected, when fetches keep being throttled and
+  before pairing again.
+- Dev builds: the fake engine's script ingests more messages, synthetic
+  attachments among them.
+
+### Fixed
+
+- `wawarden_paired` and `wawarden_connected` could stay stale when the connect
+  step's update and a `Connected` event's update overlapped.
+- The protocol library's log lines also lose a URL that directly follows a
+  letter or a digit.
+- `get_attachment`'s description says to take the number of parts and the
+  joined length from a part's result, which can be shorter than the declared
+  size.
+- The documents say what Claude Code saves of a result and passes to the
+  model: every blob that is not an image and every audio block become files,
+  and the result's text blocks are dropped when it carries
+  `structuredContent`.
+
+### Upgrade notes
+
+- The first start migrates the archive to schema version 5 and writes new
+  inbox rows as payload version 2. Both changes are forward-only: an earlier
+  release refuses the upgraded archive. Take a backup before upgrading; going
+  back needs that backup restored into the earlier release (see
+  [the runbook](docs/runbook.md#upgrading)).
+- Remove every `WAWARDEN_MEDIA_*` variable before going back to an earlier
+  release, which refuses to start with `unknown_variable`.
+- With downloads off, a revocation now removes a message's media type, and a
+  revocation that arrives before its message leaves a tombstone when it comes
+  from the original sender or a recorded group admin.
+- Before turning downloads on, give the container `--memory=768m`, and behind
+  a reverse proxy configure `GET /v1/messages/*/media` (response buffering
+  off, a whole response of at least 30 minutes, no response-size limit below
+  `WAWARDEN_MEDIA_MAX_BYTES`, `Range` and `If-Range` passed through, no caching
+  or compression) and allow `POST /mcp` responses of 16 MiB lasting 55 seconds
+  (see [Reverse proxy with TLS](docs/hardening.md#reverse-proxy-with-tls)).
+- Run `wawarden admin status` from the same release as the server: it refuses
+  a status answer without `downloads` or the three new counts.
 
 ## [1.1.0] - 2026-10-15
 
@@ -289,6 +469,7 @@ Built from commit `d0d5514` with go1.27.1. Released under the MIT licence.
 - Release builds prove the `dev` build tag absent. The container image runs
   as a non-root user on a distroless base with a read-only root filesystem.
 
+[1.2.0]: https://github.com/dortort/wawarden/releases/tag/v1.2.0
 [1.1.0]: https://github.com/dortort/wawarden/releases/tag/v1.1.0
 [1.0.0]: https://github.com/dortort/wawarden/releases/tag/v1.0.0
 [0.3.0]: https://github.com/dortort/wawarden/releases/tag/v0.3.0

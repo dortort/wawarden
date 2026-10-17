@@ -82,7 +82,8 @@ Most sensitive first.
 | Asset | Why it matters |
 |---|---|
 | Device store (`session.db`) | The linked device's keys and the protocol library's state: Signal sessions, sender keys, message secrets, identity mappings and contact names. Whoever holds it can act as the account until the device is unlinked on the phone. |
-| Archive (`archive.db`) and history blobs | Every archived chat, in plaintext. `serve` creates and locks the archive and runs the engine. Once a device is paired, the engine writes WhatsApp traffic into the archive. It keeps each history blob under `history/` until the blob is processed or quarantined. |
+| Archive (`archive.db`) and history blobs | Every archived chat, in plaintext. `serve` creates and locks the archive and runs the engine. Once a device is paired, the engine writes WhatsApp traffic into the archive. It keeps each history blob under `history/` until the blob is processed or quarantined. While attachment downloads are on it also holds a sealed media reference for each captured attachment, which the master key opens. |
+| Fetched attachments (memory and `spool/`) | The bytes of an attachment a client asked for, until its job ends: at most 10 minutes after it is ready in memory, or 30 minutes on disk. One over 16 MiB is staged in `spool/` as AES-256-GCM ciphertext under a key held only in memory, in a `0600` file whose name is removed at once on the `local` profile; a backup never includes `spool/`. |
 | Admin credential | Gates the admin listener; [The admin token](#the-admin-token) lists what it guards. It does not expire. The service holds only its SHA-256. |
 | Client tokens | Bearer credentials: whoever holds one and can reach the client listener has its access. The service stores only their SHA-256 digests. A token is shown once, in the answer that creates its client. |
 | Master key (`keys/master` in the data directory) | Every purpose key is derived from it. [The master key](#the-master-key) says what its holder, and the holder of a retired key, can do. |
@@ -99,7 +100,8 @@ These keys are derived from `keys/master` with HKDF-SHA256:
 
 - the key of the log pseudonyms;
 - the audit chain's key, and the key of the chat and message HMACs in audit lines;
-- the keys that seal the read API's cursors and message references.
+- the keys that seal the read API's cursors and message references;
+- the key that seals attachment media references (`media-ref`).
 
 Whoever holds the master key can:
 
@@ -107,7 +109,9 @@ Whoever holds the master key can:
   and message HMACs in audit lines;
 - recompute the audit chain and sign its audit anchor;
 - open and forge cursors and message references, which still never widen a
-  client's scope.
+  client's scope;
+- while attachment downloads are on, open the media references sealed in
+  `archive.db`, each holding an attachment's media key and download path.
 
 `wawarden keys rotate` replaces the master key with a new one and keeps the old
 one in `keys/retired/`. The service uses a retired key only to open cursors and
@@ -135,6 +139,9 @@ Whoever also can write `archive.db` can, with a retired key:
 - **Any WhatsApp peer or group member.** Sends floods, crafted protocol
   messages, edits, revokes, reactions and poll updates aimed at other chats,
   and text written to manipulate the agents that read it (prompt injection).
+  Sends media crafted to manipulate agents or to exploit an image or video
+  decoder, and fake revokes of messages not yet stored, which are refused for
+  targets their sender could not revoke.
 - **A malicious or prompt-injected client with a valid scoped token.** Tries to
   read or write outside its scope, to learn whether out-of-scope chats or
   messages exist, or to exhaust shared send budgets.
@@ -176,8 +183,9 @@ These are stated so that nobody relies on WaWarden for them:
   tombstone lapsed, was dropped or no longer matches the sender's identifier
   (see [Deletion and storage](#deletion-and-storage)).
   Other stored text means names, identifiers and messages waiting in the inbox.
-- Agents that pass message text into tools. WaWarden marks the text as
-  untrusted; what an agent does with it is the agent's responsibility.
+- Agents that pass message text or attachments into tools. WaWarden marks
+  both as untrusted; what an agent does with them is the agent's
+  responsibility.
 
 ## Trust boundaries
 
@@ -225,7 +233,10 @@ These are stated so that nobody relies on WaWarden for them:
      and sender. An edit or revocation is applied only from the message's
      sender. In a group, a revocation is also applied from a member the archive
      records as an admin. An edit is applied only when it is newer than the
-     last edit applied to that message.
+     last edit applied to that message. A revocation of a message not stored
+     yet leaves a 7-day tombstone only when it passes the same check, from the
+     original sender or a recorded group admin; every other one, and every
+     edit and reaction of a message not stored, is dropped.
    - **Chats named in a message.** A chat named in a message key or a reply
      reference is never followed unless it is the event's own chat. In a
      direct chat, the owner's number also counts, because that is how the
@@ -254,6 +265,15 @@ These are stated so that nobody relies on WaWarden for them:
    - **Size.** A message whose identifiers, push name, text and quoted text add
      up to more than 512 KiB is dropped before it is written. This bounds the
      memory one message takes.
+   - **Attachments.** An attachment's bytes are an untrusted payload. At
+     receipt the adapter keeps only a sealed reference, never for a view-once
+     message, and fetches nothing until a client asks. A fetch is held to the
+     reference's declared length and hashes. Only `internal/attach` decodes
+     the bytes: images, stickers and documents with image bytes by their magic
+     bytes, never through `image.Decode`, one at a time, within 50 megapixels
+     and a 128 MiB budget, and re-encoded; a video's metadata boxes are
+     blanked; nothing else is parsed
+     ([row 27](#27-attachment-content-policy)).
    - **The protocol adapter** translates the protocol library's events into
      plain data:
      - it reads a protocol message as a revocation or an edit only when its
@@ -290,6 +310,15 @@ These are stated so that nobody relies on WaWarden for them:
      owner's phone syncs, not from the contacts themselves. A read returns one
      only when that contact's direct chat is in the client's scope, and returns
      it as the phone sent it.
+   - Attachments are third-party content too. Their status carries
+     `untrusted: true` and a fixed `notice`. A `get_attachment` result puts the
+     file between two constant texts and marks its block with `_meta`
+     `{"wawarden/untrusted": true}`, and gives an image block only for bytes
+     the content policy re-encoded. A REST delivery carries the type derived
+     from the bytes, never the sender's, with `Content-Disposition:
+     attachment`, `nosniff`, a sandboxing `Content-Security-Policy` and
+     `Cross-Origin-Resource-Policy: same-origin`
+     ([delivery](api.md#delivery)).
    - How an agent should treat all of this is in [agents.md](agents.md).
 6. **Service to logs, metrics and notifications.** Chat identities leave the
    process only as keyed HMACs. Message text, query text, tokens and protocol
@@ -326,8 +355,14 @@ These are stated so that nobody relies on WaWarden for them:
      user with no permission for group or others. `session.db` and its journal
      are checked the same way, and opened with the archive's settings and
      lock.
-   - `history/` and `backups/`, when present, must be directories with mode
-     exactly `0700` owned by that user.
+   - `history/`, `backups/` and `spool/`, when present, must be directories
+     with mode exactly `0700` owned by that user.
+   - While `WAWARDEN_MEDIA_MAX_BYTES` is at most 16 MiB, no attachment byte
+     touches the disk. Above it, an attachment over 16 MiB is staged in
+     `spool/` as AES-GCM sector ciphertext under a key drawn for the file and
+     held only in memory, in a `0600` file whose name is removed at once on
+     the `local` profile, and erased when its job ends. Every start empties
+     `spool/`, and backups exclude it.
    - Backups are encrypted to an operator-supplied age recipient, so the
      service can write them but not read them. Before each backup, `backups/`
      and its staging directory `backups/tmp/` must be directories, not
@@ -757,9 +792,10 @@ enforce them.
   a trigram left by a stop or a failure between the deletion and the index
   rewrite it requires, an edit, or a revocation the archive would have refused
   for a stored target, that arrives before history sync has stored its target,
-  and a late copy whose tombstone has lapsed or was dropped, or whose sender's
-  canonical identifier changed in between (see
-  [Deletion and storage](#deletion-and-storage)).
+  a late copy whose tombstone has lapsed or was dropped, or whose sender's
+  canonical identifier changed in between, and the bytes of an attachment
+  already fetched for a client, which stay in memory or as staged ciphertext
+  until their job ends (see [Deletion and storage](#deletion-and-storage)).
 - **I-9 Panics are contained.** A panic is recovered, counted and logged
   without its value when it happens in a goroutine that WaWarden starts, in one
   of its HTTP handlers, or in the protocol adapter's event handler, which runs
@@ -871,8 +907,10 @@ scoped-read-path rule cannot see.
 - Each MCP read tool is registered through `readTool`, which obtains a read
   grant from `DecideRead` on every call and answers `not_found` when it is
   denied. `send_message` is registered through `writeTool`, which obtains a
-  write grant from `DecideWrite` on every call the same way. The send route is
-  registered through `write`.
+  write grant from `DecideWrite` on every call the same way. `get_attachment`
+  is registered through `mediaTool`, which obtains a read grant from
+  `DecideRead` on every call and answers `not_found` when it is denied. The
+  send route is registered through `write`.
 - Only `internal/api` serves requests, and it reads JSON bodies only. No code
   names a `net/http` form-parsing method: `ParseForm`, `ParseMultipartForm`,
   `FormValue`, `PostFormValue`, `FormFile` or `MultipartReader`.
@@ -945,8 +983,8 @@ scoped-read-path rule cannot see.
   `UnsafeAddr` or `UnsafePointer`: the `reflect` functions and methods that
   read or write memory through an unsafe pointer without importing `unsafe`.
 - The non-test files of `internal/cursor`, `internal/keys`, `internal/logx`,
-  `internal/ratelimit` and `internal/sanitize` may import only the standard
-  library.
+  `internal/ratelimit`, `internal/sanitize` and `internal/stage` may import
+  only the standard library.
 - A module outside the standard library may be imported only when it is on a
   reviewed list:
   - the SQLite driver, `modernc.org/sqlite`;
@@ -960,7 +998,10 @@ scoped-read-path rule cannot see.
   - the image library `golang.org/x/image`, which outside test files only
     `internal/attach` may import, to decode WebP. The standard library's
     `image/jpeg`, `image/png` and `image/gif` decoders are confined to
-    `internal/attach` the same way;
+    `internal/attach` the same way, and no file outside the tests,
+    `internal/attach` included, calls `image.Decode`, `image.DecodeConfig`
+    or `image.RegisterFormat`, which would reach a registered decoder
+    without importing it;
   - the MCP library, `github.com/modelcontextprotocol/go-sdk`, and its JSON
     Schema library, `github.com/google/jsonschema-go`, which outside test
     files only `internal/api` may import;
@@ -1280,6 +1321,13 @@ one connection.
   - `text`, `text_display` and `media_type` are null for a revoked message.
     The scoped read returns none of them for a row marked revoked, and the
     builder drops them again.
+- The attachment status, `AttachmentInfo`, holds no string a third party
+  wrote. Its kind and variant come from the archive's attachment row, whose
+  schema allows only fixed words and whose scoped read refuses any other; its
+  served type and format come from fixed lists, chosen by the content policy
+  from the bytes ([row 27](#27-attachment-content-policy)); every other string
+  is a constant of the builder. The sender's file name, caption and media
+  type never reach it.
 
 **Protects.** I-5.
 
@@ -1300,6 +1348,9 @@ one connection.
 - API tests that every message body carries `untrusted: true`, the `origin` of
   its row, the saved or the push name, and null text and media type when
   revoked (`internal/api/reads_test.go`).
+- Tests that an attachment row with a kind outside the fixed set is refused
+  (`internal/store/scoped/media_test.go`), and that the served type and format
+  come only from their lists (`internal/attach/attach_test.go`).
 
 **Since.** v0.1.0.
 
@@ -1308,8 +1359,9 @@ one connection.
 **Mechanism.** Random archives are built with the real store: phone-number and
 LID pairs, text and media messages in chats and groups, edits, revokes,
 re-keys, and chats without messages. They are crossed with random clients (all
-chats, a set, revoked), with and without media. Three properties drive them, and compare every answer with a pure
-model over an unscoped copy of the archive:
+chats, a set, revoked), with and without media. Three properties drive them,
+and compare every answer with a pure model over an unscoped copy of the
+archive:
 
 - **The scoped store.** Every read returns exactly the rows in scope, in
   order, across pages of random sizes in both directions, the change feed from
@@ -2398,6 +2450,64 @@ and account standing.
 
 **Since.** v1.0.0.
 
+### 27. Attachment content policy
+
+**Mechanism.**
+
+- Each attachment job has one set of bytes, whichever transport started it or
+  reads it. The app's media service passes the fetched bytes through the
+  content policy of `internal/attach` once, before the job turns ready. The
+  policy takes no transport input, so the attachment routes and
+  `get_attachment` serve the same bytes in any order.
+- The served type comes from the bytes, filtered through an allow-list for the
+  attachment's kind, and a `format` word from a fixed list. The sender's media
+  type and file name are never read.
+- Images, stickers other than Lottie ones, and documents whose bytes start
+  with a JPEG, PNG, GIF or WebP signature are normalised. The decoder is
+  picked by that signature; the image may declare at most 50 megapixels; a
+  128 MiB budget counts the decoded image, a progressive JPEG's coefficients
+  and the output; and one normalisation runs at a time. The image is turned
+  upright by its EXIF orientation, scaled to at most 2048 pixels on its long
+  edge, and re-encoded as JPEG at quality 85, or PNG when it has alpha, in at
+  most 16 MiB, with no metadata. An animated image keeps its first frame.
+- An image or a sticker the normaliser refuses answers `media_unsupported`. A
+  document it refuses is served as fetched, as `application/octet-stream` with
+  `format` `image` and `normalised` `false`.
+- A video, a GIF and a video note have their `udta`, `meta` and `uuid` boxes,
+  at the top level and under `moov`, rewritten as `free` boxes, and the bytes
+  after the last box dropped; a box tree that does not parse answers
+  `media_unsupported`. Audio and every other document are served as fetched.
+- Only `internal/attach` imports the image decoders, `image/jpeg`,
+  `image/png`, `image/gif` and `golang.org/x/image/webp`, and an MCP image
+  block is built only from re-encoded bytes
+  ([row 2](#2-registration-helpers)).
+
+**Protects.** The clients and agents that read attachments, from metadata a
+photo carries and from images crafted for their decoders, and the process
+from decoder memory exhaustion.
+
+**Enforced by.**
+
+- The architecture rules `image-decoders`, `confined-imports` and
+  `mcp-registration` (`internal/archtest/imports_test.go`,
+  `confinement_test.go`, `mcpregistration_test.go`).
+- The policy's tests and fuzz targets for the type and format, the
+  normaliser, its budget and pixel cap, the WebP frame extractor and the MP4
+  scrub (`internal/attach/attach_test.go`, `fuzz_test.go`).
+- The media service's tests that the policy runs once per job, before the job
+  turns ready, and that a refused image document keeps its fetched bytes
+  (`internal/app/media_test.go`).
+
+**Limits.**
+
+- A document, an audio file or a Lottie sticker keeps whatever metadata it
+  carries, and a refused image document keeps its EXIF, GPS and trailing
+  bytes (see [Clients and agents](#clients-and-agents)).
+- Normalisation removes metadata, not what an image shows: text visible in a
+  picture reaches the agent that views it.
+
+**Since.** v1.2.0.
+
 ### Other tests
 
 Other tests that guard the invariants:
@@ -2451,11 +2561,11 @@ The checks that matter most for security:
 - **Root.** A real or effective user ID of 0 is refused without
   `--allow-root`.
 - **Ownership and modes.** The data directory, `keys/`, the master key,
-  `keys/retired/` and its keys, `history/`, `backups/`, `archive.db`,
-  `session.db` and their journals must be owned by the service's user, have
-  the modes [trust boundary 7](#trust-boundaries) gives, and not be symbolic
-  links. A retired key must also be the key its name says, and not the current
-  master key.
+  `keys/retired/` and its keys, `history/`, `backups/`, `spool/`, `archive.db`,
+  `session.db` and their journals must be owned by the service's user, have the
+  modes [trust boundary 7](#trust-boundaries) gives, and not be symbolic links.
+  A retired key must also be the key its name says, and not the current master
+  key.
 - **Storage.** The service refuses archive or device store settings that read
   back differently from the fixed ones
   ([row 15](#15-verified-storage-and-deletion-on-disk)), storage profile
@@ -2540,11 +2650,14 @@ protocol adapter.
 | Live protocol messages are not stored. The engine receives each live message as plain data, a type with no field for a message secret or the protocol message. Its one field that can carry a media key is the [media reference](internals.md#media-reference), which the adapter fills only while attachment downloads are on, and seals before the engine sees it. The archive's `messages` table has no `raw` column, which a test checks. History sync is the exception. Each history blob, the protocol's own messages with their media keys and message secrets, is kept as received, in a `0600` file under `history/` or, when it arrives inline, in the archive. The archive keeps its download reference, media key included. Both are kept only until the blob is processed or quarantined, and a start deletes the files of blobs no longer pending. The protocol library keeps its own state, message secrets included, in the device store (see [Assets](#assets)). | v0.2.0 |
 | The service never sends read receipts, presence, typing indicators or status updates. No code asks the protocol library for them, and an architecture test refuses the calls. The protocol library sends delivery receipts in their inactive form, and other traffic by itself (see [Protocol library](#protocol-library)). | v0.2.0 |
 | A service without a paired device makes no connection to WhatsApp, not even the version fetch, until pairing is requested. It reports `unpaired` once, and again whenever a paired device is lost. | v0.2.0 |
-| Outbound HTTP to WhatsApp uses no proxy from the environment, a timeout on every step, TLS 1.2 or later, response caps and no redirect to another host. The caps are 8 MiB for the version page, and the history cap plus 32 bytes for a history download. | v0.2.0 |
+| Outbound HTTP to WhatsApp uses no proxy from the environment, a timeout on every step, TLS 1.2 or later, response caps and no redirect to another host. A media request that carries no attachment job, such as a history download, ends after 2 minutes, under a client timeout of 40 minutes that is only a backstop; an attachment job ends at its own deadline, and a request in it that receives nothing for 60 seconds ends too. The caps are 8 MiB for the version page, the history cap plus 32 bytes for a history download, and, for an attachment, its declared length plus 32 bytes per response and twice that over the job's at most 6 requests. | v0.2.0 |
 | No first contact, a direct chat without any stored message from the other person, unless the client is allowed it. Sends are paced, idempotent and budgeted per client, with `429` rather than queueing. A send whose outcome is unknown is stored as failed, and the service never sends it again. Outbound text with control, bidirectional or tag characters is refused, never altered. | v1.0.0 |
 | Disconnections from WhatsApp never exit the process, and `/healthz` does not depend on them. More than five starts within ten minutes start the engine disconnected. Reconnection after a drop backs off exponentially, with jitter, up to five minutes, to avoid reconnect storms, with the protocol library's own reconnection switched off. A connection that drops within a minute of coming up counts as a failed attempt and does not reset the delay. A replaced session, a temporary ban, a refused connection, a failed token refresh, or a stored device of another number than the owner's waits for the operator. | v0.2.0 |
 | With storage profile `local`, ingest pauses while the data directory's filesystem has less free space than `WAWARDEN_MIN_FREE_BYTES` (256 MiB by default; `0` turns the floor off). It reports `ingest_paused`, and resumes once the free space reaches 1.25 times the floor. While it is paused, the engine writes no message and no history-sync notification and leaves them unacknowledged, which loses them (see [Protocol library](#protocol-library)). It also applies nothing from its inbox or from history sync. Profile `nfs` has no floor. | v0.2.0 |
 | No backup is taken without `WAWARDEN_BACKUP_AGE_RECIPIENT`, and the start says so with `backup_disabled`. Every backup is encrypted to that recipient, and there is no plaintext backup of either database. One backup is taken per paired device once its initial history sync has settled. Then one is taken per night at `WAWARDEN_BACKUP_TIME`, `03:00` UTC by default, and the newest `WAWARDEN_BACKUP_KEEP`, `14` by default, are kept. A backup that would take the data directory below its free-space floor is refused. | v0.2.0 |
+| Attachment downloads are off: with `WAWARDEN_MEDIA_MAX_BYTES` at its default of `0` no media reference is kept and nothing is fetched. Turned on, an attachment is fetched only when a client created with `allow_media` asks for it, never when a message arrives and never for view-once media, within per-client and service-wide budgets that no unsafe caps switch lifts. | v1.2.0 |
+| A revocation removes the whole message: its text, its media type and its media reference. A revocation of a message not stored yet leaves a 7-day tombstone only when it comes from the original sender or a recorded group admin, and a later copy of that message is stored revoked. | v1.2.0 |
+| No attachment byte touches the disk while `WAWARDEN_MEDIA_MAX_BYTES` is at most 16 MiB. Above it, an attachment over 16 MiB is staged in `spool/` only as ciphertext under a key held in memory, and backups never include `spool/`. | v1.2.0 |
 
 ## Residual risks
 
@@ -2744,10 +2857,10 @@ This subsection is the canonical statement of what the protocol library
   attachment delivery in flight keeps sending until the next minute's sweep
   drops its job, and the chunk it is writing then can take up to 30 more
   seconds. A `get_attachment` result already published with its file or a
-  part is still written, up to 25 seconds after its call started plus 30 seconds to write
-  it, and its job's bytes stay in memory until then. A spool dropped without
-  clearing after an orphaned result stays on the heap until the next garbage
-  collection.
+  part is still written, up to 25 seconds after its call started plus
+  30 seconds to write it, and its job's bytes stay in memory until then. A
+  spool dropped without clearing after an orphaned result stays on the heap
+  until the next garbage collection.
 
 ### Timing and volume
 
@@ -2980,11 +3093,36 @@ This subsection is the canonical statement of what the protocol library
     `wawarden_policy_denials_total` stays `0` and is no alarm. The audit rows'
     `not_found` reasons are what shows a client probing.
   - How an agent should treat what it reads is in [agents.md](agents.md).
+- **Prompt injection through pixels, speech and documents.** An attachment is
+  third-party content: text in an image, words in a voice note or a video,
+  and the contents of a PDF reach an agent that reads them, instructions
+  included.
+  - WaWarden offers `get_attachment` and the attachment routes only to a client
+    created with `allow_media`, and only while downloads are on. It marks every
+    status `untrusted` with a fixed `notice`, puts a result's file between two
+    constant texts, marks its block `_meta` `{"wawarden/untrusted": true}`, and
+    re-encodes images.
+  - Re-encoding removes metadata, not what an image shows: text visible in a
+    picture reaches the agent like message text.
+  - It cannot stop an agent from acting on what an attachment shows or says.
+    How an agent should treat attachments is in
+    [agents.md](agents.md#attachments-are-third-party-content).
+- **Marking a host drops.** A host may pass the model only part of a result.
+  Claude Code 2.1.286 drops a result's text blocks when the result carries
+  `structuredContent`, the constant opening and closing texts included. The
+  status's `untrusted` and `notice` fields are then the only marking the model
+  sees; the constant texts reach only a host that shows text content.
+- **Metadata in attachments served as fetched.** Audio, documents, Lottie
+  stickers and the parts of a video outside its blanked metadata boxes are
+  served as fetched, with whatever metadata they carry. A document whose image
+  bytes the normaliser refused is served as fetched too, with its EXIF and GPS
+  fields and any bytes after the image's end.
 - **Attachment bytes saved by MCP hosts.** An MCP host may write a blob or a
-  part it receives to a file, as Claude Code does for some blobs in its
-  tool-results directory, and an agent joins parts into a file of its own.
-  Those copies are outside WaWarden: revoking the client, withdrawing the
-  message or the job's end of life does not remove them.
+  part it receives to a file, as Claude Code 2.1.286 does in its tool-results
+  directory for every blob that is not an image, every audio block and every
+  image it shows, and an agent joins parts into a file of its own. Those
+  copies are outside WaWarden: revoking the client, withdrawing the message or
+  the job's end of life does not remove them.
 - **References of merged chats.** When a re-key merges a chat without messages
   into the other chat of the same person, the merged chat's reference stops
   resolving and answers as missing. A merge that would remove a chat a client
@@ -3079,9 +3217,10 @@ This subsection is the canonical statement of what the protocol library
 
 - **Deletion residuals.**
   - Backups taken before a message was revoked, edited or expired keep its old
-    text until they are deleted. Retention deletes a backup once
-    `WAWARDEN_BACKUP_KEEP` newer ones exist. So on an active service, the old
-    text stays in backups for that many nights after the change.
+    text, and its media reference, until they are deleted. Retention deletes a
+    backup once `WAWARDEN_BACKUP_KEEP` newer ones exist. So on an active
+    service, the old text stays in backups for that many nights after the
+    change.
   - A service that stops backing up keeps its last backups indefinitely, and a
     prune refused for an unexpected entry deletes nothing.
   - Copies made outside `backups/`, such as storage snapshots, recovery points
@@ -3113,6 +3252,22 @@ This subsection is the canonical statement of what the protocol library
     was dropped, or whose sender's canonical identifier changed in between, as
     when the archive learns the sender's LID. Nothing that arrives later
     removes that text.
+- **Fetched attachments outlive their message for a while.** The bytes of an
+  attachment fetched for a client are outside I-8. They stay in memory, or in
+  `spool/` as ciphertext under a key held only in memory, until their job
+  ends: at most 10 minutes after the job turned ready in memory, or 30 minutes
+  on disk. The minute sweep drops a job whose message is no longer eligible or
+  whose client was revoked, so a revoke or an expiry ends it within a minute.
+  Two more cases:
+  - an in-memory spool dropped without clearing when a `get_attachment`
+    client left before its result was written stays on the heap until the
+    next garbage collection;
+  - an in-memory spool whose clearing waits for a `get_attachment` result
+    being written stays at most 25 seconds after that call started plus
+    30 seconds, also after a revoke, and the result is still written.
+
+  An attacker running as the service's user, or swap, can read these bytes
+  while they live, as it can the master key.
 - **An interrupted revoke.** A crash in the middle of a revoke, an edit or an
   expiry rolls it back. The old text is then in the database again until the
   change is applied again, and the journal keeps the pre-image until the next

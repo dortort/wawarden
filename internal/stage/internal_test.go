@@ -194,6 +194,40 @@ func TestRandomnessFailuresFailClosed(t *testing.T) {
 	}
 }
 
+type firstReadFails struct{ failed bool }
+
+func (r *firstReadFails) Read(p []byte) (int, error) {
+	if !r.failed {
+		r.failed = true
+		return 0, errors.New("synthetic: no randomness yet")
+	}
+	return rand.Read(p)
+}
+
+func TestAFailedKeyReadFailsClosedEvenWhenTheNameReadSucceeds(t *testing.T) {
+	data := t.TempDir()
+	s := testSpool(t, data, false, 0, math.MaxUint64)
+	s.random = &firstReadFails{}
+	if _, err := s.Admit(10, func(error) {}); !errors.Is(err, errRandom) {
+		t.Fatalf("Admit whose key read failed = %v, want the randomness refusal", err)
+	}
+	if list, err := os.ReadDir(filepath.Join(data, Dir)); err != nil || len(list) != 0 {
+		t.Fatalf("a refused admission left %d entries (%v)", len(list), err)
+	}
+}
+
+func TestEraseClosesTheSpoolFile(t *testing.T) {
+	for _, local := range []bool{true, false} {
+		s := testSpool(t, t.TempDir(), local, 0, math.MaxUint64)
+		f, _ := testAdmit(t, s, 10)
+		fh := f.f
+		f.Erase()
+		if _, err := fh.Stat(); !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("Stat of an erased spool file (local %v) = %v, want it closed", local, err)
+		}
+	}
+}
+
 func TestSectorsAreSealedUnderTheRandomKeyAndTheirOwnNonce(t *testing.T) {
 	seed := make([]byte, keyBytes+nameBytes)
 	for i := range seed {

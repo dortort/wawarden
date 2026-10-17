@@ -95,6 +95,7 @@ type supervisor struct {
 
 	gaugeMu   sync.Mutex
 	wasPaired bool
+	setGauges func(paired, connected bool)
 
 	mu         sync.Mutex
 	ctx        context.Context
@@ -116,12 +117,17 @@ type supervisor struct {
 }
 
 func newSupervisor(o Options) *supervisor {
-	return &supervisor{
+	s := &supervisor{
 		client: o.Client, versions: o.Versions, owner: ownerDigits(o.OwnerPhone), logger: o.Logger, notify: o.Notify,
 		clock: o.Clock, jitter: o.Jitter, kick: make(chan struct{}, 1), done: make(chan struct{}), state: StateUnpaired,
 		paired:    o.Metrics.Gauge("wawarden_paired", "1 while a WhatsApp device is paired, 0 otherwise."),
 		connected: o.Metrics.Gauge("wawarden_connected", "1 while the engine is connected to WhatsApp, 0 otherwise."),
 	}
+	s.setGauges = func(paired, connected bool) {
+		s.paired.Set(gauge(paired))
+		s.connected.Set(gauge(connected))
+	}
+	return s
 }
 
 func ownerDigits(e164 string) string {
@@ -212,8 +218,7 @@ func (s *supervisor) updateGauges() {
 	paired := s.client.Paired()
 	lost := s.wasPaired && !paired
 	s.wasPaired = paired
-	s.paired.Set(gauge(paired))
-	s.connected.Set(gauge(connected))
+	s.setGauges(paired, connected)
 	s.gaugeMu.Unlock()
 	if lost {
 		s.notify.Unpaired()

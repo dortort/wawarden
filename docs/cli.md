@@ -433,8 +433,11 @@ version 5, which has no media tables, prints zero media references and revoke
 tombstones. `written by` is the
 manifest's build version, or `unrecognised` when it does not look like one. The
 counts use the same rules as [`admin status`](#admin-status-admin-pair-and-admin-reconnect),
-so they can be compared with the live service, whose counts are never lower
-than a backup's unless messages expired or were deleted since. Problems with
+so they can be compared with the live service. Its chat and message counts are
+never lower than a backup's unless messages expired or were deleted since; the
+other counts move both ways as the service works, and the minute sweep removes
+expired media references and revoke tombstones, so the live service can report
+fewer of them than an older backup. Problems with
 the stream are explained on standard error, with a fixed text.
 
 ### `keys rotate`

@@ -45,6 +45,7 @@ type fakeMedia struct {
 	fetches    []MediaFetch
 	waits      map[string]chan fetchAnswer
 	during     func()
+	deaf       bool
 }
 
 func (f *fakeMedia) Precheck(declared int64) error {
@@ -73,7 +74,12 @@ func (f *fakeMedia) wait(id string) chan fetchAnswer {
 func (f *fakeMedia) Fetch(ctx context.Context, _ scoped.SealedRef, req MediaFetch) (MediaSpool, error) {
 	f.mu.Lock()
 	f.fetches = append(f.fetches, req)
+	deaf := f.deaf
 	f.mu.Unlock()
+	if deaf {
+		a := <-f.wait(req.ID)
+		return a.spool, a.err
+	}
 	select {
 	case a := <-f.wait(req.ID):
 		if a.panic {
@@ -440,6 +446,18 @@ func TestAMessageWithoutAUsableReferenceIsUnavailableAndDropsItsJob(t *testing.T
 	if v := f.view(keyMedia, "MEDIA1"); v.state != 0 {
 		t.Fatalf("the job survived a lookup that found no message, in state %d", v.state)
 	}
+	g := newMediaFixture(t, mediaOptions{})
+	g.attach("MEDIA2", "document", smallSize)
+	gone := newFakeSpool(smallSize, true)
+	g.ready(keyMedia, "MEDIA2", gone)
+	g.withdraw("MEDIA2", false)
+	requireWriterError(t, g.get(keyMedia, "MEDIA2", nil), http.StatusNotFound, codeNotFound)
+	if v := g.view(keyMedia, "MEDIA2"); v.state != 0 {
+		t.Fatalf("the job survived a GET that found no message, in state %d", v.state)
+	}
+	if erasures, _ := gone.state(); erasures != 1 {
+		t.Fatalf("a GET that found no message erased the spool %d times, want once", erasures)
+	}
 }
 
 func TestTheMediaRoutesTakeNoQuery(t *testing.T) {
@@ -582,6 +600,66 @@ func TestEachTerminalCodeIsKeptByItsTombstone(t *testing.T) {
 	}
 }
 
+func TestAnExpiredFileAnswersGoneOnceWhenTheFetchMarkedItsReferenceExpired(t *testing.T) {
+	cases := []struct {
+		name   string
+		answer fetchAnswer
+		wait   time.Duration
+		method string
+		status int
+		code   string
+	}{
+		{"a GET", fetchAnswer{err: ErrMediaExpired}, 0, http.MethodGet, http.StatusGone, codeMediaExpired},
+		{"a HEAD", fetchAnswer{err: ErrMediaExpired}, 0, http.MethodHead, http.StatusGone, ""},
+		{"a POST", fetchAnswer{err: ErrMediaExpired}, 0, http.MethodPost, http.StatusNotFound, codeMediaUnavailable},
+		{"another failure", fetchAnswer{err: ErrMediaFailed}, 0, http.MethodGet, http.StatusNotFound, codeMediaUnavailable},
+		{"a tombstone past its life", fetchAnswer{err: ErrMediaExpired}, mediaFailedLife, http.MethodGet, http.StatusNotFound, codeMediaUnavailable},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newMediaFixture(t, mediaOptions{})
+			f.attach("MEDIA1", "document", smallSize)
+			if w := f.post(keyMedia, "MEDIA1"); w.Code != http.StatusAccepted {
+				t.Fatalf("POST = %d %s, want 202", w.Code, w.Body.String())
+			}
+			f.withdraw("MEDIA1", true)
+			f.media.answer("MEDIA1", c.answer)
+			if v := f.settled(keyMedia, "MEDIA1"); v.state != mediaFailed {
+				t.Fatalf("the job settled in state %d, want failed", v.state)
+			}
+			f.clock.advance(c.wait)
+			w := f.request(c.method, keyMedia, f.mref(keyMedia, "MEDIA1"), nil)
+			if c.code != "" {
+				requireWriterError(t, w, c.status, c.code)
+			} else if w.Code != c.status {
+				t.Fatalf("%s = %d, want %d", c.method, w.Code, c.status)
+			}
+			if v := f.view(keyMedia, "MEDIA1"); v.state != 0 {
+				t.Fatalf("the job survived the first request after its reference expired, in state %d", v.state)
+			}
+			requireWriterError(t, f.get(keyMedia, "MEDIA1", nil), http.StatusNotFound, codeMediaUnavailable)
+			requireWriterError(t, f.post(keyMedia, "MEDIA1"), http.StatusNotFound, codeMediaUnavailable)
+			if got := len(f.media.fetched()); got != 1 {
+				t.Fatalf("%d fetches, want only the one that expired", got)
+			}
+		})
+	}
+}
+
+func TestALimitOfOneAMinuteHasABurstOfOne(t *testing.T) {
+	f := newMediaFixture(t, mediaOptions{perMinute: 1})
+	f.attach("MEDIA1", "document", smallSize)
+	f.attach("MEDIA2", "document", smallSize)
+	if w := f.post(keyMedia, "MEDIA1"); w.Code != http.StatusAccepted {
+		t.Fatalf("the first POST = %d, want 202", w.Code)
+	}
+	w := f.post(keyMedia, "MEDIA2")
+	requireWriterError(t, w, http.StatusTooManyRequests, codeRateLimited)
+	if got := w.Header().Get("Retry-After"); got != "60" {
+		t.Fatalf("Retry-After = %q, want the minute until the next fetch", got)
+	}
+}
+
 func TestAThrottledFetchAnswersBusyUntilItsRetryAfter(t *testing.T) {
 	f := newMediaFixture(t, mediaOptions{})
 	f.attach("MEDIA1", "document", smallSize)
@@ -623,15 +701,30 @@ func TestALostConnectionEndsTheJobWithoutATombstone(t *testing.T) {
 func TestAWaiterWakesWhenTheJobSettlesOrIsErased(t *testing.T) {
 	for _, c := range []struct {
 		name   string
+		deaf   bool
 		settle func(f *mediaFixture)
+		after  func(f *mediaFixture)
 	}{
-		{"ready", func(f *mediaFixture) { f.media.answer("MEDIA1", fetchAnswer{spool: newFakeSpool(smallSize, true)}) }},
-		{"failed", func(f *mediaFixture) { f.media.answer("MEDIA1", fetchAnswer{err: errMediaExpired}) }},
-		{"erased while fetching", func(f *mediaFixture) { f.m.drop(f.key(keyMedia, "MEDIA1")) }},
+		{name: "ready", settle: func(f *mediaFixture) { f.media.answer("MEDIA1", fetchAnswer{spool: newFakeSpool(smallSize, true)}) }},
+		{name: "failed", settle: func(f *mediaFixture) { f.media.answer("MEDIA1", fetchAnswer{err: errMediaExpired}) }},
+		{
+			name: "erased while fetching", deaf: true,
+			settle: func(f *mediaFixture) { f.m.drop(f.key(keyMedia, "MEDIA1")) },
+			after:  func(f *mediaFixture) { f.media.answer("MEDIA1", fetchAnswer{err: ErrMediaFailed}) },
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newMediaFixture(t, mediaOptions{})
 			f.attach("MEDIA1", "document", smallSize)
+			f.media.mu.Lock()
+			f.media.deaf = c.deaf
+			f.media.mu.Unlock()
+			after := sync.OnceFunc(func() {
+				if c.after != nil {
+					c.after(f)
+				}
+			})
+			t.Cleanup(after)
 			if w := f.post(keyMedia, "MEDIA1"); w.Code != http.StatusAccepted {
 				t.Fatalf("POST = %d", w.Code)
 			}
@@ -648,6 +741,7 @@ func TestAWaiterWakesWhenTheJobSettlesOrIsErased(t *testing.T) {
 			if !closedWithin(woke, 10*time.Second) {
 				t.Fatal("the waiter did not wake")
 			}
+			after()
 			f.await("the fetch to end", func() bool { fetching, _ := f.slots(); return fetching == 0 })
 		})
 	}
@@ -1052,6 +1146,48 @@ func TestPerJobDeliveryCaps(t *testing.T) {
 	g.m.mu.Unlock()
 	if running != 0 || reserved != 0 || sent != 30 {
 		t.Fatalf("after the deliveries: %d running, %d reserved, %d delivered", running, reserved, sent)
+	}
+
+	h := newMediaFixture(t, mediaOptions{})
+	h.attach("MEDIA1", "document", 1000)
+	held := newFakeSpool(1000, true)
+	v = h.ready(keyMedia, "MEDIA1", held)
+	for range 3 {
+		if w := h.get(keyMedia, "MEDIA1", ranged); w.Code != http.StatusPartialContent {
+			t.Fatalf("a delivery within the share = %d", w.Code)
+		}
+	}
+	overCap := func() int {
+		n, _ := strconv.Atoi(h.metric(`wawarden_media_deliveries_total{transport="rest",result="over_cap"}`))
+		return n
+	}
+	refused := overCap()
+	reading, release := make(chan struct{}), make(chan struct{})
+	held.mu.Lock()
+	fourth := held.reads + 1
+	held.hook = func(call int) {
+		if call == fourth {
+			close(reading)
+			<-release
+		}
+	}
+	held.mu.Unlock()
+	answered := make(chan *deadlineWriter, 1)
+	go func() { answered <- h.get(keyMedia, "MEDIA1", ranged) }()
+	<-reading
+	requireWriterError(t, h.get(keyMedia, "MEDIA1", ranged), http.StatusTooManyRequests, codeRateLimited)
+	if n := overCap(); n != refused+1 {
+		t.Fatalf("over-cap deliveries went from %d to %d, want the refusal counted once", refused, n)
+	}
+	close(release)
+	if w := <-answered; w.Code != http.StatusPartialContent {
+		t.Fatalf("the delivery whose bytes were reserved = %d", w.Code)
+	}
+	h.m.mu.Lock()
+	running, reserved, sent = v.job.running, v.job.reserved, v.job.delivered
+	h.m.mu.Unlock()
+	if running != 0 || reserved != 0 || sent != 3996 {
+		t.Fatalf("after four deliveries: %d running, %d reserved, %d delivered", running, reserved, sent)
 	}
 }
 
