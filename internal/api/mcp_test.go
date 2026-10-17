@@ -1417,7 +1417,7 @@ type pausedCall struct {
 
 func (c *pausedCall) unblock() { c.resumed.Do(func() { close(c.resume) }) }
 
-func (f *mediaFixture) pausedCall(ctx context.Context, cs *mcp.ClientSession, rt *wireTransport, key, id string) *pausedCall {
+func (f *mediaFixture) pausedCall(ctx context.Context, cs *mcp.ClientSession, rt *wireTransport, args map[string]any) *pausedCall {
 	c := &pausedCall{published: make(chan struct{}), resume: make(chan struct{}), done: make(chan *mcp.CallToolResult, 1), errs: make(chan error, 1)}
 	rt.mu.Lock()
 	rt.prepare = func(w *mcpWire) {
@@ -1427,7 +1427,6 @@ func (f *mediaFixture) pausedCall(ctx context.Context, cs *mcp.ClientSession, rt
 		}
 	}
 	rt.mu.Unlock()
-	args := f.attachmentArgs(key, id)
 	f.t.Cleanup(c.unblock)
 	go func() {
 		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: toolGetAttachment, Arguments: args})
@@ -1463,7 +1462,7 @@ func TestADeliveryHoldOutlivesEveryEraseUntilTheResultIsWritten(t *testing.T) {
 			spool := mediaSpool(smallSize, "application/pdf", false)
 			job := f.ready(keyMedia, "MEDIA1", spool).job
 			cs, rt := f.session(keyMedia, protocols[0])
-			paused := f.pausedCall(t.Context(), cs, rt, keyMedia, "MEDIA1")
+			paused := f.pausedCall(t.Context(), cs, rt, f.attachmentArgs(keyMedia, "MEDIA1"))
 			if f.holds(job) != 1 || f.permits() != 1 {
 				t.Fatalf("published with %d holds and %d permits, want 1 and 1", f.holds(job), f.permits())
 			}
@@ -1504,7 +1503,7 @@ func TestASecondInlineCallWhileOneIsPublishedAnswersBusy(t *testing.T) {
 	f.attach("MEDIA1", "document", smallSize)
 	job := f.ready(keyMedia, "MEDIA1", mediaSpool(smallSize, "application/pdf", false)).job
 	cs, rt := f.session(keyMedia, protocols[0])
-	paused := f.pausedCall(t.Context(), cs, rt, keyMedia, "MEDIA1")
+	paused := f.pausedCall(t.Context(), cs, rt, f.attachmentArgs(keyMedia, "MEDIA1"))
 	other, _ := f.session(keyMedia, protocols[1])
 	res := call(t, other, toolGetAttachment, f.attachmentArgs(keyMedia, "MEDIA1"))
 	requireAttachmentError(t, res, codeBusy)
@@ -1527,7 +1526,7 @@ func TestAnOrphanedResultIsReleasedAfterTheHandlerAndTheSettle(t *testing.T) {
 			rt := &wireTransport{handler: f.handler, key: keyMedia}
 			cs := connectWire(t, rt, probeMCPURL, protocols[0])
 			ctx, cancel := context.WithCancel(t.Context())
-			paused := f.pausedCall(ctx, cs, rt, keyMedia, "MEDIA1")
+			paused := f.pausedCall(ctx, cs, rt, f.attachmentArgs(keyMedia, "MEDIA1"))
 			cancel()
 			f.awaitTheLibraryLettingGoOfTheCall()
 			_, transient := f.m.lookup(f.key(keyMedia, "MEDIA1"), true)
@@ -1789,7 +1788,7 @@ func TestBothTransportsServeTheJobsOneSpool(t *testing.T) {
 		normalisedJPEG := mediaSpool(smallSize, "image/jpeg", true)
 		f.media.answer("DOC1", fetchAnswer{spool: formatSpool{fakeSpool: normalisedJPEG, format: "image"}})
 		cs, rt := f.session(keyMedia, protocols[0])
-		paused := f.pausedCall(t.Context(), cs, rt, keyMedia, "DOC1")
+		paused := f.pausedCall(t.Context(), cs, rt, f.attachmentArgs(keyMedia, "DOC1"))
 		rest := f.get(keyMedia, "DOC1", nil)
 		v := attachmentOf(t, paused.finish(t))
 		_, _, data, _ := blockBytes(t, v.block)
@@ -1815,7 +1814,7 @@ func TestBothTransportsServeTheJobsOneSpool(t *testing.T) {
 		f.attach("DOC1", "document", smallSize)
 		want := refused(t, f)
 		cs, rt := f.session(keyMedia, protocols[0])
-		paused := f.pausedCall(t.Context(), cs, rt, keyMedia, "DOC1")
+		paused := f.pausedCall(t.Context(), cs, rt, f.attachmentArgs(keyMedia, "DOC1"))
 		rest := f.get(keyMedia, "DOC1", nil)
 		requireRefusedImageBlob(t, attachmentOf(t, paused.finish(t)), rest.Body.Bytes())
 		if rest.Code != http.StatusOK || !bytes.Equal(rest.Body.Bytes(), want) {
@@ -1890,13 +1889,17 @@ func (f *mediaFixture) marshalGrowth(id string) uint64 {
 			peaks <- peak
 		}()
 	}
-	body := legacyCall("tools/call", `{"name":"get_attachment","arguments":{"message":"`+f.mref(keyMedia, id)+`"}}`)
-	r := httptest.NewRequestWithContext(f.t.Context(), http.MethodPost, "/mcp", strings.NewReader(body))
-	r.Header = http.Header{"Content-Type": {"application/json"}, "Accept": {"application/json, text/event-stream"}, "Authorization": {"Bearer " + keyMedia}, "Mcp-Protocol-Version": {legacyProtocol}}
-	f.handler.ServeHTTP(w, r)
+	f.serveAttachmentCall(w, `{"message":"`+f.mref(keyMedia, id)+`"}`)
 	stopped.Store(true)
 	if events, _, _ := w.trace(); w.code != http.StatusOK || !slices.Contains(events, "write") || base == 0 {
 		f.t.Fatalf("the call answered %d %v", w.code, events)
 	}
 	return <-peaks - base
+}
+
+func (f *mediaFixture) serveAttachmentCall(w *mcpWire, arguments string) {
+	body := legacyCall("tools/call", `{"name":"get_attachment","arguments":`+arguments+`}`)
+	r := httptest.NewRequestWithContext(f.t.Context(), http.MethodPost, "/mcp", strings.NewReader(body))
+	r.Header = http.Header{"Content-Type": {"application/json"}, "Accept": {"application/json, text/event-stream"}, "Authorization": {"Bearer " + keyMedia}, "Mcp-Protocol-Version": {legacyProtocol}}
+	f.handler.ServeHTTP(w, r)
 }
