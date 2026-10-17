@@ -121,12 +121,8 @@ func (s *Spool) Admit(declared int64, cancel context.CancelCauseFunc) (*Sealed, 
 	if err := s.prepare(); err != nil {
 		return nil, err
 	}
-	var st syscall.Statfs_t
-	if err := s.statfs(s.dir, &st); err != nil {
-		return nil, fault("stage: the staging directory's filesystem could not be inspected", err, false)
-	}
-	if free, need := availableBytes(&st), uint64(limit); free < need || free-need < s.keep {
-		return nil, ErrSpace
+	if err := s.room(s.dir, uint64(limit)); err != nil {
+		return nil, err
 	}
 	f, err := s.create(limit, cancel)
 	if err != nil {
@@ -134,6 +130,34 @@ func (s *Spool) Admit(declared int64, cancel context.CancelCauseFunc) (*Sealed, 
 	}
 	s.live = f
 	return f, nil
+}
+
+func (s *Spool) Headroom(declared int64) error {
+	if declared < 1 || declared > maxDeclared {
+		return errDeclared
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.live != nil {
+		return ErrBusy
+	}
+	need := uint64(declared + overhead)
+	err := s.room(s.dir, need)
+	if errors.Is(err, fs.ErrNotExist) {
+		err = s.room(filepath.Dir(s.dir), need)
+	}
+	return err
+}
+
+func (s *Spool) room(dir string, need uint64) error {
+	var st syscall.Statfs_t
+	if err := s.statfs(dir, &st); err != nil {
+		return fault("stage: the staging directory's filesystem could not be inspected", err, false)
+	}
+	if free := availableBytes(&st); free < need || free-need < s.keep {
+		return ErrSpace
+	}
+	return nil
 }
 
 func (s *Spool) prepare() error {
