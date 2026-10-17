@@ -28,9 +28,15 @@ type ClientDeps struct {
 	Sender        SendService
 	SendRejected  func(reason string)
 	AuditFailed   func(action string, err error)
+	Media         *MediaDeps
 }
 
 func NewClientHandler(d ClientDeps) http.Handler {
+	p, _ := newClientHandler(d)
+	return p
+}
+
+func newClientHandler(d ClientDeps) (http.Handler, *reads) {
 	if d.Authenticator == nil || d.Metrics == nil || d.Archive == nil || d.Audit == nil || d.Session == nil || d.Sender == nil || d.SendRejected == nil || d.AuditFailed == nil {
 		panic("api: NewClientHandler needs an Authenticator, a metrics registry, an archive, an auditor, a session state, a sender, a rejection counter and an audit failure sink")
 	}
@@ -60,12 +66,15 @@ func NewClientHandler(d ClientDeps) http.Handler {
 		},
 		auditFailed: d.AuditFailed,
 	}
-	s := &reads{archive: d.Archive, cursors: d.Cursors, refs: d.Refs, searches: searches, session: d.Session}
+	s := &reads{archive: d.Archive, cursors: d.Cursors, refs: d.Refs, searches: searches, session: d.Session, now: now}
+	if d.Media != nil {
+		s.media = newMediaRegistry(*d.Media, d.Archive, d.Metrics, now)
+	}
 	w := &writes{reads: s, sender: d.Sender, rejected: d.SendRejected, now: now}
 	registerReads(p.router, s)
 	registerWrites(p.router, w)
 	p.router.mcp(mcpPattern, newMCPEndpoint(s, w, now, mcpCallDeadline))
-	return p
+	return p, s
 }
 
 type AdminDeps struct {

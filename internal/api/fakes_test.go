@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"slices"
@@ -97,11 +98,12 @@ func (a *fakeAuditor) recorded() []ReadEvent {
 }
 
 type fakeArchive struct {
-	mu       sync.Mutex
-	chats    []scoped.Chat
-	messages []scoped.Message
-	err      error
-	calls    []string
+	mu          sync.Mutex
+	chats       []scoped.Chat
+	messages    []scoped.Message
+	attachments []scoped.Attachment
+	err         error
+	calls       []string
 }
 
 func (f *fakeArchive) call(name string) error {
@@ -244,4 +246,27 @@ func (f *fakeArchive) Search(g policy.ReadGrant, _ context.Context, query scoped
 		page.Next = scoped.SearchPosition{Upper: page.Messages[limit-1].Position.Seq}
 	}
 	return page, true, nil
+}
+
+func (f *fakeArchive) Attachment(g policy.ReadGrant, ctx context.Context, chat policy.CanonicalChat, id string, sender policy.CanonicalChat, now time.Time) (scoped.Attachment, bool, error) {
+	if err := f.call("Attachment"); err != nil {
+		return scoped.Attachment{}, false, err
+	}
+	if err := ctx.Err(); err != nil || now.IsZero() {
+		return scoped.Attachment{}, false, cmp.Or(err, scoped.ErrInvalid)
+	}
+	if !g.Media() || !g.Allows(chat) {
+		return scoped.Attachment{}, false, nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, a := range f.attachments {
+		if a.Chat == chat && a.ID == id && a.Sender == sender {
+			if !a.Expires.After(now) {
+				a = scoped.Attachment{Chat: a.Chat, ID: a.ID, Sender: a.Sender}
+			}
+			return a, true, nil
+		}
+	}
+	return scoped.Attachment{}, false, nil
 }

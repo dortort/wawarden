@@ -29,6 +29,8 @@ func TestRoutesMatchTheGoldenList(t *testing.T) {
 			{pattern: "GET /v1/search", class: classRead},
 			{pattern: "GET /v1/changes", class: classRead},
 			{pattern: "GET /v1/messages/{mref}", class: classRead},
+			{pattern: "POST /v1/messages/{mref}/media", class: classRead},
+			{pattern: "GET /v1/messages/{mref}/media", class: classRead},
 			{pattern: "POST /v1/chats/{ref}/messages", class: classWrite},
 			{pattern: "POST /mcp", class: classMCP},
 		},

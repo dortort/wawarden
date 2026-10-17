@@ -68,6 +68,7 @@ type ReadArchive interface {
 	Message(g policy.ReadGrant, ctx context.Context, chat policy.CanonicalChat, id string, sender policy.CanonicalChat) (scoped.Message, bool, error)
 	Changes(g policy.ReadGrant, ctx context.Context, ref string, pos scoped.ChangePosition, limit int) (scoped.ChangePage, bool, error)
 	Search(g policy.ReadGrant, ctx context.Context, query scoped.Query, ref string, pos scoped.SearchPosition, limit int) (scoped.SearchPage, bool, error)
+	Attachment(g policy.ReadGrant, ctx context.Context, chat policy.CanonicalChat, id string, sender policy.CanonicalChat, now time.Time) (scoped.Attachment, bool, error)
 }
 
 type ReadLimits struct {
@@ -81,6 +82,8 @@ type reads struct {
 	refs     *cursor.Sealer
 	searches *ratelimit.Limiter
 	session  func() string
+	now      func() time.Time
+	media    *mediaRegistry
 }
 
 type readHandler func(context.Context, policy.ReadGrant, *Request) (dto.Response, policy.CanonicalChat, error)
@@ -99,6 +102,8 @@ func registerReads(rt *router, s *reads) {
 	rt.read("GET /v1/search", noted(actionSearch, s.search))
 	rt.read("GET /v1/changes", noted(actionChanges, s.changes))
 	rt.read("GET /v1/messages/{mref}", noted(actionMessage, s.message))
+	rt.read("POST "+mediaRoute, noted(actionMediaFetch, s.mediaStart))
+	rt.read("GET "+mediaRoute, noted(actionMedia, s.mediaRead))
 }
 
 func noted(action string, h readHandler) func(context.Context, policy.ReadGrant, *Request) (dto.Response, error) {
