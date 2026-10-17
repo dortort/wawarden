@@ -667,6 +667,7 @@ func TestAPurgeSharesItsLimitBetweenExpiredAndAgedReferences(t *testing.T) {
 		}
 	}
 }
+
 func TestPurgeMediaRefsRemovesEveryReferenceWhileDownloadsAreOff(t *testing.T) {
 	s := openStore(t)
 	for i := range 3 {
