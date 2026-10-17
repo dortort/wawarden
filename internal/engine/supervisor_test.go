@@ -1,10 +1,12 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -1440,6 +1442,58 @@ func TestConnectedBeforeConnectReturnsCounts(t *testing.T) {
 	if h.client.count("connect") != 2 {
 		t.Fatalf("calls %v, want a reconnect after the drop", h.client.history())
 	}
+}
+
+func TestOverlappingGaugeUpdatesEndAtTheLatestState(t *testing.T) {
+	h := newSupRig(t)
+	h.versions(versionResult{v: current})
+	h.s.begin(t.Context(), 1)
+	if !h.s.step(t.Context()) {
+		t.Fatal("no version refresh step")
+	}
+	read, release := make(chan struct{}), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(unblock)
+	h.client.onConnect = func() { h.client.holdNextPaired(false, func() { close(read); <-release }) }
+	stepped, handled := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(stepped)
+		h.s.step(t.Context())
+	}()
+	eventually(t, "the connect step's gauge update has read the device", closed(read))
+	h.client.setPaired(true)
+	go func() {
+		defer close(handled)
+		h.deliver(Connected{})
+	}()
+	eventually(t, "the Connected update has finished or waits for the step's", func() bool { return closed(handled)() || waitingForTheGauges() })
+	unblock()
+	eventually(t, "both gauge updates have returned", func() bool { return closed(stepped)() && closed(handled)() })
+	h.want(StateConnected, "")
+	if p, c := h.counter("wawarden_paired"), h.counter("wawarden_connected"); p != 1 || c != 1 {
+		t.Fatalf("paired gauge %v and connected gauge %v while paired and connected, want 1 and 1", p, c)
+	}
+}
+
+func closed(ch <-chan struct{}) func() bool {
+	return func() bool {
+		select {
+		case <-ch:
+			return true
+		default:
+			return false
+		}
+	}
+}
+
+func waitingForTheGauges() bool {
+	buf := make([]byte, 1<<20)
+	for g := range bytes.SplitSeq(buf[:runtime.Stack(buf, true)], []byte("\n\n")) {
+		if bytes.Contains(g, []byte("engine.(*supervisor).updateGauges(")) && bytes.Contains(g, []byte("sync.(*Mutex).Lock(")) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestConcurrentEventsAndCommands(t *testing.T) {

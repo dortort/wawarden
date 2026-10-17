@@ -93,6 +93,9 @@ type supervisor struct {
 
 	pairMu sync.Mutex
 
+	gaugeMu   sync.Mutex
+	wasPaired bool
+
 	mu         sync.Mutex
 	ctx        context.Context
 	state      State
@@ -108,7 +111,6 @@ type supervisor struct {
 	awaiting   bool
 	rejected   bool
 	loggingOut bool
-	wasPaired  bool
 	pairs      []time.Time
 	cancelStep context.CancelFunc
 }
@@ -203,14 +205,16 @@ func (s *supervisor) wake() {
 }
 
 func (s *supervisor) updateGauges() {
-	paired := s.client.Paired()
+	s.gaugeMu.Lock()
 	s.mu.Lock()
 	connected := s.state == StateConnected
+	s.mu.Unlock()
+	paired := s.client.Paired()
 	lost := s.wasPaired && !paired
 	s.wasPaired = paired
-	s.mu.Unlock()
 	s.paired.Set(gauge(paired))
 	s.connected.Set(gauge(connected))
+	s.gaugeMu.Unlock()
 	if lost {
 		s.notify.Unpaired()
 	}
