@@ -610,8 +610,9 @@ whether it pairs the wrong account.
   another member; the owner's revocation, a group admin's and a plain member's;
   a revocation naming another chat; a reaction; a poll and a vote; a
   disappearing message; a photo with a caption; a status broadcast and a
-  newsletter post; a revocation without a target; and a member joining the
-  group. After the first ten events it drops the connection once, and the
+  newsletter post; a revocation without a target; a voice note, a video, a
+  PDF, a sticker, a JPEG sent as a document, a corrupt JPEG sent as a document
+  and an attachment that answers expired; and a member joining the group. After the first ten events it drops the connection once, and the
   engine reconnects with its usual backoff. An event the engine leaves
   unacknowledged is offered again at the next step, as WhatsApp would deliver it
   again.
@@ -621,6 +622,15 @@ whether it pairs the wrong account.
   primary device), a blob that inflates past `WAWARDEN_HISTORY_MAX_BYTES`, and
   a poison blob that the fake's decoder refuses. The last two fail three times
   and are quarantined, each with a `quarantine` event.
+- **Attachments.** With `WAWARDEN_MEDIA_MAX_BYTES` above `0`, the engine
+  keeps the references of the photo and of the seven attachments, and a
+  [fetch](api.md#attachments) returns synthetic bytes built in memory: an 8x8
+  grey JPEG for the photo and, whole, for the JPEG document; its first half for
+  the corrupt one, which the normaliser refuses so that it is served raw; an
+  Ogg Opus voice note without audio; a 16x16 WebP sticker; and a video and a
+  PDF of 8 MiB and 64 KiB each, so that `get_attachment` sends them in two
+  parts. The last attachment answers expired, and a fetch while not connected
+  answers not connected.
 - **Identity.** The script opens with the owner's identity: the owner's number
   paired with the synthetic LID `100000000000020@lid`.
 - **Sends and history requests.** While connected for the owner, a send to
@@ -636,7 +646,7 @@ whether it pairs the wrong account.
 
 When the script has played, within about 15 seconds of pairing, the fake stays
 connected and sends nothing more: `wawarden admin status` reports `connected`,
-3 chats, 17 messages and 2 history blobs quarantined. Every identity the fake
+3 chats, 24 messages and 2 history blobs quarantined. Every identity the fake
 uses is synthetic: its contacts are `+15550100021`, `+15550100022` and
 `+15550100023`, its LIDs are `100000000000020` to `100000000000022`, and an
 owner number among the contacts, or `+15550100029`, stops the start with
