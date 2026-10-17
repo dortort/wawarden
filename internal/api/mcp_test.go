@@ -1325,6 +1325,22 @@ func TestGetAttachmentAnswersUnavailableForAJobWhoseFetchExpiredItsReference(t *
 	requireWriterError(t, f.get(keyMedia, "MEDIA1", nil), http.StatusNotFound, codeMediaUnavailable)
 }
 
+func TestGetAttachmentAnswersMediaExpiredToTheCallThatWaitedForTheFetch(t *testing.T) {
+	f := newMCPMediaFixture(t, mediaOptions{})
+	f.attach("MEDIA1", "document", smallSize)
+	cs, _ := f.session(keyMedia, protocols[0])
+	done := make(chan *mcp.CallToolResult, 1)
+	go func() {
+		res, _ := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: toolGetAttachment, Arguments: f.attachmentArgs(keyMedia, "MEDIA1")})
+		done <- res
+	}()
+	f.fetches(1)
+	f.withdraw("MEDIA1", true)
+	f.media.answer("MEDIA1", fetchAnswer{err: ErrMediaExpired})
+	requireAttachmentError(t, <-done, codeMediaExpired)
+	requireAttachmentError(t, call(t, cs, toolGetAttachment, f.attachmentArgs(keyMedia, "MEDIA1")), codeMediaUnavailable)
+}
+
 func TestGetAttachmentAuditsTheMessageAndTheInlineBytes(t *testing.T) {
 	f := newMCPMediaFixture(t, mediaOptions{})
 	f.attach("MEDIA1", "document", smallSize)
