@@ -607,10 +607,6 @@ func (m *mediaRegistry) startDelivery(j *mediaJob, transport string, length int6
 	return m.reserveDelivery(j, transport, wholeFile, length)
 }
 
-func (m *mediaRegistry) startPart(j *mediaJob, part int, length int64) (func(sent int64, complete bool), error) {
-	return m.reserveDelivery(j, transportMCP, part, length)
-}
-
 func (m *mediaRegistry) reserveDelivery(j *mediaJob, transport string, part int, length int64) (func(sent int64, complete bool), error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1040,7 +1036,7 @@ func tooLargeForInline(req MediaFetch) mediaAnswer {
 	}, outcome: reasonTooLargeForInline}
 }
 
-func (m *mediaRegistry) inline(v mediaView, hold *mediaHold, limits inlineLimits) (answer mediaAnswer, err error) {
+func (m *mediaRegistry) inline(v mediaView, hold *mediaHold, limits inlineLimits) (mediaAnswer, error) {
 	info := v.status().AttachmentInfo
 	form := inlineForm(v.servedType, v.normalised, v.size, limits)
 	if hold == nil || form == formNone {
@@ -1051,44 +1047,34 @@ func (m *mediaRegistry) inline(v mediaView, hold *mediaHold, limits inlineLimits
 		}
 		return mediaAnswer{info: info, outcome: deliveryMetadata}, nil
 	}
-	d := &deliveryHold{m: m}
-	defer func() {
-		if answer.hold == nil {
-			d.release(false)
-		}
-	}()
-	select {
-	case m.permit <- struct{}{}:
-		d.permit = true
-	default:
-		return mediaAnswer{}, errBusy
-	}
-	finish, err := m.startDelivery(v.job, transportMCP, v.size)
-	switch {
-	case errors.Is(err, errMediaNotRequested):
-		return mediaAnswer{}, errBusy
-	case err != nil:
+	data, d, err := m.encode(v, hold, wholeFile, 0, v.size)
+	if err != nil {
 		return mediaAnswer{}, err
 	}
-	d.finish, d.length = finish, v.size
-	data := make([]byte, v.size)
-	if n, err := (jobReader{m: m, job: v.job}).ReadAt(data, 0); int64(n) < v.size || err != nil && !errors.Is(err, io.EOF) {
-		return mediaAnswer{}, readRefusal(err)
-	}
-	d.job = hold
 	info.Delivery, info.Length = deliveryInline, v.size
 	return mediaAnswer{info: info, data: data, hold: d, outcome: deliveryInline}, nil
 }
 
-func (m *mediaRegistry) part(v mediaView, hold *mediaHold, k int) (answer mediaAnswer, err error) {
+func (m *mediaRegistry) part(v mediaView, hold *mediaHold, k int) (mediaAnswer, error) {
 	if k < 0 || k >= partsOf(v.size) {
 		return mediaAnswer{}, errPartOutOfRange
 	}
 	offset := int64(k) * mediaPartSize
 	length := min(mediaPartSize, v.size-offset)
+	data, d, err := m.encode(v, hold, k, offset, length)
+	if err != nil {
+		return mediaAnswer{}, err
+	}
+	info := v.status().AttachmentInfo
+	info.Delivery, info.Offset, info.Length = deliveryPart, offset, length
+	return mediaAnswer{info: info, data: data, hold: d, outcome: deliveryPart}, nil
+}
+
+func (m *mediaRegistry) encode(v mediaView, hold *mediaHold, part int, offset, length int64) ([]byte, *deliveryHold, error) {
 	d := &deliveryHold{m: m}
+	encoded := false
 	defer func() {
-		if answer.hold == nil {
+		if !encoded {
 			d.release(false)
 		}
 	}()
@@ -1096,24 +1082,22 @@ func (m *mediaRegistry) part(v mediaView, hold *mediaHold, k int) (answer mediaA
 	case m.permit <- struct{}{}:
 		d.permit = true
 	default:
-		return mediaAnswer{}, errBusy
+		return nil, nil, errBusy
 	}
-	finish, err := m.startPart(v.job, k, length)
+	finish, err := m.reserveDelivery(v.job, transportMCP, part, length)
 	switch {
 	case errors.Is(err, errMediaNotRequested):
-		return mediaAnswer{}, errBusy
+		return nil, nil, errBusy
 	case err != nil:
-		return mediaAnswer{}, err
+		return nil, nil, err
 	}
 	d.finish, d.length = finish, length
 	data := make([]byte, length)
 	if n, err := (jobReader{m: m, job: v.job}).ReadAt(data, offset); int64(n) < length || err != nil && !errors.Is(err, io.EOF) {
-		return mediaAnswer{}, readRefusal(err)
+		return nil, nil, readRefusal(err)
 	}
-	d.job = hold
-	info := v.status().AttachmentInfo
-	info.Delivery, info.Offset, info.Length = deliveryPart, offset, length
-	return mediaAnswer{info: info, data: data, hold: d, outcome: deliveryPart}, nil
+	d.job, encoded = hold, true
+	return data, d, nil
 }
 
 func readRefusal(err error) error {
