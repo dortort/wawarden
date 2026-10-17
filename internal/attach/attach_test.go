@@ -979,6 +979,7 @@ func TestMP4MetadataBoxesBecomeFree(t *testing.T) {
 		{"polyglot trailer", "", cat(file, []byte("<html>SYNTHETIC-POLYGLOT</html>")), want, typeMP4},
 		{"zip trailer", "gif", cat(file, []byte("PK\x03\x04"+trailerMarker)), want, typeMP4},
 		{"short trailer", "video_note", cat(file, []byte("\x00\x00\x01")), want, typeMP4},
+		{"binary-typed trailer box", "", cat(file, be32(8+len(trailerMarker)), []byte("\x00\x01\x02\x03"), []byte(trailerMarker)), want, typeMP4},
 		{"last box to the end of the file", "", toEOF, blanked(toEOF), typeMP4},
 		{"large size", "", cat(large, []byte("trailer")), blanked(large), typeMP4},
 		{"quicktime brand", "", quicktime, blanked(quicktime), typeOctetStream},
