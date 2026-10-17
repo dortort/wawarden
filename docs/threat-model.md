@@ -487,7 +487,11 @@ alert on.
     runs until the sweep that runs every minute drops the job of a revoked or
     expired client, then stops at its next chunk
     ([Attachments](api.md#attachments)); tested in
-    `internal/api/media_test.go` and `internal/app/media_test.go`.
+    `internal/api/media_test.go` and `internal/app/media_test.go`. A
+    `get_attachment` result that already carries the file is still written,
+    at most 25 seconds after its call started plus 30 seconds to write it
+    ([get_attachment](api.md#get_attachment)); tested in
+    `internal/api/mcp_test.go`.
   - Tested with the real client list in `internal/store/admin/cache_test.go`,
     `internal/store/scoped/auth_http_test.go` and
     `internal/api/pipeline_test.go`.
@@ -868,11 +872,15 @@ scoped-read-path rule cannot see.
   `FormValue`, `PostFormValue`, `FormFile` or `MultipartReader`.
   `internal/api` may import neither `text/template` nor `html/template`.
 - The MCP library's registration surface is confined. The server's `AddTool`
-  method and the package's generic `AddTool` may appear only inside `readTool`
-  and `writeTool` in `internal/api/tools.go`. The server's construction and
-  middleware may appear only inside `newMCPEndpoint` in `internal/api/mcp.go`.
-  Prompts, resources and custom methods appear nowhere. Each of the endpoint's
-  two servers admits exactly the tool names its helpers recorded.
+  method and the package's generic `AddTool` may appear only inside
+  `readTool`, `writeTool` and `mediaTool` in `internal/api/tools.go`. The
+  server's construction and middleware may appear only inside `newMCPEndpoint`
+  in `internal/api/mcp.go`. Prompts, resources and custom methods appear
+  nowhere. Each of the endpoint's four servers admits exactly the tool names
+  its helpers recorded. The image, audio and embedded resource blocks, and
+  resource contents, may be built only inside `mediaBlock` in
+  `internal/api/tools.go`, which builds an image block only from an image the
+  content policy re-encoded.
 
 **Protects.** I-0, I-1, I-2, I-4.
 
@@ -1456,16 +1464,19 @@ no listener can be opened for it to serve.
 
 **Mechanism.** The `tools/list` answer, with every tool's name, description,
 annotations and input and output schemas, is built from string constants and
-Go types, never from data. It depends only on whether the client may write.
-Every client sees the five read tools, `list_chats`, `get_chat`,
-`get_messages`, `search_messages` and `get_changes`. A client with a write
-grant also sees `send_message`.
+Go types, never from data. It depends only on whether the client may write and
+whether it may fetch attachments. Every client sees the five read tools,
+`list_chats`, `get_chat`, `get_messages`, `search_messages` and
+`get_changes`. A client with a write grant also sees `send_message`, and a
+client with `allow_media` also sees `get_attachment` while downloads are on.
 
 **Protects.** I-5.
 
 **Enforced by.** A test fetches the answer through the mounted endpoint for a
-client with listed chats, an all-chats client and a write client. It compares
-each with a committed golden file with sorted keys
+client with listed chats, an all-chats client and a write client, each with
+and without `allow_media` and with downloads on and off. The three lists
+without `get_attachment` stay one golden file each, and the three with it have
+their own. It compares each with a committed golden file with sorted keys
 (`internal/api/testdata/mcp`). It refuses a tool name outside `[a-z0-9_]`,
 checks that no chat name or reference of the fixture appears, and refuses to
 run with `MCPGODEBUG` or `JSONSCHEMAGODEBUG` set (`internal/api/mcp_test.go`).
@@ -2222,12 +2233,26 @@ and account standing.
   only with `MCPGODEBUG` and `JSONSCHEMAGODEBUG` unset.
 - **No logger.** The MCP library is given no logger in its server or handler
   options, so its log output is discarded.
-- **Two servers.** The endpoint holds two servers built at start. One has the
-  five read tools, `list_chats`, `get_chat`, `get_messages`, `search_messages`
-  and `get_changes`. The other adds `send_message`. The endpoint picks the
-  second for a request only when `DecideWrite` grants its client. For every
-  other client, a `send_message` call is the same `unknown tool` error, byte
-  for byte, with the same audit reason as any unknown name.
+- **Four servers.** The endpoint holds four servers built at start. Each has
+  the five read tools, `list_chats`, `get_chat`, `get_messages`,
+  `search_messages` and `get_changes`. One adds `send_message`, one
+  `get_attachment`, and one both. The endpoint picks a server with
+  `send_message` for a request only when `DecideWrite` grants its client, and
+  one with `get_attachment` only when downloads are on and `DecideRead` grants
+  its client media. For every other client, a call of the missing tool is the
+  same `unknown tool` error, byte for byte, with the same audit reason as any
+  unknown name.
+- **Delivery hold.** The MCP library writes a tool result after the handler
+  returns. A `get_attachment` result that carries a file is published on the
+  request's exchange, under its lock and only while the request is live,
+  after its write deadline was renewed to 30 seconds. The endpoint releases
+  the result's permit, job delivery and job hold only after the library's
+  handler returns: at once when the response was written, counting the
+  delivery complete only when every byte was accepted and the audit row
+  committed; otherwise from a recovered goroutine after the tool's handler
+  returns and a 2-second settle, without completing the job and without
+  clearing its bytes. An erase while the hold is out defers the clear to its
+  release.
 - **One key, one send.** The idempotency store keys a send by client id and
   idempotency key alone. So one client's key names one send, whichever
   protocol carries it. Of concurrent reservations of one key, exactly one
@@ -2242,7 +2267,13 @@ and account standing.
   (`internal/api/mcp_test.go`). They cover the uniform refusals, the body
   checks, refused methods, `no-store`, a non-loopback `Host`, one audit row per
   POST, and concurrent reservations. They also compare a hidden
-  `send_message` byte for byte with an unknown tool.
+  `send_message`, and a hidden `get_attachment`, byte for byte with an
+  unknown tool.
+- Tests that pause a published `get_attachment` result before the library
+  writes it, erase its job by each path, and find the bytes intact until the
+  release; that a concurrent call answers `busy` and drops its hold; and that
+  an orphaned, unwritten or unaudited result, a closed exchange and a panic
+  release everything without completing the job (`internal/api/mcp_test.go`).
 - The `confined-imports`, `handler-ownership` and `mcp-registration`
   architecture rules, and `depguard`.
 - The `mcp-logger` architecture rule, which refuses a logger in the MCP
@@ -2266,6 +2297,11 @@ and account standing.
   - recovers a panic through `safego`, since the MCP library runs tools on its
     own goroutine, where an unrecovered panic would stop the process;
   - answers with one fixed code in `content[0].text`.
+- `get_attachment` goes through `mediaTool`, which checks `message` against
+  its bound (1 to 640 characters), mints the read grant, gives the call 25
+  seconds, recovers a panic the same way, and answers the routes' fixed codes
+  with an empty status. Its result brackets the status and the file between
+  constant texts, marks the block `wawarden/untrusted`, and echoes no argument.
 - The tools call the same code as the REST routes, so scope, cursor binding
   and denied-equals-missing are the routes'.
 - Argument values, schema-validation text, store errors and panic values never
@@ -2280,6 +2316,9 @@ and account standing.
   the route's fixed codes. For `409`, `429` and `503` it adds
   `retry_after_seconds` in `structuredContent`.
 - Every tool but `send_message` carries `readOnlyHint`.
+- A hold, a permit or a job delivery taken by a `get_attachment` call that
+  publishes no file, through `busy`, a cap, an error or a panic, is released
+  before the call returns.
 
 **Protects.** I-1, I-2, I-4, I-5.
 
@@ -2293,7 +2332,8 @@ and account standing.
   endpoint answers the next call, and that a stalled read answers `busy` at the
   deadline.
 - A test that takes every tool from `tools/list`, for a read-only and a write
-  client, and checks its annotations, output schema and failure answers.
+  client, with and without `allow_media`, and checks its annotations, output
+  schema and failure answers.
 - The MCP property of [row 7](#7-property-tests), and the `mcp-registration`
   rule of [row 2](#2-registration-helpers).
 
@@ -2641,7 +2681,8 @@ This subsection is the canonical statement of what the protocol library
     their panics ([row 25](#25-mcp-tool-calls-fail-closed)), but a panic in the
     MCP library's own code would stop the process.
   - A client that disconnects does not cancel a running tool call, which ends
-    at its 10-second deadline.
+    at its 10-second deadline, or 25 seconds for `send_message` and
+    `get_attachment`.
   - The MCP library also checks a token's expiry against the wall clock, after
     the service checked it on its injected clock. A token that expires between
     the two checks gets the MCP library's plain-text `401`.
@@ -2693,7 +2734,11 @@ This subsection is the canonical statement of what the protocol library
   commits finishes with its grant, within the 2-second read deadline. An
   attachment delivery in flight keeps sending until the next minute's sweep
   drops its job, and the chunk it is writing then can take up to 30 more
-  seconds.
+  seconds. A `get_attachment` result already published with its file is still
+  written, up to 25 seconds after its call started plus 30 seconds to write
+  it, and its job's bytes stay in memory until then. A spool dropped without
+  clearing after an orphaned result stays on the heap until the next garbage
+  collection.
 
 ### Timing and volume
 
