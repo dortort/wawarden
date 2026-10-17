@@ -178,32 +178,12 @@ func (f *fakeDownloads) parts(i int, served string, whole []byte) {
 	}
 }
 
-type listedMessage struct {
-	Ref  string `json:"mref"`
-	TS   string `json:"ts"`
-	Kind string `json:"kind"`
-}
-
 func fakeMediaRefs(t *testing.T, to netip.AddrPort, auth http.Header) []string {
 	t.Helper()
-	var chats struct {
-		Chats []struct {
-			ID string `json:"id"`
-		} `json:"chats"`
-	}
-	if r := mustDo(t, http.MethodGet, to, "/v1/chats", auth); r.status != http.StatusOK || json.Unmarshal([]byte(r.body), &chats) != nil || len(chats.Chats) != 1 {
-		t.Fatalf("GET /v1/chats = %d %s", r.status, r.body)
-	}
-	var page struct {
-		Messages []listedMessage `json:"messages"`
-	}
-	if r := mustDo(t, http.MethodGet, to, "/v1/chats/"+chats.Chats[0].ID+"/messages", auth); r.status != http.StatusOK || json.Unmarshal([]byte(r.body), &page) != nil {
-		t.Fatalf("GET messages = %d %s", r.status, r.body)
-	}
-	page.Messages = slices.DeleteFunc(page.Messages, func(m listedMessage) bool { return m.Kind != "media" })
-	slices.SortFunc(page.Messages, func(a, b listedMessage) int { return strings.Compare(a.TS, b.TS) })
+	listed := slices.DeleteFunc(onlyChatMessages(t, to, auth), func(m listedMessage) bool { return m.Kind != "media" })
+	slices.SortFunc(listed, func(a, b listedMessage) int { return strings.Compare(a.TS, b.TS) })
 	var refs []string
-	for _, m := range page.Messages {
+	for _, m := range listed {
 		refs = append(refs, m.Ref)
 	}
 	if len(refs) != fakeAttachment {
