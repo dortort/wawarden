@@ -566,21 +566,21 @@ func TestABackfillAnchoredAtAPlayedMessageRedeliversTheMessagesBeforeIt(t *testi
 	direct = direct[1:]
 	slices.Reverse(direct)
 	for _, count := range []int{3, maxBackfill} {
-		id, err := c.Backfill(t.Context(), engine.BackfillRequest{Chat: aliceLID, AnchorID: anchor.ID, AnchorTime: anchor.Timestamp, Count: count})
+		req := engine.BackfillRequest{Chat: aliceLID, AnchorID: anchor.ID, AnchorTime: anchor.Timestamp, Count: count}
+		id, err := c.Backfill(t.Context(), req)
 		if err != nil {
 			t.Fatalf("Backfill: %v", err)
 		}
 		answer, ok := r.next(t).(engine.HistoryNotification)
-		if !ok || answer.Ref.RequestID != id {
-			t.Fatalf("answer %+v", answer)
+		c.mu.Lock()
+		asked := c.answers[answer.Ref.ID]
+		c.mu.Unlock()
+		if !ok || answer.Ref.RequestID != id || asked != req {
+			t.Fatalf("answer %+v to %+v, want one to %+v", answer, asked, req)
 		}
-		var b bytes.Buffer
-		if err := c.DownloadHistory(t.Context(), answer.Ref, &b); err != nil {
-			t.Fatalf("DownloadHistory: %v", err)
-		}
-		h, err := c.Decode(inflated(t, b.Bytes(), historyCap+1))
-		if err != nil || len(h.Conversations) != 1 || h.Conversations[0].Chat != aliceLID {
-			t.Fatalf("the answer's history %+v, %v", h, err)
+		h := c.answer(answer.Ref.ID, asked)
+		if len(h.Conversations) != 1 || h.Conversations[0].Chat != aliceLID {
+			t.Fatalf("the answer's history %+v", h)
 		}
 		var got []string
 		for _, m := range h.Conversations[0].Messages {
