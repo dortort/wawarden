@@ -16,6 +16,7 @@ its image digest and the commands to verify and reproduce it.
 
 ## Contents
 
+- [Unreleased](#unreleased)
 - [1.3.0 - 2026-10-18](#130---2026-10-18)
 - [1.2.0 - 2026-10-18](#120---2026-10-18)
 - [1.1.0 - 2026-10-15](#110---2026-10-15)
@@ -23,6 +24,19 @@ its image digest and the commands to verify and reproduce it.
 - [0.3.0 - 2026-10-11](#030---2026-10-11)
 - [0.2.0 - 2026-10-06](#020---2026-10-06)
 - [0.1.0 - 2026-10-04](#010---2026-10-04)
+
+## [Unreleased]
+
+### Fixed
+
+- The 1.3.0 documentation said that a newest-anchored backfill gives a media
+  reference to any re-delivered attachment the archive holds without one.
+  Against a live account, in group chats, only the attachments of messages
+  from before the device was linked gained one; those of messages the device
+  had received itself, while downloads were off, gained none. The README, the
+  runbook, the CLI, configuration, API and internals references and the
+  threat model now say so (see
+  [Backfill requests](docs/api.md#backfill-requests)).
 
 ## [1.3.0] - 2026-10-18
 
@@ -524,6 +538,7 @@ Built from commit `d0d5514` with go1.27.1. Released under the MIT licence.
 - Release builds prove the `dev` build tag absent. The container image runs
   as a non-root user on a distroless base with a read-only root filesystem.
 
+[Unreleased]: https://github.com/dortort/wawarden/compare/v1.3.0...HEAD
 [1.3.0]: https://github.com/dortort/wawarden/releases/tag/v1.3.0
 [1.2.0]: https://github.com/dortort/wawarden/releases/tag/v1.2.0
 [1.1.0]: https://github.com/dortort/wawarden/releases/tag/v1.1.0
