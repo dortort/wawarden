@@ -98,7 +98,8 @@ and the previous row's HMAC, under a key derived from the
 
 ## Backfill
 
-A request to the owner's phone for older messages of one chat, made with
+A request to the owner's phone for the messages of one chat that come before
+its oldest archived message or, with `--anchor newest`, its newest, made with
 `wawarden admin backfill`. The phone answers, when it does, with a
 [history blob](#history-blob). Requests have a quota of one every 5 minutes
 and 20 a day. See [`admin backfill`](cli.md#admin-backfill).
