@@ -310,9 +310,9 @@ the engine rejects and logs out. Release builds refuse
   `wawarden admin backfill --anchor newest` re-delivers its message, within
   the 50 messages before the chat's newest and while the message is younger
   than `WAWARDEN_MEDIA_REF_RETENTION_DAYS`, unless it is view-once, over the
-  size cap, revoked, expired or no longer held by WhatsApp's media host. An
-  attachment the device received itself while downloads were off stays
-  without a reference (see [the runbook](docs/runbook.md#other-incidents)).
+  size cap, revoked, expired or no longer held by WhatsApp's media host.
+  Against a live account, one the device received itself while downloads
+  were off gained none (see [the runbook](docs/runbook.md#other-incidents)).
 - **Sending.** A client with write chats sends text, once per idempotency key,
   behind a pacer and send budgets (see [sending](docs/api.md#sending) and
   [ban risk](docs/ban-risk.md)).

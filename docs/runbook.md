@@ -89,8 +89,9 @@ clients depend on the service
   received before downloads were on, or while they were off, answers
   `media_unavailable`. A newest-anchored backfill can give one to an
   attachment of a message from before the device was linked (up to 50
-  messages a request, and only within the reference retention), not to one
-  the device received itself; see [Other incidents](#other-incidents).
+  messages a request, and only within the reference retention); against a
+  live account it gave none to one the device received itself. See
+  [Other incidents](#other-incidents).
 
 Keep a copy of `keys/master` off the host once the first start has created it.
 Do the same for `keys/retired/` after each
@@ -884,10 +885,10 @@ copies it, so a dropped post loses no event from the output.
   messages from before the device was linked, which arrived with the history
   synced at pairing, can gain one. With downloads on, ask the phone for the
   messages before the newest one the archive holds; each attachment that
-  arrives again gains a reference, unless it is
-  view-once, over the size cap of `WAWARDEN_MEDIA_MAX_BYTES` (and of 16 MiB
-  for an image or 1 MiB for a sticker), revoked, expired, marked gone when a
-  fetch under v1.3.0 or later answered `media_expired`, or older than
+  arrives again gains a reference, unless it is view-once, over the size cap
+  of `WAWARDEN_MEDIA_MAX_BYTES` (and of 16 MiB for an image or 1 MiB for a
+  sticker), revoked, expired, marked gone when a fetch under v1.3.0 or later
+  answered `media_expired`, or older than
   `WAWARDEN_MEDIA_REF_RETENTION_DAYS`:
 
   ```sh
@@ -898,6 +899,6 @@ copies it, so a dropped post loses no event from the output.
   asking again reaches the same ones until a newer message arrives. Against a
   live account, the phone's answer gave no reference to the attachments of
   messages the device had received itself, so an attachment that arrived
-  after pairing while downloads were off stays without one. The server
+  after pairing while downloads were off stayed without one. The server
   must be v1.3.0 or later: an earlier one refuses the anchor with
   `invalid_body`.
