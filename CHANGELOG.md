@@ -31,7 +31,7 @@ its image digest and the commands to verify and reproduce it.
 
 - The 1.3.0 documentation said that a newest-anchored backfill gives a media
   reference to any re-delivered attachment the archive holds without one.
-  Against a live account, in group chats, only the attachments of messages
+  On one live account, in group chats, only the attachments of messages
   from before the device was linked gained one; those of messages the device
   had received itself, while downloads were off, gained none. The README, the
   runbook, the CLI, configuration, API and internals references and the
