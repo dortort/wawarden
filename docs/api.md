@@ -593,7 +593,7 @@ it gave none. Every request also costs one [read](#read-rate-limits).
 |---|---|
 | `409` `media_not_requested` | The client has no job for the message: none was started, or it was erased. |
 | `202` status with `Retry-After: 2` | The job is still fetching. |
-| `410` `media_expired` | WhatsApp no longer holds the file: its media host answered `403`, `404` or `410`, and the message's reference is marked expired. |
+| `410` `media_expired` | WhatsApp no longer holds the file: its media host answered `403`, `404` or `410`, and the message's reference is marked expired. No later copy of the message, a backfill's included, gains a reference again. |
 | `502` `media_failed` | The fetch failed: an integrity check, a size or time limit, or a staging error. |
 | `422` `media_unsupported` | The content policy refused an image, a sticker or a video. |
 | `422` `media_too_large` | The adapter refused the file's declared size as over its cap. |
@@ -1222,10 +1222,13 @@ then by arrival. The answer does not hold the anchor itself.
 
 A `"newest"` backfill re-delivers messages the archive may already hold. Each
 is archived once: a message already in the archive keeps its row and can gain
-only a [media reference](internals.md#media-reference), when it has none,
-downloads are on (`WAWARDEN_MEDIA_MAX_BYTES` above 0), its row is an
-attachment that is neither revoked nor expired, and the message is younger
-than `WAWARDEN_MEDIA_REF_RETENTION_DAYS`. This is how an attachment received
+only a [media reference](internals.md#media-reference), under the rules a
+message gets at receipt: downloads are on (`WAWARDEN_MEDIA_MAX_BYTES` above
+0), the attachment is not view-once and its declared size is within the
+[effective cap](#attachments). It gains one only when it has none, its row is
+an attachment that is not revoked, has not expired and whose media host never
+answered `403`, `404` or `410` to a fetch, and the message is younger than
+`WAWARDEN_MEDIA_REF_RETENTION_DAYS`. This is how an attachment received
 before downloads were on, or while they were off, becomes downloadable; see
 the [runbook](runbook.md#other-incidents).
 
