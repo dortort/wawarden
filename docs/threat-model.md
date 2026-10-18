@@ -593,7 +593,8 @@ guards and how its misuse shows.
     WhatsApp again each time;
   - create and revoke clients, writing ones included, and list every chat's
     identifier and name;
-  - request a history backfill, within its quotas;
+  - request a history backfill before a chat's oldest or newest archived
+    message, within one set of quotas shared by both;
   - pause and resume attachment downloads. A pause erases every attachment
     job at once and makes every new fetch answer `busy`. It is held in memory
     only, so a restart resumes downloads (see
@@ -2700,7 +2701,7 @@ subject.
   the client version at run time for the common case.
 - **Backfill depends on the owner's phone.** `POST /admin/v1/backfill` sends a
   history request to the owner's primary device, at most one every 5 minutes
-  and 20 a day, and only the administrator can make one.
+  and 20 a day whichever its anchor, and only the administrator can make one.
   - The phone answers when it processes the request, possibly after a long
     time or never. How long WhatsApp keeps a request for an offline phone is
     not known.
@@ -2709,6 +2710,11 @@ subject.
     verified here. An unanswered request stays counted and incomplete.
   - Which chat identifier form, phone number or LID, the phone expects for a
     direct chat is not verified either.
+  - A newest-anchored request reaches at most the 50 messages before the
+    chat's newest one, so an older attachment received before downloads were
+    on keeps no reference. That the phone's answer carries the attachment
+    descriptors of the messages it re-delivers, so that they gain one, is not
+    verified against a live account.
 - **Limits that WhatsApp does not publish.** The text cap of 4096 characters
   and 8192 bytes is this service's policy. WhatsApp's own limit is not known,
   nor how it renders a reply to a media message, which the service never
