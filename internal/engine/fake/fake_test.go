@@ -531,3 +531,66 @@ func TestABackfillIsAnsweredOnceWithOlderHistory(t *testing.T) {
 		}
 	}
 }
+
+func TestABackfillAnchoredAtAPlayedMessageRedeliversTheMessagesBeforeIt(t *testing.T) {
+	c, r := connected(t)
+	var played []engine.Event
+	for {
+		ev := r.next(t)
+		played = append(played, ev)
+		if _, ok := ev.(engine.Disconnected); ok {
+			break
+		}
+	}
+	if err := c.Connect(t.Context()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if _, ok := r.next(t).(engine.Connected); !ok {
+		t.Fatal("a reconnection did not start with Connected")
+	}
+	for len(played) < len(c.script) {
+		played = append(played, r.next(t))
+	}
+	r.quiet(t)
+	key := func(m engine.Message) string {
+		return m.ID + " " + m.Sender + " " + m.MediaRef + " " + m.Timestamp.UTC().Format(time.RFC3339Nano)
+	}
+	var direct []string
+	var anchor engine.Message
+	for _, ev := range played {
+		if m, ok := ev.(engine.Message); ok && m.Chat == alice {
+			direct = append(direct, key(anchor))
+			anchor = m
+		}
+	}
+	direct = direct[1:]
+	slices.Reverse(direct)
+	for _, count := range []int{3, maxBackfill} {
+		id, err := c.Backfill(t.Context(), engine.BackfillRequest{Chat: aliceLID, AnchorID: anchor.ID, AnchorTime: anchor.Timestamp, Count: count})
+		if err != nil {
+			t.Fatalf("Backfill: %v", err)
+		}
+		answer, ok := r.next(t).(engine.HistoryNotification)
+		if !ok || answer.Ref.RequestID != id {
+			t.Fatalf("answer %+v", answer)
+		}
+		var b bytes.Buffer
+		if err := c.DownloadHistory(t.Context(), answer.Ref, &b); err != nil {
+			t.Fatalf("DownloadHistory: %v", err)
+		}
+		h, err := c.Decode(inflated(t, b.Bytes(), historyCap+1))
+		if err != nil || len(h.Conversations) != 1 || h.Conversations[0].Chat != aliceLID {
+			t.Fatalf("the answer's history %+v, %v", h, err)
+		}
+		var got []string
+		for _, m := range h.Conversations[0].Messages {
+			got = append(got, key(m))
+		}
+		if want := direct[:min(count, len(direct))]; !slices.Equal(got, want) {
+			t.Fatalf("%d messages before %s = %q, want the ones played before it in its chat, newest first: %q", count, anchor.ID, got, want)
+		}
+	}
+	if !slices.ContainsFunc(direct, func(k string) bool { return strings.Contains(k, " "+refPhoto+" ") }) {
+		t.Fatal("the direct chat re-delivers no attachment")
+	}
+}
