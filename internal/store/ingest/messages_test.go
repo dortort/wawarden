@@ -730,7 +730,9 @@ func TestARedeliveryNeverRefillsAReferenceItsMediaHostExpired(t *testing.T) {
 			gone := insert(t, s, mediaMessage(t, groupJID, "M1", alice, "", "sealed-1"))
 			kept := insert(t, s, mediaMessage(t, groupJID, "M2", alice, "", "sealed-2"))
 			changes := scalar[int](t, s, "SELECT max(change_seq) FROM messages")
-			write(t, s, func(tx *Tx) error { return tx.ExpireMediaRef(chat(t, groupJID), "M1", chat(t, aliceLID), epoch.Add(time.Hour)) })
+			write(t, s, func(tx *Tx) error {
+				return tx.ExpireMediaRef(chat(t, groupJID), "M1", chat(t, aliceLID), epoch.Add(time.Hour))
+			})
 			if got := scalar[int](t, s, "SELECT max(change_seq) FROM messages"); got != changes {
 				t.Fatalf("marking an attachment gone moved the newest change number from %d to %d", changes, got)
 			}
