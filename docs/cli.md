@@ -409,8 +409,8 @@ never an identifier, a name or a key:
 
 ```text
 format: 1
-written by: v1.0.0
-created: 2026-10-05T03:00:00Z
+written by: v1.3.0
+created: 2026-10-18T03:00:00Z
 archive integrity: ok
 archive schema version: 6
 archive schema: ok
