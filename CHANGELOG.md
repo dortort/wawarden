@@ -34,15 +34,16 @@ its image digest and the commands to verify and reproduce it.
   `--anchor oldest|newest`. With `newest` the owner's phone is asked for up to
   50 messages before the chat's newest message, and a re-delivered attachment
   that the archive holds without a media reference gains one while downloads
-  are on, if it is neither revoked nor expired and is younger than
+  are on, under the same size and view-once rules as at receipt, if it is
+  neither revoked nor expired and is younger than
   `WAWARDEN_MEDIA_REF_RETENTION_DAYS` (see
   [Backfill requests](docs/api.md#backfill-requests)). Both anchors share the
   one quota of a request every 5 minutes and 20 a UTC day.
 
 ### Changed
 
-- Dev builds: the fake engine answers a backfill anchored at a message it
-  delivered with the messages it delivered before it in that chat.
+- Dev builds: the fake engine answers a backfill with the messages it
+  delivered before the anchor in that chat, when there are any.
 
 ### Fixed
 
