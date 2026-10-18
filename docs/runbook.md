@@ -881,8 +881,11 @@ copies it, so a dropped post loses no event from the output.
 - **Attachments received before downloads were on**, or while they were off,
   answer `media_unavailable`: no reference was kept for them. With downloads
   on, ask the phone for the messages before the newest one the archive holds;
-  each that arrives again gains a reference, unless it is revoked, expired or
-  older than `WAWARDEN_MEDIA_REF_RETENTION_DAYS`:
+  each attachment that arrives again gains a reference, unless it is
+  view-once, over the size cap of `WAWARDEN_MEDIA_MAX_BYTES` (and of 16 MiB
+  for an image or 1 MiB for a sticker), revoked, expired, already answered
+  `media_expired` because its media host no longer holds it, or older than
+  `WAWARDEN_MEDIA_REF_RETENTION_DAYS`:
 
   ```sh
   wawarden admin backfill --chat <chat> --anchor newest --token-file admin.token
