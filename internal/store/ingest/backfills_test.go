@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -37,15 +38,25 @@ func backfillStore(t *testing.T) *Store {
 
 func backfill(t *testing.T, s *Store, g policy.AdminGrant, id string, at time.Time) (BackfillTicket, error) {
 	t.Helper()
-	return s.ReserveBackfill(g, t.Context(), BackfillRequest{ID: id, Chat: chat(t, alice), Count: MaxBackfillCount, Now: at})
+	return anchored(t, s, g, id, AnchorOldest, at)
+}
+
+func anchored(t *testing.T, s *Store, g policy.AdminGrant, id string, anchor AnchorKind, at time.Time) (BackfillTicket, error) {
+	t.Helper()
+	return s.ReserveBackfill(g, t.Context(), BackfillRequest{ID: id, Chat: chat(t, alice), Count: MaxBackfillCount, Anchor: anchor, Now: at})
 }
 
 func quotaRefused(t *testing.T, s *Store, g policy.AdminGrant, at time.Time, daily bool, retry time.Duration) {
 	t.Helper()
-	_, err := backfill(t, s, g, "refused", at)
+	anchorRefused(t, s, g, AnchorOldest, at, daily, retry)
+}
+
+func anchorRefused(t *testing.T, s *Store, g policy.AdminGrant, anchor AnchorKind, at time.Time, daily bool, retry time.Duration) {
+	t.Helper()
+	_, err := anchored(t, s, g, "refused", anchor, at)
 	var q *QuotaError
 	if !errors.As(err, &q) || q.Daily != daily || q.RetryAfter != retry {
-		t.Fatalf("ReserveBackfill at %v = %v, want a quota refusal (daily %v) retrying after %v", at, err, daily, retry)
+		t.Fatalf("ReserveBackfill (anchor %d) at %v = %v, want a quota refusal (daily %v) retrying after %v", anchor, at, err, daily, retry)
 	}
 }
 
@@ -81,6 +92,7 @@ func TestABackfillStartsAtTheChatsOldestMessage(t *testing.T) {
 		"no request id":     {g, BackfillRequest{Chat: chat(t, alice), Count: 1, Now: epoch}, ErrInvalid},
 		"no chat":           {g, BackfillRequest{ID: "X", Count: 1, Now: epoch}, ErrInvalid},
 		"no time":           {g, BackfillRequest{ID: "X", Chat: chat(t, alice), Count: 1}, ErrInvalid},
+		"an unknown anchor": {g, BackfillRequest{ID: "X", Chat: chat(t, alice), Count: 1, Anchor: AnchorNewest + 1, Now: epoch}, ErrInvalid},
 	} {
 		if _, err := s.ReserveBackfill(tt.g, t.Context(), tt.in); !errors.Is(err, tt.want) {
 			t.Errorf("%s: ReserveBackfill = %v, want %v", name, err, tt.want)
@@ -88,6 +100,69 @@ func TestABackfillStartsAtTheChatsOldestMessage(t *testing.T) {
 	}
 	if n := scalar[int](t, s, "SELECT count(*) FROM backfills"); n != 2 {
 		t.Fatalf("%d backfill rows, want the two reserved", n)
+	}
+}
+
+func TestANewestAnchoredBackfillStartsAtTheChatsNewestMessage(t *testing.T) {
+	s := backfillStore(t)
+	g := adminGrant(t)
+	if _, err := s.ReserveBackfill(g, t.Context(), BackfillRequest{ID: "P1", Chat: chat(t, bob), Count: 1, Anchor: AnchorNewest, Now: epoch}); !errors.Is(err, ErrNoAnchor) {
+		t.Fatalf("a chat without messages = %v, want ErrNoAnchor", err)
+	}
+	ticket, err := anchored(t, s, g, "P2", AnchorNewest, epoch)
+	want := BackfillTicket{ID: "P2", Chat: chat(t, alice), Count: MaxBackfillCount, Anchor: BackfillAnchor{ID: "NEW", Timestamp: epoch.Add(time.Hour)}}
+	if err != nil || ticket != want {
+		t.Fatalf("ticket = %+v, %v, want %+v", ticket, err, want)
+	}
+	for _, id := range []string{"TIE-1", "TIE-2"} {
+		tie := textMessage(t, alice, id, ownerJID, "synthetic tie")
+		tie.FromMe = true
+		if id == "TIE-1" {
+			tie.Timestamp = epoch.Add(time.Hour)
+		}
+		insert(t, s, tie)
+	}
+	for i, tt := range []struct {
+		anchor AnchorKind
+		want   BackfillAnchor
+	}{
+		{AnchorNewest, BackfillAnchor{ID: "TIE-1", FromMe: true, Timestamp: epoch.Add(time.Hour)}},
+		{AnchorOldest, BackfillAnchor{ID: "OLD", FromMe: true, Timestamp: epoch}},
+	} {
+		at := epoch.Add(time.Duration(i+1) * BackfillInterval)
+		if ticket, err := anchored(t, s, g, "P-tie-"+strconv.Itoa(i), tt.anchor, at); err != nil || ticket.Anchor != tt.want {
+			t.Fatalf("anchor %d over a timestamp tie = %+v, %v, want %+v, the tie broken by arrival", tt.anchor, ticket.Anchor, err, tt.want)
+		}
+	}
+	if ticket, err := s.ReserveBackfill(g, t.Context(), BackfillRequest{ID: "P-default", Chat: chat(t, alice), Count: 1, Now: epoch.Add(3 * BackfillInterval)}); err != nil || ticket.Anchor.ID != "OLD" {
+		t.Fatalf("a request that names no anchor = %+v, %v, want the oldest message", ticket.Anchor, err)
+	}
+}
+
+func TestBothAnchorsShareOneQuota(t *testing.T) {
+	s := backfillStore(t)
+	g := adminGrant(t)
+	day := time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC)
+	if _, err := anchored(t, s, g, "first", AnchorNewest, day); err != nil {
+		t.Fatalf("ReserveBackfill: %v", err)
+	}
+	anchorRefused(t, s, g, AnchorOldest, day.Add(time.Minute), false, 4*time.Minute)
+	anchorRefused(t, s, g, AnchorNewest, day.Add(time.Minute), false, 4*time.Minute)
+	for i := 1; i < BackfillPerDay; i++ {
+		anchor := AnchorKind(i % 2)
+		if _, err := anchored(t, s, g, "day-"+strconv.Itoa(i), anchor, day.Add(time.Duration(i)*BackfillInterval)); err != nil {
+			t.Fatalf("backfill %d of the day (anchor %d): %v", i+1, anchor, err)
+		}
+		if i < BackfillPerDay-1 {
+			anchorRefused(t, s, g, 1-anchor, day.Add(time.Duration(i)*BackfillInterval+time.Minute), false, 4*time.Minute)
+		}
+	}
+	last := day.Add((BackfillPerDay - 1) * BackfillInterval)
+	for _, anchor := range []AnchorKind{AnchorOldest, AnchorNewest} {
+		anchorRefused(t, s, g, anchor, last.Add(BackfillInterval), true, day.Add(24*time.Hour).Sub(last.Add(BackfillInterval)))
+	}
+	if n := scalar[int](t, s, "SELECT count(*) FROM backfills"); n != BackfillPerDay {
+		t.Fatalf("%d backfill rows, want %d", n, BackfillPerDay)
 	}
 }
 

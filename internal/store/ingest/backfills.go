@@ -17,8 +17,9 @@ const (
 )
 
 const (
-	selectAnchor = "SELECT id, from_me, ts FROM messages WHERE chat_jid = ?1 ORDER BY ts, seq LIMIT 1"
-	selectQuota  = `SELECT
+	selectAnchor       = "SELECT id, from_me, ts FROM messages WHERE chat_jid = ?1 ORDER BY ts, seq LIMIT 1"
+	selectNewestAnchor = "SELECT id, from_me, ts FROM messages WHERE chat_jid = ?1 ORDER BY ts DESC, seq DESC LIMIT 1"
+	selectQuota        = `SELECT
 		(SELECT max(requested_at) FROM backfills WHERE requested_at > ?1),
 		(SELECT count(*) FROM backfills WHERE requested_at >= ?2)`
 	insertBackfill   = "INSERT INTO backfills (request_id, chat_jid, count, requested_at) VALUES (?1, ?2, ?3, ?4)"
@@ -42,11 +43,19 @@ func (e *QuotaError) Error() string {
 	return "ingest: a backfill was requested less than five minutes ago"
 }
 
+type AnchorKind uint8
+
+const (
+	AnchorOldest AnchorKind = iota
+	AnchorNewest
+)
+
 type BackfillRequest struct {
-	ID    string
-	Chat  policy.CanonicalChat
-	Count int
-	Now   time.Time
+	ID     string
+	Chat   policy.CanonicalChat
+	Count  int
+	Anchor AnchorKind
+	Now    time.Time
 }
 
 type BackfillAnchor struct {
@@ -72,6 +81,8 @@ func (s *Store) ReserveBackfill(g policy.AdminGrant, ctx context.Context, in Bac
 		return BackfillTicket{}, invalid("chat")
 	case in.Count < 1 || in.Count > MaxBackfillCount:
 		return BackfillTicket{}, invalid("count")
+	case in.Anchor != AnchorOldest && in.Anchor != AnchorNewest:
+		return BackfillTicket{}, invalid("anchor")
 	case in.Now.IsZero():
 		return BackfillTicket{}, invalid("time")
 	}
@@ -92,9 +103,13 @@ func (tx *Tx) reserveBackfill(in BackfillRequest) (BackfillTicket, error) {
 	if err != nil {
 		return BackfillTicket{}, err
 	}
+	query := selectAnchor
+	if in.Anchor == AnchorNewest {
+		query = selectNewestAnchor
+	}
 	var anchor BackfillAnchor
 	var ts int64
-	switch err := tx.q.QueryRowContext(tx.ctx, selectAnchor, chat.JID()).Scan(&anchor.ID, &anchor.FromMe, &ts); {
+	switch err := tx.q.QueryRowContext(tx.ctx, query, chat.JID()).Scan(&anchor.ID, &anchor.FromMe, &ts); {
 	case errors.Is(err, sql.ErrNoRows):
 		return BackfillTicket{}, ErrNoAnchor
 	case err != nil:
