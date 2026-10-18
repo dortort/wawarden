@@ -2712,9 +2712,12 @@ subject.
     direct chat is not verified either.
   - A newest-anchored request reaches at most the 50 messages before the
     chat's newest one, so an older attachment received before downloads were
-    on keeps no reference. That the phone's answer carries the attachment
-    descriptors of the messages it re-delivers, so that they gain one, is not
-    verified against a live account.
+    on keeps no reference. The request puts the newest message in the
+    protocol's field for the oldest message the device holds; that the phone
+    then answers with the messages before it comes from the protocol
+    library's documentation and is not verified against a live account, nor
+    is that its answer carries the attachment descriptors of the messages it
+    re-delivers, so that they gain one.
 - **Limits that WhatsApp does not publish.** The text cap of 4096 characters
   and 8192 bytes is this service's policy. WhatsApp's own limit is not known,
   nor how it renders a reply to a media message, which the service never
