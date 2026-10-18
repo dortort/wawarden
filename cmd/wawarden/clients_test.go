@@ -35,6 +35,8 @@ func newRoutedListener(t *testing.T, answers map[string][2]string) (*routedListe
 			answer = [2]string{"404", `{"error":"not_found"}`}
 		}
 		switch answer[0] {
+		case "400":
+			status = http.StatusBadRequest
 		case "404":
 			status = http.StatusNotFound
 		case "409":
