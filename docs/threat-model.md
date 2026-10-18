@@ -2713,11 +2713,15 @@ subject.
   - A newest-anchored request reaches at most the 50 messages before the
     chat's newest one, so an older attachment received before downloads were
     on keeps no reference. The request puts the newest message in the
-    protocol's field for the oldest message the device holds; that the phone
-    then answers with the messages before it comes from the protocol
-    library's documentation and is not verified against a live account, nor
-    is that its answer carries the attachment descriptors of the messages it
-    re-delivers, so that they gain one.
+    protocol's field for the oldest message the device holds. Against a live
+    account, the phone answered with the messages before it, and the
+    attachments of messages from before the device was linked gained a
+    reference from their descriptors; the attachments of messages the device
+    had received itself gained none, whether the phone left those messages
+    out or sent them without descriptors. So the anchor recovers attachments
+    from the history synced at pairing, not attachments received since while
+    downloads were off. Whether every phone answers the same way is not
+    known.
   - A re-delivered attachment whose media host answered `403`, `404` or
     `410` to a fetch gains no reference again, so it is not fetched again.
     The mark that keeps it so exists from v1.3.0 on: an attachment that
