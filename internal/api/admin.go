@@ -41,6 +41,15 @@ var (
 	ErrBackfillNoAnchor  error = &codedError{status: http.StatusUnprocessableEntity, code: codeBackfillNoAnchor}
 )
 
+type BackfillAnchor uint8
+
+const (
+	BackfillOldest BackfillAnchor = iota
+	BackfillNewest
+)
+
+var backfillAnchors = map[string]BackfillAnchor{"oldest": BackfillOldest, "newest": BackfillNewest}
+
 func BackfillQuota(wait time.Duration) error {
 	return &codedError{status: http.StatusTooManyRequests, code: codeBackfillQuota, retryAfter: wait}
 }
@@ -78,14 +87,15 @@ type AdminService interface {
 	Status(ctx context.Context) (AdminStatus, error)
 	Pair(ctx context.Context) (code string, err error)
 	Reconnect(ctx context.Context) error
-	Backfill(g policy.AdminGrant, ctx context.Context, chat policy.CanonicalChat, count int) (requestID string, err error)
+	Backfill(g policy.AdminGrant, ctx context.Context, chat policy.CanonicalChat, count int, anchor BackfillAnchor) (requestID string, err error)
 	PauseMedia(paused bool)
 	ClientService
 }
 
 type backfillRequest struct {
-	Chat  string `json:"chat"`
-	Count *int   `json:"count"`
+	Chat   string  `json:"chat"`
+	Count  *int    `json:"count"`
+	Anchor *string `json:"anchor"`
 }
 
 type mediaPauseRequest struct {
@@ -128,13 +138,20 @@ func registerAdmin(rt *router, svc AdminService, events AdminEvents) {
 		if count < 1 || count > maxBackfillCount {
 			return nil, errBadBody
 		}
+		anchor := BackfillOldest
+		if body.Anchor != nil {
+			var known bool
+			if anchor, known = backfillAnchors[*body.Anchor]; !known {
+				return nil, errBadBody
+			}
+		}
 		chat, err := backfillChat(ctx, svc, body.Chat)
 		if err != nil {
 			return nil, err
 		}
 		ctx, cancel := context.WithTimeout(ctx, sendDeadline)
 		defer cancel()
-		id, err := svc.Backfill(g, ctx, chat, count)
+		id, err := svc.Backfill(g, ctx, chat, count, anchor)
 		if err != nil {
 			return nil, err
 		}

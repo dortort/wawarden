@@ -94,7 +94,7 @@ func TestABackfillAsksForTheMessagesBeforeTheOldestRow(t *testing.T) {
 	g := adminGrant(t)
 	now := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
 	e := &scriptedBackfiller{id: "3EB0REQUEST"}
-	id, err := requestBackfill(g, t.Context(), s, e, now, group, 20)
+	id, err := requestBackfill(g, t.Context(), s, e, now, group, 20, api.BackfillOldest)
 	if err != nil || id != "3EB0REQUEST" {
 		t.Fatalf("requestBackfill = %q, %v", id, err)
 	}
@@ -111,12 +111,35 @@ func TestABackfillAsksForTheMessagesBeforeTheOldestRow(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CompleteBackfill: %v", err)
 	}
-	_, err = requestBackfill(g, t.Context(), s, e, now.Add(time.Minute), group, 20)
+	_, err = requestBackfill(g, t.Context(), s, e, now.Add(time.Minute), group, 20, api.BackfillOldest)
 	if !reflect.DeepEqual(err, api.BackfillQuota(4*time.Minute)) {
 		t.Fatalf("a second request within five minutes = %v", err)
 	}
 	if n := backfillsSince(t, s, now.Truncate(24*time.Hour)); n != 1 {
 		t.Fatalf("%d backfills today, want 1", n)
+	}
+}
+
+func TestANewestAnchoredBackfillAsksForTheMessagesBeforeTheNewestRow(t *testing.T) {
+	s, group, oldest := backfillArchive(t)
+	g := adminGrant(t)
+	now := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
+	e := &scriptedBackfiller{id: "3EB0NEWEST"}
+	id, err := requestBackfill(g, t.Context(), s, e, now, group, 20, api.BackfillNewest)
+	if err != nil || id != "3EB0NEWEST" {
+		t.Fatalf("requestBackfill = %q, %v", id, err)
+	}
+	want := engine.BackfillRequest{Chat: group.JID(), AnchorID: "NEWER", AnchorTime: oldest.Add(time.Hour), Count: 20}
+	if len(e.calls) != 1 || !reflect.DeepEqual(e.calls[0], want) {
+		t.Fatalf("engine requests = %+v, want %+v", e.calls, want)
+	}
+	for _, anchor := range []api.BackfillAnchor{api.BackfillOldest, api.BackfillNewest} {
+		if _, err := requestBackfill(g, t.Context(), s, e, now.Add(time.Minute), group, 20, anchor); !reflect.DeepEqual(err, api.BackfillQuota(4*time.Minute)) {
+			t.Fatalf("a request anchored %d a minute after a newest-anchored one = %v, want the shared quota", anchor, err)
+		}
+	}
+	if len(e.calls) != 1 {
+		t.Fatalf("%d engine requests, want 1", len(e.calls))
 	}
 }
 
@@ -135,14 +158,14 @@ func TestABackfillThatSentNothingIsRefunded(t *testing.T) {
 		g := adminGrant(t)
 		now := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
 		e := &scriptedBackfiller{id: tt.id, err: tt.err}
-		if _, err := requestBackfill(g, t.Context(), s, e, now, group, 50); !reflect.DeepEqual(err, tt.want) {
+		if _, err := requestBackfill(g, t.Context(), s, e, now, group, 50, api.BackfillOldest); !reflect.DeepEqual(err, tt.want) {
 			t.Fatalf("requestBackfill with %v = %v, want %v", tt.err, err, tt.want)
 		}
 		if n := backfillsSince(t, s, now.Truncate(24*time.Hour)); n != 0 {
 			t.Fatalf("%d backfills counted after %v, want none", n, tt.err)
 		}
 		e.err, e.id = nil, "3EB0RETRY"
-		if id, err := requestBackfill(g, t.Context(), s, e, now, group, 50); err != nil || id != "3EB0RETRY" {
+		if id, err := requestBackfill(g, t.Context(), s, e, now, group, 50, api.BackfillOldest); err != nil || id != "3EB0RETRY" {
 			t.Fatalf("the retry = %q, %v", id, err)
 		}
 	}
@@ -163,7 +186,7 @@ func TestABackfillThatMayHaveLeftStaysCounted(t *testing.T) {
 		g := adminGrant(t)
 		now := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
 		e := &scriptedBackfiller{id: tt.id, err: tt.err}
-		if _, err := requestBackfill(g, t.Context(), s, e, now, group, 50); !reflect.DeepEqual(err, tt.want) {
+		if _, err := requestBackfill(g, t.Context(), s, e, now, group, 50, api.BackfillOldest); !reflect.DeepEqual(err, tt.want) {
 			t.Fatalf("requestBackfill with %v = %v, want %v", tt.err, err, tt.want)
 		}
 		if n := backfillsSince(t, s, now.Truncate(24*time.Hour)); n != 1 {
@@ -187,8 +210,10 @@ func TestABackfillOfAChatWithoutRowsIsRefused(t *testing.T) {
 	s, _, _ := backfillArchive(t)
 	empty, _ := policy.Normalize("120363000000000009@g.us")
 	e := &scriptedBackfiller{id: "3EB0X"}
-	if _, err := requestBackfill(adminGrant(t), t.Context(), s, e, time.Now(), empty, 50); !errors.Is(err, api.ErrBackfillNoAnchor) || len(e.calls) != 0 {
-		t.Fatalf("a chat without rows = %v after %d engine calls", err, len(e.calls))
+	for _, anchor := range []api.BackfillAnchor{api.BackfillOldest, api.BackfillNewest} {
+		if _, err := requestBackfill(adminGrant(t), t.Context(), s, e, time.Now(), empty, 50, anchor); !errors.Is(err, api.ErrBackfillNoAnchor) || len(e.calls) != 0 {
+			t.Fatalf("a chat without rows (anchor %d) = %v after %d engine calls", anchor, err, len(e.calls))
+		}
 	}
 }
 
@@ -209,7 +234,7 @@ func TestTheStatusCountsOnlyTheBackfillsRequestedSinceUTCMidnight(t *testing.T) 
 		t.Fatalf("Write: %v", err)
 	}
 	for i, at := range []time.Time{midnight.Add(-10 * time.Minute), midnight} {
-		if _, err := requestBackfill(adminGrant(t), t.Context(), a.archive, &scriptedBackfiller{id: "3EB0REQUEST" + strconv.Itoa(i)}, at, group, 20); err != nil {
+		if _, err := requestBackfill(adminGrant(t), t.Context(), a.archive, &scriptedBackfiller{id: "3EB0REQUEST" + strconv.Itoa(i)}, at, group, 20, api.BackfillOldest); err != nil {
 			t.Fatalf("requestBackfill at %v: %v", at, err)
 		}
 	}

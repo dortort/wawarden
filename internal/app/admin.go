@@ -82,8 +82,8 @@ func (s adminService) Reconnect(context.Context) error {
 	return adminError(s.engine.Reconnect())
 }
 
-func (s adminService) Backfill(g policy.AdminGrant, ctx context.Context, chat policy.CanonicalChat, count int) (string, error) {
-	return requestBackfill(g, ctx, s.archive, s.engine, s.now(), chat, count)
+func (s adminService) Backfill(g policy.AdminGrant, ctx context.Context, chat policy.CanonicalChat, count int, anchor api.BackfillAnchor) (string, error) {
+	return requestBackfill(g, ctx, s.archive, s.engine, s.now(), chat, count, anchor)
 }
 
 func (s adminService) CreateClient(ctx context.Context, spec policy.ClientSpec) (api.ClientView, string, error) {
