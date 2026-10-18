@@ -2718,6 +2718,12 @@ subject.
     library's documentation and is not verified against a live account, nor
     is that its answer carries the attachment descriptors of the messages it
     re-delivers, so that they gain one.
+  - A re-delivered attachment whose media host answered `403`, `404` or
+    `410` to a fetch gains no reference again, so it is not fetched again.
+    The mark that keeps it so exists from v1.3.0 on: an attachment that
+    answered so under an earlier release kept no mark once the sweep removed
+    its reference, so a re-delivery can give it one, and its next fetch
+    marks it.
 - **Limits that WhatsApp does not publish.** The text cap of 4096 characters
   and 8192 bytes is this service's policy. WhatsApp's own limit is not known,
   nor how it renders a reply to a media message, which the service never
