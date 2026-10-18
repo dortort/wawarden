@@ -525,7 +525,9 @@ Right after the master key, `serve`:
    500,000 messages on a laptop, most of it checking the new column's
    constraint against every stored message. Version 5 follows version 4 and
    adds tables, columns and indexes and clears the media type of revoked
-   messages, which takes under a second per 500,000 messages on a laptop. Then
+   messages, which takes under a second per 500,000 messages on a laptop.
+   Version 6 follows version 5 and only adds a column to the messages, which
+   also takes under a second per 500,000 messages on a laptop. Then
    `serve` completes a rewrite of the full-text index that a stop or a failed
    rewrite left due (see the end of this section) and logs `archive_opened`.
 
