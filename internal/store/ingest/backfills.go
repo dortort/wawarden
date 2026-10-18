@@ -103,13 +103,15 @@ func (tx *Tx) reserveBackfill(in BackfillRequest) (BackfillTicket, error) {
 	if err != nil {
 		return BackfillTicket{}, err
 	}
-	query := selectAnchor
-	if in.Anchor == AnchorNewest {
-		query = selectNewestAnchor
+	row := func() *sql.Row {
+		if in.Anchor == AnchorNewest {
+			return tx.q.QueryRowContext(tx.ctx, selectNewestAnchor, chat.JID())
+		}
+		return tx.q.QueryRowContext(tx.ctx, selectAnchor, chat.JID())
 	}
 	var anchor BackfillAnchor
 	var ts int64
-	switch err := tx.q.QueryRowContext(tx.ctx, query, chat.JID()).Scan(&anchor.ID, &anchor.FromMe, &ts); {
+	switch err := row().Scan(&anchor.ID, &anchor.FromMe, &ts); {
 	case errors.Is(err, sql.ErrNoRows):
 		return BackfillTicket{}, ErrNoAnchor
 	case err != nil:
