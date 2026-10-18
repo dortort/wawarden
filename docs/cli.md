@@ -39,7 +39,7 @@ wawarden admin clients create --name NAME (--read CHAT... | --all-chats) [--writ
 wawarden admin clients list ADMIN
 wawarden admin clients show|revoke --id ID ADMIN
 wawarden admin chats list [--match TEXT] ADMIN
-wawarden admin backfill --chat CHAT [--count N] ADMIN
+wawarden admin backfill --chat CHAT [--count N] [--anchor oldest|newest] ADMIN
                                  call the admin listener; ADMIN is [--addr URL] and one of
                                  --token-file PATH, --token-stdin or --token-command COMMAND
                                  (default --addr http://127.0.0.1:8082)
@@ -249,16 +249,26 @@ error when more match.
 
 ### `admin backfill`
 
-`admin backfill --chat CHAT [--count N]` takes the same `--addr` and token
-flags as `admin status`, uses the same HTTP client, sanitiser and refusal
-message, and calls `POST /admin/v1/backfill` (see [Admin routes](api.md#admin-routes))
-to ask the owner's phone for the `N` messages of a chat that come before the
-oldest one the archive holds. `--chat` takes the forms that `--read` takes
-under [`admin clients`](#admin-clients-and-admin-chats): a chat identifier, a
+`admin backfill --chat CHAT [--count N] [--anchor oldest|newest]` takes the
+same `--addr` and token flags as `admin status`, uses the same HTTP client,
+sanitiser and refusal message, and calls `POST /admin/v1/backfill` (see
+[Backfill requests](api.md#backfill-requests)) to ask the owner's phone for
+the `N` messages of a chat that come before an anchor: the oldest message the
+archive holds with `--anchor oldest`, the default, or the newest with
+`--anchor newest`. `--chat` takes the forms that `--read` takes under
+[`admin clients`](#admin-clients-and-admin-chats): a chat identifier, a
 `+E.164` number or a chat reference, which is looked up first. `--count` is
-from 1 to 50, 50 by default. A missing `--chat`, a value of none of these forms
-or a `--count` out of range stops the command with exit `2` before it sends
+from 1 to 50, 50 by default. Without `--anchor`, or with `oldest`, the request
+carries no `anchor` key, so it also works against a v1.2.0 server; `newest`
+sends `"anchor":"newest"`, which only a v1.3.0 or later server accepts (an
+earlier one answers `invalid_body`, exit `1`). A missing `--chat`, a value of
+none of these forms, a `--count` out of range or an `--anchor` other than
+`oldest` or `newest` stops the command with exit `2` before it sends
 anything, and an unknown reference with exit `5`.
+
+A newest-anchored backfill is how an attachment received before downloads
+were on, or while they were off, gains the reference a download needs; see
+the [runbook](runbook.md#other-incidents).
 
 On success it prints `backfill requested: <request id>` on standard output,
 and on standard error that the phone sends the messages when it processes the
@@ -499,7 +509,7 @@ of a backup you may verify carries its key id (`audit verify` lists them under
 |---|---|
 | `0` | `serve` stopped cleanly after `SIGTERM` or `SIGINT`; `healthcheck` got `200`; `version` and `admin init` printed their output; an admin command got `200`, or `202` for `admin backfill`, and printed the answer; `audit verify` verified every row and found every shipped head; `keys rotate` replaced the master key and printed both key ids; `backup verify` read a complete backup and every check passed. |
 | `1` | `serve` failed after its configuration was accepted: the [archive](configuration.md#message-archive) or the [device store](configuration.md#device-store) could not be opened or its lock was not acquired within five minutes, the device store could not be brought up to date, or a listener could not be opened (`startup_failed`), a listener failed while running (`listener_failed`), or shutdown ended with errors, for example when the grace period ran out. `healthcheck` failed for any reason, including extra arguments. `version` or `admin init` could not write to standard output. An admin command's request failed: no connection, no answer within 40 seconds, an answer over 64 KiB or not in the expected shape, a redirect, or any status other than those of codes `0`, `4` and `5`, such as `engine_unavailable` (`503`), `pair_failed` (`502`), `invalid_query` (`400`) or `internal_error` (`500`). `audit verify` could not open the copy, the master key file, the retired keys or the log. `keys rotate` was refused, because another process holds the archive's lock or a check of `keys/` failed, or could not write a key. `backup verify` was given a `--work-dir` that is not a private directory of its user or an `--extract-to` that exists, could not read standard input to the end, found it ended early (as after a failed or wrong-key decryption), could not write a database into the work directory or had too little space for it, or could not move the verified databases to `--extract-to`. |
-| `2` | `serve` refused to start (`startup_refused`, see [Startup refusals](configuration.md#startup-refusals)). Or a usage error: an unknown subcommand, `help`, `-h` or `--help` (see [Help and usage errors](#help-and-usage-errors)), or an unknown flag or extra argument given to `serve`, `version`, `admin`, `audit`, `keys` or `backup`, an admin command without exactly one token source or with an empty `--token-file` or `--token-command`, an invalid `--addr`, a `clients create` without `--name` or with a chat value it cannot use, an `admin backfill` without `--chat`, with a chat value it cannot use or with a `--count` outside 1 to 50, a `--id` that is not a client id, an `audit verify` without `--db` or `--master-key-file`, a `keys rotate` without `--data-dir`, or a `backup verify` without `--work-dir` or without `-` as its only argument; the usage text goes to standard error. |
+| `2` | `serve` refused to start (`startup_refused`, see [Startup refusals](configuration.md#startup-refusals)). Or a usage error: an unknown subcommand, `help`, `-h` or `--help` (see [Help and usage errors](#help-and-usage-errors)), or an unknown flag or extra argument given to `serve`, `version`, `admin`, `audit`, `keys` or `backup`, an admin command without exactly one token source or with an empty `--token-file` or `--token-command`, an invalid `--addr`, a `clients create` without `--name` or with a chat value it cannot use, an `admin backfill` without `--chat`, with a chat value it cannot use, with a `--count` outside 1 to 50 or with an `--anchor` other than `oldest` or `newest`, a `--id` that is not a client id, an `audit verify` without `--db` or `--master-key-file`, a `keys rotate` without `--data-dir`, or a `backup verify` without `--work-dir` or without `-` as its only argument; the usage text goes to standard error. |
 | `3` | An admin command could not use its token: the file or standard input could not be read, held more than 4096 bytes or was a terminal; the token command could not start, failed, timed out, left a process holding its output or printed more than 4096 bytes; or what it read is not an admin token. Nothing was sent. |
 | `4` | The admin listener refused the token: `401` (`unauthorized`), or `429` with `too_many_requests` (the failure budget is spent, see [Failed authentication](api.md#failed-authentication)). |
 | `5` | The service refused the operation: `409` (`already_paired`, `already_connected`, `not_paired`, `owner_phone_missing`, `owner_mismatch` or `name_taken`), `422` (a [client refusal](api.md#admin-routes), or `backfill_no_anchor`), `404` (`not_found`, such as an unknown client id) or `429` with `rate_limited` or `backfill_quota`; see [Admin routes](api.md#admin-routes). `clients create` and `admin backfill` also exit `5` when no chat has a reference they were given. |
