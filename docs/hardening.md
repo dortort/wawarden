@@ -159,8 +159,8 @@ these constraints on the proxy:
 
 The admin listener is guarded by the admin token alone. With it, a caller can
 request pairing, reconnect the engine, create clients (writing ones included),
-revoke them, list chats, request a history backfill and pause attachment
-downloads. The pairing code
+revoke them, list chats, request a history backfill (before a chat's oldest
+or newest archived message) and pause attachment downloads. The pairing code
 crosses the path in its answer. The threat model's
 [admin token](threat-model.md#the-admin-token) section gives the full list. The
 listener is opened only when `WAWARDEN_ADMIN_TOKEN_SHA256` or
