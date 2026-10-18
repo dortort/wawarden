@@ -77,6 +77,7 @@ exit-code 4 exitDenied
 exit-code 5 exitRefused
 exit-code 6 exitUnverified
 flag wawarden admin backfill --addr string
+flag wawarden admin backfill --anchor string
 flag wawarden admin backfill --chat string
 flag wawarden admin backfill --count int
 flag wawarden admin backfill --token-command string
