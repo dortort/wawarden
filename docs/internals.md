@@ -406,14 +406,16 @@ that names no request, completes none.
 
 A history blob can hold messages the archive already has, as the answer to a
 backfill anchored at a chat's newest message does. Such a message keeps its
-row unchanged and can gain only a [media reference](#media-reference): when
-it has none, downloads are on, its row is an attachment that is neither
-revoked nor expired, and the message is younger than
+row unchanged and can gain only a [media reference](#media-reference), under
+the rules a message gets at receipt: downloads are on, the attachment is not
+view-once and its declared size is within the cap. It gains one only when it
+has none, its row is an attachment that is not revoked, has not expired and
+was never marked gone by its media host, and the message is younger than
 `WAWARDEN_MEDIA_REF_RETENTION_DAYS`. This is how an attachment received
 before downloads were on, or while they were off, gets the reference a
 download needs.
 
-The download goes through the protocol library, which asks WhatsApp for the
+The blob's download goes through the protocol library, which asks WhatsApp for the
 media hosts, fetches the encrypted blob over an HTTP client of the adapter's,
 with timeouts, no proxy, no redirect and a response cap of
 `WAWARDEN_HISTORY_MAX_BYTES` plus 32 bytes for the encryption's padding and
@@ -539,7 +541,8 @@ the library is called. Architecture rules pin the seams and the callers of
 
 A 403, 404 or 410 from the media host means WhatsApp no longer holds the file:
 the engine sets the reference's expiry to now, and the minute sweep removes
-it. A 429 or a 5xx ends the job with WhatsApp's `Retry-After`, and the media
+it. The same transaction marks the attachment gone, so no later copy of its
+message, a backfill's answer included, gains a reference again. A 429 or a 5xx ends the job with WhatsApp's `Retry-After`, and the media
 service holds every new fetch for it, clamped to between 30 seconds and
 10 minutes, or 1 minute when it gave none. Every other failure, a body that
 fails its hash or authentication check included, is `media_failed`. The error
@@ -767,7 +770,7 @@ of its package.
 
 ## Archive schema
 
-The schema is at version 5. Besides chats, messages and their full-text index,
+The schema is at version 6. Besides chats, messages and their full-text index,
 identity mappings, push names, group members, the inbox and the history-sync
 queue, it holds:
 
@@ -794,18 +797,23 @@ queue, it holds:
   a message's reference only while its downloads switch is on, which it is
   exactly while `WAWARDEN_MEDIA_MAX_BYTES` is above 0; its minute
   sweep runs the purge of references, and a fetch that answers that the
-  attachment has expired marks that message's reference expired. A
+  attachment has expired marks that message's reference expired and the
+  message's attachment gone. A
   reference stored with a message expires at the earlier of the message's
   time plus the retention given with it and the message's own expiry.
   It is written only with a new media message that has a media type, or later
   by a copy of a stored media message that has a media type and no reference,
-  is not revoked and has not expired, and never when that expiry has already
-  passed as the message is stored. The transaction that revokes a message
-  deletes its reference, and so does the one that purges an expired message. A
-  purge of references, at most a given number per call, takes a retention and
-  a flag: with the flag set, it removes the references past their expiry and
-  those added longer ago than the retention, and without it, every one.
+  is not revoked, has not expired and is not marked gone, and never when that
+  expiry has already passed as the message is stored. The transaction that
+  revokes a message deletes its reference, and so does the one that purges an
+  expired message. A purge of references, at most a given number per call,
+  takes a retention and a flag: with the flag set, it removes the references
+  past their expiry and those added longer ago than the retention, and without
+  it, every one.
   Marking a reference expired moves its expiry to the given time, never later;
+- on each message, `media_gone`, set when its media host answered that the
+  attachment is gone and never cleared, not even by a purge of references;
+  version 6 adds it, unset on every message stored before;
 - no media type on a revoked message, nor on an expired one once the expiry
   purge reaches it: the revoke or purge clears it, and the migration to
   version 5 clears it on messages revoked before. The purge also reaches media
