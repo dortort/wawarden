@@ -16,12 +16,49 @@ its image digest and the commands to verify and reproduce it.
 
 ## Contents
 
+- [1.3.0 - 2026-10-18](#130---2026-10-18)
 - [1.2.0 - 2026-10-18](#120---2026-10-18)
 - [1.1.0 - 2026-10-15](#110---2026-10-15)
 - [1.0.0 - 2026-10-12](#100---2026-10-12)
 - [0.3.0 - 2026-10-11](#030---2026-10-11)
 - [0.2.0 - 2026-10-06](#020---2026-10-06)
 - [0.1.0 - 2026-10-04](#010---2026-10-04)
+
+## [1.3.0] - 2026-10-18
+
+### Added
+
+- A backfill can be anchored at a chat's newest archived message.
+  `POST /admin/v1/backfill` takes an optional `anchor`, `"oldest"` (the
+  default, as before) or `"newest"`, and `wawarden admin backfill` takes
+  `--anchor oldest|newest`. With `newest` the owner's phone is asked for up to
+  50 messages before the chat's newest message, and a re-delivered attachment
+  that the archive holds without a media reference gains one while downloads
+  are on, if it is neither revoked nor expired and is younger than
+  `WAWARDEN_MEDIA_REF_RETENTION_DAYS` (see
+  [Backfill requests](docs/api.md#backfill-requests)). Both anchors share the
+  one quota of a request every 5 minutes and 20 a UTC day.
+
+### Changed
+
+- Dev builds: the fake engine answers a backfill anchored at a message it
+  delivered with the messages it delivered before it in that chat.
+
+### Fixed
+
+- The documentation did not say that a media reference is kept only for an
+  attachment received while downloads are on. The runbook, the configuration
+  reference and the API reference now say that one received before downloads
+  were on, or while they were off, answers `media_unavailable` until a
+  newest-anchored backfill re-delivers its message (see
+  [the runbook](docs/runbook.md#other-incidents)).
+
+### Upgrade notes
+
+- Run `wawarden admin backfill --anchor newest` against a v1.3.0 server. A
+  v1.2.0 server refuses the `anchor` key with `invalid_body`; without
+  `--anchor`, or with `--anchor oldest`, the command sends no `anchor` key and
+  works against both.
 
 ## [1.2.0] - 2026-10-18
 
@@ -471,6 +508,7 @@ Built from commit `d0d5514` with go1.27.1. Released under the MIT licence.
 - Release builds prove the `dev` build tag absent. The container image runs
   as a non-root user on a distroless base with a read-only root filesystem.
 
+[1.3.0]: https://github.com/dortort/wawarden/releases/tag/v1.3.0
 [1.2.0]: https://github.com/dortort/wawarden/releases/tag/v1.2.0
 [1.1.0]: https://github.com/dortort/wawarden/releases/tag/v1.1.0
 [1.0.0]: https://github.com/dortort/wawarden/releases/tag/v1.0.0
