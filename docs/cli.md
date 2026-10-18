@@ -412,7 +412,7 @@ format: 1
 written by: v1.0.0
 created: 2026-10-05T03:00:00Z
 archive integrity: ok
-archive schema version: 5
+archive schema version: 6
 archive schema: ok
 archive chats: 212
 archive messages: 48210
