@@ -304,7 +304,11 @@ the engine rejects and logs out. Release builds refuse
   [attachments](docs/api.md#attachments),
   [get_attachment](docs/api.md#get_attachment) and
   [pausing downloads](docs/api.md#pausing-downloads)). A revocation removes
-  the whole message, its attachment reference included.
+  the whole message, its attachment reference included. An attachment
+  received before downloads were on becomes downloadable when
+  `wawarden admin backfill --anchor newest` re-delivers its message, within
+  the 50 messages before the chat's newest (see
+  [the runbook](docs/runbook.md#other-incidents)).
 - **Sending.** A client with write chats sends text, once per idempotency key,
   behind a pacer and send budgets (see [sending](docs/api.md#sending) and
   [ban risk](docs/ban-risk.md)).
