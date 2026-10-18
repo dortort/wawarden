@@ -745,11 +745,10 @@ whether it pairs the wrong account.
   chat ends with recipient unavailable; and while not connected, nothing is
   sent. A history request for a synthetic chat returns a request id, and a
   tenth of a second later the fake delivers an on-demand history notification
-  naming it, offered again until the engine accepts it. When the anchor is a
-  message the fake delivered, the blob holds up to as many of the messages it
-  delivered before it in the same chat as requested, newest first, as a
-  phone's answer would; otherwise it holds as many older synthetic messages
-  as requested. The fake keeps the sends that
+  naming it, offered again until the engine accepts it. When the fake
+  delivered messages before the anchor in the same chat, the blob holds up to
+  as many of them as requested, newest first, as a phone's answer would;
+  otherwise it holds as many older synthetic messages as requested. The fake keeps the sends that
   reached its wire in memory, for tests of development builds.
 
 When the script has played, within about 15 seconds of pairing, the fake stays
