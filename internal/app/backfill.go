@@ -24,9 +24,14 @@ type backfiller interface {
 	Backfill(ctx context.Context, req engine.BackfillRequest) (string, error)
 }
 
-func requestBackfill(g policy.AdminGrant, ctx context.Context, store backfillStore, e backfiller, now time.Time, chat policy.CanonicalChat, count int) (string, error) {
+func requestBackfill(g policy.AdminGrant, ctx context.Context, store backfillStore, e backfiller, now time.Time, chat policy.CanonicalChat, count int,
+	anchor api.BackfillAnchor) (string, error) {
+	kind := ingest.AnchorOldest
+	if anchor == api.BackfillNewest {
+		kind = ingest.AnchorNewest
+	}
 	provisional := e.NewMessageID()
-	ticket, err := store.ReserveBackfill(g, ctx, ingest.BackfillRequest{ID: provisional, Chat: chat, Count: count, Now: now})
+	ticket, err := store.ReserveBackfill(g, ctx, ingest.BackfillRequest{ID: provisional, Chat: chat, Count: count, Anchor: kind, Now: now})
 	if quota, ok := errors.AsType[*ingest.QuotaError](err); ok {
 		return "", api.BackfillQuota(quota.RetryAfter)
 	}

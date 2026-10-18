@@ -45,15 +45,16 @@ type fakeAdmin struct {
 	backfillErr    error
 	backfillChat   policy.CanonicalChat
 	backfillCount  int
+	backfillAnchor BackfillAnchor
 	backfillGrant  bool
 	backfillBudget time.Duration
 }
 
-func (f *fakeAdmin) Backfill(g policy.AdminGrant, ctx context.Context, chat policy.CanonicalChat, count int) (string, error) {
+func (f *fakeAdmin) Backfill(g policy.AdminGrant, ctx context.Context, chat policy.CanonicalChat, count int, anchor BackfillAnchor) (string, error) {
 	f.record("backfill")
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.backfillChat, f.backfillCount, f.backfillGrant = chat, count, g.Valid()
+	f.backfillChat, f.backfillCount, f.backfillAnchor, f.backfillGrant = chat, count, anchor, g.Valid()
 	if deadline, ok := ctx.Deadline(); ok {
 		f.backfillBudget = time.Until(deadline)
 	}

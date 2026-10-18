@@ -14,23 +14,31 @@ func TestBackfillAccepts202WithTheRequestID(t *testing.T) {
 	f.service.backfillID = "3EB0SYNTHETIC"
 	f.service.chats = []ChatEntry{{Chat: groupChat, Ref: groupRef}, {Chat: aliceChat, Ref: groupRef[:31] + "2"}}
 	for _, tt := range []struct {
-		body  string
-		chat  policy.CanonicalChat
-		count int
+		body   string
+		chat   policy.CanonicalChat
+		count  int
+		anchor BackfillAnchor
 	}{
 		{body: `{"chat":"120363000000000001@g.us"}`, chat: groupChat, count: 50},
 		{body: `{"chat":"` + groupRef + `","count":1}`, chat: groupChat, count: 1},
 		{body: `{"chat":"15550100001@s.whatsapp.net","count":50}`, chat: aliceChat, count: 50},
+		{body: `{"chat":"120363000000000001@g.us","anchor":"newest"}`, chat: groupChat, count: 50, anchor: BackfillNewest},
+		{body: `{"anchor":"newest","chat":"` + groupRef + `","count":7}`, chat: groupChat, count: 7, anchor: BackfillNewest},
+		{body: `{"chat":"120363000000000001@g.us","anchor":"oldest"}`, chat: groupChat, count: 50, anchor: BackfillOldest},
+		{body: `{"chat":"120363000000000001@g.us","anchor":null}`, chat: groupChat, count: 50, anchor: BackfillOldest},
 	} {
+		f.service.mu.Lock()
+		f.service.backfillAnchor = BackfillNewest + 1
+		f.service.mu.Unlock()
 		rec := adminRequest(t, f, http.MethodPost, "/admin/v1/backfill", "application/json", tt.body)
 		if rec.Code != http.StatusAccepted || rec.Body.String() != `{"request_id":"3EB0SYNTHETIC"}` {
 			t.Fatalf("%s = %d %s", tt.body, rec.Code, rec.Body.String())
 		}
 		f.service.mu.Lock()
-		chat, count, granted, budget := f.service.backfillChat, f.service.backfillCount, f.service.backfillGrant, f.service.backfillBudget
+		chat, count, anchor, granted, budget := f.service.backfillChat, f.service.backfillCount, f.service.backfillAnchor, f.service.backfillGrant, f.service.backfillBudget
 		f.service.mu.Unlock()
-		if chat != tt.chat || count != tt.count || !granted || budget <= 20*time.Second || budget > sendDeadline {
-			t.Fatalf("%s reached the service as %v, %d, granted %v, %v left", tt.body, chat, count, granted, budget)
+		if chat != tt.chat || count != tt.count || anchor != tt.anchor || !granted || budget <= 20*time.Second || budget > sendDeadline {
+			t.Fatalf("%s reached the service as %v, %d, anchor %d, granted %v, %v left", tt.body, chat, count, anchor, granted, budget)
 		}
 	}
 	for _, m := range f.events.recorded() {
@@ -55,6 +63,16 @@ func TestBackfillRefusalsAreFixed(t *testing.T) {
 		{name: "an upper-case reference", body: `{"chat":"ABCDEF00000000000000000000000000"}`, status: 400, code: codeInvalidBody},
 		{name: "an unknown reference", body: `{"chat":"` + noRef + `"}`, status: 404, code: codeNotFound},
 		{name: "an unknown field", body: `{"chat":"120363000000000001@g.us","since":1}`, status: 400, code: codeInvalidBody},
+		{name: "an unknown anchor", body: `{"chat":"120363000000000001@g.us","anchor":"latest"}`, status: 400, code: codeInvalidBody},
+		{name: "an empty anchor", body: `{"chat":"120363000000000001@g.us","anchor":""}`, status: 400, code: codeInvalidBody},
+		{name: "an upper-case anchor", body: `{"chat":"120363000000000001@g.us","anchor":"NEWEST"}`, status: 400, code: codeInvalidBody},
+		{name: "a numeric anchor", body: `{"chat":"120363000000000001@g.us","anchor":1}`, status: 400, code: codeInvalidBody},
+		{name: "a boolean anchor", body: `{"chat":"120363000000000001@g.us","anchor":true}`, status: 400, code: codeInvalidBody},
+		{name: "an anchor list", body: `{"chat":"120363000000000001@g.us","anchor":["newest"]}`, status: 400, code: codeInvalidBody},
+		{name: "a duplicate anchor", body: `{"chat":"120363000000000001@g.us","anchor":"newest","anchor":"newest"}`, status: 400, code: codeInvalidBody},
+		{name: "two different anchors", body: `{"chat":"120363000000000001@g.us","anchor":"oldest","anchor":"newest"}`, status: 400, code: codeInvalidBody},
+		{name: "the quota of a newest anchor", body: `{"chat":"120363000000000001@g.us","anchor":"newest"}`, err: BackfillQuota(time.Minute), status: 429, code: codeBackfillQuota, retryAfter: "60"},
+		{name: "no anchor for a newest anchor", body: `{"chat":"120363000000000001@g.us","anchor":"newest"}`, err: ErrBackfillNoAnchor, status: 422, code: codeBackfillNoAnchor},
 		{name: "the quota", body: `{"chat":"120363000000000001@g.us"}`, err: BackfillQuota(4*time.Minute + 10*time.Second), status: 429, code: codeBackfillQuota, retryAfter: "250"},
 		{name: "the daily quota", body: `{"chat":"120363000000000001@g.us"}`, err: BackfillQuota(20 * time.Hour), status: 429, code: codeBackfillQuota, retryAfter: "72000"},
 		{name: "no anchor", body: `{"chat":"120363000000000001@g.us"}`, err: ErrBackfillNoAnchor, status: 422, code: codeBackfillNoAnchor},
