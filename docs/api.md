@@ -551,7 +551,7 @@ it has no attachment reference: it is not a media message, it was view-once or
 revoked, its declared size was over the effective cap or its message older
 than `WAWARDEN_MEDIA_REF_RETENTION_DAYS` when it arrived, its reference is
 past its expiry, or it arrived before downloads were on or while they were off
-and no [backfill](#backfill-requests) has re-delivered it since. A request
+and no [backfill](#backfill-requests) has given it one since. A request
 that finds the message
 no longer eligible also drops the client's job for it; when the message's chat
 or sender was re-keyed to a LID after the reference was issued, the next minute

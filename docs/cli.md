@@ -267,9 +267,10 @@ none of these forms, a `--count` out of range or an `--anchor` other than
 anything, and an unknown reference with exit `5`.
 
 A newest-anchored backfill is how an attachment in a message from before
-the device was linked, received while downloads were off, gains the
-reference a download needs. An attachment the device received itself while
-downloads were off gains none; see the [runbook](runbook.md#other-incidents).
+the device was linked, received before downloads were on or while they were
+off, gains the reference a download needs. Against a live account, one the
+device received itself while downloads were off gained none; see the
+[runbook](runbook.md#other-incidents).
 
 On success it prints `backfill requested: <request id>` on standard output,
 and on standard error that the phone sends the messages when it processes the
