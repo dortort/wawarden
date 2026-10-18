@@ -18,7 +18,7 @@ import (
 func TestANewestAnchoredBackfillGivesAttachmentsArchivedWithoutAReferenceOne(t *testing.T) {
 	adminToken := token.NewAdmin()
 	cfg := testConfig(t, adminToken)
-	cfg.OwnerPhone, cfg.Dev.FakeEngine = "+15550100009", true
+	cfg.OwnerPhone, cfg.Dev.FakeEngine, cfg.HistoryMaxBytes = "+15550100009", true, 1<<20
 	cfg.MediaMaxBytes, cfg.MediaRefRetentionDays = 16<<20, config.DefaultMediaRefRetentionDays
 	cfg.MediaPerMinute, cfg.MediaGlobalPerHour, cfg.MediaGlobalBytesPerHour = 60000, config.MaxMediaGlobalPerHour, config.DefaultMediaGlobalBytesPerHour
 	logs := &syncBuffer{}
