@@ -31,7 +31,7 @@ const usage = `usage:
   wawarden admin clients list ADMIN
   wawarden admin clients show|revoke --id ID ADMIN
   wawarden admin chats list [--match TEXT] ADMIN
-  wawarden admin backfill --chat CHAT [--count N] ADMIN
+  wawarden admin backfill --chat CHAT [--count N] [--anchor oldest|newest] ADMIN
                                    call the admin listener; ADMIN is [--addr URL] and one of
                                    --token-file PATH, --token-stdin or --token-command COMMAND
                                    (default --addr http://127.0.0.1:8082)
