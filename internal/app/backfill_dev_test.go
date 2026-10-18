@@ -33,6 +33,13 @@ func TestANewestAnchoredBackfillGivesAttachmentsArchivedWithoutAReferenceOne(t *
 		t.Fatalf("pair = %d %s", r.status, r.body)
 	}
 	waitUntil(t, "every scripted attachment reference", func() bool { counts, _ := f.status(); return counts["media_refs_live"] == fakeAttachment })
+	for quarantined := 1.0; quarantined <= 2; quarantined++ {
+		waitUntil(t, "the script's failing history blobs to be set aside", func() bool {
+			counts, _ := f.status()
+			return counts["history_blobs_quarantined"] >= quarantined
+		})
+	}
+	waitUntil(t, "no history blob pending", func() bool { counts, _ := f.status(); return counts["history_blobs_pending"] == 0 })
 	if err := a.archive.Write(t.Context(), "test.downloads_off", func(tx *ingest.Tx) error {
 		_, err := tx.PurgeMediaRefs(time.Now(), engine.DefaultMediaRefRetention, false, 2*fakeAttachment)
 		return err
