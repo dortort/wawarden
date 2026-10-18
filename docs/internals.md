@@ -411,9 +411,12 @@ the rules a message gets at receipt: downloads are on, the attachment is not
 view-once and its declared size is within the cap. It gains one only when it
 has none, its row is an attachment that is not revoked, has not expired and
 was never marked gone after its media host answered 403, 404 or 410 to a
-fetch, and the message is younger than `WAWARDEN_MEDIA_REF_RETENTION_DAYS`. This is how an attachment received
-before downloads were on, or while they were off, gets the reference a
-download needs.
+fetch, and the message is younger than `WAWARDEN_MEDIA_REF_RETENTION_DAYS`. This is how an attachment in a
+message from before the device was linked, received before downloads were on
+or while they were off, gets the reference a download needs. Against a live
+account, the phone's answer gave none to the attachments of messages the
+device had received itself, whether it left those messages out or sent them
+without their attachment descriptors.
 
 The blob's download goes through the protocol library, which asks WhatsApp for the
 media hosts, fetches the encrypted blob over an HTTP client of the adapter's,
