@@ -9,10 +9,10 @@ import (
 	"github.com/dortort/wawarden/internal/store/internal/db"
 )
 
-const latestSchemaVersion = 5
+const latestSchemaVersion = 6
 
 func migrate(ctx context.Context, d *db.DB) (int, error) {
-	return d.Migrate(ctx, []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5})
+	return d.Migrate(ctx, []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6})
 }
 
 func LatestSchemaVersion() int { return latestSchemaVersion }
@@ -384,4 +384,8 @@ ALTER TABLE audit ADD COLUMN message_hmac BLOB CHECK (message_hmac IS NULL OR le
 ALTER TABLE audit ADD COLUMN bytes INTEGER CHECK (bytes IS NULL OR bytes >= 0);
 
 UPDATE messages SET media_type = NULL WHERE revoked = 1 AND media_type IS NOT NULL;
+`
+
+const schemaV6 = `
+ALTER TABLE messages ADD COLUMN media_gone INTEGER NOT NULL DEFAULT 0 CHECK (media_gone BETWEEN 0 AND 1);
 `

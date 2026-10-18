@@ -20,8 +20,8 @@ func TestMigratingALargeArchive(t *testing.T) {
 	start := time.Now()
 	s := openWith(t, opts)
 	t.Logf("migrated 500,000 messages in %v", time.Since(start))
-	if s.SchemaVersion() != 5 {
-		t.Fatalf("schema version %d, want 5", s.SchemaVersion())
+	if s.SchemaVersion() != 6 {
+		t.Fatalf("schema version %d, want 6", s.SchemaVersion())
 	}
 	requireNumbered(t, s, 500000)
 	if n := scalar[int](t, s, "SELECT count(DISTINCT ref) FROM chats WHERE length(ref) = 32"); n != 1000 {

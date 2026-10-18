@@ -157,10 +157,11 @@ const (
 	insertMediaRef = "INSERT INTO media_refs (seq, ref, kind, variant, declared, expires_at, added_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
 	fillMediaRef   = `INSERT INTO media_refs (seq, ref, kind, variant, declared, expires_at, added_at)
 		SELECT seq, ?2, ?3, ?4, ?5, min(?6, ts + ?7, coalesce(expires_at, ?6)), ?8 FROM messages
-		WHERE seq = ?1 AND kind = 'media' AND media_type IS NOT NULL AND revoked = 0 AND min(?6, ts + ?7, coalesce(expires_at, ?6)) > ?8
+		WHERE seq = ?1 AND kind = 'media' AND media_type IS NOT NULL AND revoked = 0 AND media_gone = 0 AND min(?6, ts + ?7, coalesce(expires_at, ?6)) > ?8
 		ON CONFLICT (seq) DO NOTHING`
 	deleteMediaRef    = "DELETE FROM media_refs WHERE seq = ?"
 	expireMediaRef    = "UPDATE media_refs SET expires_at = ?1 WHERE seq = (SELECT seq FROM messages WHERE chat_jid = ?2 AND id = ?3 AND sender_jid = ?4) AND expires_at > ?1"
+	markMediaGone     = "UPDATE messages SET media_gone = 1 WHERE chat_jid = ?1 AND id = ?2 AND sender_jid = ?3"
 	selectAllRefs     = "SELECT seq FROM media_refs ORDER BY seq LIMIT ?"
 	selectExpiredRefs = "SELECT seq FROM media_refs WHERE expires_at <= ? ORDER BY expires_at, seq LIMIT ?"
 	selectAgedRefs    = "SELECT seq FROM media_refs WHERE added_at <= ? ORDER BY added_at, seq LIMIT ?"
@@ -544,6 +545,9 @@ func (tx *Tx) ExpireMediaRef(chat policy.CanonicalChat, id string, sender policy
 	}
 	chat, sender, err := tx.messageKey(chat, id, sender)
 	if err != nil {
+		return err
+	}
+	if _, err := tx.q.ExecContext(tx.ctx, markMediaGone, chat.JID(), id, sender.JID()); err != nil {
 		return err
 	}
 	_, err = tx.q.ExecContext(tx.ctx, expireMediaRef, ms(now), chat.JID(), id, sender.JID())

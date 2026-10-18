@@ -17,8 +17,8 @@ import (
 func TestOpenCreatesTheSchemaOnce(t *testing.T) {
 	opts := testOptions(t)
 	s := openWith(t, opts)
-	if s.SchemaVersion() != 5 || LatestSchemaVersion() != s.SchemaVersion() {
-		t.Fatalf("schema version %d, latest %d, want 5", s.SchemaVersion(), LatestSchemaVersion())
+	if s.SchemaVersion() != 6 || LatestSchemaVersion() != s.SchemaVersion() {
+		t.Fatalf("schema version %d, latest %d, want 6", s.SchemaVersion(), LatestSchemaVersion())
 	}
 	for _, table := range []string{"chats", "chat_aliases", "lid_map", "contacts", "group_participants", "messages", "messages_fts", "history_blobs", "inbox", "sync_state",
 		"contact_names", "clients", "client_read_chats", "client_write_chats", "audit", "media_refs", "revoke_tombstones"} {
@@ -37,7 +37,7 @@ func TestOpenCreatesTheSchemaOnce(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	again := openWith(t, opts)
-	if again.SchemaVersion() != 5 || scalar[int](t, again, "SELECT count(*) FROM messages") != 1 {
+	if again.SchemaVersion() != 6 || scalar[int](t, again, "SELECT count(*) FROM messages") != 1 {
 		t.Fatal("reopening changed the schema or the data")
 	}
 	if !again.Healthy() || again.Profile() != ProfileLocal {
@@ -49,7 +49,7 @@ func TestOpenRefusesANewerSchema(t *testing.T) {
 	opts := testOptions(t)
 	s := openWith(t, opts)
 	write(t, s, func(tx *Tx) error {
-		_, err := tx.q.ExecContext(tx.ctx, "PRAGMA user_version = 6")
+		_, err := tx.q.ExecContext(tx.ctx, "PRAGMA user_version = 7")
 		return err
 	})
 	if err := s.Close(); err != nil {
@@ -719,6 +719,44 @@ func TestExpireMediaRefMovesTheExpiryForward(t *testing.T) {
 		if err := s.Write(t.Context(), "test.expire", call); !errors.Is(err, ErrInvalid) {
 			t.Errorf("ExpireMediaRef with %s = %v, want ErrInvalid", name, err)
 		}
+	}
+}
+
+func TestARedeliveryNeverRefillsAReferenceItsMediaHostExpired(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		t.Run(fmt.Sprintf("downloads on %t", on), func(t *testing.T) {
+			s := openStore(t)
+			learn(t, s, aliceLID, alice, MappingSenderAlt)
+			gone := insert(t, s, mediaMessage(t, groupJID, "M1", alice, "", "sealed-1"))
+			kept := insert(t, s, mediaMessage(t, groupJID, "M2", alice, "", "sealed-2"))
+			changes := scalar[int](t, s, "SELECT max(change_seq) FROM messages")
+			write(t, s, func(tx *Tx) error { return tx.ExpireMediaRef(chat(t, groupJID), "M1", chat(t, aliceLID), epoch.Add(time.Hour)) })
+			if got := scalar[int](t, s, "SELECT max(change_seq) FROM messages"); got != changes {
+				t.Fatalf("marking an attachment gone moved the newest change number from %d to %d", changes, got)
+			}
+			want := map[bool]int{true: 1, false: 2}[on]
+			if n := purgeRefs(t, s, epoch.Add(time.Hour), refRetention, on, 10); n != want || storedRef(t, s, gone) != "" {
+				t.Fatalf("the purge after an expiry removed %d references, want %d", n, want)
+			}
+			at := epoch.Add(2 * time.Hour)
+			for _, id := range []string{"M1", "M2"} {
+				again := mediaMessage(t, groupJID, id, alice, "", "sealed-again")
+				again.Origin, again.Ingested = OriginHistory, at
+				if _, inserted := insertNew(t, s, again); inserted {
+					t.Fatalf("a re-delivered %s was stored again", id)
+				}
+			}
+			if got := storedRef(t, s, gone); got != "" {
+				t.Fatalf("a re-delivery refilled the reference its media host expired as %q", got)
+			}
+			wantKept := refRow("sealed-2", MediaImage, "", 4096, epoch.Add(refRetention), epoch)
+			if !on {
+				wantKept = refRow("sealed-again", MediaImage, "", 4096, epoch.Add(refRetention), at)
+			}
+			if got := storedRef(t, s, kept); got != wantKept {
+				t.Fatalf("the other message's reference is %q, want %q", got, wantKept)
+			}
+		})
 	}
 }
 
