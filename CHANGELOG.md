@@ -35,13 +35,18 @@ its image digest and the commands to verify and reproduce it.
   50 messages before the chat's newest message, and a re-delivered attachment
   that the archive holds without a media reference gains one while downloads
   are on, under the same size and view-once rules as at receipt, if it is
-  neither revoked nor expired and is younger than
+  neither revoked nor expired, its media host never answered `403`, `404` or
+  `410` to a fetch of it, and it is younger than
   `WAWARDEN_MEDIA_REF_RETENTION_DAYS` (see
   [Backfill requests](docs/api.md#backfill-requests)). Both anchors share the
   one quota of a request every 5 minutes and 20 a UTC day.
 
 ### Changed
 
+- The archive is at schema version 6. A fetch that the media host answers
+  with `403`, `404` or `410` now also marks the message, and no later copy of
+  it, a backfill's answer included, gains a media reference again. Before,
+  the mark went with the reference when the minute sweep removed it.
 - Dev builds: the fake engine answers a backfill with the messages it
   delivered before the anchor in that chat, when there are any.
 
@@ -56,6 +61,14 @@ its image digest and the commands to verify and reproduce it.
 
 ### Upgrade notes
 
+- The first start migrates the archive to schema version 6. The change is
+  forward-only: an earlier release refuses the upgraded archive. Take a
+  backup before upgrading; going back needs that backup restored into the
+  earlier release (see [the runbook](docs/runbook.md#upgrading)).
+- An attachment whose media host answered `403`, `404` or `410` under an
+  earlier release keeps no mark once the sweep removed its reference: a
+  newest-anchored backfill can give it a reference again, and its next fetch
+  marks it.
 - Run `wawarden admin backfill --anchor newest` against a v1.3.0 server. A
   v1.2.0 server refuses the `anchor` key with `invalid_body`; without
   `--anchor`, or with `--anchor oldest`, the command sends no `anchor` key and
