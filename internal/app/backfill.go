@@ -26,8 +26,11 @@ type backfiller interface {
 
 func requestBackfill(g policy.AdminGrant, ctx context.Context, store backfillStore, e backfiller, now time.Time, chat policy.CanonicalChat, count int,
 	anchor api.BackfillAnchor) (string, error) {
-	kind := ingest.AnchorOldest
-	if anchor == api.BackfillNewest {
+	kind := ingest.AnchorNewest + 1
+	switch anchor {
+	case api.BackfillOldest:
+		kind = ingest.AnchorOldest
+	case api.BackfillNewest:
 		kind = ingest.AnchorNewest
 	}
 	provisional := e.NewMessageID()

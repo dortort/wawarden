@@ -143,6 +143,21 @@ func TestANewestAnchoredBackfillAsksForTheMessagesBeforeTheNewestRow(t *testing.
 	}
 }
 
+func TestABackfillWithAnUnknownAnchorIsRefusedBeforeAnythingIsSent(t *testing.T) {
+	s, group, _ := backfillArchive(t)
+	now := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
+	e := &scriptedBackfiller{id: "3EB0UNKNOWN"}
+	if _, err := requestBackfill(adminGrant(t), t.Context(), s, e, now, group, 20, api.BackfillNewest+1); !errors.Is(err, ingest.ErrInvalid) {
+		t.Fatalf("an unknown anchor = %v, want ErrInvalid", err)
+	}
+	if len(e.calls) != 0 {
+		t.Fatalf("an unknown anchor sent %+v", e.calls)
+	}
+	if n := backfillsSince(t, s, now.Truncate(24*time.Hour)); n != 0 {
+		t.Fatalf("an unknown anchor counted %d backfills", n)
+	}
+}
+
 func TestABackfillThatSentNothingIsRefunded(t *testing.T) {
 	for _, tt := range []struct {
 		id   string
