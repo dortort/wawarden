@@ -1167,7 +1167,7 @@ client's `id` is its client id.
 | `GET /admin/v1/clients` | none | `200` `{"clients":[...]}`, oldest first: each client's `id`, `name`, `state`, `created_at`, `expires_at`, `revoked_at`, `all_chats`, `allow_first_contact`, `allow_media`, `read_chat_count` and `write_chat_count`. |
 | `GET /admin/v1/clients/{id}` | none | `200` with the client. |
 | `POST /admin/v1/clients/{id}/revoke` | exactly `{}` | `200` with the revoked client. Revoking a revoked client changes nothing and answers the same. |
-| `POST /admin/v1/backfill` | `{"chat":..., "count":...}`, below | `202` `{"request_id":"<id>"}`: the backfill went to WhatsApp under that id; the phone answers when it processes it. See [Backfill requests](#backfill-requests). |
+| `POST /admin/v1/backfill` | `{"chat":..., "count":..., "anchor":...}`, below | `202` `{"request_id":"<id>"}`: the backfill went to WhatsApp under that id; the phone answers when it processes it. See [Backfill requests](#backfill-requests). |
 | `POST /admin/v1/media` | exactly `{"paused":true}` or `{"paused":false}` | `200` with the same object: attachment downloads are paused or resumed. See [Pausing downloads](#pausing-downloads). |
 | `GET /admin/v1/chats` | none; the query may hold one `match` | `200` `{"chats":[{"id","kind","ref","name"}...],"truncated":false}`: at most 100 chats, most recent message first, whose name contains `match` (ignoring the letter case of ASCII letters), whose identifier contains it, or whose reference is it; every chat without `match`. `truncated` is `true` when more match. |
 
@@ -1202,21 +1202,35 @@ optional:
 
 ### Backfill requests
 
-A backfill asks the owner's phone for older messages of one chat. On the wire
-it is a history request, a message to the owner's primary device (see
+A backfill asks the owner's phone for the messages of one chat that come
+before an anchor message. On the wire it is a history request, a message to
+the owner's primary device (see
 [What a send does on the wire](internals.md#what-a-send-does-on-the-wire)).
 The phone answers with an on-demand history-sync blob, which arrives like any
 other [history](internals.md#history-sync) blob.
 
 The body of `POST /admin/v1/backfill` holds `chat`, a chat identifier as
 below or a chat reference (the 32 hexadecimal digits that `GET
-/admin/v1/chats` answers as `ref`), and optionally `count`, from 1 to 50, 50
-when omitted. The request asks the owner's primary device for the `count`
-messages that come before the chat's oldest message in the archive. At most
-one request is made every 5 minutes and 20 each UTC day, all chats together;
-a request that wrote nothing to WhatsApp (`not_connected`, or `rate_limited`
-while a send runs) does not count, and one that may have reached it counts
-whatever its answer. When a history notification answers it, the engine marks
+/admin/v1/chats` answers as `ref`), optionally `count`, from 1 to 50, 50
+when omitted, and optionally `anchor`, `"oldest"` or `"newest"`, `"oldest"`
+when omitted or `null`. The request asks the owner's primary device for the
+`count` messages that come before the anchor: with `"oldest"` the chat's
+oldest message in the archive, with `"newest"` its newest, by timestamp and
+then by arrival. The answer does not hold the anchor itself.
+
+A `"newest"` backfill re-delivers messages the archive may already hold. Each
+is archived once: a message already in the archive keeps its row and can gain
+only a [media reference](internals.md#media-reference), when it has none,
+downloads are on (`WAWARDEN_MEDIA_MAX_BYTES` above 0), its row is an
+attachment that is neither revoked nor expired, and the message is younger
+than `WAWARDEN_MEDIA_REF_RETENTION_DAYS`. This is how an attachment received
+before downloads were on, or while they were off, becomes downloadable; see
+the [runbook](runbook.md#other-incidents).
+
+At most one request is made every 5 minutes and 20 each UTC day, all chats
+and both anchors together; a request that wrote nothing to WhatsApp
+(`not_connected`, or `rate_limited` while a send runs) does not count, and one
+that may have reached it counts whatever its answer. When a history notification answers it, the engine marks
 the request complete. The route reports `admin_mutation` with the action
 `backfill`.
 
@@ -1296,7 +1310,7 @@ The routes refuse with fixed codes:
 | `409` `{"error":"name_taken"}` | create client | Another client has the name. |
 | `422` `{"error":"write_chat_unknown"}` | create client | The archive has not seen a write chat, and it is a group or `allow_first_contact` is not set. |
 | `404` `{"error":"not_found"}` | show and revoke client | No client has the id. |
-| `400` `{"error":"invalid_body"}` | backfill | `chat` is neither a chat identifier nor a chat reference, or `count` is not from 1 to 50. |
+| `400` `{"error":"invalid_body"}` | backfill | `chat` is neither a chat identifier nor a chat reference, `count` is not from 1 to 50, or `anchor` is neither `"oldest"` nor `"newest"` (a v1.2.0 server refuses any `anchor` key). Like every body, a key given twice or a value of the wrong type is refused too. |
 | `404` `{"error":"not_found"}` | backfill | No chat has the reference. |
 | `422` `{"error":"backfill_no_anchor"}` | backfill | The archive holds no message of the chat, so there is nothing to ask for history before. |
 | `429` `{"error":"backfill_quota"}` | backfill | A request was made less than 5 minutes ago, or 20 were made this UTC day. `Retry-After` gives the whole seconds until the next is allowed: up to 300, or until midnight UTC for the daily quota. |
