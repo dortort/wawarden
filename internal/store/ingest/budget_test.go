@@ -169,6 +169,7 @@ func TestTheSendBackfillAndBlobQueriesUseTheirIndexes(t *testing.T) {
 		"the backfill count":    {countBackfills, backfills, []any{0}},
 		"the backfill quota":    {selectQuota, "SCALAR SUBQUERY 1; " + backfills + "; SCALAR SUBQUERY 2; " + backfills, []any{0, 0}},
 		"the backfill anchor":   {selectAnchor, "SEARCH messages USING INDEX messages_chat_ts (chat_jid=?)", []any{alice}},
+		"the newest anchor":     {selectNewestAnchor, "SEARCH messages USING INDEX messages_chat_ts (chat_jid=?)", []any{alice}},
 		"the sent row":          {selectSentBy, "SEARCH messages USING INDEX sqlite_autoindex_messages_1 (chat_jid=? AND id=?)", []any{alice, "3EB0SENT", writerID}},
 		"the blob prune":        {pruneBlobs, "SEARCH history_blobs USING INTEGER PRIMARY KEY (rowid<?)", []any{0, 10}},
 	} {
