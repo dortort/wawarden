@@ -26,6 +26,8 @@ its image digest and the commands to verify and reproduce it.
 
 ## [1.3.0] - 2026-10-18
 
+Built from commit `26eb050` with go1.27.2.
+
 ### Added
 
 - A backfill can be anchored at a chat's newest archived message.
