@@ -57,8 +57,8 @@ func TestMigratingToVersion5AddsMediaReferencesAndClearsRevokedMediaTypes(t *tes
 	opts.Master = testMaster(t)
 	changes := seedVersion4(t, opts)
 	s := openWith(t, opts)
-	if s.SchemaVersion() != 5 || LatestSchemaVersion() != 5 {
-		t.Fatalf("schema version %d, latest %d, want 5", s.SchemaVersion(), LatestSchemaVersion())
+	if s.SchemaVersion() != 6 || LatestSchemaVersion() != 6 {
+		t.Fatalf("schema version %d, latest %d, want 6", s.SchemaVersion(), LatestSchemaVersion())
 	}
 	rep, err := admin.Verify(t.Context(), copyArchive(t, s), opts.Master, nil)
 	if err != nil || !rep.OK() || rep.Rows != 3 || rep.Verified != 3 {

@@ -191,7 +191,7 @@ func TestBackupVerify(t *testing.T) {
 		t.Fatalf("backup verify = %d\n%s\nstderr %q", code, stdout, stderr)
 	}
 	for _, want := range []string{
-		"format: 1\n", "written by: v1.0.0-test\n", "archive integrity: ok\n", "archive schema version: 5\n", "archive schema: ok\n",
+		"format: 1\n", "written by: v1.0.0-test\n", "archive integrity: ok\n", "archive schema version: 6\n", "archive schema: ok\n",
 		"archive chats: 1\n", "archive messages: 1\n", "archive history blobs pending: 0\n", "archive active clients: 1\n", "archive audit rows: 2\n",
 		"archive media references live: 0\n", "archive media references expired: 0\n", "archive revoke tombstones: 0\n",
 		"device store integrity: ok\n", "device store schema: ok\n", "device store paired: no\n", "device store pre-keys: 0\n", "device store sessions: 0\n",
