@@ -35,8 +35,8 @@ its image digest and the commands to verify and reproduce it.
   50 messages before the chat's newest message, and a re-delivered attachment
   that the archive holds without a media reference gains one while downloads
   are on, under the same size and view-once rules as at receipt, if it is
-  neither revoked nor expired, its media host never answered `403`, `404` or
-  `410` to a fetch of it, and it is younger than
+  neither revoked nor expired, was never marked gone after a `403`, `404` or
+  `410` from its media host, and is younger than
   `WAWARDEN_MEDIA_REF_RETENTION_DAYS` (see
   [Backfill requests](docs/api.md#backfill-requests)). Both anchors share the
   one quota of a request every 5 minutes and 20 a UTC day.
