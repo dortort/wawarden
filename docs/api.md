@@ -548,9 +548,11 @@ malformed reference all get the same `404` (`not_found`) as an unknown route,
 whether downloads are on or off (see [Not found](#not-found)). A message in
 scope then answers `404` (`media_unavailable`) when downloads are off, or when
 it has no attachment reference: it is not a media message, it was view-once or
-revoked, its reference is past its expiry, or it arrived before downloads were
-on or while they were off and no [backfill](#backfill-requests) has
-re-delivered it since. A request that finds the message
+revoked, its declared size was over the effective cap or its message older
+than `WAWARDEN_MEDIA_REF_RETENTION_DAYS` when it arrived, its reference is
+past its expiry, or it arrived before downloads were on or while they were off
+and no [backfill](#backfill-requests) has re-delivered it since. A request
+that finds the message
 no longer eligible also drops the client's job for it; when the message's chat
 or sender was re-keyed to a LID after the reference was issued, the next minute
 sweep drops it instead.
