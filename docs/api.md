@@ -1226,9 +1226,9 @@ only a [media reference](internals.md#media-reference), under the rules a
 message gets at receipt: downloads are on (`WAWARDEN_MEDIA_MAX_BYTES` above
 0), the attachment is not view-once and its declared size is within the
 [effective cap](#attachments). It gains one only when it has none, its row is
-an attachment that is not revoked, has not expired and whose media host never
-answered `403`, `404` or `410` to a fetch, and the message is younger than
-`WAWARDEN_MEDIA_REF_RETENTION_DAYS`. This is how an attachment received
+an attachment that is not revoked, has not expired and was never marked gone
+after its media host answered `403`, `404` or `410` to a fetch, and the
+message is younger than `WAWARDEN_MEDIA_REF_RETENTION_DAYS`. This is how an attachment received
 before downloads were on, or while they were off, becomes downloadable; see
 the [runbook](runbook.md#other-incidents).
 
