@@ -62,7 +62,7 @@ Exit codes are listed under [exit codes](cli.md#exit-codes).
 | `backup_failed`, `backup_prune_failed` | [Backup failures](#backup-failures) |
 | `rekey_conflict` | [Re-key conflicts](#re-key-conflicts) |
 | `notify_dropped`, `notify_failed` | [Dropped notifications](#dropped-notifications) |
-| `ingest_paused`, `quarantine`, `restart_budget`, `db_lost` | [Other incidents](#other-incidents) |
+| `ingest_paused`, `quarantine`, `restart_budget`, `db_lost`, an attachment received before downloads were on answering `media_unavailable` | [Other incidents](#other-incidents) |
 
 ## Before the first start
 
@@ -84,7 +84,12 @@ clients depend on the service
   with `--allow-media` can download it (see
   [Attachments](api.md#attachments)). At or below `16777216` (16 MiB), no attachment byte will be
   written to disk. Give the container `--memory=768m` with downloads on.
-  Setting it back to 0 removes every stored reference within a minute.
+  Setting it back to 0 removes every stored reference within a minute. A
+  reference is kept only for an attachment received while it is above 0: one
+  received before downloads were on, or while they were off, answers
+  `media_unavailable` until a newest-anchored backfill re-delivers its message
+  (up to 50 messages a request, and only within the reference retention; see
+  [Other incidents](#other-incidents)).
 
 Keep a copy of `keys/master` off the host once the first start has created it.
 Do the same for `keys/retired/` after each
@@ -871,5 +876,19 @@ copies it, so a dropped post loses no event from the output.
   wawarden admin backfill --chat <chat> --count 50 --token-file admin.token
   ```
 
-  At most one request every 5 minutes and 20 a day. `backfill_quota` and
-  `backfill_no_anchor` exit `5`.
+  At most one request every 5 minutes and 20 a day, whichever the anchor.
+  `backfill_quota` and `backfill_no_anchor` exit `5`.
+- **Attachments received before downloads were on**, or while they were off,
+  answer `media_unavailable`: no reference was kept for them. With downloads
+  on, ask the phone for the messages before the newest one the archive holds;
+  each that arrives again gains a reference, unless it is revoked, expired or
+  older than `WAWARDEN_MEDIA_REF_RETENTION_DAYS`:
+
+  ```sh
+  wawarden admin backfill --chat <chat> --anchor newest --token-file admin.token
+  ```
+
+  One request reaches at most the 50 messages before the chat's newest, and
+  asking again reaches the same ones until a newer message arrives. The server
+  must be v1.3.0 or later: an earlier one refuses the anchor with
+  `invalid_body`.

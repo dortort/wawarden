@@ -404,6 +404,15 @@ engine marks an on-demand blob, the answer to a backfill, processed, it marks
 the backfill with that request id complete in the same transaction; a blob of another sync type, or one
 that names no request, completes none.
 
+A history blob can hold messages the archive already has, as the answer to a
+backfill anchored at a chat's newest message does. Such a message keeps its
+row unchanged and can gain only a [media reference](#media-reference): when
+it has none, downloads are on, its row is an attachment that is neither
+revoked nor expired, and the message is younger than
+`WAWARDEN_MEDIA_REF_RETENTION_DAYS`. This is how an attachment received
+before downloads were on, or while they were off, gets the reference a
+download needs.
+
 The download goes through the protocol library, which asks WhatsApp for the
 media hosts, fetches the encrypted blob over an HTTP client of the adapter's,
 with timeouts, no proxy, no redirect and a response cap of
@@ -664,7 +673,9 @@ its place for at most the 20-second deadline.
 
 A backfill (`wawarden admin backfill`, `POST /admin/v1/backfill`) goes out as
 a history request: a protocol message to the owner's primary device that asks
-for up to 50 messages of a chat that come before a given message. It runs
+for up to 50 messages of a chat that come before a given message, the chat's
+oldest archived message or, with the `newest` anchor, its newest (by
+timestamp, then by arrival). The anchor itself is not asked for. It runs
 under the same deadline and has the same outcomes as a send. The phone answers
 with an on-demand history-sync blob. WhatsApp's
 acknowledgement means only that the request was accepted for delivery: the
@@ -731,8 +742,11 @@ whether it pairs the wrong account.
   chat ends with recipient unavailable; and while not connected, nothing is
   sent. A history request for a synthetic chat returns a request id, and a
   tenth of a second later the fake delivers an on-demand history notification
-  naming it, whose blob holds as many older synthetic messages as requested,
-  offered again until the engine accepts it. The fake keeps the sends that
+  naming it, offered again until the engine accepts it. When the anchor is a
+  message the fake delivered, the blob holds up to as many of the messages it
+  delivered before it in the same chat as requested, newest first, as a
+  phone's answer would; otherwise it holds as many older synthetic messages
+  as requested. The fake keeps the sends that
   reached its wire in memory, for tests of development builds.
 
 When the script has played, within about 15 seconds of pairing, the fake stays
