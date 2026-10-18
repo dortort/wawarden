@@ -71,6 +71,7 @@ type Client struct {
 	ids       int
 	sent      []engine.SendRequest
 	answers   map[string]engine.BackfillRequest
+	played    []engine.Message
 }
 
 func New(opts Options) (*Client, error) {
@@ -224,7 +225,7 @@ func (c *Client) DownloadHistory(ctx context.Context, ref engine.HistoryRef, dst
 	if !ok {
 		return errUnknownBlob
 	}
-	blob, err := compress(olderHistory(ref.ID, req))
+	blob, err := compress(c.answer(ref.ID, req))
 	if err != nil {
 		return err
 	}
@@ -314,8 +315,8 @@ func (c *Client) run(ctx context.Context, pair <-chan struct{}) {
 			}
 			return
 		}
-		if c.deliver(stamped(ev, time.Now())) {
-			c.advance(step)
+		if ev = stamped(ev, time.Now()); c.deliver(ev) {
+			c.advance(step, ev)
 		}
 	}
 }
@@ -348,11 +349,15 @@ func (c *Client) peek() (engine.Event, int, bool) {
 	return c.script[c.next], c.next, true
 }
 
-func (c *Client) advance(step int) {
+func (c *Client) advance(step int, ev engine.Event) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.next == step {
-		c.next++
+	if c.next != step {
+		return
+	}
+	c.next++
+	if m, ok := ev.(engine.Message); ok {
+		c.played = append(c.played, m)
 	}
 }
 
@@ -441,6 +446,29 @@ func (c *Client) Backfill(ctx context.Context, req engine.BackfillRequest) (stri
 		}
 	})
 	return id, nil
+}
+
+func (c *Client) answer(blob string, req engine.BackfillRequest) engine.History {
+	if before := c.playedBefore(req); len(before) > 0 {
+		return engine.History{Conversations: []engine.Conversation{{Chat: req.Chat, Messages: before}}}
+	}
+	return olderHistory(blob, req)
+}
+
+func (c *Client) playedBefore(req engine.BackfillRequest) []engine.Message {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	at := slices.IndexFunc(c.played, func(m engine.Message) bool { return m.ID == req.AnchorID })
+	if at < 0 {
+		return nil
+	}
+	var before []engine.Message
+	for _, m := range slices.Backward(c.played[:at]) {
+		if m.Chat == c.played[at].Chat && len(before) < req.Count {
+			before = append(before, m)
+		}
+	}
+	return before
 }
 
 func olderHistory(blob string, req engine.BackfillRequest) engine.History {
