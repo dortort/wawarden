@@ -464,7 +464,10 @@ func (c *Client) playedBefore(req engine.BackfillRequest) []engine.Message {
 	}
 	var before []engine.Message
 	for _, m := range slices.Backward(c.played[:at]) {
-		if m.Chat == c.played[at].Chat && len(before) < req.Count {
+		if len(before) == req.Count {
+			break
+		}
+		if m.Chat == c.played[at].Chat {
 			before = append(before, m)
 		}
 	}
