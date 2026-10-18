@@ -2714,14 +2714,14 @@ subject.
     chat's newest one, so an older attachment received before downloads were
     on keeps no reference. The request puts the newest message in the
     protocol's field for the oldest message the device holds. Against a live
-    account, the phone answered with the messages before it, and the
-    attachments of messages from before the device was linked gained a
-    reference from their descriptors; the attachments of messages the device
-    had received itself gained none, whether the phone left those messages
-    out or sent them without descriptors. So the anchor recovers attachments
-    from the history synced at pairing, not attachments received since while
-    downloads were off. Whether every phone answers the same way is not
-    known.
+    account, in group chats, the phone answered, and the attachments of
+    messages from before the device was linked, within the retention, gained
+    a reference from their descriptors; the attachments of messages the
+    device had received itself gained none, whether the phone left those
+    messages out or sent them without descriptors. So the anchor recovered
+    attachments from the history synced at pairing, not attachments received
+    since while downloads were off. Whether every phone, or a direct chat,
+    answers the same way is not known.
   - A re-delivered attachment whose media host answered `403`, `404` or
     `410` to a fetch gains no reference again, so it is not fetched again.
     The mark that keeps it so exists from v1.3.0 on: an attachment that
