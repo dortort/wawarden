@@ -266,9 +266,10 @@ none of these forms, a `--count` out of range or an `--anchor` other than
 `oldest` or `newest` stops the command with exit `2` before it sends
 anything, and an unknown reference with exit `5`.
 
-A newest-anchored backfill is how an attachment received before downloads
-were on, or while they were off, gains the reference a download needs; see
-the [runbook](runbook.md#other-incidents).
+A newest-anchored backfill is how an attachment in a message from before
+the device was linked, received while downloads were off, gains the
+reference a download needs. An attachment the device received itself while
+downloads were off gains none; see the [runbook](runbook.md#other-incidents).
 
 On success it prints `backfill requested: <request id>` on standard output,
 and on standard error that the phone sends the messages when it processes the
