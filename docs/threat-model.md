@@ -1905,9 +1905,10 @@ those packages (`internal/archtest/imports_test.go`), and `depguard`.
 **Enforced by.**
 
 - The architecture rules `confined-imports`, `raw-database-handle`,
-  `protocol-calls`, `protocol-client-calls` and `media-download`
-  (`internal/archtest/protocol_test.go`, `protocolclient_test.go`,
-  `mediadownload_test.go`, `storage_test.go`), and `depguard`.
+  `protocol-calls`, `protocol-client-calls`, `media-download` and
+  `media-fetch-callers` (`internal/archtest/confinement_test.go`,
+  `protocol_test.go`, `protocolclient_test.go`, `mediadownload_test.go`,
+  `sealedref_test.go`, `storage_test.go`), and `depguard`.
 - Tests of the adapter's construction, on every client it builds: the
   settings, that the protocol library's HTTP clients are the adapter's, and
   that it holds exactly one event handler (`internal/engine/wa/client_test.go`).
