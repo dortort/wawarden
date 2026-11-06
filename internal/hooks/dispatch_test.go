@@ -386,3 +386,22 @@ func counter(t *testing.T, reg *metrics.Registry, series string) string {
 	}
 	return ""
 }
+
+type cancellingTransport struct{ cancel context.CancelFunc }
+
+func (c cancellingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	c.cancel()
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("")), Header: http.Header{}}, nil
+}
+
+func TestADeliveryAcceptedAsTheDispatcherStopsIsStored(t *testing.T) {
+	f := newFixture(t, Spec{})
+	ctx, cancel := context.WithCancel(t.Context())
+	f.d.http = &http.Client{Transport: cancellingTransport{cancel: cancel}}
+	f.feed.items = []Item{item(1, 1, true, false, "accepted"), item(2, 2, true, false, "never sent")}
+	f.d.pass(ctx, &f.hook)
+	saved := f.store.saved()
+	if len(saved) != 1 || saved[0].Delivered != 1 || saved[0].Change != 1 || saved[0].High != 1 {
+		t.Fatalf("saved %+v, want the accepted delivery stored with its position and nothing after it", saved)
+	}
+}

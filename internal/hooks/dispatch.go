@@ -346,7 +346,8 @@ func (d *Dispatcher) pass(ctx context.Context, h *Hook) time.Duration {
 				dirty = false
 			}
 			reason, delivered := d.deliver(ctx, h, item, func() bool { return d.holds(ctx, h.Client) })
-			if ctx.Err() != nil {
+			if !delivered && ctx.Err() != nil {
+				// Stopped before the receiver took it: the message is posted again after a restart.
 				return 0
 			}
 			if delivered {
@@ -361,6 +362,9 @@ func (d *Dispatcher) pass(ctx context.Context, h *Hook) time.Duration {
 			h.Change, h.High = item.Change, max(h.High, item.Seq)
 			if !d.save(ctx, h, &p) {
 				return failedReadWait
+			}
+			if ctx.Err() != nil {
+				return 0
 			}
 			continue
 		}

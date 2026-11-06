@@ -115,7 +115,10 @@ func TestAWebhookPostsTheNewMessagesItsClientMayRead(t *testing.T) {
 	}
 	d.Start(t.Context())
 	deadline := time.Now().Add(10 * time.Second)
-	for len(recv.received()) < 2 && time.Now().Before(deadline) {
+	for time.Now().Before(deadline) {
+		if v, err := svc.Get(t.Context(), client.ID, view.ID); err == nil && v.Delivered == 2 {
+			break
+		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	if err := d.Stop(t.Context()); err != nil {
