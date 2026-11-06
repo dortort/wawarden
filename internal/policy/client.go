@@ -21,6 +21,7 @@ type ClientSpec struct {
 	AllChats          bool
 	AllowFirstContact bool
 	AllowMedia        bool
+	AllowWebhooks     bool
 	ExpiresInDays     int
 }
 
@@ -82,6 +83,7 @@ func ValidateClientSpec(spec ClientSpec, now time.Time) (Client, error) {
 		ExpiresAt:         now.Add(time.Duration(days) * clientDay),
 		AllowFirstContact: spec.AllowFirstContact,
 		AllowMedia:        spec.AllowMedia,
+		AllowWebhooks:     spec.AllowWebhooks,
 	}, nil
 }
 

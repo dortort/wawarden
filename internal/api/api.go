@@ -29,6 +29,7 @@ type ClientDeps struct {
 	SendRejected  func(reason string)
 	AuditFailed   func(action string, err error)
 	Media         *MediaDeps
+	Webhooks      WebhookService
 }
 
 func NewClientHandler(d ClientDeps) http.Handler {
@@ -73,7 +74,12 @@ func newClientHandler(d ClientDeps) (http.Handler, *reads) {
 	w := &writes{reads: s, sender: d.Sender, rejected: d.SendRejected, now: now}
 	registerReads(p.router, s)
 	registerWrites(p.router, w)
-	p.router.mcp(mcpPattern, newMCPEndpoint(s, w, now, mcpCallDeadline, defaultInlineLimits()))
+	var hooked *webhooks
+	if d.Webhooks != nil {
+		hooked = &webhooks{svc: d.Webhooks, now: now}
+		registerWebhooks(p.router, hooked)
+	}
+	p.router.mcp(mcpPattern, newMCPEndpoint(s, w, hooked, now, mcpCallDeadline, defaultInlineLimits()))
 	return p, s
 }
 

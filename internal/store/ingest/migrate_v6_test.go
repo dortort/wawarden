@@ -44,8 +44,8 @@ func TestMigratingToVersion6MarksNoAttachmentGone(t *testing.T) {
 	opts := testOptions(t)
 	changes := seedVersion5(t, opts)
 	s := openWith(t, opts)
-	if s.SchemaVersion() != 6 || LatestSchemaVersion() != 6 {
-		t.Fatalf("schema version %d, latest %d, want 6", s.SchemaVersion(), LatestSchemaVersion())
+	if s.SchemaVersion() != 7 || LatestSchemaVersion() != 7 {
+		t.Fatalf("schema version %d, latest %d, want 7", s.SchemaVersion(), LatestSchemaVersion())
 	}
 	if got := scalar[string](t, s, "SELECT group_concat(id || ':' || media_gone, ',') FROM (SELECT * FROM messages ORDER BY id)"); got != "M1:0,T1:0" {
 		t.Fatalf("media_gone after the migration = %q, want every message unmarked", got)

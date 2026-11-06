@@ -142,6 +142,7 @@ type Client struct {
 	AllChats          bool         `json:"all_chats"`
 	AllowFirstContact bool         `json:"allow_first_contact"`
 	AllowMedia        bool         `json:"allow_media"`
+	AllowWebhooks     bool         `json:"allow_webhooks"`
 	ReadChats         []ClientChat `json:"read_chats"`
 	WriteChats        []ClientChat `json:"write_chats"`
 }
@@ -165,6 +166,7 @@ type ClientSummary struct {
 	AllChats          bool    `json:"all_chats"`
 	AllowFirstContact bool    `json:"allow_first_contact"`
 	AllowMedia        bool    `json:"allow_media"`
+	AllowWebhooks     bool    `json:"allow_webhooks"`
 	ReadChatCount     int64   `json:"read_chat_count"`
 	WriteChatCount    int64   `json:"write_chat_count"`
 }
@@ -592,3 +594,50 @@ func (m MediaStatus) RetryAfter() time.Duration {
 }
 
 func (m MediaStatus) encode() (string, []byte, error) { return encodeJSON(m) }
+
+type WebhookFilter struct {
+	Chats     []string `json:"chats"`
+	Direction string   `json:"direction"`
+	Kinds     []string `json:"kinds"`
+	Contains  *string  `json:"contains"`
+}
+
+type Webhook struct {
+	ID             string        `json:"id"`
+	URL            string        `json:"url"`
+	Method         string        `json:"method"`
+	ContentType    string        `json:"content_type"`
+	HeaderNames    []string      `json:"header_names"`
+	Payload        *string       `json:"payload"`
+	Filter         WebhookFilter `json:"filter"`
+	CreatedAt      string        `json:"created_at"`
+	Delivered      int64         `json:"delivered"`
+	Failed         int64         `json:"failed"`
+	LastDeliveryAt *string       `json:"last_delivery_at"`
+	LastFailureAt  *string       `json:"last_failure_at"`
+	LastFailure    *string       `json:"last_failure"`
+}
+
+func (w Webhook) encode() (string, []byte, error) { return encodeJSON(w) }
+
+type WebhookCreated struct {
+	Webhook *Webhook `json:"webhook"`
+	Secret  string   `json:"secret"`
+}
+
+func (WebhookCreated) Status() int { return statusCreated }
+
+func (w WebhookCreated) encode() (string, []byte, error) { return encodeJSON(w) }
+
+type WebhookList struct {
+	Webhooks []Webhook `json:"webhooks"`
+}
+
+func (l WebhookList) encode() (string, []byte, error) { return encodeJSON(l) }
+
+type WebhookDeleted struct {
+	ID      string `json:"id"`
+	Deleted bool   `json:"deleted"`
+}
+
+func (d WebhookDeleted) encode() (string, []byte, error) { return encodeJSON(d) }

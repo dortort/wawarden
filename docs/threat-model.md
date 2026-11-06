@@ -60,7 +60,8 @@ The process opens at most three listeners, all plain HTTP, and nothing else:
 
 Outbound traffic is limited to the WhatsApp websocket, the protocol version
 fetch, history downloads and the attachment fetches clients ask for from
-WhatsApp's hosts, and an optional notification webhook. [Secure defaults](#secure-defaults) says when the
+WhatsApp's hosts, an optional notification webhook, and the webhooks that
+clients created with `allow_webhooks` register. [Secure defaults](#secure-defaults) says when the
 service first connects to WhatsApp.
 
 WaWarden does not restrict who can reach its listeners and does not terminate
@@ -406,6 +407,28 @@ These are stated so that nobody relies on WaWarden for them:
      holding up the engine, the admin routes or shutdown. Events it cannot
      deliver are counted and dropped. Those dropped when the shutdown's grace
      period runs out are also reported in one line, and make `serve` exit `1`.
+   - The [client webhooks](api.md#webhooks) go through the same HTTP client,
+     destination check and signature, under the separate switch
+     `WAWARDEN_WEBHOOKS_ALLOW_PRIVATE`, and under these further rules:
+     - A client gets them only when the operator created it with
+       `allow_webhooks`. Its URL, method, extra headers and body template are
+       the client's choice, so the destination check is the only guard on
+       where the service connects; keep the private-address switch off unless
+       every such client may reach the private network.
+     - A webhook posts only what its client may read: it follows the client's
+       change feed through the scoped store, under a read grant decided for
+       the client at every page, so a revoked or expired client's webhooks
+       post nothing more, and a retry stops once the client is gone.
+     - It adds no read power: a client could read the same messages and post
+       them anywhere itself. It moves the post into the service, which is
+       why the operator must allow it per client.
+     - The extra headers' values, the URL and the template are stored in the
+       archive, and so in its backups, in clear; they are never answered back
+       to a client or logged. The signing secret, 32 random bytes per webhook,
+       is stored in the archive too and answered once, at creation.
+     - Each webhook delivers one message at a time, so a slow receiver holds
+       up only its own webhook. Undelivered events are retried for at most 24
+       hours, then counted, logged and dropped.
 10. **Admin CLI to the admin listener.** This covers `wawarden admin status`,
     `pair`, `reconnect`, `clients`, `chats list` and `backfill`.
     - They take the token from a file, standard input or a command, never from
@@ -2667,6 +2690,7 @@ protocol adapter.
 | Every log line passes through one log writer, which redacts tokens, pseudonymises identifiers, drops XML lines and renders values fail-closed. The protocol library's and the Signal library's logs reach it through an adapter, and the MCP library has no logger. Tool arguments are never logged. [Row 13](#13-one-log-writer) gives the rules. | v0.2.0 |
 | Text that the admin CLI prints from a server answer passes through a terminal sanitiser. It replaces every control, format, line-separator and paragraph-separator character, and every invalid byte, with U+FFFD. So an answer cannot move the cursor, rewrite the screen, set a link or write the clipboard. The refusal code the CLI prints has client and admin tokens redacted as the log writer does. A test runs failing `serve`, `admin`, `audit`, `keys` and `backup` commands with tokens as their inputs and as the listener's answer, and finds no token secret in their output. | v0.2.0 |
 | The notification webhook is off unless configured. When it is on, [trust boundary 9](#trust-boundaries) gives its transport and destination rules. | v0.2.0 |
+| A client registers no webhook unless the operator created it with `allow_webhooks`, and a client webhook reaches no loopback, private or shared address unless `WAWARDEN_WEBHOOKS_ALLOW_PRIVATE=1`. | v1.4.0 |
 | Live status, broadcast and newsletter traffic, and live traffic of every other chat that is not a phone-number user, a LID user or a group, is dropped at ingest, before it is written anywhere. Such conversations inside a history-sync blob are dropped while the blob is applied. The blob's file and its inline content, which hold them until then, are deleted once the blob is processed or quarantined. | v0.2.0 |
 | Live protocol messages are not stored. The engine receives each live message as plain data, a type with no field for a message secret or the protocol message. Its one field that can carry a media key is the [media reference](internals.md#media-reference), which the adapter fills only while attachment downloads are on, and seals before the engine sees it. The archive's `messages` table has no `raw` column, which a test checks. History sync is the exception. Each history blob, the protocol's own messages with their media keys and message secrets, is kept as received, in a `0600` file under `history/` or, when it arrives inline, in the archive. The archive keeps its download reference, media key included. Both are kept only until the blob is processed or quarantined, and a start deletes the files of blobs no longer pending. The protocol library keeps its own state, message secrets included, in the device store (see [Assets](#assets)). | v0.2.0 |
 | The service never sends read receipts, presence, typing indicators or status updates. No code asks the protocol library for them, and an architecture test refuses the calls. The protocol library sends delivery receipts in their inactive form, and other traffic by itself (see [Protocol library](#protocol-library)). | v0.2.0 |
@@ -3133,6 +3157,16 @@ This subsection is the canonical statement of what the protocol library
     `wawarden_policy_denials_total` stays `0` and is no alarm. The audit rows'
     `not_found` reasons are what shows a client probing.
   - How an agent should treat what it reads is in [agents.md](agents.md).
+- **Webhooks registered by a manipulated agent.** A client created with
+  `allow_webhooks` can be told, by a message it reads, to register a webhook
+  that posts its chats to a third party.
+  - WaWarden offers the webhook routes and tools only to such clients, the
+    `create_webhook` description asks for a webhook only when the operator or
+    the user asked for one, and every create and delete has an audit row
+    (`rest.webhook_create`, `mcp.create_webhook`).
+  - It cannot tell a webhook an agent was asked for from one a message talked
+    it into. Grant `allow_webhooks` only to clients whose agents do not act on
+    message text, and watch the audit rows for creates.
 - **Prompt injection through pixels, speech and documents.** An attachment is
   third-party content: text in an image, words in a voice note or a video,
   and the contents of a PDF reach an agent that reads them, instructions

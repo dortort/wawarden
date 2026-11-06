@@ -19,4 +19,5 @@ type Client struct {
 	Revoked           bool
 	AllowFirstContact bool
 	AllowMedia        bool
+	AllowWebhooks     bool
 }

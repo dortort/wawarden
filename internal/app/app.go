@@ -17,6 +17,7 @@ import (
 	"github.com/dortort/wawarden/internal/buildinfo"
 	"github.com/dortort/wawarden/internal/config"
 	"github.com/dortort/wawarden/internal/engine"
+	"github.com/dortort/wawarden/internal/hooks"
 	"github.com/dortort/wawarden/internal/keys"
 	"github.com/dortort/wawarden/internal/listeners"
 	"github.com/dortort/wawarden/internal/logx"
@@ -61,6 +62,7 @@ type App struct {
 	session     deviceStore
 	engine      *engine.Engine
 	notify      *notify.Notifier
+	hooks       *hooks.Dispatcher
 	emf         *metrics.EMF
 	emfEvery    time.Duration
 	backup      *scheduler
@@ -214,6 +216,16 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 	if err := a.backup.load(ctx); err != nil {
 		return nil, errors.Join(err, a.closeStores())
 	}
+	var webhooks api.WebhookService
+	if refs != nil {
+		if a.hooks, err = hooks.New(hooks.Options{
+			Store: archive.Webhooks(), Clients: archive.Clients(), Top: archive.Webhooks().Top, Metrics: reg, Logger: logger,
+			Feed: api.NewWebhookFeed(api.FeedDeps{Archive: archive.Scoped(), Refs: refs}), AllowPrivate: cfg.WebhooksPrivate,
+		}); err != nil {
+			return nil, errors.Join(err, a.closeStores())
+		}
+		webhooks = webhookService{store: archive.Webhooks(), changed: a.hooks.Changed}
+	}
 	pause := &api.MediaPause{}
 	specs := []listeners.Spec{{
 		Name: listenerClient,
@@ -224,6 +236,7 @@ func newAppWith(ctx context.Context, cfg config.Config, out *logx.Writer, master
 			Limits: api.ReadLimits{ReadsPerMinute: cfg.ReadPerMinute, SearchesPerMinute: cfg.SearchPerMinute},
 			Sender: sendService{sender: newSender(cfg, archive, a.engine, notifier), rejected: rejected}, SendRejected: rejected,
 			AuditFailed: auditFailures(reg, alerts), Media: a.mediaDeps(ctx, cfg, media, archive, pause),
+			Webhooks: webhooks,
 		}),
 	}}
 	if cfg.AdminCredential != nil {
@@ -336,6 +349,7 @@ func (a *App) Run(ctx context.Context) error {
 		a.notify.SendOutcomeUnknown(reasonRestart)
 	}
 	a.engine.Start(context.WithoutCancel(ctx), a.starts)
+	a.hooks.Start(context.WithoutCancel(ctx))
 	emitting, stopEmitting := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopEmitting()
 	emitted := make(chan struct{})
@@ -381,6 +395,7 @@ func (a *App) Run(ctx context.Context) error {
 		a.afterDrain()
 	}
 	stopped := a.engine.Stop(grace)
+	hooksStopped := a.hooks.Stop(grace)
 	mediaStopped := a.media.wait(grace)
 	stopBackingUp()
 	var backupStopped error
@@ -395,7 +410,7 @@ func (a *App) Run(ctx context.Context) error {
 	if a.emf != nil {
 		a.emit()
 	}
-	err := errors.Join(failure, drained, stopped, mediaStopped, backupStopped, a.notify.Stop(grace), a.closeStores(), a.health.Shutdown(grace))
+	err := errors.Join(failure, drained, stopped, hooksStopped, mediaStopped, backupStopped, a.notify.Stop(grace), a.closeStores(), a.health.Shutdown(grace))
 	if err != nil {
 		a.logger.Error("stopped with errors", slog.String("event", "stopped"), slog.String("error", err.Error()))
 		return err

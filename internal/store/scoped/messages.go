@@ -13,7 +13,7 @@ import (
 const (
 	messageColumns = `m.seq, m.ts, m.change_seq, m.chat_jid, c.ref, m.id, m.sender_jid, k.push_name, coalesce(n.full_name, n.first_name),
 		m.from_me, m.kind, CASE WHEN m.revoked = 0 THEN m.text END, CASE WHEN m.revoked = 0 THEN m.text_display END,
-		CASE WHEN m.revoked = 0 THEN m.media_type END, q.id, q.sender_jid, m.quote_verified, m.edited_ts, m.revoked, m.sent_by`
+		CASE WHEN m.revoked = 0 THEN m.media_type END, q.id, q.sender_jid, m.quote_verified, m.edited_ts, m.revoked, m.sent_by, m.origin = 'live'`
 	messageJoins = ` JOIN chats c ON c.jid = m.chat_jid
 		LEFT JOIN contacts k ON k.jid = m.sender_jid
 		LEFT JOIN contact_names n ON n.jid = m.sender_jid{scope n.jid}

@@ -53,6 +53,7 @@ type Store struct {
 	scoped  *scoped.Reader
 	audit   *admin.Audit
 	clients *admin.Clients
+	hooks   *admin.Webhooks
 
 	mu     sync.Mutex
 	paused bool
@@ -76,7 +77,7 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 	}
 	audit := admin.NewAudit(d, opts.Master, opts.AuditOut)
 	s := &Store{db: d, version: version, floor: opts.MinFreeBytes, admin: admin.New(d), scoped: scoped.New(d, slots...),
-		audit: audit, clients: admin.NewClients(d, audit, opts.Now)}
+		audit: audit, clients: admin.NewClients(d, audit, opts.Now), hooks: admin.NewWebhooks(d, opts.Now)}
 	if err := s.finishRewrite(ctx); err != nil {
 		return nil, errors.Join(err, d.Close())
 	}
@@ -103,6 +104,8 @@ func (s *Store) Scoped() *scoped.Reader { return s.scoped }
 func (s *Store) Audit() *admin.Audit { return s.audit }
 
 func (s *Store) Clients() *admin.Clients { return s.clients }
+
+func (s *Store) Webhooks() *admin.Webhooks { return s.hooks }
 
 func (s *Store) Backup(ctx context.Context, staging string, write func(name string, size int64, r io.Reader) error) error {
 	return s.db.Backup(ctx, staging, write)

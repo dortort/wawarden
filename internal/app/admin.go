@@ -151,7 +151,7 @@ func clientView(c admin.Client) api.ClientView {
 	}
 	return api.ClientView{
 		ID: c.ID, Name: c.Name, State: c.State, CreatedAt: c.CreatedAt, ExpiresAt: c.ExpiresAt, RevokedAt: c.RevokedAt,
-		AllChats: c.AllChats, AllowFirstContact: c.AllowFirstContact, AllowMedia: c.AllowMedia,
+		AllChats: c.AllChats, AllowFirstContact: c.AllowFirstContact, AllowMedia: c.AllowMedia, AllowWebhooks: c.AllowWebhooks,
 		ReadCount: c.ReadCount, WriteCount: c.WriteCount,
 		Read: chats(c.Read), Write: chats(c.Write),
 	}

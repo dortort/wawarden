@@ -63,6 +63,7 @@ type Message struct {
 	EditedAt      time.Time            `json:"-"`
 	Revoked       bool                 `json:"-"`
 	SentBy        string               `json:"-"`
+	Live          bool                 `json:"-"`
 	Position      MessagePosition      `json:"-"`
 	Change        ChangePosition       `json:"-"`
 }
@@ -164,7 +165,7 @@ func scanMessage(rs rowScanner) (Message, error) {
 	var verified, edited sql.NullInt64
 	var ts int64
 	if err := rs.Scan(&m.Position.Seq, &ts, &m.Change.ChangeSeq, &chat, &m.ChatRef, &m.ID, &sender, &pushName, &savedName,
-		&m.FromMe, &m.Kind, &text, &display, &media, &replyID, &replySender, &verified, &edited, &m.Revoked, &sentBy); err != nil {
+		&m.FromMe, &m.Kind, &text, &display, &media, &replyID, &replySender, &verified, &edited, &m.Revoked, &sentBy, &m.Live); err != nil {
 		return Message{}, err
 	}
 	var err error

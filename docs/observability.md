@@ -116,6 +116,10 @@ lines have none of the four keys.
 | `notify_failed` | `WARN`, at every log level | `attempts`, `reason`, `status` | The [webhook](#webhook) did not take an event, which is dropped. |
 | `notify_dropped` | `WARN`, at every log level | `count` | At shutdown, the [webhook](#webhook) dropped `count` events it had not delivered, and `serve` exits `1`. |
 | `emf_failed` | `WARN` | `error_type` | Writing the [EMF](#embedded-metric-format) lines failed. |
+| `webhook_dropped` | `WARN` | `webhook`, `client`, `reason` | A [client webhook](api.md#webhook-deliveries) dropped an event after its last attempt; `reason` is `http_status`, `network_error`, `destination_refused`, `payload_invalid`, `retries_exhausted` or `client_gone`. Neither the URL, the headers nor the body is logged. |
+| `webhook_read_failed` | `WARN` | `webhook`, `error_type` | A client webhook could not read its client's change feed; it tries again 5 seconds later. |
+| `webhook_unsaved` | `WARN` | `webhook`, `error_type` | A client webhook's position could not be stored; it reads the same messages again 5 seconds later, so a receiver may see an event twice. |
+| `webhooks_unread` | `WARN` | `error_type` | The client webhooks could not be loaded from the archive; the dispatcher tries again within 10 seconds. |
 | `backup_disabled` | `WARN`, at every log level | | `WAWARDEN_BACKUP_AGE_RECIPIENT` is not set, or the [fake engine](internals.md#fake-engine) runs and opens no device store, so no [backup](configuration.md#backups) is ever taken. Logged once per start. |
 | `backup_check_failed` | `WARN` | `error_type` | A step of the [backup](configuration.md#backups) scheduler failed: reading or recording whether a backup is due, the prune of old backups (also reported as `backup_prune_failed`), the [audit retention](#audit-retention) or the prune of history blob rows; the scheduler runs again 30 seconds later. |
 | `audit_failed` | `WARN`, at every log level | `action`, `error_type` | An [audit row](#audit-chain) written after its response had begun, such as a completion row, could not be written; the response was not changed. Counted in `wawarden_audit_failures_total`. |
@@ -431,6 +435,8 @@ in [EMF](#embedded-metric-format), which needs no token.
 | `wawarden_sends_rejected_total` | counter | `reason` | [Sends](api.md#sending) refused: `scope` (a chat the client reads but may not write to), `first_contact`, `budget_minute`, `budget_hour`, `budget_global`, `pacer` (the pacer, or another send that was running). Every reason is present from the start, at `0`. Other refusals, such as a malformed text or key, are not counted. |
 | `wawarden_panics_total` | counter | `name` | Panics recovered, by handler or goroutine name. Absent until the first panic. |
 | `wawarden_notify_dropped_total` | counter | `reason` | Notification events the [webhook](#webhook) did not deliver: `queue_full`, `failed`, `shutdown`. |
+| `wawarden_webhook_deliveries_total` | counter | `outcome` | [Client webhook](api.md#webhook-deliveries) events, `delivered` or `dropped` after the last attempt. Both are present from the start, at `0`. |
+| `wawarden_webhook_attempt_failures_total` | counter | `reason` | Client webhook attempts that failed: `http_status`, `network_error`, `destination_refused`, `payload_invalid`. A retried event counts each failed attempt. |
 | `wawarden_build_info` | gauge | `version`, `revision`, `dev` | Always `1`; the labels describe the running binary. |
 | `wawarden_backup_last_success_timestamp_seconds` | gauge | | Unix time at which the newest successful [backup](configuration.md#backups) began, read from the archive at start; `0` until a backup succeeds. It is not written to the [EMF](#embedded-metric-format) lines. |
 
@@ -496,7 +502,8 @@ which refuses the event, and `wa.media.watchdog` for a panic in the watchdog
 of an attachment fetch, which ends the fetch (see
 [Media transport](internals.md#media-transport)). Other code on
 goroutines that the protocol library starts itself is not covered: a panic there ends the process. The notifier adds
-`notify.flush` and `notify.webhook`, the EMF writer
+`notify.flush` and `notify.webhook`, the client webhook dispatcher `hooks.dispatch`,
+`hooks.worker` (one per webhook) and `hooks.stop`, the EMF writer
 `metrics.emf`, the [backup](configuration.md#backups) scheduler `backup.schedule`, and each
 database call the watcher `db.deadline`, which logs a call that runs past its
 deadline. In development builds, the [fake engine](internals.md#fake-engine) adds

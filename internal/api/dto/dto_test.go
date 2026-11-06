@@ -45,6 +45,19 @@ func samples() []dto.Response {
 		dto.ChangePage{Messages: []dto.Message{sampleMessage()}, Next: &next, More: true, Truncated: true, Session: dto.Session{State: "connected"}},
 		dto.SendResult{Message: new(sampleMessage()), Replayed: true, Session: dto.Session{State: "connected"}, RetryAfterSeconds: new(5)},
 		dto.BackfillRequested{RequestID: "3EB0SYNTHETIC"},
+		sampleWebhook(),
+		dto.WebhookCreated{Webhook: new(sampleWebhook()), Secret: strings.Repeat("ab", 32)},
+		dto.WebhookList{Webhooks: []dto.Webhook{sampleWebhook()}},
+		dto.WebhookDeleted{ID: "wh_0123456789abcdef", Deleted: true},
+	}
+}
+
+func sampleWebhook() dto.Webhook {
+	payload, contains, at, failure := `{"text":"{{message.text}}"}`, "invoice", "2026-10-05T12:00:00.000Z", "http_status"
+	return dto.Webhook{
+		ID: "wh_0123456789abcdef", URL: "https://hooks.example.com/in", Method: "POST", ContentType: "application/json", HeaderNames: []string{"Authorization"},
+		Payload: &payload, Filter: dto.WebhookFilter{Chats: []string{strings.Repeat("a", 32)}, Direction: "inbound", Kinds: []string{"text"}, Contains: &contains},
+		CreatedAt: at, Delivered: 3, Failed: 1, LastDeliveryAt: &at, LastFailureAt: &at, LastFailure: &failure,
 	}
 }
 
@@ -171,13 +184,13 @@ func TestEncode(t *testing.T) {
 			name:            "client",
 			response:        sampleClient(),
 			wantContentType: "application/json; charset=utf-8",
-			wantBody:        `{"id":"aaaaaaaa","name":"agent","state":"active","created_at":"2026-10-05T12:00:00Z","expires_at":"2027-01-03T12:00:00Z","revoked_at":null,"all_chats":false,"allow_first_contact":false,"allow_media":true,"read_chats":[{"id":"120363000000000001@g.us","kind":"group","known":true,"name":"Synthetic Group"}],"write_chats":[]}`,
+			wantBody:        `{"id":"aaaaaaaa","name":"agent","state":"active","created_at":"2026-10-05T12:00:00Z","expires_at":"2027-01-03T12:00:00Z","revoked_at":null,"all_chats":false,"allow_first_contact":false,"allow_media":true,"allow_webhooks":false,"read_chats":[{"id":"120363000000000001@g.us","kind":"group","known":true,"name":"Synthetic Group"}],"write_chats":[]}`,
 		},
 		{
 			name:            "client list with the default flags",
 			response:        dto.ClientList{Clients: []dto.ClientSummary{{ID: "aaaaaaaa", Name: "agent", State: "active", CreatedAt: "2026-10-05T12:00:00Z", ExpiresAt: "2027-01-03T12:00:00Z", ReadChatCount: 1}}},
 			wantContentType: "application/json; charset=utf-8",
-			wantBody:        `{"clients":[{"id":"aaaaaaaa","name":"agent","state":"active","created_at":"2026-10-05T12:00:00Z","expires_at":"2027-01-03T12:00:00Z","revoked_at":null,"all_chats":false,"allow_first_contact":false,"allow_media":false,"read_chat_count":1,"write_chat_count":0}]}`,
+			wantBody:        `{"clients":[{"id":"aaaaaaaa","name":"agent","state":"active","created_at":"2026-10-05T12:00:00Z","expires_at":"2027-01-03T12:00:00Z","revoked_at":null,"all_chats":false,"allow_first_contact":false,"allow_media":false,"allow_webhooks":false,"read_chat_count":1,"write_chat_count":0}]}`,
 		},
 		{
 			name:            "metrics",
@@ -526,9 +539,9 @@ func declaredTypes(t *testing.T) []string {
 	return names
 }
 
-func TestOnlyTheSendBackfillAndMediaAnswersCarryTheirOwnStatus(t *testing.T) {
+func TestOnlyTheSendBackfillMediaAndWebhookAnswersCarryTheirOwnStatus(t *testing.T) {
 	type statused interface{ Status() int }
-	want := map[string]int{"dto.SendResult": 201, "dto.BackfillRequested": 202, "dto.MediaStatus": 202}
+	want := map[string]int{"dto.SendResult": 201, "dto.BackfillRequested": 202, "dto.MediaStatus": 202, "dto.WebhookCreated": 201}
 	for _, r := range append(samples(), sampleMediaStatus(dto.MediaFetching), sampleAttachment(t)) {
 		name := reflect.TypeOf(r).String()
 		s, ok := r.(statused)

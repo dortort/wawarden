@@ -9,10 +9,10 @@ import (
 	"github.com/dortort/wawarden/internal/store/internal/db"
 )
 
-const latestSchemaVersion = 6
+const latestSchemaVersion = 7
 
 func migrate(ctx context.Context, d *db.DB) (int, error) {
-	return d.Migrate(ctx, []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6})
+	return d.Migrate(ctx, []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7})
 }
 
 func LatestSchemaVersion() int { return latestSchemaVersion }
@@ -388,4 +388,35 @@ UPDATE messages SET media_type = NULL WHERE revoked = 1 AND media_type IS NOT NU
 
 const schemaV6 = `
 ALTER TABLE messages ADD COLUMN media_gone INTEGER NOT NULL DEFAULT 0 CHECK (media_gone BETWEEN 0 AND 1);
+`
+
+const schemaV7 = `
+ALTER TABLE clients ADD COLUMN allow_webhooks INTEGER NOT NULL DEFAULT 0 CHECK (allow_webhooks BETWEEN 0 AND 1);
+
+CREATE TABLE webhooks (
+	id TEXT PRIMARY KEY CHECK (length(id) = 19),
+	client_id TEXT NOT NULL REFERENCES clients (id),
+	url TEXT NOT NULL CHECK (length(url) BETWEEN 9 AND 2048),
+	method TEXT NOT NULL CHECK (method = 'POST' OR method = 'PUT' OR method = 'PATCH'),
+	content_type TEXT NOT NULL CHECK (content_type = 'application/json' OR content_type = 'text/plain'),
+	headers TEXT NOT NULL CHECK (json_valid(headers) AND json_type(headers) = 'object'),
+	payload TEXT CHECK (payload IS NULL OR length(payload) BETWEEN 1 AND 16384),
+	filter TEXT NOT NULL CHECK (json_valid(filter) AND json_type(filter) = 'object'),
+	secret BLOB NOT NULL CHECK (length(secret) = 32),
+	created_at INTEGER NOT NULL,
+	change_seq INTEGER NOT NULL CHECK (change_seq >= 0),
+	high_seq INTEGER NOT NULL CHECK (high_seq >= 0),
+	delivered INTEGER NOT NULL DEFAULT 0 CHECK (delivered >= 0),
+	failed INTEGER NOT NULL DEFAULT 0 CHECK (failed >= 0),
+	last_delivery_at INTEGER,
+	last_failure_at INTEGER,
+	last_failure TEXT
+) STRICT;
+
+CREATE INDEX webhooks_client ON webhooks (client_id, created_at);
+
+CREATE TRIGGER webhooks_no_replace BEFORE INSERT ON webhooks
+WHEN EXISTS (SELECT 1 FROM webhooks WHERE id = NEW.id) BEGIN
+	SELECT RAISE(ABORT, 'a webhook row is never replaced');
+END;
 `

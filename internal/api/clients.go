@@ -58,6 +58,7 @@ type ClientView struct {
 	AllChats          bool
 	AllowFirstContact bool
 	AllowMedia        bool
+	AllowWebhooks     bool
 	ReadCount         int64
 	WriteCount        int64
 	Read              []ClientChatView
@@ -85,6 +86,7 @@ type clientRequest struct {
 	AllChats          bool     `json:"all_chats"`
 	AllowFirstContact bool     `json:"allow_first_contact"`
 	AllowMedia        bool     `json:"allow_media"`
+	AllowWebhooks     bool     `json:"allow_webhooks"`
 	ExpiresInDays     int      `json:"expires_in_days"`
 }
 
@@ -93,6 +95,7 @@ func registerClients(rt *router, svc ClientService, events AdminEvents) {
 		view, credential, err := svc.CreateClient(ctx, policy.ClientSpec{
 			Name: body.Name, Read: body.ReadChats, Write: body.WriteChats,
 			AllChats: body.AllChats, AllowFirstContact: body.AllowFirstContact, AllowMedia: body.AllowMedia,
+			AllowWebhooks: body.AllowWebhooks,
 			ExpiresInDays: body.ExpiresInDays,
 		})
 		if err != nil {
@@ -110,7 +113,7 @@ func registerClients(rt *router, svc ClientService, events AdminEvents) {
 			list.Clients = append(list.Clients, dto.ClientSummary{
 				ID: v.ID, Name: v.Name, State: v.State, CreatedAt: timeText(v.CreatedAt), ExpiresAt: timeText(v.ExpiresAt),
 				RevokedAt: optionalTime(v.RevokedAt), AllChats: v.AllChats, AllowFirstContact: v.AllowFirstContact,
-				AllowMedia: v.AllowMedia, ReadChatCount: v.ReadCount, WriteChatCount: v.WriteCount,
+				AllowMedia: v.AllowMedia, AllowWebhooks: v.AllowWebhooks, ReadChatCount: v.ReadCount, WriteChatCount: v.WriteCount,
 			})
 		}
 		return list, nil
@@ -184,7 +187,7 @@ func clientResponse(v ClientView) dto.Client {
 	return dto.Client{
 		ID: v.ID, Name: v.Name, State: v.State, CreatedAt: timeText(v.CreatedAt), ExpiresAt: timeText(v.ExpiresAt),
 		RevokedAt: optionalTime(v.RevokedAt), AllChats: v.AllChats, AllowFirstContact: v.AllowFirstContact,
-		AllowMedia: v.AllowMedia, ReadChats: clientChats(v.Read), WriteChats: clientChats(v.Write),
+		AllowMedia: v.AllowMedia, AllowWebhooks: v.AllowWebhooks, ReadChats: clientChats(v.Read), WriteChats: clientChats(v.Write),
 	}
 }
 

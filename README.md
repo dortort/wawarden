@@ -316,6 +316,11 @@ the engine rejects and logs out. Release builds refuse
 - **Sending.** A client with write chats sends text, once per idempotency key,
   behind a pacer and send budgets (see [sending](docs/api.md#sending) and
   [ban risk](docs/ban-risk.md)).
+- **Webhooks.** Off by default. A client created with `allow_webhooks`
+  registers, over REST or MCP, up to 10 webhooks that post each new message it
+  may read, picked by chat, direction, kind or text, to an HTTPS URL with the
+  method, headers and body template it chooses, signed (see
+  [webhooks](docs/api.md#webhooks)).
 - **Audit.** Every client change and request joins a hash-chained audit table
   that `wawarden audit verify` checks (see
   [the audit chain](docs/observability.md#audit-chain)).
