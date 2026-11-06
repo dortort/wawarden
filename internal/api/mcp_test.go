@@ -381,13 +381,13 @@ func probeWrites(f *readFixture, archive ReadArchive) *writes {
 
 func probeEndpoint(t *testing.T, f *readFixture, archive ReadArchive, deadline time.Duration) string {
 	t.Helper()
-	f.handler.(*pipeline).router.mcp("POST /probe/mcp", newMCPEndpoint(probeReads(f, archive), probeWrites(f, archive), fixedNow, deadline, defaultInlineLimits()))
+	f.handler.(*pipeline).router.mcp("POST /probe/mcp", newMCPEndpoint(probeReads(f, archive), probeWrites(f, archive), nil, fixedNow, deadline, defaultInlineLimits()))
 	return "http://wawarden.invalid/probe/mcp"
 }
 
 func TestMCPEndpointRefusesARequestWithoutThePipelinesClient(t *testing.T) {
 	f := newMCPFixture(t)
-	endpoint := newMCPEndpoint(probeReads(f, f.archive), probeWrites(f, f.archive), fixedNow, mcpCallDeadline, defaultInlineLimits())
+	endpoint := newMCPEndpoint(probeReads(f, f.archive), probeWrites(f, f.archive), nil, fixedNow, mcpCallDeadline, defaultInlineLimits())
 	rec := rawMCP(t, endpoint, keyGroup, legacyCall("tools/list", "{}"), legacyHeader)
 	if rec.Code != http.StatusUnauthorized || strings.Contains(rec.Body.String(), toolListChats) {
 		t.Fatalf("an endpoint reached without the pipeline = %d %s, want 401", rec.Code, rec.Body.String())
@@ -485,7 +485,7 @@ func listedToolsAnswerThroughTheirHelper(t *testing.T, p protocol, key string, n
 	logs := installPanicReporter(t, metrics.NewRegistry())
 	probe := probeReads(f, panickingArchive{})
 	probe.media = newMediaRegistry(*testMediaDeps(t, &fakeMedia{}), panickingArchive{}, metrics.NewRegistry(), fixedNow)
-	f.handler.(*pipeline).router.mcp("POST /probe/mcp", newMCPEndpoint(probe, probeWrites(f, panickingArchive{}), fixedNow, mcpCallDeadline, defaultInlineLimits()))
+	f.handler.(*pipeline).router.mcp("POST /probe/mcp", newMCPEndpoint(probe, probeWrites(f, panickingArchive{}), nil, fixedNow, mcpCallDeadline, defaultInlineLimits()))
 	panicking := connectAt(t, f.handler, probeMCPURL, key, p)
 	reader, revoked := connect(t, f.handler, key, p), connect(t, f.handler, keyRevoked, p)
 	mref, err := f.refs.SealRef(f.clients[key].ID, cursor.Ref{Chat: groupChat.JID(), ID: "SYNTHETIC1", Sender: aliceChat.JID()})
@@ -1116,7 +1116,7 @@ func (f *mediaFixture) session(key string, p protocol) (*mcp.ClientSession, *wir
 }
 
 func (f *mediaFixture) probe(settles <-chan time.Time) {
-	e := newMCPEndpoint(f.reads, &writes{reads: f.reads, sender: &fakeSender{}, rejected: func(string) {}, now: f.clock.now}, f.clock.now, mcpCallDeadline, defaultInlineLimits())
+	e := newMCPEndpoint(f.reads, &writes{reads: f.reads, sender: &fakeSender{}, rejected: func(string) {}, now: f.clock.now}, nil, f.clock.now, mcpCallDeadline, defaultInlineLimits())
 	e.settles = settles
 	f.handler.(*pipeline).router.mcp("POST /probe/mcp", e)
 }

@@ -45,6 +45,7 @@ type clientAnswer struct {
 	AllChats          *bool               `json:"all_chats"`
 	AllowFirstContact *bool               `json:"allow_first_contact"`
 	AllowMedia        *bool               `json:"allow_media"`
+	AllowWebhooks     *bool               `json:"allow_webhooks"`
 	ReadChats         *[]clientChatAnswer `json:"read_chats"`
 	WriteChats        *[]clientChatAnswer `json:"write_chats"`
 	ReadChatCount     *int64              `json:"read_chat_count"`
@@ -106,6 +107,7 @@ func clientCreate(ctx context.Context, flags *flag.FlagSet, src adminSource, arg
 	allChats := flags.Bool("all-chats", false, "let the client read every chat")
 	firstContact := flags.Bool("allow-first-contact", false, "let the client write to a direct chat the archive has not seen")
 	media := flags.Bool("allow-media", false, "let the client download attachments once downloads are on")
+	webhooks := flags.Bool("allow-webhooks", false, "let the client register webhooks that post its new messages to a URL")
 	days := flags.Int("expires-days", 0, "days until the client expires, 90 by default")
 	if !parseAdminFlags(flags, args, stderr) {
 		return usageError(stderr)
@@ -142,8 +144,9 @@ func clientCreate(ctx context.Context, flags *flag.FlagSet, src adminSource, arg
 		AllChats          bool     `json:"all_chats"`
 		AllowFirstContact bool     `json:"allow_first_contact"`
 		AllowMedia        bool     `json:"allow_media"`
+		AllowWebhooks     bool     `json:"allow_webhooks"`
 		ExpiresInDays     int      `json:"expires_in_days"`
-	}{*name, nonNil(resolved["read"]), nonNil(resolved["write"]), *allChats, *firstContact, *media, *days})
+	}{*name, nonNil(resolved["read"]), nonNil(resolved["write"]), *allChats, *firstContact, *media, *webhooks, *days})
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "admin clients create: the request cannot be encoded")
 		return exitFailed
@@ -270,6 +273,9 @@ func writeClientHead(out *bytes.Buffer, a clientAnswer) {
 		{"allow media", strconv.FormatBool(*a.AllowMedia)},
 	} {
 		fmt.Fprintf(out, "%s: %s\n", line[0], sanitize.Terminal(line[1]))
+	}
+	if a.AllowWebhooks != nil {
+		fmt.Fprintf(out, "allow webhooks: %t\n", *a.AllowWebhooks)
 	}
 }
 

@@ -189,6 +189,7 @@ The service makes these outbound connections and no others
 | `https://web.whatsapp.com`, the protocol version | Before connecting |
 | The media hosts WhatsApp names at run time, such as `mmg.whatsapp.net`, for history-sync downloads and the attachments clients ask for while `WAWARDEN_MEDIA_MAX_BYTES` is above 0 | During history sync, after a backfill request, and when a client with `allow_media` starts an attachment job |
 | The webhook host and port of `WAWARDEN_NOTIFY_URL`, HTTPS only | When it is set; private addresses are refused unless `WAWARDEN_NOTIFY_ALLOW_PRIVATE=1` |
+| The hosts of the [client webhooks](api.md#webhooks), HTTPS only, chosen by the clients created with `allow_webhooks` | While such a client holds a webhook; private addresses are refused unless `WAWARDEN_WEBHOOKS_ALLOW_PRIVATE=1` |
 | The system's DNS resolver | For all of the above |
 
 A service without a paired device makes no connection to WhatsApp until

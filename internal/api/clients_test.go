@@ -37,7 +37,7 @@ func sampleView(t *testing.T) ClientView {
 }
 
 const sampleClientJSON = `{"id":"aaaqeaye","name":"agent","state":"active","created_at":"2026-10-06T12:00:00Z","expires_at":"2027-01-04T12:00:00Z",` +
-	`"revoked_at":null,"all_chats":false,"allow_first_contact":false,"allow_media":true,` +
+	`"revoked_at":null,"all_chats":false,"allow_first_contact":false,"allow_media":true,"allow_webhooks":false,` +
 	`"read_chats":[{"id":"120363000000000001@g.us","kind":"group","known":true,"name":"Synthetic Group"},{"id":"100000000000001@lid","kind":"lid","known":false,"name":null}],` +
 	`"write_chats":[{"id":"120363000000000001@g.us","kind":"group","known":true,"name":"Synthetic Group"}]}`
 
@@ -150,7 +150,7 @@ func TestClientReadsAndRevoke(t *testing.T) {
 	f.service.view = sampleView(t)
 	rec := adminRequest(t, f, http.MethodGet, "/admin/v1/clients", "", "")
 	want := `{"clients":[{"id":"aaaqeaye","name":"agent","state":"active","created_at":"2026-10-06T12:00:00Z","expires_at":"2027-01-04T12:00:00Z",` +
-		`"revoked_at":null,"all_chats":false,"allow_first_contact":false,"allow_media":true,"read_chat_count":2,"write_chat_count":1}]}`
+		`"revoked_at":null,"all_chats":false,"allow_first_contact":false,"allow_media":true,"allow_webhooks":false,"read_chat_count":2,"write_chat_count":1}]}`
 	if rec.Code != http.StatusOK || rec.Body.String() != want {
 		t.Fatalf("list = %d %s, want %s", rec.Code, rec.Body, want)
 	}

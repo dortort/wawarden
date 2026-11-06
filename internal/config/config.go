@@ -45,6 +45,7 @@ const (
 	envNotifyURL       = "WAWARDEN_NOTIFY_URL"
 	envNotifySecret    = "WAWARDEN_NOTIFY_SECRET_FILE"
 	envNotifyPrivate   = "WAWARDEN_NOTIFY_ALLOW_PRIVATE"
+	envWebhookPrivate  = "WAWARDEN_WEBHOOKS_ALLOW_PRIVATE"
 	envBackupRecipient = "WAWARDEN_BACKUP_AGE_RECIPIENT"
 	envBackupTime      = "WAWARDEN_BACKUP_TIME"
 	envBackupKeep      = "WAWARDEN_BACKUP_KEEP"
@@ -135,6 +136,7 @@ const (
 	reasonHistoryMaxBytesInvalid   = "history_max_bytes_invalid"
 	reasonUnsafeDebugInvalid       = "unsafe_debug_invalid"
 	reasonMetricsEMFInvalid        = "metrics_emf_invalid"
+	reasonWebhookPrivateInvalid    = "webhooks_allow_private_invalid"
 	reasonNotifyURLInvalid         = "notify_url_invalid"
 	reasonNotifyPrivateInvalid     = "notify_allow_private_invalid"
 	reasonNotifyURLMissing         = "notify_url_missing"
@@ -163,7 +165,7 @@ const (
 var known = []string{envDataDir, envListen, envAdminListen, envHealthListen, envAdminHash, envAdminHashFile, envLogLevel, envStorageProfile, envMinFreeBytes,
 	envOwnerPhone, envHistoryMax, envUnsafeDebug, envMetricsEMF, envNotifyURL, envNotifySecret, envNotifyPrivate, envBackupRecipient,
 	envReadPerMinute, envSearchPerMinute, envUnsafeRateCaps, envBackupTime, envBackupKeep, envAuditRetention, envSendGlobal, envSendPerMinute,
-	envUnsafeSendCaps, envMediaMax, envMediaRetention, envMediaPerMinute, envMediaGlobal, envMediaGlobalBytes}
+	envUnsafeSendCaps, envMediaMax, envMediaRetention, envMediaPerMinute, envMediaGlobal, envMediaGlobalBytes, envWebhookPrivate}
 
 type StorageProfile string
 
@@ -195,6 +197,7 @@ type Config struct {
 	HistoryMaxBytes int64
 	UnsafeDebug     time.Duration
 	MetricsEMF      bool
+	WebhooksPrivate bool
 	Notify          Notify
 	BackupRecipient string
 	BackupMinute    int
@@ -287,6 +290,9 @@ func Load(environ []string, opts Options) (Config, *Refusal) {
 		return Config{}, r
 	}
 	if cfg.MetricsEMF, r = metricsEMF(env); r != nil {
+		return Config{}, r
+	}
+	if cfg.WebhooksPrivate, r = webhooksPrivate(env); r != nil {
 		return Config{}, r
 	}
 	if cfg.Notify, r = notifySettings(env); r != nil {
@@ -584,6 +590,14 @@ func unsafeDebug(env map[string]string) (time.Duration, *Refusal) {
 		return 0, &Refusal{Reason: reasonUnsafeDebugInvalid, Variable: envUnsafeDebug, detail: "must be a number of minutes written in decimal digits, from 1 to 60"}
 	}
 	return time.Duration(n) * time.Minute, nil
+}
+
+func webhooksPrivate(env map[string]string) (bool, *Refusal) {
+	v, ok := env[envWebhookPrivate]
+	if ok && v != "0" && v != "1" {
+		return false, &Refusal{Reason: reasonWebhookPrivateInvalid, Variable: envWebhookPrivate, detail: "must be 0 or 1"}
+	}
+	return v == "1", nil
 }
 
 func metricsEMF(env map[string]string) (bool, *Refusal) {

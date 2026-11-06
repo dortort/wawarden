@@ -772,7 +772,7 @@ of its package.
 
 ## Archive schema
 
-The schema is at version 6. Besides chats, messages and their full-text index,
+The schema is at version 7. Besides chats, messages and their full-text index,
 identity mappings, push names, group members, the inbox and the history-sync
 queue, it holds:
 
@@ -846,8 +846,9 @@ queue, it holds:
   room for a 32-byte digest of its token, not for the token; its expiry must be
   at most 366 days after its creation, and triggers refuse a write chat for a
   client that reads every chat, and an `INSERT OR REPLACE` or `REPLACE` that
-  would swap a client row under its chats. A client's `allow_media` flag is off
-  unless set. A client's chats are canonical identifiers, not references to
+  would swap a client row under its chats. A client's `allow_media` and
+  `allow_webhooks` flags are off unless set; version 7 adds `allow_webhooks`,
+  off on every client created before. A client's chats are canonical identifiers, not references to
   stored chats, so they may name a chat the archive has not seen yet, and a
   re-key moves them from the phone number to the LID (see [Ingest](#ingest));
 - the audit table, whose rows triggers refuse to update or replace, and to
@@ -855,7 +856,13 @@ queue, it holds:
   Two columns, `message_hmac`, 16 to 32 bytes, and `bytes`, a count of 0 or
   more, are empty on rows written before version 5.
   Only the nightly [audit retention](observability.md#audit-retention) moves the anchor and
-  deletes rows.
+  deletes rows;
+- the [client webhooks](api.md#webhooks), since version 7: per webhook its id,
+  its client, the URL, method, content type, extra headers as a JSON object,
+  body template and filter as a JSON object, a 32-byte signing secret, the
+  change number and message number it has reached, and its delivery counts and
+  last outcomes. A trigger refuses an `INSERT OR REPLACE` of a webhook row;
+  deleting one is the client's.
 
 The [admin routes](api.md#admin-routes) create and revoke clients, and each change
 appends a row to the [audit chain](observability.md#audit-chain). The engine writes saved

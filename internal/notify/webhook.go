@@ -370,3 +370,17 @@ func (h *webhook) post(d delivery) (int, time.Duration, error) {
 	}
 	return resp.StatusCode, retryAfter, nil
 }
+
+// NewClient builds the HTTP client every outbound webhook uses: no proxy, no redirects, bounded timeouts, and a dialer that checks every destination address.
+func NewClient(allowPrivate bool) *http.Client { return newHTTPClient(newDialer(allowPrivate)) }
+
+// Sign is the signature of the WaWarden-Signature header, shared by the notification webhook and the client webhooks.
+func Sign(secret []byte, id, timestamp string, body []byte) string {
+	return sign(secret, id, timestamp, body)
+}
+
+// Retryable reports whether an answer with this status is worth another attempt.
+func Retryable(status int) bool { return retryable(status) }
+
+// DestinationRefused reports whether an error comes from the destination check.
+func DestinationRefused(err error) bool { return errors.Is(err, errDestination) }

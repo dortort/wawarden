@@ -23,6 +23,7 @@ reference, canonical identifier, LID and pacer are explained in the
   - [Query parameters and pages](#query-parameters-and-pages)
   - [Cursors and message references](#cursors-and-message-references)
   - [Attachments](#attachments)
+  - [Webhooks](#webhooks)
   - [Read rate limits](#read-rate-limits)
   - [Send limits](#send-limits)
   - [Busy reads](#busy-reads)
@@ -77,7 +78,8 @@ Outbound, the service connects to WhatsApp, and only while a device is
 paired or pairing was requested: the websocket at `web.whatsapp.com`, the
 version fetch from the same host, and history and [attachment](#attachments)
 downloads from the media hosts WhatsApp names. Its only other outbound connections go to the
-[webhook](observability.md#webhook), when `WAWARDEN_NOTIFY_URL` is set. Each connection to
+[webhook](observability.md#webhook), when `WAWARDEN_NOTIFY_URL` is set, and to the URLs of
+the [client webhooks](#webhooks), through the same HTTP client and destination check. Each connection to
 WhatsApp is made directly: the proxy variables
 (`HTTPS_PROXY`, `HTTP_PROXY`) are ignored, every step has a timeout (10 seconds to
 connect and for the TLS handshake, 20 seconds for response headers; the
@@ -248,6 +250,10 @@ writes.
 | `POST /v1/messages/{mref}/media` | none | `202` or `200`, the [attachment](#attachments)'s status, starting a fetch job when there is none |
 | `GET /v1/messages/{mref}/media`, and `HEAD` | none | `202`, the [attachment](#attachments)'s status while it fetches, then `200` or `206` with its bytes |
 | `POST /v1/chats/{ref}/messages` | none; a body and an `Idempotency-Key` header, see [Sending](#sending) | `201` `{message, replayed, session}`, the sent `Message` |
+| `POST /v1/webhooks` | none; a body, see [Webhooks](#webhooks) | `201` `{webhook, secret}`, for a client created with `allow_webhooks` |
+| `GET /v1/webhooks` | none | `{webhooks:[Webhook]}`, the client's own webhooks |
+| `GET /v1/webhooks/{id}` | none | one `Webhook` |
+| `DELETE /v1/webhooks/{id}` | none | `{id, deleted}` |
 
 A `Chat` is `{id, kind, name, name_source, last_message_at}`:
 
@@ -691,6 +697,136 @@ WaWarden; it carries no reference, message id or third-party string:
 - `untrusted` is always `true`, and `notice` is a fixed sentence: the bytes
   are third-party content.
 
+### Webhooks
+
+A client created with [`allow_webhooks`](#creating-a-client) may register up to
+10 webhooks. Each one posts every **new live message** that the client may read
+and that its filter passes to a URL the client chooses, with the method, extra
+headers and body the client chooses. A client without the flag gets `404
+not_found` on every webhook route, as if the routes did not exist, and no
+webhook tools over [MCP](#mcp-tools).
+
+The body of `POST /v1/webhooks` is a JSON object (at most 64 KiB, under the
+[request body](#request-bodies) rules):
+
+| Key | Content |
+|---|---|
+| `url` (required) | `https://host[:port][/path][?query]`, at most 2048 bytes, without credentials or a fragment. |
+| `method` | `POST`, `PUT` or `PATCH`, in any letter case; `POST` when omitted. |
+| `content_type` | `application/json` or `text/plain`; `application/json` when omitted. |
+| `headers` | At most 8 `{name, value}` objects sent with every request, for example an `Authorization` header the receiver expects. A name is letters, digits and `-`, at most 64 characters, given once ignoring case; a value is printable ASCII, at most 1024 characters. The service refuses the headers it sets itself or that change how a request is framed or routed: `Host`, `Content-Type`, `Content-Length`, `Content-Encoding`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Upgrade`, `TE`, `Trailer`, `Expect`, `User-Agent`, `Forwarded`, `X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Real-IP`, and any name starting with `WaWarden-`, `Sec-` or `Proxy-`. |
+| `payload` | A body template, at most 16 KiB; see [Payload templates](#payload-templates). The [default body](#webhook-deliveries) when omitted. |
+| `filter` | An object of the optional keys below; a message must pass every key that is set. |
+
+| Filter key | Content |
+|---|---|
+| `chats` | At most 64 chat references as `GET /v1/chats` lists them: only messages of these chats. A reference outside the client's scope never matches. |
+| `direction` | `inbound` for messages others sent, `outbound` for messages the owner's account sent (the owner's own and every gateway send), `any` when omitted. |
+| `kinds` | Message kinds among `text`, `media`, `reaction`, `poll_update` and `other`. |
+| `contains` | 1 to 128 characters that the message's `text` must contain, ignoring letter case. A message without text never matches. |
+
+The answer is `201` `{webhook, secret}`. `secret` is 64 lower-case
+hexadecimal digits that sign every delivery; this answer alone carries it.
+A `Webhook` is `{id, url, method, content_type, header_names, payload,
+filter:{chats, direction, kinds, contains}, created_at, delivered, failed,
+last_delivery_at, last_failure_at, last_failure}`: `id` is `wh_` and 16
+hexadecimal digits, `header_names` lists the extra headers' names, sorted,
+and never their values, `delivered` and `failed` count the events the receiver
+accepted and those dropped, and `last_failure` is the reason of the newest
+drop, among `http_status`, `network_error`, `destination_refused`,
+`payload_invalid`, `retries_exhausted` and `client_gone`. A webhook cannot be
+changed: delete it and create another.
+
+A refused create answers `400` with one of `webhook_url_invalid`,
+`webhook_method_invalid`, `webhook_content_type_invalid`,
+`webhook_header_invalid`, `webhook_payload_invalid` and
+`webhook_filter_invalid`, `409 webhook_limit_reached` for an eleventh webhook,
+or the [request body](#request-bodies) codes. `GET` and `DELETE` of an `id`
+the client does not hold answer `404 not_found`; one client never sees
+another's webhooks.
+
+#### Webhook deliveries
+
+A webhook starts after the newest message in the archive when it is created,
+and follows the client's [change feed](#client-api) under the client's own
+read grant, so it sees exactly what `GET /v1/changes` would show the client.
+Of that feed it posts each message that is new, came in live rather than from
+[history](internals.md#history-sync), and passes the filter. An edit,
+a revocation or an expiry of a message posts nothing, and neither does a
+message that history or a [backfill](#backfill-requests) adds.
+
+The default body is:
+
+```json
+{"id":"evt_9c2f0e4b7a1d3c5e8f60a1b2c3d4e5f6","event":"message.created","time":"2026-10-05T08:00:00.120Z","webhook":"wh_0123456789abcdef","message":{"mref":"m1_q8ZbN3xVd0kT5hLw2pRj7sYc4uFe9aGo","chat":"5b0e8c1f2a3d4e6f7a8b9c0d1e2f3a4b","sender":{"id":"15550100002@s.whatsapp.net","name":"Synthetic Contact"},"from_me":false,"ts":"2026-10-05T08:00:00.000Z","kind":"text","text":"See you at noon","text_display":"See you at noon","text_truncated":false,"media_type":null,"reply_to":null,"quote_verified":false,"edited_at":null,"revoked":false,"origin":"peer","untrusted":true}}
+```
+
+`message` is the client's `Message`, as `GET /v1/changes` answers it, with an
+`mref` the client's token opens. Each request carries:
+
+| Header | Value |
+|---|---|
+| `Content-Type` | `application/json`, or `text/plain; charset=utf-8` |
+| `User-Agent` | `wawarden` |
+| `WaWarden-Webhook-Id` | The webhook's `id`. |
+| `WaWarden-Event-Id` | `evt_` and 32 hexadecimal digits, the same for one message and one webhook on every attempt and after a restart. |
+| `WaWarden-Timestamp` | The time of this attempt, in Unix seconds. |
+| `WaWarden-Signature` | `v1=` and the lower-case hexadecimal HMAC-SHA256, keyed with the bytes of the 64-digit `secret`, of the event id, `.`, the timestamp, `.` and the body's bytes. |
+
+and the webhook's extra headers. A receiver verifies a delivery as it would the
+[notification webhook's](observability.md#verifying-a-delivery), with the
+webhook's `secret` as the key.
+
+A webhook posts its messages one at a time, in the order of the feed, and stores
+its position after each one, so a restart resumes where it stopped: a message
+is posted at least once, and a receiver should ignore an event id it has
+already handled. A `2xx` answer delivers the event. A network error and the
+statuses `408`, `425`, `429` and `5xx` are retried after 1 second, then twice
+as long each time up to 5 minutes, with jitter, or after a `Retry-After` of at
+most 5 minutes, while the webhook waits; after 24 hours of retries, or as soon
+as the client is revoked, expires or is gone, the event is dropped. Any other
+answer, and a destination the [destination check](observability.md#webhook)
+refuses, drops the event at once. A dropped event is counted, logged as
+`webhook_dropped` and not tried again; the webhook goes on with the next
+message.
+
+A webhook of a revoked or expired client posts nothing and keeps its position;
+it is never deleted by the service. The service follows no redirect, uses no
+proxy and reads at most 4 KiB of an answer. Private, loopback and link-local
+destinations are refused unless `WAWARDEN_WEBHOOKS_ALLOW_PRIVATE=1` (see
+[the configuration](configuration.md#environment-variables)).
+
+#### Payload templates
+
+A `payload` replaces the default body. It names the default body's fields with
+placeholders, `{{` and `}}` around a dotted path such as `{{message.text}}`,
+`{{message.sender.name}}`, `{{message.chat}}`, `{{webhook}}` or the whole
+`{{message}}`; spaces inside the braces are allowed. A template that names a
+field the default body lacks, holds more than 64 placeholders, or, as JSON,
+does not parse or nests deeper than 32 levels is refused with
+`webhook_payload_invalid`.
+
+- With `content_type` `application/json`, the template must be JSON. A string
+  that is exactly one placeholder becomes the field's JSON value, so
+  `"{{message.from_me}}"` becomes `false`, `"{{message.reply_to}}"` may become
+  `null` and `"{{message}}"` becomes an object. A placeholder inside a longer
+  string is replaced by the field's text, escaped for JSON; `null` becomes the
+  empty string. Placeholders in object keys stay as written. The template's
+  keys keep their order.
+- With `text/plain`, every placeholder is replaced by the field's text, with no
+  escaping, and an object by its JSON.
+
+A rendered body over 1 MiB is not sent: the event is dropped as
+`payload_invalid`. Every value a template inserts is third-party text, as in
+the client API: a receiver must not act on it as instructions (see
+[docs/agents.md](agents.md)).
+
+For example, to post a short notice to a chat service that takes `{"text":…}`:
+
+```json
+{"url":"https://hooks.example.com/services/T000/B000/XXXX","payload":"{\"text\":\"New WhatsApp message from {{message.sender.name}}: {{message.text}}\"}","filter":{"direction":"inbound","kinds":["text"]}}
+```
+
 ### Read rate limits
 
 Each client has a read budget and a search budget, kept in memory and never
@@ -757,18 +893,19 @@ ends.
 Every request the read budget admits writes one [audit](observability.md#audit-chain) row and
 one standard-output line before it is answered, allowed or not. The action is
 `rest.me`, `rest.chats`, `rest.chat`, `rest.messages`, `rest.search`,
-`rest.changes`, `rest.message`, `rest.media.fetch`, `rest.media` or `rest.send` for the routes above, in that order, and
+`rest.changes`, `rest.message`, `rest.media.fetch`, `rest.media`, `rest.send`, `rest.webhook_create`, `rest.webhooks`, `rest.webhook` or `rest.webhook_delete` for the routes above, in that order, and
 `rest.unrouted` for an unknown path or method, a send of a client without a
 write grant included; the reason is `ok` (for a `201` too) or the error
 code of the answer (`not_found`, `invalid_query`, `invalid_cursor`,
 `rate_limited`, `busy`, `method_not_allowed`, one of the [sending](#sending)
-codes, or `internal_error`, which a handler
+or [webhook](#webhooks) codes, or `internal_error`, which a handler
 that panics also records). The row names
 a chat only when the answer is about one chat (`rest.chat`, `rest.messages` and
 `rest.message` that succeed, `rest.media.fetch` and `rest.media` once the message
 is found in scope, whatever the answer, and `rest.send` once the chat is found in the
 write scope, whatever the send's outcome); a `404` `not_found` names none. No row holds the
-text or the idempotency key. Every `POST /mcp` writes one
+text or the idempotency key, nor a webhook's URL, headers or template; a
+webhook's deliveries write no row. Every `POST /mcp` writes one
 row too, with the actions and reasons listed under [MCP audit](#mcp-audit). A request whose row cannot be
 written within 2 seconds is answered `503` (`busy`) with `Retry-After: 1`, and
 one whose row fails for another reason `500` (`internal_error`); either way
@@ -865,10 +1002,12 @@ contain a chat name or anything else read from the archive. Every client gets
 the five read tools. A client that holds a write grant at the time of the
 request also gets `send_message`, and a client created with
 [`allow_media`](#creating-a-client) also gets `get_attachment` while downloads
-are on (`WAWARDEN_MEDIA_MAX_BYTES` above 0). A call of a tool the client does
+are on (`WAWARDEN_MEDIA_MAX_BYTES` above 0), and a client created with
+[`allow_webhooks`](#creating-a-client) also gets `create_webhook`,
+`list_webhooks` and `delete_webhook`. A call of a tool the client does
 not get is answered exactly as a call of a tool that does not exist, byte for
-byte, with the audit reason `unknown_tool`. The endpoint holds the four lists
-as four servers built at start, one for each combination of the two grants,
+byte, with the audit reason `unknown_tool`. The endpoint holds the lists
+as servers built at start, one for each combination of the three grants,
 and picks one for each request; the 2026-07-28 revision lets `tools/list` vary
 with the authorization a request presents. Each tool but `get_attachment`
 calls the same code as its route and answers the same JSON, which the
@@ -883,8 +1022,12 @@ calls the same code as its route and answers the same JSON, which the
 | `get_changes` | `since`, `chat`, `limit` | As `GET /v1/changes`: `{messages, next, more, truncated, session}` |
 | `send_message` | `chat`, `text`, `idempotency_key` (all required), `reply_to` | As `POST /v1/chats/{ref}/messages`: `{message, replayed, session}` |
 | `get_attachment` | `message` (required), `part` | The attachment's [status](#status), and the file when it comes inline or the part asked for; see [get_attachment](#get_attachment) |
+| `create_webhook` | `url` (required), `method`, `content_type`, `headers`, `payload`, `filter` | As `POST /v1/webhooks`: `{webhook, secret}`; see [Webhooks](#webhooks) |
+| `list_webhooks` | none | As `GET /v1/webhooks`: `{webhooks}` |
+| `delete_webhook` | `webhook` (required) | As `DELETE /v1/webhooks/{id}`: `{id, deleted}` |
 
-There is no tool for `GET /v1/me` or `GET /v1/messages/{mref}`.
+There is no tool for `GET /v1/me`, `GET /v1/messages/{mref}` or
+`GET /v1/webhooks/{id}`.
 
 | Argument | Schema | Meaning |
 |---|---|---|
@@ -898,6 +1041,8 @@ There is no tool for `GET /v1/me` or `GET /v1/messages/{mref}`.
 | `message` | string, 1 to 640 characters | A message's `mref` as `get_messages`, `search_messages` or `get_changes` return it. |
 | `part` | integer, 0 to 255 | With `get_attachment`, the index of the 8 MiB part to return, from `0` to the status's `parts` − 1; see [Parts](#parts). |
 | `idempotency_key` | string, 8 to 128 characters matching `^[\x21-\x7e]{8,128}$` | The key `Idempotency-Key` carries on the route: unique per intended message, repeated only to retry the same call. |
+| `url`, `method`, `content_type`, `headers`, `payload`, `filter` | as the keys of `POST /v1/webhooks`; `method` one of `POST`, `PUT` and `PATCH` in upper case | The webhook to create; see [Webhooks](#webhooks). |
+| `webhook` | string, 1 to 64 characters | A webhook's `id` as `create_webhook` or `list_webhooks` return it. |
 
 Each input schema is an object that allows no other property, and the arguments
 are checked against it before anything is read. Omitted or `null` arguments are
@@ -907,7 +1052,10 @@ Every read tool carries the annotation `readOnlyHint: true`, and
 `get_attachment` also `idempotentHint: true` and `openWorldHint: true`;
 `send_message` carries `readOnlyHint: false`, `destructiveHint: false`,
 `idempotentHint: true` and `openWorldHint: true`, and its description asks for
-at most one send per trigger. Every tool has an `outputSchema` inferred from
+at most one send per trigger. `list_webhooks` carries `readOnlyHint: true`;
+`create_webhook` `destructiveHint: false` and `openWorldHint: true`, and its
+description asks for a webhook only when the operator or the user asked for one;
+`delete_webhook` `destructiveHint: true` and `idempotentHint: true`. Every tool has an `outputSchema` inferred from
 the answer's type.
 
 A result carries the answer in `structuredContent` and the same JSON as text in
@@ -936,6 +1084,7 @@ send `Retry-After`.
 | `busy` | As on the routes, or the call passed its deadline: 10 seconds for a read tool, 25 seconds for `send_message` and `get_attachment`. For `get_attachment` also while another call's inline result or part is built or written, since one is handled at a time across the service, or when the job ended while the call read it. |
 | `media_unavailable`, `media_expired`, `media_failed`, `media_unsupported`, `media_too_large` | `get_attachment` only, when the [attachment routes](#attachments) would answer that code. |
 | `range_not_satisfiable` | `get_attachment` only, for a `part` at or past the ready job's `parts`. |
+| `webhook_url_invalid`, `webhook_method_invalid`, `webhook_content_type_invalid`, `webhook_header_invalid`, `webhook_payload_invalid`, `webhook_filter_invalid`, `webhook_limit_reached` | `create_webhook` only, when the route would answer that code. |
 | `invalid_text`, `invalid_idempotency_key`, `first_contact_refused`, `request_in_progress`, `idempotency_key_reused`, `not_connected`, `send_rejected`, `send_outcome_unknown` | `send_message` only, when the route would answer that code; `not_connected` also for `get_attachment` when a fetch would start while WhatsApp is not connected. A text or key that breaks the input schema, such as an empty text or a seven-character key, is `invalid_arguments` instead; control characters and the 8192-byte cap reach the text check. |
 | `internal_error` | Anything else failed, a panic in the tool included; the panic is counted as `api.mcp` and the endpoint keeps serving. |
 
@@ -1061,8 +1210,9 @@ resource link either, since the route needs the bearer token.
 
 Every `POST /mcp` that the read budget admits writes one [audit](#read-audit)
 row. The action is `mcp.list_chats`, `mcp.get_chat`, `mcp.get_messages`,
-`mcp.search_messages`, `mcp.get_changes`, `mcp.send_message` or
-`mcp.get_attachment` for a call of that tool, and
+`mcp.search_messages`, `mcp.get_changes`, `mcp.send_message`,
+`mcp.get_attachment`, `mcp.create_webhook`, `mcp.list_webhooks` or
+`mcp.delete_webhook` for a call of that tool, and
 `mcp.protocol` for everything else: the handshake, `tools/list`, `ping`,
 notifications, refused methods, unknown tools and refused bodies. The reason is
 `ok`, the tool's code, the body refusal (`unsupported_media_type`,
@@ -1180,7 +1330,7 @@ client's `id` is its client id.
 A client is:
 
 ```json
-{"id":"aaaqeaye","name":"agent","state":"active","created_at":"2026-10-06T12:00:00Z","expires_at":"2027-01-04T12:00:00Z","revoked_at":null,"all_chats":false,"allow_first_contact":false,"allow_media":false,"read_chats":[{"id":"120363000000000001@g.us","kind":"group","known":true,"name":"Synthetic Group"}],"write_chats":[]}
+{"id":"aaaqeaye","name":"agent","state":"active","created_at":"2026-10-06T12:00:00Z","expires_at":"2027-01-04T12:00:00Z","revoked_at":null,"all_chats":false,"allow_first_contact":false,"allow_media":false,"allow_webhooks":false,"read_chats":[{"id":"120363000000000001@g.us","kind":"group","known":true,"name":"Synthetic Group"}],"write_chats":[]}
 ```
 
 `state` is `active`, `expired` once `expires_at` has passed, or `revoked`.
@@ -1202,6 +1352,7 @@ optional:
 | `all_chats` | `true` lets the client read every chat, including chats that appear later; then `read_chats` and `write_chats` must be empty. |
 | `allow_first_contact` | `true` lets a write chat be a direct chat the archive has not seen yet. |
 | `allow_media` | `true` lets the client download [attachments](#attachments) while downloads are on (`WAWARDEN_MEDIA_MAX_BYTES` above 0); no key means `false`. While downloads are off it is stored and reported but grants nothing. While an active client holds it and at least one write chat, the [status](#status-object) carries the `media_write_client` warning. |
+| `allow_webhooks` | `true` lets the client register [webhooks](#webhooks) that post its new messages to URLs it chooses; no key means `false`. The client's read scope bounds what they post. |
 | `expires_in_days` | 1 to 365; `0` or no key means 90. A client never lives longer than 365 days, so a token cannot be made that never expires. |
 
 ### Backfill requests

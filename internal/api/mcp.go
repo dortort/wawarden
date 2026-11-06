@@ -45,22 +45,32 @@ type mcpEndpoint struct {
 	settles <-chan time.Time
 }
 
-type mcpClass struct{ write, media bool }
+type mcpClass struct{ write, media, hooks bool }
 
-func newMCPEndpoint(s *reads, w *writes, now func() time.Time, deadline time.Duration, media inlineLimits) *mcpEndpoint {
+func newMCPEndpoint(s *reads, w *writes, h *webhooks, now func() time.Time, deadline time.Duration, media inlineLimits) *mcpEndpoint {
 	version := buildinfo.Read().Version
 	servers := map[mcpClass]*mcp.Server{}
-	for _, class := range []mcpClass{{}, {write: true}, {media: true}, {write: true, media: true}} {
+	classes := []mcpClass{{}, {write: true}, {media: true}, {write: true, media: true}}
+	if h != nil {
+		for _, c := range slices.Clone(classes) {
+			c.hooks = true
+			classes = append(classes, c)
+		}
+	}
+	for _, class := range classes {
 		server := mcp.NewServer(&mcp.Implementation{Name: mcpServerName, Version: version}, &mcp.ServerOptions{
 			Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{}},
 		})
-		kit := &toolkit{reads: s, writes: w, now: now, deadline: deadline, media: media}
+		kit := &toolkit{reads: s, writes: w, hooks: h, now: now, deadline: deadline, media: media}
 		registerTools(server, kit)
 		if class.media {
 			registerMediaTools(server, kit)
 		}
 		if class.write {
 			registerWriteTools(server, kit)
+		}
+		if class.hooks {
+			registerWebhookTools(server, kit)
 		}
 		server.AddReceivingMiddleware(allowedMethods(kit.names))
 		servers[class] = server
@@ -69,7 +79,7 @@ func newMCPEndpoint(s *reads, w *writes, now func() time.Time, deadline time.Dur
 		c := clientFrom(r.Context())
 		_, write := policy.DecideWrite(c, now())
 		g, _ := policy.DecideRead(c, now())
-		return servers[mcpClass{write: write, media: s.media != nil && g.Media()}]
+		return servers[mcpClass{write: write, media: s.media != nil && g.Media(), hooks: h != nil && c != nil && c.AllowWebhooks}]
 	}
 	sdk := mcp.NewStreamableHTTPHandler(serverFor, &mcp.StreamableHTTPOptions{
 		Stateless:                  true,

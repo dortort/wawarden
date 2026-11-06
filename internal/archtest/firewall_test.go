@@ -146,9 +146,9 @@ func TestRuleAnchors(t *testing.T) {
 		db   string
 		want int
 	}{
-		{name: "the names the rules guard", api: "func (rt *router) register() {}\nfunc decided() {}\nfunc readTool() {}\nfunc writeTool() {}\nfunc mediaTool() {}\nfunc mediaBlock() {}\nfunc newMCPEndpoint() {}\n", lis: "type Spec struct{ Handler http.Handler }\n", db: "func (d *DB) RawHandle() *sql.DB { return nil }\n"},
-		{name: "renamed", api: "func (rt *router) add() {}\nfunc guard() {}\nfunc addTool() {}\nfunc (rt *router) readTool() {}\n", lis: "type Endpoint struct{ Handler http.Handler }\n", db: "func (d *DB) SQLHandle() *sql.DB { return nil }\n", want: 9},
-		{name: "added beside them", api: "func (rt *router) register() {}\nfunc (rt *router) open() {}\nfunc decided() {}\nfunc readTool() {}\nfunc writeTool() {}\nfunc mediaTool() {}\nfunc mediaBlock() {}\nfunc newMCPEndpoint() {}\n", lis: "type Spec struct{ Handler http.Handler }\ntype Wrapped struct{ Handler http.Handler }\n", db: "func (d *DB) RawHandle() *sql.DB { return nil }\nfunc (d *DB) Conn() *sql.DB { return nil }\n", want: 3},
+		{name: "the names the rules guard", api: "func (rt *router) register() {}\nfunc decided() {}\nfunc readTool() {}\nfunc writeTool() {}\nfunc mediaTool() {}\nfunc hookTool() {}\nfunc mediaBlock() {}\nfunc newMCPEndpoint() {}\n", lis: "type Spec struct{ Handler http.Handler }\n", db: "func (d *DB) RawHandle() *sql.DB { return nil }\n"},
+		{name: "renamed", api: "func (rt *router) add() {}\nfunc guard() {}\nfunc addTool() {}\nfunc (rt *router) readTool() {}\n", lis: "type Endpoint struct{ Handler http.Handler }\n", db: "func (d *DB) SQLHandle() *sql.DB { return nil }\n", want: 10},
+		{name: "added beside them", api: "func (rt *router) register() {}\nfunc (rt *router) open() {}\nfunc decided() {}\nfunc readTool() {}\nfunc writeTool() {}\nfunc mediaTool() {}\nfunc hookTool() {}\nfunc mediaBlock() {}\nfunc newMCPEndpoint() {}\n", lis: "type Spec struct{ Handler http.Handler }\ntype Wrapped struct{ Handler http.Handler }\n", db: "func (d *DB) RawHandle() *sql.DB { return nil }\nfunc (d *DB) Conn() *sql.DB { return nil }\n", want: 3},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			root := t.TempDir()

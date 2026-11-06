@@ -274,6 +274,7 @@ func TestRefusals(t *testing.T) {
 		{name: "metrics as a word", vars: map[string]string{envMetricsEMF: "true"}, reason: "metrics_emf_invalid", variable: envMetricsEMF},
 		{name: "empty metrics switch", vars: map[string]string{envMetricsEMF: ""}, reason: "metrics_emf_invalid", variable: envMetricsEMF},
 		{name: "metrics switch with a space", vars: map[string]string{envMetricsEMF: "1 "}, reason: "metrics_emf_invalid", variable: envMetricsEMF},
+		{name: "webhook private switch as a word", vars: map[string]string{envWebhookPrivate: "yes"}, reason: "webhooks_allow_private_invalid", variable: envWebhookPrivate},
 
 		{name: "rate caps as a word", vars: map[string]string{envUnsafeRateCaps: "yes"}, reason: "unsafe_rate_caps_invalid", variable: envUnsafeRateCaps},
 		{name: "empty rate caps switch", vars: map[string]string{envUnsafeRateCaps: ""}, reason: "unsafe_rate_caps_invalid", variable: envUnsafeRateCaps},
@@ -1011,6 +1012,19 @@ func TestMetricsEMF(t *testing.T) {
 		if r != nil || cfg.MetricsEMF != want {
 			t.Fatalf("WAWARDEN_METRICS_EMF=%s: MetricsEMF %v, %v", value, cfg.MetricsEMF, r)
 		}
+	}
+}
+
+func TestWebhooksAllowPrivate(t *testing.T) {
+	for value, want := range map[string]bool{"1": true, "0": false} {
+		cfg, r := Load(environ(withDataDir(t, map[string]string{envWebhookPrivate: value})), testOptions())
+		if r != nil || cfg.WebhooksPrivate != want {
+			t.Fatalf("WAWARDEN_WEBHOOKS_ALLOW_PRIVATE=%s: WebhooksPrivate %v, %v", value, cfg.WebhooksPrivate, r)
+		}
+	}
+	cfg, r := Load(environ(withDataDir(t, nil)), testOptions())
+	if r != nil || cfg.WebhooksPrivate {
+		t.Fatalf("Load without the switch = %v, %v, want private destinations refused", cfg.WebhooksPrivate, r)
 	}
 }
 

@@ -12,16 +12,17 @@ const (
 	mcpReadHelper   = "readTool"
 	mcpWriteHelper  = "writeTool"
 	mcpMediaHelper  = "mediaTool"
+	mcpHookHelper   = "hookTool"
 	mcpEndpointFunc = "newMCPEndpoint"
 	mcpBlockBuilder = "mediaBlock"
 )
 
-var mcpToolHelpers = []string{mcpReadHelper, mcpWriteHelper, mcpMediaHelper}
+var mcpToolHelpers = []string{mcpReadHelper, mcpWriteHelper, mcpMediaHelper, mcpHookHelper}
 
 type mcpSite struct{ file, fn string }
 
 var mcpServerSurface = map[string][]mcpSite{
-	"AddTool":                  {{mcpToolsFile, mcpReadHelper}, {mcpToolsFile, mcpWriteHelper}, {mcpToolsFile, mcpMediaHelper}},
+	"AddTool":                  {{mcpToolsFile, mcpReadHelper}, {mcpToolsFile, mcpWriteHelper}, {mcpToolsFile, mcpMediaHelper}, {mcpToolsFile, mcpHookHelper}},
 	"NewServer":                {{mcpEndpointFile, mcpEndpointFunc}},
 	"AddReceivingMiddleware":   {{mcpEndpointFile, mcpEndpointFunc}},
 	"AddSendingMiddleware":     {{mcpEndpointFile, mcpEndpointFunc}},
@@ -65,6 +66,12 @@ func f(server *sdk.Server, w wrapped, h sdk.ToolHandler) {
 	sdk.AddTool[struct{}, any](server, nil, nil)
 	w.AddTool(nil, h)
 }
+`},
+		{name: "a webhook tool helper outside tools.go", rel: "internal/api/x.go", want: 1, src: `package api
+
+import "github.com/modelcontextprotocol/go-sdk/mcp"
+
+func hookTool(server *mcp.Server, h mcp.ToolHandler) { server.AddTool(&mcp.Tool{Name: "x"}, h) }
 `},
 		{name: "the rest of the server's surface outside newMCPEndpoint", rel: "internal/api/x.go", want: 7, src: `package api
 

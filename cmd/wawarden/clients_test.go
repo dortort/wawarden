@@ -100,7 +100,7 @@ func TestClientsCreatePrintsTheTokenOnce(t *testing.T) {
 	if err := json.Unmarshal([]byte(bodies[2]), &sent); err != nil {
 		t.Fatalf("the create body %q is not JSON", bodies[2])
 	}
-	want := `{"all_chats":false,"allow_first_contact":false,"allow_media":false,"expires_in_days":30,"name":"agent",` +
+	want := `{"all_chats":false,"allow_first_contact":false,"allow_media":false,"allow_webhooks":false,"expires_in_days":30,"name":"agent",` +
 		`"read_chats":["120363000000000001@g.us","15550100001@s.whatsapp.net","15550100002@s.whatsapp.net"],"write_chats":["120363000000000001@g.us"]}`
 	if got, _ := json.Marshal(sent); string(got) != want {
 		t.Fatalf("the create body %s, want %s", got, want)
@@ -122,8 +122,28 @@ func TestClientsCreateSendsAllowMedia(t *testing.T) {
 		t.Fatalf("admin clients create --allow-media = %d\n%s\nstderr %q", code, stdout, stderr)
 	}
 	_, bodies := f.seen()
-	if len(bodies) != 1 || !strings.Contains(bodies[0], `"allow_first_contact":false,"allow_media":true,"expires_in_days":0}`) {
+	if len(bodies) != 1 || !strings.Contains(bodies[0], `"allow_first_contact":false,"allow_media":true,"allow_webhooks":false,"expires_in_days":0}`) {
 		t.Fatalf("the create bodies %q, want one asking for allow_media", bodies)
+	}
+}
+
+func TestClientsCreateSendsAllowWebhooks(t *testing.T) {
+	secret := token.NewAdmin()
+	_, credential := token.NewClient()
+	granted := strings.Replace(clientJSON, `"allow_media":false,`, `"allow_media":false,"allow_webhooks":true,`, 1)
+	f, addr := newRoutedListener(t, map[string][2]string{
+		"POST /admin/v1/clients": {"200", `{"client":` + granted + `,"credential":"` + credential + `"}`},
+	})
+	code, stdout, stderr := invokeWith(t, []string{
+		"admin", "clients", "create", "--addr", addr, "--token-stdin", "--name", "agent", "--read", "120363000000000001@g.us", "--allow-webhooks",
+	}, nil, strings.NewReader(secret))
+	want := strings.Replace(clientOutput, "allow media: false\n", "allow media: false\nallow webhooks: true\n", 1) + "token: " + credential + "\n"
+	if code != 0 || stdout != want {
+		t.Fatalf("admin clients create --allow-webhooks = %d\n%s\nstderr %q", code, stdout, stderr)
+	}
+	_, bodies := f.seen()
+	if len(bodies) != 1 || !strings.Contains(bodies[0], `"allow_media":false,"allow_webhooks":true,`) {
+		t.Fatalf("the create bodies %q, want one asking for allow_webhooks", bodies)
 	}
 }
 

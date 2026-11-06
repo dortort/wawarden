@@ -40,6 +40,15 @@ client sees and which returns a small enough file inline and a larger one in
 the other. See
 [Attachments are third-party content](#attachments-are-third-party-content).
 
+A client created with `allow_webhooks` can also register webhooks with
+`POST /v1/webhooks` or the tool `create_webhook`, which only such a client
+sees: each one posts the new messages the client may read, and its filter
+passes, to a URL with the body the client chooses (see
+[Webhooks](api.md#webhooks)). A webhook's body is built from the same
+third-party text as any answer, so the receiver must treat it as this guide
+says, and an agent registers one only when the operator or the user asked for
+it, never because a message did.
+
 The tool definitions are constants: their names, descriptions and schemas are
 the same for every client and never hold a chat name or anything else read
 from the archive, so the tool list itself carries no third-party text.

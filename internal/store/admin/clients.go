@@ -48,6 +48,7 @@ type Client struct {
 	AllChats          bool
 	AllowFirstContact bool
 	AllowMedia        bool
+	AllowWebhooks     bool
 	ReadCount         int64
 	WriteCount        int64
 	Read              []ClientChat
@@ -208,7 +209,7 @@ func (c *Clients) reloadLocked() {
 }
 
 const (
-	selectAuthRows  = `SELECT id, name, token_hash, read_all, allow_first_contact, allow_media, expires_at, revoked_at FROM clients`
+	selectAuthRows  = `SELECT id, name, token_hash, read_all, allow_first_contact, allow_media, allow_webhooks, expires_at, revoked_at FROM clients`
 	selectReadSets  = `SELECT client_id, chat_jid FROM client_read_chats`
 	selectWriteSets = `SELECT client_id, chat_jid FROM client_write_chats`
 )
@@ -237,7 +238,7 @@ func loadFrom(ctx context.Context, q db.Querier) (map[string]credential, error) 
 		var hash []byte
 		var expires int64
 		var revoked sql.NullInt64
-		if err := rows.Scan(&cl.ID, &cl.Name, &hash, &cl.ReadAll, &cl.AllowFirstContact, &cl.AllowMedia, &expires, &revoked); err != nil {
+		if err := rows.Scan(&cl.ID, &cl.Name, &hash, &cl.ReadAll, &cl.AllowFirstContact, &cl.AllowMedia, &cl.AllowWebhooks, &expires, &revoked); err != nil {
 			return nil, errors.Join(err, rows.Close())
 		}
 		digest, ok := token.ParseDigest(hash)
@@ -302,7 +303,7 @@ const (
 	selectIDTaken   = `SELECT EXISTS (SELECT 1 FROM clients WHERE id = ?)`
 	selectLID       = `SELECT lid FROM lid_map WHERE pn = ?`
 	selectKnown     = `SELECT EXISTS (SELECT 1 FROM chats WHERE jid = ?)`
-	insertClient    = `INSERT INTO clients (id, name, token_hash, read_all, allow_first_contact, allow_media, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	insertClient    = `INSERT INTO clients (id, name, token_hash, read_all, allow_first_contact, allow_media, allow_webhooks, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	insertReadChat  = `INSERT INTO client_read_chats (client_id, chat_jid) VALUES (?, ?)`
 	insertWriteChat = `INSERT INTO client_write_chats (client_id, chat_jid) VALUES (?, ?)`
 	insertUnseen    = `INSERT INTO chats (jid, kind) VALUES (?, ?) ON CONFLICT (jid) DO NOTHING`
@@ -352,7 +353,7 @@ func (c *Clients) Create(ctx context.Context, spec policy.ClientSpec) (Client, s
 		if id, full, err = freshToken(ctx, q); err != nil {
 			return err
 		}
-		if _, err := q.ExecContext(ctx, insertClient, id, want.Name, token.StoredDigest(full), boolInt(want.ReadAll), boolInt(want.AllowFirstContact), boolInt(want.AllowMedia), now.UnixMilli(), want.ExpiresAt.UnixMilli()); err != nil {
+		if _, err := q.ExecContext(ctx, insertClient, id, want.Name, token.StoredDigest(full), boolInt(want.ReadAll), boolInt(want.AllowFirstContact), boolInt(want.AllowMedia), boolInt(want.AllowWebhooks), now.UnixMilli(), want.ExpiresAt.UnixMilli()); err != nil {
 			return err
 		}
 		for chat := range read {
@@ -492,11 +493,11 @@ func (c *Clients) Get(ctx context.Context, id string) (Client, error) {
 }
 
 const (
-	selectClients = `SELECT id, name, read_all, allow_first_contact, allow_media, created_at, expires_at, revoked_at,
+	selectClients = `SELECT id, name, read_all, allow_first_contact, allow_media, allow_webhooks, created_at, expires_at, revoked_at,
 		(SELECT count(*) FROM client_read_chats r WHERE r.client_id = c.id),
 		(SELECT count(*) FROM client_write_chats w WHERE w.client_id = c.id)
 		FROM clients c ORDER BY created_at, rowid`
-	selectClient = `SELECT id, name, read_all, allow_first_contact, allow_media, created_at, expires_at, revoked_at,
+	selectClient = `SELECT id, name, read_all, allow_first_contact, allow_media, allow_webhooks, created_at, expires_at, revoked_at,
 		(SELECT count(*) FROM client_read_chats r WHERE r.client_id = c.id),
 		(SELECT count(*) FROM client_write_chats w WHERE w.client_id = c.id)
 		FROM clients c WHERE id = ?`
@@ -579,7 +580,7 @@ func scanClient(s scanner, now time.Time) (Client, error) {
 	var v Client
 	var created, expires int64
 	var revoked sql.NullInt64
-	if err := s.Scan(&v.ID, &v.Name, &v.AllChats, &v.AllowFirstContact, &v.AllowMedia, &created, &expires, &revoked, &v.ReadCount, &v.WriteCount); err != nil {
+	if err := s.Scan(&v.ID, &v.Name, &v.AllChats, &v.AllowFirstContact, &v.AllowMedia, &v.AllowWebhooks, &created, &expires, &revoked, &v.ReadCount, &v.WriteCount); err != nil {
 		return Client{}, err
 	}
 	v.CreatedAt, v.ExpiresAt = fromMS(created), fromMS(expires)
@@ -638,4 +639,17 @@ func boolInt(b bool) int64 {
 		return 1
 	}
 	return 0
+}
+
+// Lookup returns a live or dormant client by its id from the loaded snapshot, for the webhook dispatcher, which acts for a client without its token.
+func (c *Clients) Lookup(ctx context.Context, id string) (*policy.Client, bool, error) {
+	snap, err := c.current(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	cred, ok := snap.clients[id]
+	if !ok {
+		return nil, false, nil
+	}
+	return cred.client, true, nil
 }
