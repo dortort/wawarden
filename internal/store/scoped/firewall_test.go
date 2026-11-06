@@ -31,6 +31,7 @@ var rowTypes = []reflect.Type{
 	reflect.TypeFor[scoped.SealedRef](),
 	reflect.TypeFor[scoped.SearchPage](),
 	reflect.TypeFor[scoped.SearchPosition](),
+	reflect.TypeFor[scoped.StoredPage](),
 }
 
 var opaqueTypes = []reflect.Type{reflect.TypeFor[time.Time](), reflect.TypeFor[policy.CanonicalChat]()}

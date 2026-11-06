@@ -67,6 +67,7 @@ type ReadArchive interface {
 	Messages(g policy.ReadGrant, ctx context.Context, ref string, pos scoped.MessagePosition, dir scoped.Direction, limit int) (scoped.MessagePage, bool, error)
 	Message(g policy.ReadGrant, ctx context.Context, chat policy.CanonicalChat, id string, sender policy.CanonicalChat) (scoped.Message, bool, error)
 	Changes(g policy.ReadGrant, ctx context.Context, ref string, pos scoped.ChangePosition, limit int) (scoped.ChangePage, bool, error)
+	Stored(g policy.ReadGrant, ctx context.Context, after int64, limit int) (scoped.StoredPage, error)
 	Search(g policy.ReadGrant, ctx context.Context, query scoped.Query, ref string, pos scoped.SearchPosition, limit int) (scoped.SearchPage, bool, error)
 	Attachment(g policy.ReadGrant, ctx context.Context, chat policy.CanonicalChat, id string, sender policy.CanonicalChat, now time.Time) (scoped.Attachment, bool, error)
 }

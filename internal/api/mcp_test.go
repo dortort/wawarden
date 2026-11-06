@@ -434,6 +434,10 @@ func (panickingArchive) Changes(policy.ReadGrant, context.Context, string, scope
 	panic(secretPanic{text: panicCanary})
 }
 
+func (panickingArchive) Stored(policy.ReadGrant, context.Context, int64, int) (scoped.StoredPage, error) {
+	panic(secretPanic{text: panicCanary})
+}
+
 func (panickingArchive) Search(policy.ReadGrant, context.Context, scoped.Query, string, scoped.SearchPosition, int) (scoped.SearchPage, bool, error) {
 	panic(secretPanic{text: panicCanary})
 }

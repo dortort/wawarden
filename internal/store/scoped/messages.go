@@ -28,6 +28,9 @@ const (
 		" WHERE m.change_seq > ?1 AND m.change_seq <= ?2{scope m.chat_jid} ORDER BY m.change_seq LIMIT ?3"
 	selectChatChanges = "SELECT " + messageColumns + " FROM messages m" + messageJoins +
 		" WHERE m.chat_jid = ?4 AND m.change_seq > ?1 AND m.change_seq <= ?2{scope m.chat_jid} ORDER BY m.change_seq LIMIT ?3"
+	// NOT INDEXED keeps a scoped read to its window of sequence numbers instead of every message of the chats in scope.
+	selectStored = "SELECT " + messageColumns + " FROM messages m NOT INDEXED" + messageJoins +
+		" WHERE m.seq > ?1 AND m.seq <= ?2{scope m.chat_jid} ORDER BY m.seq LIMIT ?3"
 	selectFirstChange     = "SELECT min(m.change_seq) FROM messages m WHERE m.change_seq > ?1 AND m.change_seq <= ?2 AND m.ts >= ?3{scope m.chat_jid}"
 	selectChatFirstChange = "SELECT min(m.change_seq) FROM messages m WHERE m.chat_jid = ?4 AND m.change_seq > ?1 AND m.change_seq <= ?2 AND m.ts >= ?3{scope m.chat_jid}"
 	selectTopChange       = "SELECT coalesce(max(change_seq), 0) FROM messages"
@@ -174,6 +177,39 @@ func (r *Reader) Changes(g policy.ReadGrant, ctx context.Context, ref string, po
 		return nil
 	})
 	return page, found, err
+}
+
+// Stored reads messages in the order the archive stored them, after the sequence number after, whatever later edits changed.
+func (r *Reader) Stored(g policy.ReadGrant, ctx context.Context, after int64, limit int) (StoredPage, error) {
+	if !validLimit(limit) || after < 0 {
+		return StoredPage{}, ErrInvalid
+	}
+	var page StoredPage
+	err := r.read(g, ctx, "scoped.stored", func(ctx context.Context, q querier) error {
+		var top int64
+		if err := q.scalar(ctx, selectTopSeq, &top); err != nil {
+			return err
+		}
+		messages := rowsOf[Message]{q, scanMessage}
+		for i := 0; i < maxWindows && after < top && len(page.Messages) <= limit; i++ {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			upto := min(after+window, top)
+			got, err := messages.QueryContext(ctx, selectStored, after, upto, limit+1-len(page.Messages))
+			if err != nil {
+				return err
+			}
+			page.Messages = append(page.Messages, got...)
+			after = upto
+		}
+		page.Next, page.More = after, after < top
+		if len(page.Messages) > limit {
+			page.Messages, page.Next, page.More = page.Messages[:limit], page.Messages[limit-1].Position.Seq, true
+		}
+		return nil
+	})
+	return page, err
 }
 
 const (

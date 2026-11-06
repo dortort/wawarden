@@ -227,6 +227,26 @@ func (f *fakeArchive) Changes(g policy.ReadGrant, _ context.Context, ref string,
 	return page, true, nil
 }
 
+func (f *fakeArchive) Stored(g policy.ReadGrant, _ context.Context, after int64, limit int) (scoped.StoredPage, error) {
+	if err := f.call("Stored"); err != nil {
+		return scoped.StoredPage{}, err
+	}
+	rows := f.inScope(g, "")
+	slices.SortFunc(rows, func(a, b scoped.Message) int { return int(a.Position.Seq - b.Position.Seq) })
+	page := scoped.StoredPage{Next: after}
+	for _, m := range rows {
+		if m.Position.Seq > after {
+			page.Messages = append(page.Messages, m)
+			page.Next = m.Position.Seq
+		}
+	}
+	if len(page.Messages) > limit {
+		page.Messages, page.More = page.Messages[:limit], true
+		page.Next = page.Messages[limit-1].Position.Seq
+	}
+	return page, nil
+}
+
 func (f *fakeArchive) Search(g policy.ReadGrant, _ context.Context, query scoped.Query, ref string, pos scoped.SearchPosition, limit int) (scoped.SearchPage, bool, error) {
 	if err := f.call("Search"); err != nil {
 		return scoped.SearchPage{}, false, err

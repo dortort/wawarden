@@ -93,6 +93,12 @@ type ChangePage struct {
 	More     bool           `json:"-"`
 }
 
+type StoredPage struct {
+	Messages []Message `json:"-"`
+	Next     int64     `json:"-"`
+	More     bool      `json:"-"`
+}
+
 var errCorrupt = errors.New("scoped: a stored identifier is not canonical")
 
 func stored(jid string, kind policy.ChatKind) (policy.CanonicalChat, error) {
