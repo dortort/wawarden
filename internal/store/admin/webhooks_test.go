@@ -46,15 +46,15 @@ func TestAWebhookStartsAfterTheNewestMessageAndKeepsItsSettings(t *testing.T) {
 		t.Fatalf("Hooks = %+v, %v", all, err)
 	}
 	top, err := w.Top(t.Context())
-	if err != nil || all[0].Change != top || all[0].High != 2 || string(all[0].Secret) != string(secret) {
-		t.Fatalf("the webhook starts at %d/%d with top %d (%v), want after the 2 seeded messages", all[0].Change, all[0].High, top, err)
+	if err != nil || all[0].High != top || all[0].High != 2 || string(all[0].Secret) != string(secret) {
+		t.Fatalf("the webhook starts at %d with top %d (%v), want after the 2 seeded messages", all[0].High, top, err)
 	}
 
 	f.clock.advance(time.Minute)
-	if err := w.Advance(t.Context(), view.ID, hooks.Progress{Change: top + 5, High: 9, Delivered: 2, LastDelivery: f.clock.Now()}); err != nil {
+	if err := w.Advance(t.Context(), view.ID, hooks.Progress{High: 9, Delivered: 2, LastDelivery: f.clock.Now()}); err != nil {
 		t.Fatalf("Advance: %v", err)
 	}
-	if err := w.Advance(t.Context(), view.ID, hooks.Progress{Change: top + 1, High: 3, Failed: 1, LastFailure: f.clock.Now(), Failure: hooks.ReasonStatus}); err != nil {
+	if err := w.Advance(t.Context(), view.ID, hooks.Progress{High: 3, Failed: 1, LastFailure: f.clock.Now(), Failure: hooks.ReasonStatus}); err != nil {
 		t.Fatalf("Advance: %v", err)
 	}
 	got, err := w.Get(t.Context(), c.ID, view.ID)
@@ -62,8 +62,8 @@ func TestAWebhookStartsAfterTheNewestMessageAndKeepsItsSettings(t *testing.T) {
 		t.Fatalf("Get = %+v, %v", got, err)
 	}
 	all, _ = w.Hooks(t.Context())
-	if all[0].Change != top+5 || all[0].High != 9 {
-		t.Fatalf("an older position moved the webhook back to %d/%d", all[0].Change, all[0].High)
+	if all[0].High != 9 {
+		t.Fatalf("an older position moved the webhook back to %d", all[0].High)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestWebhooksBelongToTheirClient(t *testing.T) {
 	if err := w.Delete(t.Context(), a.ID, view.ID); !errors.Is(err, admin.ErrWebhookNotFound) {
 		t.Fatalf("a second Delete = %v", err)
 	}
-	if err := w.Advance(t.Context(), view.ID, hooks.Progress{Change: 1}); err != nil {
+	if err := w.Advance(t.Context(), view.ID, hooks.Progress{High: 1}); err != nil {
 		t.Fatalf("Advance of a deleted webhook: %v", err)
 	}
 	if all, _ := w.Hooks(t.Context()); len(all) != 0 {

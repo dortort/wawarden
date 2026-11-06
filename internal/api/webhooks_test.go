@@ -293,7 +293,7 @@ func TestWebhookFeedReadsUnderTheClientsOwnGrant(t *testing.T) {
 		t.Fatalf("Next = %+v, %v, %v", page, ok, err)
 	}
 	for _, item := range page.Items {
-		if item.Message.Chat != groupRef || item.Live != (item.Seq%2 == 0) || !strings.HasPrefix(item.Message.Ref, "m1_") || item.Seq != item.Change {
+		if item.Message.Chat != groupRef || item.Live != (item.Seq%2 == 0) || !strings.HasPrefix(item.Message.Ref, "m1_") {
 			t.Fatalf("item %+v", item)
 		}
 	}

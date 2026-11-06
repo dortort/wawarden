@@ -117,8 +117,8 @@ lines have none of the four keys.
 | `notify_dropped` | `WARN`, at every log level | `count` | At shutdown, the [webhook](#webhook) dropped `count` events it had not delivered, and `serve` exits `1`. |
 | `emf_failed` | `WARN` | `error_type` | Writing the [EMF](#embedded-metric-format) lines failed. |
 | `webhook_dropped` | `WARN` | `webhook`, `client`, `reason` | A [client webhook](api.md#webhook-deliveries) dropped an event after its last attempt; `reason` is `http_status`, `network_error`, `destination_refused`, `payload_invalid`, `retries_exhausted` or `client_gone`. Neither the URL, the headers nor the body is logged. |
-| `webhook_read_failed` | `WARN` | `webhook`, `error_type` | A client webhook could not read its client's change feed; it tries again 5 seconds later. |
-| `webhook_unsaved` | `WARN` | `webhook`, `error_type` | A client webhook's position could not be stored; it reads the same messages again 5 seconds later, so a receiver may see an event twice. |
+| `webhook_read_failed` | `WARN` | `webhook`, `error_type` | A client webhook could not read its client's messages; it tries again 5 seconds later. |
+| `webhook_unsaved` | `WARN` | `webhook`, `error_type` | A client webhook's position could not be stored; it tries again 5 seconds later and posts nothing more until it is stored, and a restart before then posts the last event again, so a receiver may see it twice. |
 | `webhooks_unread` | `WARN` | `error_type` | The client webhooks could not be loaded from the archive; the dispatcher tries again within 10 seconds. |
 | `backup_disabled` | `WARN`, at every log level | | `WAWARDEN_BACKUP_AGE_RECIPIENT` is not set, or the [fake engine](internals.md#fake-engine) runs and opens no device store, so no [backup](configuration.md#backups) is ever taken. Logged once per start. |
 | `backup_check_failed` | `WARN` | `error_type` | A step of the [backup](configuration.md#backups) scheduler failed: reading or recording whether a backup is due, the prune of old backups (also reported as `backup_prune_failed`), the [audit retention](#audit-retention) or the prune of history blob rows; the scheduler runs again 30 seconds later. |

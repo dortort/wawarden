@@ -46,9 +46,10 @@ its image digest and the commands to verify and reproduce it.
     alone returns, carries an event id that stays the same on retries, and
     goes through the notification webhook's HTTP client and destination check;
     private addresses need `WAWARDEN_WEBHOOKS_ALLOW_PRIVATE=1`;
-  - a webhook follows its client's change feed under the client's own read
-    grant, keeps its position in the archive across restarts, retries for at
-    most 24 hours, and stops posting when its client is revoked or expires.
+  - a webhook posts its client's messages in the order they were stored,
+    under the client's own read grant decided again before each one, keeps
+    its position in the archive across restarts, retries for at most 24
+    hours, and stops posting when its client is revoked or expires.
   The metrics `wawarden_webhook_deliveries_total` and
   `wawarden_webhook_attempt_failures_total` and the `webhook_dropped` warning
   report deliveries. The archive moves to schema version 7, which adds the

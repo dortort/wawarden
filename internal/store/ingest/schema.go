@@ -404,7 +404,6 @@ CREATE TABLE webhooks (
 	filter TEXT NOT NULL CHECK (json_valid(filter) AND json_type(filter) = 'object'),
 	secret BLOB NOT NULL CHECK (length(secret) = 32),
 	created_at INTEGER NOT NULL,
-	change_seq INTEGER NOT NULL CHECK (change_seq >= 0),
 	high_seq INTEGER NOT NULL CHECK (high_seq >= 0),
 	delivered INTEGER NOT NULL DEFAULT 0 CHECK (delivered >= 0),
 	failed INTEGER NOT NULL DEFAULT 0 CHECK (failed >= 0),

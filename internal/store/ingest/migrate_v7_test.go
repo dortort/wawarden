@@ -33,18 +33,18 @@ func TestMigratingToVersion7AddsWebhooksAndKeepsClientsWithout(t *testing.T) {
 	if got := scalar[int](t, s, "SELECT allow_webhooks FROM clients WHERE id = 'aaaaaaaa'"); got != 0 {
 		t.Fatalf("an existing client allows webhooks after the migration: %d", got)
 	}
-	insert := "INSERT INTO webhooks (id, client_id, url, method, content_type, headers, payload, filter, secret, created_at, change_seq, high_seq) VALUES "
-	ok := "('wh_0123456789abcdef', 'aaaaaaaa', 'https://h.example.com', 'POST', 'application/json', '{}', NULL, '{}', zeroblob(32), 1, 0, 0)"
+	insert := "INSERT INTO webhooks (id, client_id, url, method, content_type, headers, payload, filter, secret, created_at, high_seq) VALUES "
+	ok := "('wh_0123456789abcdef', 'aaaaaaaa', 'https://h.example.com', 'POST', 'application/json', '{}', NULL, '{}', zeroblob(32), 1, 0)"
 	if err := execAll(t, s, insert+ok); err != nil {
 		t.Fatalf("insert a webhook: %v", err)
 	}
 	for name, tt := range map[string]struct{ row, want string }{
 		"a replaced row":    {ok, "a webhook row is never replaced"},
-		"another method":    {"('wh_1123456789abcdef', 'aaaaaaaa', 'https://h.example.com', 'GET', 'application/json', '{}', NULL, '{}', zeroblob(32), 1, 0, 0)", "CHECK constraint failed"},
-		"headers not JSON":  {"('wh_2123456789abcdef', 'aaaaaaaa', 'https://h.example.com', 'POST', 'application/json', '[', NULL, '{}', zeroblob(32), 1, 0, 0)", "CHECK constraint failed"},
-		"a short secret":    {"('wh_3123456789abcdef', 'aaaaaaaa', 'https://h.example.com', 'POST', 'application/json', '{}', NULL, '{}', zeroblob(31), 1, 0, 0)", "CHECK constraint failed"},
-		"an unknown client": {"('wh_4123456789abcdef', 'zzzzzzzz', 'https://h.example.com', 'POST', 'application/json', '{}', NULL, '{}', zeroblob(32), 1, 0, 0)", "FOREIGN KEY constraint failed"},
-		"an empty payload":  {"('wh_5123456789abcdef', 'aaaaaaaa', 'https://h.example.com', 'POST', 'text/plain', '{}', '', '{}', zeroblob(32), 1, 0, 0)", "CHECK constraint failed"},
+		"another method":    {"('wh_1123456789abcdef', 'aaaaaaaa', 'https://h.example.com', 'GET', 'application/json', '{}', NULL, '{}', zeroblob(32), 1, 0)", "CHECK constraint failed"},
+		"headers not JSON":  {"('wh_2123456789abcdef', 'aaaaaaaa', 'https://h.example.com', 'POST', 'application/json', '[', NULL, '{}', zeroblob(32), 1, 0)", "CHECK constraint failed"},
+		"a short secret":    {"('wh_3123456789abcdef', 'aaaaaaaa', 'https://h.example.com', 'POST', 'application/json', '{}', NULL, '{}', zeroblob(31), 1, 0)", "CHECK constraint failed"},
+		"an unknown client": {"('wh_4123456789abcdef', 'zzzzzzzz', 'https://h.example.com', 'POST', 'application/json', '{}', NULL, '{}', zeroblob(32), 1, 0)", "FOREIGN KEY constraint failed"},
+		"an empty payload":  {"('wh_5123456789abcdef', 'aaaaaaaa', 'https://h.example.com', 'POST', 'text/plain', '{}', '', '{}', zeroblob(32), 1, 0)", "CHECK constraint failed"},
 	} {
 		if err := execAll(t, s, insert+tt.row); err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("%s = %v, want %q", name, err, tt.want)
