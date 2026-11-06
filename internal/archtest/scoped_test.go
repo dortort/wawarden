@@ -19,7 +19,7 @@ const (
 
 var (
 	grantFreeMethods  = set("Query.Expression", "SealedRef.Sealed")
-	scopedReadMethods = set("Reader.Attachment", "Reader.Chat", "Reader.Chats", "Reader.Changes", "Reader.Message", "Reader.Messages", "Reader.Search")
+	scopedReadMethods = set("Reader.Attachment", "Reader.Chat", "Reader.Chats", "Reader.Changes", "Reader.Message", "Reader.Messages", "Reader.Search", "Reader.Stored")
 )
 
 const grantWideningRead = `package scoped

@@ -460,6 +460,41 @@ func TestChangesFollowTheChangeNumbers(t *testing.T) {
 	}
 }
 
+func TestStoredFollowsTheOrderMessagesWereStoredIn(t *testing.T) {
+	s := openStore(t)
+	refs := insert(t, s, message(t, alice, "A1", alice, "one", epoch), message(t, bob, "B1", bob, "two", epoch), message(t, alice, "A2", alice, "three", epoch))
+	write(t, s, func(tx *ingest.Tx) error { return tx.ApplyRevoke(refs[0]) })
+	changes, _, err := s.Scoped().Changes(grant(t, alice), t.Context(), "", scoped.ChangePosition{}, 5)
+	if err != nil || !slices.Equal(ids(changes.Messages), []string{"A2", "A1"}) {
+		t.Fatalf("changes = %q, %v, want the revoked message after the newer one", ids(changes.Messages), err)
+	}
+	for limit := 1; limit <= 3; limit++ {
+		var got []string
+		var after int64
+		for range 10 {
+			page, err := s.Scoped().Stored(grant(t, alice), t.Context(), after, limit)
+			if err != nil {
+				t.Fatalf("Stored: %v", err)
+			}
+			got = append(got, ids(page.Messages)...)
+			if after = page.Next; !page.More {
+				break
+			}
+		}
+		if !slices.Equal(got, []string{"A1", "A2"}) {
+			t.Fatalf("stored messages in pages of %d = %q", limit, got)
+		}
+	}
+	exec(t, s, "INSERT INTO messages (seq, chat_jid, id, sender_jid, from_me, origin, ts, kind, text, text_display) VALUES (170000, '"+alice+"', 'A3', '"+alice+"', 0, 'live', 1, 'text', 'far', 'far')")
+	page, err := s.Scoped().Stored(grant(t, alice), t.Context(), 3, 5)
+	if err != nil || len(page.Messages) != 0 || !page.More || page.Next != 3+5*scoped.Window {
+		t.Fatalf("a page across empty windows = %+v, %v", page, err)
+	}
+	if _, err := s.Scoped().Stored(grant(t, alice), t.Context(), -1, 5); !errors.Is(err, scoped.ErrInvalid) {
+		t.Fatalf("Stored before the first message = %v", err)
+	}
+}
+
 func TestChangesFromATimeStartAtTheFirstChangeOfAMessageDatedFromIt(t *testing.T) {
 	s := openStore(t)
 	refs := insert(t, s, message(t, alice, "A1", alice, "one", epoch), message(t, bob, "B1", bob, "two", epoch.Add(2*time.Minute)),
