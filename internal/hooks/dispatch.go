@@ -59,13 +59,11 @@ type Hook struct {
 	Client string
 	Spec   Spec
 	Secret []byte
-	Change int64
 	High   int64
 }
 
 // Progress is what a worker stores after it handled messages: the new position, and the outcome counts to add.
 type Progress struct {
-	Change       int64
 	High         int64
 	Delivered    int64
 	Failed       int64
@@ -74,15 +72,14 @@ type Progress struct {
 	Failure      string
 }
 
-// Item is one message of a client's change feed.
+// Item is one message a client may read, in the order the archive stored it.
 type Item struct {
 	Seq     int64
-	Change  int64
 	Live    bool
 	Message dto.Message
 }
 
-// Page is a page of a client's change feed, read under the client's own read grant.
+// Page is a page of the messages a client may read, under the client's own read grant, after a sequence number.
 type Page struct {
 	Items []Item
 	Next  int64
@@ -98,7 +95,7 @@ type Clients interface {
 	Lookup(ctx context.Context, id string) (*policy.Client, bool, error)
 }
 
-// Feed reads a client's changes; ok is false when the client may not read or hold webhooks now.
+// Feed reads a client's messages in the order they were stored; ok is false when the client may not read or hold webhooks now.
 type Feed interface {
 	Next(ctx context.Context, c *policy.Client, after int64, limit int) (page Page, ok bool, err error)
 }
@@ -297,8 +294,9 @@ func (d *Dispatcher) reconcile(ctx context.Context) {
 
 func (d *Dispatcher) work(ctx context.Context, w *worker) {
 	h := w.hook
+	var p Progress
 	for ctx.Err() == nil {
-		wait := d.pass(ctx, &h)
+		wait := d.pass(ctx, &h, &p)
 		if wait == 0 {
 			continue
 		}
@@ -312,9 +310,12 @@ func (d *Dispatcher) work(ctx context.Context, w *worker) {
 	}
 }
 
-// pass reads and delivers the hook's pending messages and returns how long to wait before the next pass, 0 for at once.
-func (d *Dispatcher) pass(ctx context.Context, h *Hook) time.Duration {
-	if top := d.latest(); top != 0 && top <= h.Change {
+// pass stores what an earlier pass could not, then posts the hook's next matching message, and returns how long to wait before the next pass, 0 for at once.
+func (d *Dispatcher) pass(ctx context.Context, h *Hook, p *Progress) time.Duration {
+	if *p != (Progress{}) && !d.save(ctx, h, p) {
+		return failedReadWait
+	}
+	if top := d.latest(); top != 0 && top <= h.High {
 		return idleEvery
 	}
 	c, found, err := d.o.Clients.Lookup(ctx, h.Client)
@@ -324,56 +325,46 @@ func (d *Dispatcher) pass(ctx context.Context, h *Hook) time.Duration {
 	if !found {
 		return dormantEvery
 	}
-	page, ok, err := d.o.Feed.Next(ctx, c, h.Change, pageSize)
+	page, ok, err := d.o.Feed.Next(ctx, c, h.High, pageSize)
 	switch {
 	case err != nil:
 		if ctx.Err() == nil {
-			d.o.Logger.Warn("a client webhook could not read its client's changes", slog.String("event", "webhook_read_failed"),
+			d.o.Logger.Warn("a client webhook could not read its client's messages", slog.String("event", "webhook_read_failed"),
 				slog.String("webhook", h.ID), slog.String("error_type", errorType(err)))
 		}
 		return failedReadWait
 	case !ok:
 		return dormantEvery
 	}
-	var p Progress
-	dirty := false
+	start := h.High
 	for _, item := range page.Items {
-		if item.Seq > h.High && item.Live && h.Spec.Filter.Match(item.Message) {
-			if dirty {
-				if !d.save(ctx, h, &p) {
-					return failedReadWait
-				}
-				dirty = false
-			}
-			reason, delivered := d.deliver(ctx, h, item, func() bool { return d.holds(ctx, h.Client) })
-			if !delivered && ctx.Err() != nil {
-				// Stopped before the receiver took it: the message is posted again after a restart.
-				return 0
-			}
-			if delivered {
-				p.Delivered, p.LastDelivery = 1, d.now()
-				d.deliveries.With(outcomeDelivered).Inc()
-			} else {
-				p.Failed, p.LastFailure, p.Failure = 1, d.now(), reason
-				d.deliveries.With(outcomeDropped).Inc()
-				d.o.Logger.Warn("a client webhook did not accept an event, which is dropped", slog.String("event", "webhook_dropped"),
-					slog.String("webhook", h.ID), slog.String("client", h.Client), slog.String("reason", reason))
-			}
-			h.Change, h.High = item.Change, max(h.High, item.Seq)
-			if !d.save(ctx, h, &p) {
-				return failedReadWait
-			}
-			if ctx.Err() != nil {
-				return 0
-			}
+		if !item.Live || !h.Spec.Filter.Match(item.Message) {
+			h.High = item.Seq
 			continue
 		}
-		h.Change, h.High, dirty = item.Change, max(h.High, item.Seq), true
+		reason, delivered := d.deliver(ctx, h, item, func() bool { return d.holds(ctx, h.Client) })
+		if !delivered && ctx.Err() != nil {
+			// Stopped before the receiver took it: the message is posted again after a restart.
+			return 0
+		}
+		if delivered {
+			p.Delivered, p.LastDelivery = p.Delivered+1, d.now()
+			d.deliveries.With(outcomeDelivered).Inc()
+		} else {
+			p.Failed, p.LastFailure, p.Failure = p.Failed+1, d.now(), reason
+			d.deliveries.With(outcomeDropped).Inc()
+			d.o.Logger.Warn("a client webhook did not accept an event, which is dropped", slog.String("event", "webhook_dropped"),
+				slog.String("webhook", h.ID), slog.String("client", h.Client), slog.String("reason", reason))
+		}
+		h.High = item.Seq
+		if !d.save(ctx, h, p) {
+			return failedReadWait
+		}
+		// The next message is read under a grant decided again, so a client that lost access posts nothing more.
+		return 0
 	}
-	if page.Next > h.Change {
-		h.Change, dirty = page.Next, true
-	}
-	if dirty && !d.save(ctx, h, &p) {
+	h.High = max(h.High, page.Next)
+	if h.High != start && !d.save(ctx, h, p) {
 		return failedReadWait
 	}
 	if page.More {
@@ -383,7 +374,7 @@ func (d *Dispatcher) pass(ctx context.Context, h *Hook) time.Duration {
 }
 
 func (d *Dispatcher) save(ctx context.Context, h *Hook, p *Progress) bool {
-	p.Change, p.High = h.Change, h.High
+	p.High = h.High
 	if err := d.o.Store.Advance(context.WithoutCancel(ctx), h.ID, *p); err != nil {
 		d.o.Logger.Warn("a client webhook's position cannot be stored", slog.String("event", "webhook_unsaved"),
 			slog.String("webhook", h.ID), slog.String("error_type", errorType(err)))

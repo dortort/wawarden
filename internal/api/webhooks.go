@@ -264,17 +264,17 @@ func (f *WebhookFeed) Next(ctx context.Context, c *policy.Client, after int64, l
 	if !ok {
 		return hooks.Page{}, false, nil
 	}
-	page, _, err := f.reads.archive.Changes(g, ctx, "", scoped.ChangePosition{ChangeSeq: after}, limit)
+	page, err := f.reads.archive.Stored(g, ctx, after, limit)
 	if err != nil {
 		return hooks.Page{}, true, err
 	}
-	out := hooks.Page{Items: make([]hooks.Item, 0, len(page.Messages)), Next: page.Next.ChangeSeq, More: page.More}
+	out := hooks.Page{Items: make([]hooks.Item, 0, len(page.Messages)), Next: page.Next, More: page.More}
 	for _, m := range page.Messages {
 		item, err := f.reads.messageItem(g.Client(), m)
 		if err != nil {
 			return hooks.Page{}, true, err
 		}
-		out.Items = append(out.Items, hooks.Item{Seq: m.Position.Seq, Change: m.Change.ChangeSeq, Live: m.Live, Message: item})
+		out.Items = append(out.Items, hooks.Item{Seq: m.Position.Seq, Live: m.Live, Message: item})
 	}
 	return out, true, nil
 }

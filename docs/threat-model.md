@@ -415,10 +415,10 @@ These are stated so that nobody relies on WaWarden for them:
        the client's choice, so the destination check is the only guard on
        where the service connects; keep the private-address switch off unless
        every such client may reach the private network.
-     - A webhook posts only what its client may read: it follows the client's
-       change feed through the scoped store, under a read grant decided for
-       the client at every page, so a revoked or expired client's webhooks
-       post nothing more, and a retry stops once the client is gone.
+     - A webhook posts only what its client may read: it reads the client's
+       messages through the scoped store, under a read grant decided for the
+       client again before each event, so a revoked or expired client's
+       webhooks post nothing more, and a retry stops once the client is gone.
      - It adds no read power: a client could read the same messages and post
        them anywhere itself. It moves the post into the service, which is
        why the operator must allow it per client.

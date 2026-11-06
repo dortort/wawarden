@@ -748,10 +748,11 @@ another's webhooks.
 #### Webhook deliveries
 
 A webhook starts after the newest message in the archive when it is created,
-and follows the client's [change feed](#client-api) under the client's own
-read grant, so it sees exactly what `GET /v1/changes` would show the client.
-Of that feed it posts each message that is new, came in live rather than from
-[history](internals.md#history-sync), and passes the filter. An edit,
+and reads its client's messages in the order the archive stored them, under
+the client's own read grant, so it sees the messages `GET /v1/changes` would
+show the client. It posts each one that came in live rather than from
+[history](internals.md#history-sync) and passes the filter, in its place even
+when an edit has moved it in the change feed. An edit,
 a revocation or an expiry of a message posts nothing, and neither does a
 message that history or a [backfill](#backfill-requests) adds.
 
@@ -777,8 +778,9 @@ and the webhook's extra headers. A receiver verifies a delivery as it would the
 [notification webhook's](observability.md#verifying-a-delivery), with the
 webhook's `secret` as the key.
 
-A webhook posts its messages one at a time, in the order of the feed, and stores
-its position after each one, so a restart resumes where it stopped: a message
+A webhook posts its messages one at a time, in the order they were stored,
+decides its client's read grant again before each one, and stores its position
+after each one, so a restart resumes where it stopped: a message
 is posted at least once, and a receiver should ignore an event id it has
 already handled. A `2xx` answer delivers the event. A network error and the
 statuses `408`, `425`, `429` and `5xx` are retried after 1 second, then twice

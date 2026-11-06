@@ -57,18 +57,17 @@ func WellFormedWebhookID(id string) bool { return webhookID.MatchString(id) }
 const (
 	selectWebhookCount = `SELECT count(*) FROM webhooks WHERE client_id = ?`
 	selectWebhookTaken = `SELECT EXISTS (SELECT 1 FROM webhooks WHERE id = ?)`
-	selectFeedTop      = `SELECT coalesce(max(change_seq), 0), coalesce(max(seq), 0) FROM messages`
-	insertWebhook      = `INSERT INTO webhooks (id, client_id, url, method, content_type, headers, payload, filter, secret, created_at, change_seq, high_seq)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	selectNewestSeq    = `SELECT coalesce(max(seq), 0) FROM messages`
+	insertWebhook      = `INSERT INTO webhooks (id, client_id, url, method, content_type, headers, payload, filter, secret, created_at, high_seq)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	webhookColumns = `id, client_id, url, method, content_type, headers, coalesce(payload, ''), filter, created_at, delivered, failed,
 		last_delivery_at, last_failure_at, coalesce(last_failure, '')`
 	selectClientWebhooks = `SELECT ` + webhookColumns + ` FROM webhooks WHERE client_id = ? ORDER BY created_at, id`
 	selectClientWebhook  = `SELECT ` + webhookColumns + ` FROM webhooks WHERE client_id = ? AND id = ?`
 	deleteWebhook        = `DELETE FROM webhooks WHERE client_id = ? AND id = ?`
-	selectDeliveryHooks  = `SELECT id, client_id, url, method, content_type, headers, coalesce(payload, ''), filter, secret, change_seq, high_seq FROM webhooks ORDER BY id`
-	advanceWebhook       = `UPDATE webhooks SET change_seq = max(change_seq, ?2), high_seq = max(high_seq, ?3), delivered = delivered + ?4, failed = failed + ?5,
-		last_delivery_at = coalesce(?6, last_delivery_at), last_failure_at = coalesce(?7, last_failure_at), last_failure = coalesce(?8, last_failure) WHERE id = ?1`
-	selectChangeTop = `SELECT coalesce(max(change_seq), 0) FROM messages`
+	selectDeliveryHooks  = `SELECT id, client_id, url, method, content_type, headers, coalesce(payload, ''), filter, secret, high_seq FROM webhooks ORDER BY id`
+	advanceWebhook       = `UPDATE webhooks SET high_seq = max(high_seq, ?2), delivered = delivered + ?3, failed = failed + ?4,
+		last_delivery_at = coalesce(?5, last_delivery_at), last_failure_at = coalesce(?6, last_failure_at), last_failure = coalesce(?7, last_failure) WHERE id = ?1`
 )
 
 // Create stores a webhook that starts after the newest message of the archive, and returns its signing secret once.
@@ -104,8 +103,8 @@ func (w *Webhooks) Create(ctx context.Context, client string, spec hooks.Spec) (
 		if err != nil {
 			return err
 		}
-		var change, high int64
-		if err := q.QueryRowContext(ctx, selectFeedTop).Scan(&change, &high); err != nil {
+		var high int64
+		if err := q.QueryRowContext(ctx, selectNewestSeq).Scan(&high); err != nil {
 			return err
 		}
 		var payload sql.NullString
@@ -113,7 +112,7 @@ func (w *Webhooks) Create(ctx context.Context, client string, spec hooks.Spec) (
 			payload = sql.NullString{String: spec.Payload, Valid: true}
 		}
 		if _, err := q.ExecContext(ctx, insertWebhook, id, client, spec.URL, spec.Method, spec.ContentType, headers, payload, filter, secret,
-			now.UnixMilli(), change, high); err != nil {
+			now.UnixMilli(), high); err != nil {
 			return err
 		}
 		view, err = scanWebhook(q.QueryRowContext(ctx, selectClientWebhook, client, id))
@@ -211,7 +210,7 @@ func (w *Webhooks) Hooks(ctx context.Context) ([]hooks.Hook, error) {
 			var h hooks.Hook
 			var headers, filter string
 			if err := rows.Scan(&h.ID, &h.Client, &h.Spec.URL, &h.Spec.Method, &h.Spec.ContentType, &headers, &h.Spec.Payload, &filter,
-				&h.Secret, &h.Change, &h.High); err != nil {
+				&h.Secret, &h.High); err != nil {
 				return errors.Join(err, rows.Close())
 			}
 			if h.Spec.Headers, err = hooks.DecodeHeaders(headers); err != nil {
@@ -233,17 +232,17 @@ func (w *Webhooks) Hooks(ctx context.Context) ([]hooks.Hook, error) {
 // Advance stores a webhook's new position and adds its outcome counts; a deleted webhook is left deleted.
 func (w *Webhooks) Advance(ctx context.Context, id string, p hooks.Progress) error {
 	return w.db.Write(ctx, "admin.webhook_advance", func(ctx context.Context, q db.Querier) error {
-		_, err := q.ExecContext(ctx, advanceWebhook, id, p.Change, p.High, p.Delivered, p.Failed, optionalMS(p.LastDelivery), optionalMS(p.LastFailure),
+		_, err := q.ExecContext(ctx, advanceWebhook, id, p.High, p.Delivered, p.Failed, optionalMS(p.LastDelivery), optionalMS(p.LastFailure),
 			sql.NullString{String: p.Failure, Valid: p.Failure != ""})
 		return err
 	})
 }
 
-// Top is the archive's newest change number, which tells the dispatcher whether anything is new without reading a message.
+// Top is the sequence number of the archive's newest message, which tells the dispatcher whether anything is new without reading a message.
 func (w *Webhooks) Top(ctx context.Context) (int64, error) {
 	var top int64
 	err := w.db.Read(ctx, "admin.webhook_top", func(ctx context.Context, q db.Querier) error {
-		return q.QueryRowContext(ctx, selectChangeTop).Scan(&top)
+		return q.QueryRowContext(ctx, selectNewestSeq).Scan(&top)
 	})
 	return top, err
 }

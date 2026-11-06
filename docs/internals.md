@@ -860,9 +860,9 @@ queue, it holds:
 - the [client webhooks](api.md#webhooks), since version 7: per webhook its id,
   its client, the URL, method, content type, extra headers as a JSON object,
   body template and filter as a JSON object, a 32-byte signing secret, the
-  change number and message number it has reached, and its delivery counts and
-  last outcomes. A trigger refuses an `INSERT OR REPLACE` of a webhook row;
-  deleting one is the client's.
+  message number it has reached, and its delivery counts and last outcomes. A
+  trigger refuses an `INSERT OR REPLACE` of a webhook row; deleting one is the
+  client's.
 
 The [admin routes](api.md#admin-routes) create and revoke clients, and each change
 appends a row to the [audit chain](observability.md#audit-chain). The engine writes saved

@@ -71,19 +71,20 @@ func (f *fakeFeed) Next(_ context.Context, c *policy.Client, after int64, limit 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, after)
-	if f.err != nil || !f.ok || !c.AllowWebhooks {
-		return Page{}, f.ok && c.AllowWebhooks, f.err
+	allowed := f.ok && c.AllowWebhooks && !c.Revoked
+	if f.err != nil || !allowed {
+		return Page{}, allowed, f.err
 	}
 	var page Page
 	page.Next = after
 	for _, it := range f.items {
-		if it.Change > after {
+		if it.Seq > after {
 			if len(page.Items) == limit {
 				page.More = true
 				break
 			}
 			page.Items = append(page.Items, it)
-			page.Next = it.Change
+			page.Next = it.Seq
 		}
 	}
 	return page, true, nil
@@ -129,20 +130,22 @@ func (r *receiver) requests() []received {
 
 func ptr(s string) *string { return &s }
 
-func item(seq, change int64, live, fromMe bool, body string) Item {
-	return Item{Seq: seq, Change: change, Live: live, Message: dto.Message{
+func item(seq int64, live, fromMe bool, body string) Item {
+	return Item{Seq: seq, Live: live, Message: dto.Message{
 		Ref: "m1_" + strconv.FormatInt(seq, 10), Chat: strings.Repeat("a", 32), FromMe: fromMe, Kind: "text", Text: ptr(body), Origin: "peer", Untrusted: true,
 	}}
 }
 
 type fixture struct {
-	d     *Dispatcher
-	store *fakeStore
-	feed  *fakeFeed
-	recv  *receiver
-	reg   *metrics.Registry
-	hook  Hook
-	slept []time.Duration
+	d        *Dispatcher
+	store    *fakeStore
+	feed     *fakeFeed
+	recv     *receiver
+	reg      *metrics.Registry
+	hook     Hook
+	progress Progress
+	clients  fakeClients
+	slept    []time.Duration
 }
 
 func newFixture(t *testing.T, spec Spec, statuses ...int) *fixture {
@@ -154,10 +157,10 @@ func newFixture(t *testing.T, spec Spec, statuses ...int) *fixture {
 		t.Fatalf("Normalize: %v", err)
 	}
 	f := &fixture{store: &fakeStore{}, feed: &fakeFeed{ok: true}, recv: recv, reg: metrics.NewRegistry()}
-	f.hook = Hook{ID: "wh_0123456789abcdef", Client: "aaaaaaaa", Spec: spec, Secret: []byte(strings.Repeat("s", 32)), Change: 0, High: 0}
+	f.hook = Hook{ID: "wh_0123456789abcdef", Client: "aaaaaaaa", Spec: spec, Secret: []byte(strings.Repeat("s", 32))}
 	f.store.hooks = []Hook{f.hook}
-	clients := fakeClients{"aaaaaaaa": {ID: "aaaaaaaa", AllowWebhooks: true, ReadAll: true, ExpiresAt: testNow.Add(time.Hour)}}
-	f.d, err = New(Options{Store: f.store, Clients: clients, Feed: f.feed, Top: func(context.Context) (int64, error) { return 1 << 40, nil },
+	f.clients = fakeClients{"aaaaaaaa": {ID: "aaaaaaaa", AllowWebhooks: true, ReadAll: true, ExpiresAt: testNow.Add(time.Hour)}}
+	f.d, err = New(Options{Store: f.store, Clients: f.clients, Feed: f.feed, Top: func(context.Context) (int64, error) { return 1 << 40, nil },
 		Metrics: f.reg, Logger: slog.New(slog.DiscardHandler), Now: func() time.Time { return testNow }, HTTP: recv.server.Client()})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -169,17 +172,29 @@ func newFixture(t *testing.T, spec Spec, statuses ...int) *fixture {
 	return f
 }
 
-func TestAPassDeliversOnlyNewLiveMatchingMessagesInOrder(t *testing.T) {
+func (f *fixture) pass(ctx context.Context) time.Duration { return f.d.pass(ctx, &f.hook, &f.progress) }
+
+// drain runs passes until one asks to wait, as the worker does.
+func (f *fixture) drain(ctx context.Context) time.Duration {
+	for range 100 {
+		if wait := f.pass(ctx); wait != 0 {
+			return wait
+		}
+	}
+	return 0
+}
+
+func TestAWebhookDeliversItsLiveMatchingMessagesInStoredOrder(t *testing.T) {
 	f := newFixture(t, Spec{Method: "PUT", Headers: map[string]string{"Authorization": "Bearer synthetic"}, Filter: Filter{Direction: DirectionInbound}})
 	f.hook.High = 2
 	f.feed.items = []Item{
-		item(1, 3, true, false, "an edit of an old message"),
-		item(3, 4, false, false, "history"),
-		item(4, 5, true, true, "the owner's"),
-		item(5, 6, true, false, "first"),
-		item(6, 7, true, false, "second"),
+		item(1, true, false, "before the webhook"),
+		item(3, false, false, "history"),
+		item(4, true, true, "the owner's"),
+		item(5, true, false, "first"),
+		item(6, true, false, "second"),
 	}
-	if wait := f.d.pass(t.Context(), &f.hook); wait != idleEvery {
+	if wait := f.drain(t.Context()); wait != idleEvery {
 		t.Fatalf("pass waits %v, want %v", wait, idleEvery)
 	}
 	got := f.recv.requests()
@@ -198,8 +213,8 @@ func TestAPassDeliversOnlyNewLiveMatchingMessagesInOrder(t *testing.T) {
 			t.Fatalf("delivery %d signature %s does not verify with the secret as the client holds it", i, r.signature)
 		}
 	}
-	if f.hook.Change != 7 || f.hook.High != 6 {
-		t.Fatalf("position %d/%d, want 7/6", f.hook.Change, f.hook.High)
+	if f.hook.High != 6 {
+		t.Fatalf("position %d, want 6", f.hook.High)
 	}
 	saved := f.store.saved()
 	last := saved[len(saved)-1]
@@ -207,18 +222,18 @@ func TestAPassDeliversOnlyNewLiveMatchingMessagesInOrder(t *testing.T) {
 	for _, p := range saved {
 		delivered += p.Delivered
 	}
-	if last.Change != 7 || last.High != 6 || delivered != 2 {
+	if last.High != 6 || delivered != 2 {
 		t.Fatalf("saved %+v", saved)
 	}
-	if f.d.pass(t.Context(), &f.hook); len(f.recv.requests()) != 2 {
+	if f.drain(t.Context()); len(f.recv.requests()) != 2 {
 		t.Fatal("a second pass delivered again")
 	}
 }
 
 func TestATemplateShapesTheBody(t *testing.T) {
 	f := newFixture(t, Spec{ContentType: ContentText, Payload: "New: {{message.text}} ({{webhook}})"})
-	f.feed.items = []Item{item(1, 1, true, false, "hello")}
-	f.d.pass(t.Context(), &f.hook)
+	f.feed.items = []Item{item(1, true, false, "hello")}
+	f.drain(t.Context())
 	got := f.recv.requests()
 	if len(got) != 1 || got[0].body != "New: hello (wh_0123456789abcdef)" || got[0].contentType != "text/plain; charset=utf-8" {
 		t.Fatalf("deliveries %+v", got)
@@ -227,8 +242,8 @@ func TestATemplateShapesTheBody(t *testing.T) {
 
 func TestARetryableAnswerIsRetriedAndAPermanentOneDropped(t *testing.T) {
 	f := newFixture(t, Spec{}, http.StatusServiceUnavailable, http.StatusTooManyRequests, http.StatusOK, http.StatusBadRequest)
-	f.feed.items = []Item{item(1, 1, true, false, "retried"), item(2, 2, true, false, "dropped"), item(3, 3, true, false, "after")}
-	f.d.pass(t.Context(), &f.hook)
+	f.feed.items = []Item{item(1, true, false, "retried"), item(2, true, false, "dropped"), item(3, true, false, "after")}
+	f.drain(t.Context())
 	got := f.recv.requests()
 	if len(got) != 5 || got[0].id != got[2].id || got[3].id == got[2].id {
 		t.Fatalf("%d requests, want 3 attempts of the first event, 1 of the second and 1 of the third: %+v", len(got), got)
@@ -244,8 +259,8 @@ func TestARetryableAnswerIsRetriedAndAPermanentOneDropped(t *testing.T) {
 			failure = p.Failure
 		}
 	}
-	if delivered != 2 || failed != 1 || failure != ReasonStatus || f.hook.Change != 3 {
-		t.Fatalf("delivered %d, failed %d (%s), at %d", delivered, failed, failure, f.hook.Change)
+	if delivered != 2 || failed != 1 || failure != ReasonStatus || f.hook.High != 3 {
+		t.Fatalf("delivered %d, failed %d (%s), at %d", delivered, failed, failure, f.hook.High)
 	}
 	if v := counter(t, f.reg, `wawarden_webhook_deliveries_total{outcome="dropped"}`); v != "1" {
 		t.Fatalf("dropped counter %s", v)
@@ -255,7 +270,7 @@ func TestARetryableAnswerIsRetriedAndAPermanentOneDropped(t *testing.T) {
 func TestRetriesStopOnceTheClientIsRevoked(t *testing.T) {
 	f := newFixture(t, Spec{}, http.StatusServiceUnavailable, http.StatusOK)
 	f.d.o.Clients = fakeClients{"aaaaaaaa": {ID: "aaaaaaaa", AllowWebhooks: true, ReadAll: true, Revoked: true, ExpiresAt: testNow.Add(time.Hour)}}
-	f.feed.items = []Item{item(1, 1, true, false, "x")}
+	f.feed.items = []Item{item(1, true, false, "x")}
 	h := f.hook
 	reason, delivered := f.d.deliver(t.Context(), &h, f.feed.items[0], func() bool { return f.d.holds(t.Context(), h.Client) })
 	if delivered || reason != ReasonRevoked || len(f.recv.requests()) != 1 {
@@ -275,27 +290,27 @@ func TestRetriesGiveUpAfterADay(t *testing.T) {
 		clock = clock.Add(d * 60)
 		return nil
 	}
-	f.feed.items = []Item{item(1, 1, true, false, "never")}
-	f.d.pass(t.Context(), &f.hook)
+	f.feed.items = []Item{item(1, true, false, "never")}
+	f.drain(t.Context())
 	saved := f.store.saved()
-	if len(saved) == 0 || saved[len(saved)-1].Failure != ReasonExpired || f.hook.Change != 1 {
+	if len(saved) == 0 || saved[len(saved)-1].Failure != ReasonExpired || f.hook.High != 1 {
 		t.Fatalf("saved %+v, want the event dropped after the retries ran out", saved)
 	}
 }
 
 func TestADormantClientAndAFailingFeedDeliverNothing(t *testing.T) {
 	f := newFixture(t, Spec{})
-	f.feed.items = []Item{item(1, 1, true, false, "x")}
+	f.feed.items = []Item{item(1, true, false, "x")}
 	f.feed.ok = false
-	if wait := f.d.pass(t.Context(), &f.hook); wait != dormantEvery || f.hook.Change != 0 {
-		t.Fatalf("pass for a dormant client waits %v at %d", wait, f.hook.Change)
+	if wait := f.pass(t.Context()); wait != dormantEvery || f.hook.High != 0 {
+		t.Fatalf("pass for a dormant client waits %v at %d", wait, f.hook.High)
 	}
 	f.feed.ok, f.feed.err = true, errors.New("synthetic busy")
-	if wait := f.d.pass(t.Context(), &f.hook); wait != failedReadWait || f.hook.Change != 0 {
-		t.Fatalf("pass with a failing feed waits %v at %d", wait, f.hook.Change)
+	if wait := f.pass(t.Context()); wait != failedReadWait || f.hook.High != 0 {
+		t.Fatalf("pass with a failing feed waits %v at %d", wait, f.hook.High)
 	}
 	f.hook.Client = "bbbbbbbb"
-	if wait := f.d.pass(t.Context(), &f.hook); wait != dormantEvery {
+	if wait := f.pass(t.Context()); wait != dormantEvery {
 		t.Fatalf("pass for an unknown client waits %v", wait)
 	}
 	if len(f.recv.requests()) != 0 {
@@ -303,15 +318,70 @@ func TestADormantClientAndAFailingFeedDeliverNothing(t *testing.T) {
 	}
 }
 
-func TestAnUnsavedPositionStopsThePass(t *testing.T) {
+func TestAnUnsavedOutcomeIsStoredBeforeAnythingMoreIsPosted(t *testing.T) {
 	f := newFixture(t, Spec{})
 	f.store.fail = errors.New("synthetic write failure")
-	f.feed.items = []Item{item(1, 1, true, false, "x"), item(2, 2, true, false, "y")}
-	if wait := f.d.pass(t.Context(), &f.hook); wait != failedReadWait {
+	f.feed.items = []Item{item(1, true, false, "x"), item(2, true, false, "y")}
+	for range 2 {
+		if wait := f.pass(t.Context()); wait != failedReadWait {
+			t.Fatalf("pass waits %v, want %v", wait, failedReadWait)
+		}
+	}
+	if n, reads := len(f.recv.requests()), len(f.feed.calls); n != 1 || reads != 1 {
+		t.Fatalf("%d deliveries after %d reads, want the passes to stop after the first unsaved one", n, reads)
+	}
+	f.store.fail = nil
+	if wait := f.drain(t.Context()); wait != idleEvery || len(f.recv.requests()) != 2 {
+		t.Fatalf("drain waits %v after %d deliveries", wait, len(f.recv.requests()))
+	}
+	saved := f.store.saved()
+	if len(saved) < 2 || saved[0].Delivered != 1 || saved[0].High != 1 || !saved[0].LastDelivery.Equal(testNow) || saved[1].Delivered != 1 || saved[1].High != 2 {
+		t.Fatalf("saved %+v, want the unsaved delivery stored before the next one", saved)
+	}
+}
+
+func TestAnUnsavedOutcomeAtTheTopIsStoredWithoutANewMessage(t *testing.T) {
+	f := newFixture(t, Spec{})
+	f.store.fail = errors.New("synthetic write failure")
+	f.feed.items = []Item{item(1, true, false, "x")}
+	if wait := f.pass(t.Context()); wait != failedReadWait {
 		t.Fatalf("pass waits %v, want %v", wait, failedReadWait)
 	}
-	if n := len(f.recv.requests()); n != 1 {
-		t.Fatalf("%d deliveries, want the pass to stop after the first unsaved one", n)
+	f.d.o.Top = func(context.Context) (int64, error) { return 1, nil }
+	f.d.probe(t.Context())
+	f.store.fail = nil
+	if wait := f.pass(t.Context()); wait != idleEvery {
+		t.Fatalf("pass at the top waits %v, want %v", wait, idleEvery)
+	}
+	if saved := f.store.saved(); len(saved) != 1 || saved[0].Delivered != 1 || saved[0].High != 1 {
+		t.Fatalf("saved %+v, want the delivery stored once the store recovers", saved)
+	}
+}
+
+func TestAClientRevokedAfterAnEventPostsNothingMore(t *testing.T) {
+	f := newFixture(t, Spec{})
+	f.feed.items = []Item{item(1, true, false, "x"), item(2, true, false, "y"), item(3, true, false, "z")}
+	if wait := f.pass(t.Context()); wait != 0 || len(f.recv.requests()) != 1 {
+		t.Fatalf("first pass waits %v after %d deliveries", wait, len(f.recv.requests()))
+	}
+	f.clients["aaaaaaaa"].Revoked = true
+	if wait := f.drain(t.Context()); wait != dormantEvery || len(f.recv.requests()) != 1 || f.hook.High != 1 {
+		t.Fatalf("drain waits %v after %d deliveries at %d, want the rest of the page kept", wait, len(f.recv.requests()), f.hook.High)
+	}
+}
+
+func TestAClientRevokedDuringRetriesPostsNothingMore(t *testing.T) {
+	f := newFixture(t, Spec{}, http.StatusServiceUnavailable)
+	f.d.sleep = func(context.Context, time.Duration) error {
+		f.clients["aaaaaaaa"].Revoked = true
+		return nil
+	}
+	f.feed.items = []Item{item(1, true, false, "x"), item(2, true, false, "y"), item(3, true, false, "z")}
+	if wait := f.drain(t.Context()); wait != dormantEvery || len(f.recv.requests()) != 1 || f.hook.High != 1 {
+		t.Fatalf("drain waits %v after %d requests at %d, want one attempt and the rest of the page kept", wait, len(f.recv.requests()), f.hook.High)
+	}
+	if saved := f.store.saved(); len(saved) != 1 || saved[0].Failure != ReasonRevoked {
+		t.Fatalf("saved %+v, want the event dropped as client_gone", saved)
 	}
 }
 
@@ -319,15 +389,15 @@ func TestTheProbeSkipsAnIdleHook(t *testing.T) {
 	f := newFixture(t, Spec{})
 	f.d.o.Top = func(context.Context) (int64, error) { return 5, nil }
 	f.d.probe(t.Context())
-	f.hook.Change = 5
-	if wait := f.d.pass(t.Context(), &f.hook); wait != idleEvery || len(f.feed.calls) != 0 {
+	f.hook.High = 5
+	if wait := f.pass(t.Context()); wait != idleEvery || len(f.feed.calls) != 0 {
 		t.Fatalf("pass at the top waits %v after %d reads", wait, len(f.feed.calls))
 	}
 }
 
 func TestTheDispatcherRunsAndStops(t *testing.T) {
 	f := newFixture(t, Spec{})
-	f.feed.items = []Item{item(1, 1, true, false, "x")}
+	f.feed.items = []Item{item(1, true, false, "x")}
 	f.d.Start(t.Context())
 	f.d.Changed()
 	deadline := time.Now().Add(5 * time.Second)
@@ -358,9 +428,10 @@ func TestTheDefaultClientRefusesALoopbackDestination(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	f.feed.items = []Item{item(1, 1, true, false, "x")}
+	f.feed.items = []Item{item(1, true, false, "x")}
 	h := f.hook
-	d.pass(t.Context(), &h)
+	var p Progress
+	d.pass(t.Context(), &h, &p)
 	saved := f.store.saved()
 	if len(f.recv.requests()) != 0 || len(saved) == 0 || saved[len(saved)-1].Failure != ReasonDestination {
 		t.Fatalf("a loopback webhook reached the receiver or was not dropped as refused: %+v", saved)
@@ -398,10 +469,10 @@ func TestADeliveryAcceptedAsTheDispatcherStopsIsStored(t *testing.T) {
 	f := newFixture(t, Spec{})
 	ctx, cancel := context.WithCancel(t.Context())
 	f.d.http = &http.Client{Transport: cancellingTransport{cancel: cancel}}
-	f.feed.items = []Item{item(1, 1, true, false, "accepted"), item(2, 2, true, false, "never sent")}
-	f.d.pass(ctx, &f.hook)
+	f.feed.items = []Item{item(1, true, false, "accepted"), item(2, true, false, "never sent")}
+	f.pass(ctx)
 	saved := f.store.saved()
-	if len(saved) != 1 || saved[0].Delivered != 1 || saved[0].Change != 1 || saved[0].High != 1 {
+	if len(saved) != 1 || saved[0].Delivered != 1 || saved[0].High != 1 {
 		t.Fatalf("saved %+v, want the accepted delivery stored with its position and nothing after it", saved)
 	}
 }
