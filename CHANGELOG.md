@@ -27,6 +27,8 @@ its image digest and the commands to verify and reproduce it.
 
 ## [1.4.0] - 2026-11-07
 
+Built from commit `935d043` with go1.27.3.
+
 ### Added
 
 - Client webhooks, off by default. A client created with `allow_webhooks`
