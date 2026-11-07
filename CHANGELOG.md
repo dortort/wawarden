@@ -78,6 +78,18 @@ its image digest and the commands to verify and reproduce it.
   threat model now say so (see
   [Backfill requests](docs/api.md#backfill-requests)).
 
+### Upgrade notes
+
+- The first start migrates the archive to schema version 7. The change is
+  forward-only: an earlier release refuses the upgraded archive. Take a
+  backup before upgrading; going back needs that backup restored into the
+  earlier release (see [the runbook](docs/runbook.md#upgrading)).
+- Remove `WAWARDEN_WEBHOOKS_ALLOW_PRIVATE` before going back to an earlier
+  release, which refuses to start with `unknown_variable`.
+- Run `wawarden admin clients create` against a v1.4.0 server. It always
+  sends the `allow_webhooks` key, which a v1.3.0 server refuses with
+  `invalid_body`.
+
 ## [1.3.0] - 2026-10-18
 
 Built from commit `26eb050` with go1.27.2.
