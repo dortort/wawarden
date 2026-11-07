@@ -16,7 +16,7 @@ its image digest and the commands to verify and reproduce it.
 
 ## Contents
 
-- [Unreleased](#unreleased)
+- [1.4.0 - 2026-11-07](#140---2026-11-07)
 - [1.3.0 - 2026-10-18](#130---2026-10-18)
 - [1.2.0 - 2026-10-18](#120---2026-10-18)
 - [1.1.0 - 2026-10-15](#110---2026-10-15)
@@ -25,7 +25,7 @@ its image digest and the commands to verify and reproduce it.
 - [0.2.0 - 2026-10-06](#020---2026-10-06)
 - [0.1.0 - 2026-10-04](#010---2026-10-04)
 
-## [Unreleased]
+## [1.4.0] - 2026-11-07
 
 ### Added
 
@@ -590,7 +590,7 @@ Built from commit `d0d5514` with go1.27.1. Released under the MIT licence.
 - Release builds prove the `dev` build tag absent. The container image runs
   as a non-root user on a distroless base with a read-only root filesystem.
 
-[Unreleased]: https://github.com/dortort/wawarden/compare/v1.3.0...HEAD
+[1.4.0]: https://github.com/dortort/wawarden/releases/tag/v1.4.0
 [1.3.0]: https://github.com/dortort/wawarden/releases/tag/v1.3.0
 [1.2.0]: https://github.com/dortort/wawarden/releases/tag/v1.2.0
 [1.1.0]: https://github.com/dortort/wawarden/releases/tag/v1.1.0
