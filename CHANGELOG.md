@@ -56,6 +56,17 @@ its image digest and the commands to verify and reproduce it.
   `webhooks` table and the clients' `allow_webhooks` flag; an earlier release
   refuses to open it.
 
+### Security
+
+- Built with go1.27.3, which fixes
+  [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809) in the standard
+  library: `crypto/x509` distrusts compromised intermediate certificates.
+  `govulncheck` finds that 1.3.0, built with go1.27.2, reaches it: an
+  attachment download verifies its media host's certificate through it.
+- The threat model lists the new residual: a client created with
+  `allow_webhooks` that a message it reads talks into registering a webhook
+  (see [Clients and agents](docs/threat-model.md#clients-and-agents)).
+
 ### Fixed
 
 - The 1.3.0 documentation said that a newest-anchored backfill gives a media
