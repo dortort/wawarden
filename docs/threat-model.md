@@ -423,9 +423,11 @@ These are stated so that nobody relies on WaWarden for them:
        them anywhere itself. It moves the post into the service, which is
        why the operator must allow it per client.
      - The extra headers' values, the URL and the template are stored in the
-       archive, and so in its backups, in clear; they are never answered back
-       to a client or logged. The signing secret, 32 random bytes per webhook,
-       is stored in the archive too and answered once, at creation.
+       archive, and so in its backups, in clear, and are never logged. The
+       URL and the template are answered only to the client that holds the
+       webhook; the headers' values never are. The signing secret, 32 random
+       bytes per webhook, is stored in the archive too and answered once, at
+       creation.
      - Each webhook delivers one message at a time, so a slow receiver holds
        up only its own webhook. Undelivered events are retried for at most 24
        hours, then counted, logged and dropped.
