@@ -102,8 +102,15 @@ documented design are welcome.
 - Traffic to WhatsApp that the threat model says WaWarden never causes, such as
   read receipts or presence, or a connection from a service without a paired
   device before pairing is requested.
-- A notification webhook post that reaches an address its destination check
-  refuses.
+- A notification or client webhook post that reaches an address its
+  destination check refuses.
+- Client webhook flaws: a client without `allow_webhooks` registering a
+  webhook, a webhook posting a message its client may not read or posting
+  after its client is revoked or expires, or one client seeing or deleting
+  another client's webhook.
+- A client webhook's URL, extra headers, template or signing secret reaching a
+  log, its headers' values reaching any answer, or its secret reaching an
+  answer other than the one to its create.
 - A backup that can be decrypted without the age identity it was encrypted to,
   or a plaintext copy of a database that outlives a backup beyond the cases the
   threat model lists.
