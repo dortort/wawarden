@@ -155,6 +155,13 @@ first: WhatsApp can ban an account that links an unofficial client.
 
 ### Try it without an account
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/demo-dark.svg">
+    <img alt="WaWarden fake engine quickstart: pairing with FAKE-C0DE, creating a scoped client token, reading over REST and MCP, and registering with Claude Code" src="docs/assets/demo-light.svg" width="100%">
+  </picture>
+</p>
+
 A development build can run a scripted fake engine in place of WhatsApp. It
 pairs, connects and plays synthetic messages and history, offline. You need
 git, curl and Go 1.21 or later, which downloads the toolchain that `go.mod`
