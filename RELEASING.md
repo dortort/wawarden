@@ -328,7 +328,7 @@ What bounds the risk:
 | SPDX 2.3 SBOMs for the binaries, `wawarden_<version>_<os>_<arch>.spdx.json`, the `darwin` ones from `v1.1.0` on | Release assets, and attested to each binary in GitHub's attestation store |
 | Build provenance attestations (SLSA, via `actions/attest-build-provenance`): one for the image index, and one whose subjects are the files `SHA256SUMS` lists | GitHub's attestation store; the image attestation is also pushed to the registry, and the files' Sigstore bundle is the release asset `wawarden_<version>_provenance.sigstore.json` |
 | Keyless cosign signature on the image index, made with cosign v3.1.3 | Registry, next to the image |
-| Official MCP Registry entry (`io.github.dortort/wawarden`), stamped from `server.json` with the release version and digest-pinned image reference | `registry.modelcontextprotocol.io` |
+| From `v1.4.1` on, the Official MCP Registry entry (`io.github.dortort/wawarden`), stamped from `server.json` with the release version and digest-pinned image reference | `registry.modelcontextprotocol.io` |
 
 The SBOMs list the Go modules and the Go standard library compiled into each
 binary. No SBOM covers the image as a whole, so the packages of the distroless
