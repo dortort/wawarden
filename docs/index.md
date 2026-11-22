@@ -86,3 +86,8 @@ messaging tool.
     [releasing](../RELEASING.md) and the [security policy](../SECURITY.md).
 
 </div>
+
+For AI agents: use [llms.txt](https://wawarden.dortort.dev/llms.txt) for a
+Markdown index of every page, or load the
+[WaWarden client skill](https://wawarden.dortort.dev/.well-known/agent-skills/wawarden-client/SKILL.md)
+([discovery index](https://wawarden.dortort.dev/.well-known/agent-skills/index.json)).
