@@ -18,6 +18,7 @@ env:
   VERSION: ${{ inputs.version }}
   IMAGE: ghcr.io/dortort/wawarden
   BUILDX_VERSION: v0.37.1
+  MCP_PUBLISHER_VERSION: v1.8.11
   GOFLAGS: -mod=readonly
 
 defaults:
@@ -562,3 +563,54 @@ jobs:
             echo "::error::release $VERSION reports isImmutable=$immutable; it was published while immutable releases were off"
             exit 1
           fi
+
+  mcp-registry:
+    name: Publish to MCP Registry
+    needs: [build, release]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+        with:
+          cosign-release: v3.1.3
+
+      - name: Download and verify mcp-publisher
+        run: |
+          base="https://github.com/modelcontextprotocol/registry/releases/download/$MCP_PUBLISHER_VERSION"
+          archive="mcp-publisher_linux_amd64.tar.gz"
+          curl -fsSL "$base/$archive" -o "$RUNNER_TEMP/$archive"
+          curl -fsSL "$base/$archive.sigstore.json" -o "$RUNNER_TEMP/$archive.sigstore.json"
+          cosign verify-blob \
+            --bundle "$RUNNER_TEMP/$archive.sigstore.json" \
+            --certificate-identity "https://github.com/modelcontextprotocol/registry/.github/workflows/release.yml@refs/tags/$MCP_PUBLISHER_VERSION" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$RUNNER_TEMP/$archive"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" mcp-publisher
+          chmod 0755 "$RUNNER_TEMP/mcp-publisher"
+
+      - name: Stamp and validate server.json
+        env:
+          DIGEST: ${{ needs.build.outputs.digest }}
+        run: |
+          semver="${VERSION#v}"
+          jq --arg v "$semver" --arg id "$IMAGE:$VERSION@$DIGEST" \
+            '.version = $v | .packages[0].identifier = $id' \
+            server.json > "$RUNNER_TEMP/server.json"
+          "$RUNNER_TEMP/mcp-publisher" validate "$RUNNER_TEMP/server.json"
+
+      - name: Publish to Official MCP Registry
+        run: |
+          "$RUNNER_TEMP/mcp-publisher" login github-oidc
+          "$RUNNER_TEMP/mcp-publisher" publish "$RUNNER_TEMP/server.json"
