@@ -84,11 +84,12 @@ above after any change to the repository settings.
 
 - Releases are cut **only from `main`**, by the manually dispatched workflow
   `.github/workflows/release.yml`. Nobody pushes release tags by hand.
-- The workflow has five jobs: `guard` (*Check version, tag, environment and
+- The workflow has six jobs: `guard` (*Check version, tag, environment and
   CI*), then `build` (*Build*), then `rebuild` (*Rebuild and compare*) and
   `darwin` (*Rebuild and run on macOS*, once on each of two macOS runners)
-  side by side, and last `release` (*Publish*), the publishing job. Every job
-  runs only when the workflow was dispatched on `refs/heads/main`.
+  side by side, then `release` (*Publish*), the publishing job, and last
+  `mcp-registry` (*Publish to MCP Registry*). Every job runs only when the
+  workflow was dispatched on `refs/heads/main`.
 - The workflow input is the version. The `guard` job accepts only
   `vMAJOR.MINOR.PATCH` with decimal numbers without leading zeros and no suffix
   (`v0.1.0`, not `v0.01.0` or `v1.0.0-rc.1`), and stops when `git ls-remote`
@@ -101,9 +102,11 @@ above after any change to the repository settings.
 - The job that publishes runs in the `release` environment, so it starts only
   after the maintainer approves it. In the release workflow, the permissions that
   can write to the repository or the registry (`contents: write`,
-  `packages: write`, `attestations: write`) and the OIDC token used for signing
-  (`id-token: write`) are granted only to that job, so they exist only after
-  approval.
+  `packages: write`, `attestations: write`) are granted only to `release`, so
+  they exist only after approval. Once `release` succeeds, `mcp-registry`
+  publishes the stamped `server.json` to the Official MCP Registry using GitHub
+  OIDC with only `contents: read` and `id-token: write`, after verifying the
+  pinned `mcp-publisher` archive with `cosign verify-blob`.
 - Outside the release workflow, two jobs hold `id-token: write`. The OpenSSF
   Scorecard job (`.github/workflows/scorecard.yml`) needs it to publish its
   results; it runs on pushes to `main` and on a schedule, and does not build or
@@ -239,8 +242,10 @@ fourth independent build of every binary, on another operating system.
 ### What the publishing job runs
 
 The publishing job, `release` (*Publish*), is the only job of the release
-workflow that holds `contents: write`, `packages: write`,
-`attestations: write` and `id-token: write`. It checks out the commit the
+workflow that holds `contents: write`, `packages: write` and
+`attestations: write` (it also holds `id-token: write` for signing and
+attesting; `mcp-registry` runs only after `release` succeeds and holds only
+`contents: read` and `id-token: write`). It checks out the commit the
 workflow was dispatched on, the commit the `build`, `rebuild` and `darwin`
 jobs built, and runs code from that commit:
 
@@ -323,6 +328,7 @@ What bounds the risk:
 | SPDX 2.3 SBOMs for the binaries, `wawarden_<version>_<os>_<arch>.spdx.json`, the `darwin` ones from `v1.1.0` on | Release assets, and attested to each binary in GitHub's attestation store |
 | Build provenance attestations (SLSA, via `actions/attest-build-provenance`): one for the image index, and one whose subjects are the files `SHA256SUMS` lists | GitHub's attestation store; the image attestation is also pushed to the registry, and the files' Sigstore bundle is the release asset `wawarden_<version>_provenance.sigstore.json` |
 | Keyless cosign signature on the image index, made with cosign v3.1.3 | Registry, next to the image |
+| Official MCP Registry entry (`io.github.dortort/wawarden`), stamped from `server.json` with the release version and digest-pinned image reference | `registry.modelcontextprotocol.io` |
 
 The SBOMs list the Go modules and the Go standard library compiled into each
 binary. No SBOM covers the image as a whole, so the packages of the distroless
@@ -791,6 +797,7 @@ Dependabot does not update the following, so they are bumped by hand:
 | BuildKit | The default of `BUILDKIT_IMAGE` (version and digest) in `hack/repro-build.sh`. |
 | The Go image of the offline run | `default_image` (version and digest) in `hack/offline-test.sh`. The script stops unless the image's Go equals the `toolchain` version, so bump it with Go. |
 | cosign | The `cosign-release` input of the `sigstore/cosign-installer` step in `.github/workflows/release.yml`. Update the cosign version this document names with it. |
+| mcp-publisher | `MCP_PUBLISHER_VERSION` in the `env` block of `.github/workflows/release.yml`. |
 
 For every update:
 
