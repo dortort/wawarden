@@ -60,11 +60,20 @@ SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
 _page_descriptions: dict[str, str] = {}
 _markdown_copies: dict[str, tuple[str, str]] = {}
+_nav = None
 
 
 def on_pre_build(config) -> None:
+    global _nav
     _page_descriptions.clear()
     _markdown_copies.clear()
+    _nav = None
+
+
+def on_nav(nav, config, files):
+    global _nav
+    _nav = nav
+    return nav
 
 
 def _site_base(config) -> str:
@@ -406,8 +415,52 @@ def on_post_page(output: str, page, config) -> str:
     return output.replace("</head>", tag, 1)
 
 
+def _collect_section_pages(items) -> list:
+    pages = []
+    for item in items:
+        if item.is_page:
+            pages.append(item)
+        elif item.is_section:
+            pages.extend(_collect_section_pages(item.children))
+    return pages
+
+
+def _format_llms_entry(page, config) -> str:
+    url = _markdown_url(page, config)
+    desc = _page_descriptions.get(page.file.src_uri, "").strip()
+    if desc:
+        return f"- [{page.title}]({url}): {desc}"
+    return f"- [{page.title}]({url})"
+
+
+def _render_llms_txt(nav, config) -> str:
+    lines = [
+        f"# {config['site_name']}",
+        "",
+        f"> {config['site_description']}",
+    ]
+    top_pages = [item for item in nav.items if item.is_page]
+    sections: list[tuple[str, list]] = []
+    if top_pages:
+        sections.append(("Documentation", top_pages))
+    for item in nav.items:
+        if item.is_section:
+            section_pages = _collect_section_pages(item.children)
+            if section_pages:
+                sections.append((item.title, section_pages))
+    for heading, pages in sections:
+        lines.extend(["", f"## {heading}", ""])
+        for page in pages:
+            lines.append(_format_llms_entry(page, config))
+    return "\n".join(lines) + "\n"
+
+
 def on_post_build(config) -> None:
     for dest_path, content in _markdown_copies.values():
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         with open(dest_path, "w", encoding="utf-8") as f:
             f.write(content)
+    if _nav is not None:
+        llms_path = os.path.join(config["site_dir"], "llms.txt")
+        with open(llms_path, "w", encoding="utf-8") as f:
+            f.write(_render_llms_txt(_nav, config))
