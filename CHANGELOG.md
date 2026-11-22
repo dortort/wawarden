@@ -16,6 +16,7 @@ its image digest and the commands to verify and reproduce it.
 
 ## Contents
 
+- [1.4.1 - 2026-11-22](#141---2026-11-22)
 - [1.4.0 - 2026-11-07](#140---2026-11-07)
 - [1.3.0 - 2026-10-18](#130---2026-10-18)
 - [1.2.0 - 2026-10-18](#120---2026-10-18)
@@ -24,6 +25,50 @@ its image digest and the commands to verify and reproduce it.
 - [0.3.0 - 2026-10-11](#030---2026-10-11)
 - [0.2.0 - 2026-10-06](#020---2026-10-06)
 - [0.1.0 - 2026-10-04](#010---2026-10-04)
+
+## [1.4.1] - 2026-11-22
+
+### Security
+
+- Built with go1.27.4, which fixes
+  [GO-2026-6859](https://pkg.go.dev/vuln/GO-2026-6859) (`CVE-2026-97054`) in
+  the standard library: an HTTP/1 server crash caused by a `MaxBytesReader`
+  header race in `net/http`. `govulncheck` finds that 1.4.0, built with
+  go1.27.3, reaches it through WaWarden's HTTP listeners and `net/http` calls
+  ([#52](https://github.com/dortort/wawarden/issues/52)).
+
+### Added
+
+- Official MCP Registry packaging and publishing:
+  - the container image carries the `io.modelcontextprotocol.server.name` OCI
+    label (`io.github.dortort/wawarden`; see
+    [Container image](docs/configuration.md#container-image));
+  - the repository includes `server.json` for `io.github.dortort/wawarden`,
+    and the release workflow stamps it with the release version and
+    digest-pinned image reference and publishes it to
+    `registry.modelcontextprotocol.io` via GitHub OIDC after verifying the
+    pinned `mcp-publisher` archive with `cosign verify-blob` (see
+    [What a release contains](RELEASING.md#what-a-release-contains)).
+- AI-agent readiness outputs on the
+  [documentation site](https://wawarden.dortort.dev/), verified on every build
+  by `website/verify_site.py`: `robots.txt` with AI crawler rules and content
+  signals, unique per-page meta descriptions, per-page Markdown copies with
+  `<link rel="alternate" type="text/markdown">` links, `/llms.txt` generated
+  from the navigation, and the `wawarden-client` agent skill at
+  `/.well-known/agent-skills/wawarden-client/SKILL.md` with its discovery
+  index at `/.well-known/agent-skills/index.json` (linked from
+  [the documentation home page](docs/index.md)).
+- End-to-end agent recipes in [Recipes](docs/agents.md#recipes), dark and
+  light terminal demo SVGs for the offline fake-engine quickstart in the README
+  under [Try it without an account](README.md#try-it-without-an-account), and
+  `glama.json` metadata for the Glama MCP directory.
+
+### Changed
+
+- Updated `go.mau.fi/libsignal` from `v0.2.2` to `v0.2.3` (and indirect
+  `golang.org/x/crypto` from `v0.57.0` to `v0.58.0`), and updated
+  `sigstore/cosign-installer` in `.github/workflows/release.yml` from `v4.1.2`
+  to `v4.1.3`.
 
 ## [1.4.0] - 2026-11-07
 
@@ -592,6 +637,7 @@ Built from commit `d0d5514` with go1.27.1. Released under the MIT licence.
 - Release builds prove the `dev` build tag absent. The container image runs
   as a non-root user on a distroless base with a read-only root filesystem.
 
+[1.4.1]: https://github.com/dortort/wawarden/releases/tag/v1.4.1
 [1.4.0]: https://github.com/dortort/wawarden/releases/tag/v1.4.0
 [1.3.0]: https://github.com/dortort/wawarden/releases/tag/v1.3.0
 [1.2.0]: https://github.com/dortort/wawarden/releases/tag/v1.2.0
