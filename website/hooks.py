@@ -45,6 +45,23 @@ HTML_ATTR = re.compile(r"""(\b(?:href|src|srcset)=)(["'])([^"']*)\2""")
 CODE_SPAN = re.compile(r"(`+)(?:(?!\1)[\s\S])+?\1")
 ALERT = re.compile(r"^ {0,3}> ?\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$", re.IGNORECASE)
 ALERT_KIND = {"note": "note", "tip": "tip", "important": "info", "warning": "warning", "caution": "danger"}
+THEMATIC_BREAK = re.compile(r"^ {0,3}(?:[-*_] *){3,}$")
+HTML_BLOCK_START = re.compile(r"^ {0,3}<(?!(?:https?|mailto):)[!/A-Za-z]")
+AUTOLINK = re.compile(r"<((?:https?|mailto):[^>\s]+)>")
+INLINE_IMAGE = re.compile(r"!\[([^\]]*)\]\((?:<[^>]*>|[^)\s]+)(?:\s+\"[^\"]*\"|\s+'[^']*')?\)")
+INLINE_LINK_TEXT = re.compile(r"\[((?:[^\[\]]|\[[^\[\]]*\])*)\]\((?:<[^>]*>|[^)\s]+)(?:\s+\"[^\"]*\"|\s+'[^']*')?\)")
+REF_LINK_TEXT = re.compile(r"\[([^\]]+)\]\[[^\]]*\]")
+BOLD_STAR = re.compile(r"\*\*([^*]+)\*\*")
+BOLD_UNDER = re.compile(r"(?<!\w)__([^_]+)__(?!\w)")
+ITALIC_STAR = re.compile(r"\*([^*]+)\*")
+ITALIC_UNDER = re.compile(r"(?<!\w)_([^_]+)_(?!\w)")
+SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
+_page_descriptions: dict[str, str] = {}
+
+
+def on_pre_build(config) -> None:
+    _page_descriptions.clear()
 
 
 def _root_dir(config) -> str:
@@ -224,7 +241,80 @@ def _alerts(lines: list[str]) -> list[str]:
     return out
 
 
+def _strip_inline_markdown(text: str) -> str:
+    text = INLINE_IMAGE.sub(r"\1", text)
+    text = INLINE_LINK_TEXT.sub(r"\1", text)
+    text = REF_LINK_TEXT.sub(r"\1", text)
+    text = AUTOLINK.sub(r"\1", text)
+    text = CODE_SPAN.sub(lambda m: m.group(0)[len(m.group(1)):-len(m.group(1))].strip(), text)
+    text = BOLD_STAR.sub(r"\1", text)
+    text = BOLD_UNDER.sub(r"\1", text)
+    text = ITALIC_STAR.sub(r"\1", text)
+    text = ITALIC_UNDER.sub(r"\1", text)
+    return " ".join(text.split())
+
+
+def _extract_description(markdown: str, max_len: int = 290) -> str:
+    paragraph: list[str] = []
+    in_fence: str | None = None
+    in_html = False
+    for line in markdown.split("\n"):
+        f = FENCE.match(line)
+        if in_fence:
+            if f and f.group(2).startswith(in_fence) and not line.strip()[len(f.group(2)):].strip():
+                in_fence = None
+            continue
+        if f:
+            if paragraph:
+                break
+            in_fence = f.group(2)
+            continue
+        stripped = line.strip()
+        if not stripped:
+            in_html = False
+            if paragraph:
+                break
+            continue
+        if in_html:
+            continue
+        if not paragraph and (
+            stripped.startswith(("#", ">", "|"))
+            or LIST_MARKER.match(line)
+            or THEMATIC_BREAK.match(line)
+            or HTML_BLOCK_START.match(line)
+        ):
+            if HTML_BLOCK_START.match(line):
+                in_html = True
+            continue
+        if paragraph and (
+            stripped.startswith(("#", ">", "|"))
+            or LIST_MARKER.match(line)
+            or THEMATIC_BREAK.match(line)
+        ):
+            break
+        paragraph.append(stripped)
+    plain = _strip_inline_markdown(" ".join(paragraph))
+    if len(plain) <= max_len:
+        return plain
+    sentences = SENTENCE_SPLIT.split(plain)
+    chosen = ""
+    for sentence in sentences:
+        candidate = f"{chosen} {sentence}".strip() if chosen else sentence
+        if len(candidate) <= max_len:
+            chosen = candidate
+        else:
+            break
+    if chosen:
+        return chosen
+    cut = plain[: max_len - 1].rsplit(" ", 1)[0].rstrip(",;:")
+    return cut + "…"
+
+
 def on_page_markdown(markdown: str, page, config, files: Files) -> str:
+    description = str(page.meta.get("description") or "").strip() or _extract_description(markdown)
+    if description:
+        page.meta["description"] = description
+        _page_descriptions[page.file.src_uri] = description
     root = _root_dir(config)
     lines = markdown.split("\n")
     lines = _reindent_lists(lines)
