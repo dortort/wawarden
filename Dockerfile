@@ -8,7 +8,8 @@ ARG REVISION
 LABEL org.opencontainers.image.source="https://github.com/dortort/wawarden" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
       org.opencontainers.image.version="${VERSION}" \
-      org.opencontainers.image.revision="${REVISION}"
+      org.opencontainers.image.revision="${REVISION}" \
+      io.modelcontextprotocol.server.name="io.github.dortort/wawarden"
 COPY --chmod=0555 dist/wawarden_${VERSION}_linux_${TARGETARCH} /wawarden
 COPY dist/licenses /licenses
 # An empty named volume mounted on /data takes this directory's owner and mode.
