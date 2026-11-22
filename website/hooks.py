@@ -17,15 +17,21 @@ same files render on the site without changing them:
 
 from __future__ import annotations
 
+import hashlib
 import html
+import json
 import os
 import posixpath
 import re
 
+import yaml
 from mkdocs.structure.files import File, Files
 
 REPO_BLOB = "https://github.com/dortort/wawarden/blob/main/"
 REPO_TREE = "https://github.com/dortort/wawarden/tree/main/"
+AGENT_SKILLS_SCHEMA = "https://schemas.agentskills.io/discovery/0.2.0/schema.json"
+SKILLS_SRC_DIR = os.path.join("website", "skills")
+SKILLS_SITE_PREFIX = ".well-known/agent-skills"
 
 # Root file -> its page on the site, relative to docs_dir.
 ROOT_PAGES = {
@@ -112,6 +118,9 @@ def on_serve(server, config, builder):
         path = os.path.join(root, name)
         if os.path.isfile(path):
             server.watch(path)
+    skills_dir = os.path.join(root, SKILLS_SRC_DIR)
+    if os.path.isdir(skills_dir):
+        server.watch(skills_dir)
     return server
 
 
@@ -433,7 +442,69 @@ def _format_llms_entry(page, config) -> str:
     return f"- [{page.title}]({url})"
 
 
-def _render_llms_txt(nav, config) -> str:
+def _parse_skill_frontmatter(content: str, path: str) -> dict[str, str]:
+    if not content.startswith("---\n"):
+        raise ValueError(f"{path}: missing YAML frontmatter")
+    end = content.find("\n---\n", 4)
+    if end == -1:
+        raise ValueError(f"{path}: unterminated YAML frontmatter")
+    meta = yaml.safe_load(content[4:end])
+    if not isinstance(meta, dict):
+        raise ValueError(f"{path}: frontmatter must be a YAML mapping")
+    name = str(meta.get("name") or "").strip()
+    description = str(meta.get("description") or "").strip()
+    if not name or not description:
+        raise ValueError(f"{path}: frontmatter must include non-empty name and description")
+    return {"name": name, "description": description}
+
+
+def _publish_agent_skills(config) -> list[dict[str, str]]:
+    root = _root_dir(config)
+    skills_dir = os.path.join(root, SKILLS_SRC_DIR)
+    if not os.path.isdir(skills_dir):
+        return []
+    site_base = _site_base(config)
+    site_dir = config["site_dir"]
+    published: list[dict[str, str]] = []
+    for entry in sorted(os.listdir(skills_dir)):
+        src_path = os.path.join(skills_dir, entry, "SKILL.md")
+        if not os.path.isfile(src_path):
+            continue
+        with open(src_path, "rb") as f:
+            raw = f.read()
+        meta = _parse_skill_frontmatter(raw.decode("utf-8"), src_path)
+        if meta["name"] != entry:
+            raise ValueError(f"{src_path}: frontmatter name {meta['name']!r} does not match directory {entry!r}")
+        rel_url = f"{SKILLS_SITE_PREFIX}/{entry}/SKILL.md"
+        dest_path = os.path.join(site_dir, rel_url)
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        with open(dest_path, "wb") as f:
+            f.write(raw)
+        with open(dest_path, "rb") as f:
+            digest = hashlib.sha256(f.read()).hexdigest()
+        published.append(
+            {
+                "name": meta["name"],
+                "type": "skill-md",
+                "description": meta["description"],
+                "url": f"{site_base}/{rel_url}",
+                "digest": f"sha256:{digest}",
+            }
+        )
+    if published:
+        index_path = os.path.join(site_dir, SKILLS_SITE_PREFIX, "index.json")
+        os.makedirs(os.path.dirname(index_path), exist_ok=True)
+        index_doc = {
+            "$schema": AGENT_SKILLS_SCHEMA,
+            "skills": published,
+        }
+        with open(index_path, "w", encoding="utf-8") as f:
+            json.dump(index_doc, f, indent=2)
+            f.write("\n")
+    return published
+
+
+def _render_llms_txt(nav, config, skills: list[dict[str, str]]) -> str:
     lines = [
         f"# {config['site_name']}",
         "",
@@ -452,6 +523,14 @@ def _render_llms_txt(nav, config) -> str:
         lines.extend(["", f"## {heading}", ""])
         for page in pages:
             lines.append(_format_llms_entry(page, config))
+    if skills:
+        lines.extend(["", "## Agent skills", ""])
+        for skill in skills:
+            lines.append(f"- [{skill['name']}]({skill['url']}): {skill['description']}")
+        lines.append(
+            f"- [Agent Skills Discovery Index]({_site_base(config)}/{SKILLS_SITE_PREFIX}/index.json): "
+            "Machine-readable index of published WaWarden agent skills with SHA-256 digests."
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -460,7 +539,8 @@ def on_post_build(config) -> None:
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         with open(dest_path, "w", encoding="utf-8") as f:
             f.write(content)
+    skills = _publish_agent_skills(config)
     if _nav is not None:
         llms_path = os.path.join(config["site_dir"], "llms.txt")
         with open(llms_path, "w", encoding="utf-8") as f:
-            f.write(_render_llms_txt(_nav, config))
+            f.write(_render_llms_txt(_nav, config, skills))
