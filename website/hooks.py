@@ -17,6 +17,7 @@ same files render on the site without changing them:
 
 from __future__ import annotations
 
+import html
 import os
 import posixpath
 import re
@@ -58,10 +59,26 @@ ITALIC_UNDER = re.compile(r"(?<!\w)_([^_]+)_(?!\w)")
 SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
 _page_descriptions: dict[str, str] = {}
+_markdown_copies: dict[str, tuple[str, str]] = {}
 
 
 def on_pre_build(config) -> None:
     _page_descriptions.clear()
+    _markdown_copies.clear()
+
+
+def _site_base(config) -> str:
+    return str(config["site_url"]).rstrip("/")
+
+
+def _markdown_rel_path(page) -> str:
+    if not page.url or page.url.endswith("/"):
+        return page.url + "index.md"
+    return posixpath.join(posixpath.dirname(page.url), "index.md")
+
+
+def _markdown_url(page, config) -> str:
+    return f"{_site_base(config)}/{_markdown_rel_path(page)}"
 
 
 def _root_dir(config) -> str:
@@ -94,12 +111,17 @@ def _repo_path(page) -> str:
     return SITE_TO_ROOT.get(src, "docs/" + src)
 
 
-def _rewrite_target(target: str, page, files: Files, root: str, html: bool) -> str:
+def _rewrite_target(target: str, page, files: Files, root: str, is_html: bool, site_base: str | None = None) -> str:
     raw = target
     wrapped = target.startswith("<") and target.endswith(">")
     if wrapped:
         target = target[1:-1]
-    if not target or target.startswith(("#", "/")) or SCHEME.match(target):
+    if not target or target.startswith("#") or SCHEME.match(target):
+        return raw
+    if target.startswith("/"):
+        if site_base and not target.startswith("//"):
+            new = site_base + target
+            return f"<{new}>" if wrapped else new
         return raw
     path, sep, fragment = target.partition("#")
     path, qsep, query = path.partition("?")
@@ -121,9 +143,15 @@ def _rewrite_target(target: str, page, files: Files, root: str, html: bool) -> s
         base = REPO_TREE if os.path.isdir(os.path.join(root, resolved)) else REPO_BLOB
         new = base + ("" if resolved == "." else resolved) + (qsep + query) + (sep + fragment)
         return f"<{new}>" if wrapped else new
-    if html:
+    target_file = files.get_file_from_path(site_path)
+    if site_base is not None:
+        if target_file.is_documentation_page() and not is_html:
+            new = f"{site_base}/{target_file.url}index.md"
+        else:
+            new = f"{site_base}/{target_file.url}"
+    elif is_html:
         # Raw HTML is not rewritten by MkDocs: make it relative to the page's URL.
-        target_url = files.get_file_from_path(site_path).url
+        target_url = target_file.url
         page_dir = page.url if page.url.endswith("/") or not page.url else posixpath.dirname(page.url) + "/"
         new = posixpath.relpath(target_url or ".", page_dir or ".")
         if target_url.endswith("/") and not new.endswith("/"):
@@ -134,13 +162,13 @@ def _rewrite_target(target: str, page, files: Files, root: str, html: bool) -> s
     return f"<{new}>" if wrapped else new
 
 
-def _rewrite_paragraph(text: str, page, files: Files, root: str) -> str:
+def _rewrite_paragraph(text: str, page, files: Files, root: str, site_base: str | None = None) -> str:
     """Rewrite the links in one paragraph (no blank lines, no fenced code)."""
 
     def outside_code(part: str) -> str:  # part has its code spans hidden
-        part = REF_DEF.sub(lambda m: m.group(1) + _rewrite_target(m.group(2), page, files, root, False) + m.group(3), part)
-        part = INLINE_LINK.sub(lambda m: m.group(1) + _rewrite_target(m.group(2), page, files, root, False) + m.group(3), part)
-        return HTML_ATTR.sub(lambda m: m.group(1) + m.group(2) + _rewrite_target(m.group(3), page, files, root, True) + m.group(2), part)
+        part = REF_DEF.sub(lambda m: m.group(1) + _rewrite_target(m.group(2), page, files, root, False, site_base) + m.group(3), part)
+        part = INLINE_LINK.sub(lambda m: m.group(1) + _rewrite_target(m.group(2), page, files, root, False, site_base) + m.group(3), part)
+        return HTML_ATTR.sub(lambda m: m.group(1) + m.group(2) + _rewrite_target(m.group(3), page, files, root, True, site_base) + m.group(2), part)
 
     # Hide code spans behind placeholders, so that a link inside one is left
     # alone while a link whose text is a code span is still rewritten.
@@ -152,6 +180,36 @@ def _rewrite_paragraph(text: str, page, files: Files, root: str) -> str:
 
     masked = outside_code(CODE_SPAN.sub(hide, text))
     return re.sub(r"\x00(\d+)\x00", lambda m: spans[int(m.group(1))], masked)
+
+
+def _rewrite_lines(lines: list[str], page, files: Files, root: str, site_base: str | None = None) -> list[str]:
+    rewritten: list[str] = []
+    paragraph: list[str] = []
+    in_fence: str | None = None
+
+    def flush():
+        if paragraph:
+            rewritten.extend(_rewrite_paragraph("\n".join(paragraph), page, files, root, site_base).split("\n"))
+            paragraph.clear()
+
+    for line in lines:
+        f = FENCE.match(line)
+        if in_fence:
+            rewritten.append(line)
+            if f and f.group(2).startswith(in_fence) and not line.strip()[len(f.group(2)):].strip():
+                in_fence = None
+            continue
+        if f:
+            flush()
+            in_fence = f.group(2)
+            rewritten.append(line)
+        elif not line.strip():
+            flush()
+            rewritten.append(line)
+        else:
+            paragraph.append(line)
+    flush()
+    return rewritten
 
 
 def _reindent_lists(lines: list[str]) -> list[str]:
@@ -316,35 +374,12 @@ def on_page_markdown(markdown: str, page, config, files: Files) -> str:
         page.meta["description"] = description
         _page_descriptions[page.file.src_uri] = description
     root = _root_dir(config)
-    lines = markdown.split("\n")
-    lines = _reindent_lists(lines)
-    rewritten: list[str] = []
-    paragraph: list[str] = []
-    in_fence: str | None = None
-
-    def flush():
-        if paragraph:
-            rewritten.extend(_rewrite_paragraph("\n".join(paragraph), page, files, root).split("\n"))
-            paragraph.clear()
-
-    for line in lines:
-        f = FENCE.match(line)
-        if in_fence:
-            rewritten.append(line)
-            if f and f.group(2).startswith(in_fence) and not line.strip()[len(f.group(2)):].strip():
-                in_fence = None
-            continue
-        if f:
-            flush()
-            in_fence = f.group(2)
-            rewritten.append(line)
-        elif not line.strip():
-            flush()
-            rewritten.append(line)
-        else:
-            paragraph.append(line)
-    flush()
-    lines = rewritten
+    raw_lines = markdown.split("\n")
+    abs_md = "\n".join(_rewrite_lines(raw_lines, page, files, root, _site_base(config))).rstrip("\n") + "\n"
+    dest_md = os.path.join(os.path.dirname(page.file.abs_dest_path), "index.md")
+    _markdown_copies[page.file.src_uri] = (dest_md, abs_md)
+    lines = _reindent_lists(raw_lines)
+    lines = _rewrite_lines(lines, page, files, root)
     lines = _alerts(lines)
     if page.file.src_uri == "index.md":
         for i, line in enumerate(lines):
@@ -363,3 +398,16 @@ def on_page_context(context, page, config, nav):
     if src in SITE_TO_ROOT:
         page.edit_url = "https://github.com/dortort/wawarden/edit/main/" + SITE_TO_ROOT[src]
     return context
+
+
+def on_post_page(output: str, page, config) -> str:
+    href = html.escape(_markdown_url(page, config), quote=True)
+    tag = f'  <link rel="alternate" type="text/markdown" href="{href}">\n  </head>'
+    return output.replace("</head>", tag, 1)
+
+
+def on_post_build(config) -> None:
+    for dest_path, content in _markdown_copies.values():
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        with open(dest_path, "w", encoding="utf-8") as f:
+            f.write(content)
