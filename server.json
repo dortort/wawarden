@@ -1,0 +1,123 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.dortort/wawarden",
+  "title": "WaWarden",
+  "description": "Self-hosted WhatsApp gateway with per-client, per-chat scoped reading, search, and sending",
+  "version": "1.4.0",
+  "websiteUrl": "https://wawarden.dortort.dev/",
+  "repository": {
+    "url": "https://github.com/dortort/wawarden",
+    "source": "github",
+    "id": "1403621980"
+  },
+  "icons": [
+    {
+      "src": "https://wawarden.dortort.dev/assets/favicon.svg",
+      "mimeType": "image/svg+xml",
+      "sizes": [
+        "any"
+      ]
+    }
+  ],
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/dortort/wawarden:v1.4.0",
+      "runtimeHint": "docker",
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://127.0.0.1:8080/mcp",
+        "headers": [
+          {
+            "name": "Authorization",
+            "description": "Scoped client bearer token created with 'wawarden admin clients create'",
+            "value": "Bearer {client_token}",
+            "isRequired": true,
+            "isSecret": true,
+            "variables": {
+              "client_token": {
+                "description": "Client bearer token issued by 'wawarden admin clients create'",
+                "isRequired": true,
+                "isSecret": true
+              }
+            }
+          }
+        ]
+      },
+      "runtimeArguments": [
+        {
+          "type": "positional",
+          "value": "--read-only",
+          "description": "Mount the container root filesystem read-only; WaWarden writes only under /data"
+        },
+        {
+          "type": "named",
+          "name": "--publish",
+          "description": "Publish the client MCP and REST listener on host loopback only",
+          "value": "127.0.0.1:8080:8080",
+          "isRequired": true
+        },
+        {
+          "type": "named",
+          "name": "--mount",
+          "description": "Mount a named Docker volume on /data (inherits 65532:65532 mode 0700)",
+          "value": "type=volume,src={data_volume},dst=/data",
+          "isRequired": true,
+          "variables": {
+            "data_volume": {
+              "description": "Docker volume name for persistent archive, session store, and keys",
+              "default": "wawarden-data",
+              "isRequired": true
+            }
+          }
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "WAWARDEN_LISTEN",
+          "description": "Client listener address inside the container; bind 0.0.0.0:8080 so host loopback port publishing reaches it",
+          "default": "0.0.0.0:8080",
+          "isRequired": true
+        },
+        {
+          "name": "WAWARDEN_OWNER_PHONE",
+          "description": "WhatsApp account phone number in E.164 format permitted to pair (e.g. +15550100001)",
+          "placeholder": "+15550100001",
+          "isRequired": false
+        },
+        {
+          "name": "WAWARDEN_ADMIN_TOKEN_SHA256",
+          "description": "64-hex-character SHA-256 hash of the admin token from 'wawarden admin init'; enables the admin listener",
+          "placeholder": "<64-hex-sha256>",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "WAWARDEN_ADMIN_LISTEN",
+          "description": "Admin listener address inside the container (default 127.0.0.1:8082)",
+          "default": "127.0.0.1:8082",
+          "isRequired": false
+        },
+        {
+          "name": "WAWARDEN_LOG_LEVEL",
+          "description": "Structured JSON log verbosity level",
+          "default": "info",
+          "choices": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
+          "isRequired": false
+        },
+        {
+          "name": "WAWARDEN_MEDIA_MAX_BYTES",
+          "description": "Maximum downloadable attachment size in bytes (0 disables media downloads; up to 2147483648)",
+          "format": "number",
+          "default": "0",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}
