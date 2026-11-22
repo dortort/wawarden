@@ -47,6 +47,10 @@ jobs:
         run: |
           "$RUNNER_TEMP/venv/bin/mkdocs" build --strict --site-dir "$RUNNER_TEMP/site"
 
+      - name: Verify AI-readiness site outputs
+        run: |
+          "$RUNNER_TEMP/venv/bin/python" website/verify_site.py --site-dir "$RUNNER_TEMP/site"
+
       - name: Configure GitHub Pages
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
