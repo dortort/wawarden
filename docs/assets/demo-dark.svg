@@ -1,0 +1,164 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="740" viewBox="0 0 1280 740" role="img" aria-label="Terminal recording of the WaWarden fake engine quickstart: pairing with FAKE-C0DE, checking admin status, creating a scoped client token, reading chats over REST, calling list_chats and search_messages over MCP, and registering the MCP server with Claude Code">
+  <title>WaWarden fake engine quickstart: pairing, scoped client creation, REST, MCP and Claude Code</title>
+  <defs>
+    <clipPath id="window">
+      <rect x="0.5" y="0.5" width="1279" height="739" rx="24"/>
+    </clipPath>
+    <style>
+      .bg { fill: #111B21; }
+      .chrome { fill: #0B1014; }
+      .frame { fill: none; stroke: #2A3942; stroke-width: 1; }
+      .divider { stroke: #2A3942; stroke-width: 1; }
+      .dot { fill: #2A3942; }
+      .dot-live { fill: #25D366; }
+      .badge { fill: #1B262D; stroke: #2A3942; stroke-width: 1; }
+      .ui { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 13px; fill: #AEBAC1; }
+      .ui-strong { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 13px; font-weight: 700; fill: #E9EDEF; letter-spacing: -0.01em; }
+      .ui-badge { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 12px; fill: #AEBAC1; }
+      .term { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; fill: #E9EDEF; white-space: pre; }
+      .prompt { fill: #25D366; font-weight: 700; }
+      .cmd { fill: #FFFFFF; font-weight: 600; }
+      .flag { fill: #5BE08E; }
+      .out { fill: #AEBAC1; }
+      .key { fill: #8696A0; }
+      .val { fill: #E9EDEF; }
+      .hi { fill: #25D366; font-weight: 700; }
+      .warn { fill: #5BE08E; }
+      .cursor { fill: #25D366; animation: blink 1s steps(1, end) infinite; }
+
+      .s1c { opacity: 0; animation: show1c 26s linear infinite; }
+      .s1o { opacity: 0; animation: show1o 26s linear infinite; }
+      .s2c { opacity: 0; animation: show2c 26s linear infinite; }
+      .s2o { opacity: 0; animation: show2o 26s linear infinite; }
+      .s3c { opacity: 0; animation: show3c 26s linear infinite; }
+      .s3o { opacity: 0; animation: show3o 26s linear infinite; }
+      .s4c { opacity: 0; animation: show4c 26s linear infinite; }
+      .s4o { opacity: 0; animation: show4o 26s linear infinite; }
+      .s5c { opacity: 0; animation: show5c 26s linear infinite; }
+      .s5o { opacity: 0; animation: show5o 26s linear infinite; }
+      .s6c { opacity: 0; animation: show6c 26s linear infinite; }
+      .s6o { opacity: 0; animation: show6o 26s linear infinite; }
+      .s7c { opacity: 0; animation: show7c 26s linear infinite; }
+      .s7o { opacity: 0; animation: show7o 26s linear infinite; }
+
+      @keyframes show1c { 0%, 1.5% { opacity: 0; } 2.5%, 96% { opacity: 1; } 98%, 100% { opacity: 0; } }
+      @keyframes show1o { 0%, 4.5% { opacity: 0; } 5.5%, 96% { opacity: 1; } 98%, 100% { opacity: 0; } }
+      @keyframes show2c { 0%, 9.5% { opacity: 0; } 10.5%, 96% { opacity: 1; } 98%, 100% { opacity: 0; } }
+      @keyframes show2o { 0%, 12.5% { opacity: 0; } 13.5%, 96% { opacity: 1; } 98%, 100% { opacity: 0; } }
+      @keyframes show3c { 0%, 18.5% { opacity: 0; } 19.5%, 96% { opacity: 1; } 98%, 100% { opacity: 0; } }
+      @keyframes show3o { 0%, 22.0% { opacity: 0; } 23.0%, 96% { opacity: 1; } 98%, 100% { opacity: 0; } }
+      @keyframes show4c { 0%, 29.0% { opacity: 0; } 30.0%, 96% { opacity: 1; } 98%, 100% { opacity: 0; } }
+      @keyframes show4o { 0%, 32.5% { opacity: 0; } 33.5%, 96% { opacity: 1; } 98%, 100% { opacity: 0; } }
+      @keyframes show5c { 0%, 39.5% { opacity: 0; } 40.5%, 96% { opacity: 1; } 98%, 100% { opacity: 0; } }
+      @keyframes show5o { 0%, 43.5% { opacity: 0; } 44.5%, 96% { opacity: 1; } 98%, 100% { opacity: 0; } }
+      @keyframes show6c { 0%, 51.0% { opacity: 0; } 52.0%, 96% { opacity: 1; } 98%, 100% { opacity: 0; } }
+      @keyframes show6o { 0%, 55.5% { opacity: 0; } 56.5%, 96% { opacity: 1; } 98%, 100% { opacity: 0; } }
+      @keyframes show7c { 0%, 63.5% { opacity: 0; } 64.5%, 96% { opacity: 1; } 98%, 100% { opacity: 0; } }
+      @keyframes show7o { 0%, 67.5% { opacity: 0; } 68.5%, 96% { opacity: 1; } 98%, 100% { opacity: 0; } }
+      @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+
+      @media (prefers-reduced-motion: reduce) {
+        .s1c, .s1o, .s2c, .s2o, .s3c, .s3o, .s4c, .s4o, .s5c, .s5o, .s6c, .s6o, .s7c, .s7o {
+          animation: none;
+          opacity: 1;
+        }
+        .cursor { animation: none; opacity: 1; }
+      }
+    </style>
+  </defs>
+
+  <g clip-path="url(#window)">
+    <rect class="bg" x="0" y="0" width="1280" height="740"/>
+    <rect class="chrome" x="0" y="0" width="1280" height="46"/>
+    <line class="divider" x1="0" y1="46.5" x2="1280" y2="46.5"/>
+
+    <!-- Window dots -->
+    <circle class="dot" cx="28" cy="23" r="6"/>
+    <circle class="dot" cx="48" cy="23" r="6"/>
+    <circle class="dot" cx="68" cy="23" r="6"/>
+
+    <!-- Brand mark and title -->
+    <polyline points="96,24 101,33 108,18 113,28 120,13" fill="none" stroke="#25D366" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="132" y="28" class="ui-strong">wawarden-dev</text>
+    <text x="232" y="28" class="ui">WAWARDEN_DEV_FAKE_ENGINE=1 · offline quickstart</text>
+
+    <!-- Listener badge -->
+    <rect class="badge" x="1036" y="11" width="220" height="24" rx="12"/>
+    <circle class="dot-live" cx="1052" cy="23" r="4"/>
+    <text x="1064" y="27" class="ui-badge">127.0.0.1:8080 · :8082</text>
+
+    <!-- Step 1: Pair with FAKE-C0DE -->
+    <g class="s1c">
+      <text x="28" y="76" class="term"><tspan class="prompt">$</tspan> <tspan class="cmd">./wawarden-dev admin pair</tspan> <tspan class="flag">--token-file</tspan> &quot;$dir/admin.token&quot;</text>
+    </g>
+    <g class="s1o">
+      <text x="28" y="96" class="term out">On the phone, open Linked devices, choose Link a device, then Link with phone number instead, and enter the code.</text>
+      <text x="28" y="116" class="term"><tspan class="key">pairing code:</tspan> <tspan class="hi">FAKE-C0DE</tspan></text>
+    </g>
+
+    <!-- Step 2: Check admin status -->
+    <g class="s2c">
+      <text x="28" y="144" class="term"><tspan class="prompt">$</tspan> <tspan class="cmd">./wawarden-dev admin status</tspan> <tspan class="flag">--token-file</tspan> &quot;$dir/admin.token&quot;</text>
+    </g>
+    <g class="s2o">
+      <text x="28" y="164" class="term"><tspan class="key">state:</tspan> <tspan class="hi">connected</tspan>   <tspan class="key">reason:</tspan> <tspan class="val">none</tspan>   <tspan class="key">paired:</tspan> <tspan class="val">true</tspan>   <tspan class="key">downloads:</tspan> <tspan class="val">off</tspan>   <tspan class="key">chats:</tspan> <tspan class="hi">3</tspan>   <tspan class="key">messages:</tspan> <tspan class="hi">25</tspan></text>
+      <text x="28" y="184" class="term"><tspan class="key">history blobs pending:</tspan> <tspan class="val">0</tspan>   <tspan class="key">history blobs quarantined:</tspan> <tspan class="hi">2</tspan>   <tspan class="key">inbox backlog:</tspan> <tspan class="val">0</tspan>   <tspan class="key">last ingest:</tspan> <tspan class="val">2026-10-23T13:31:50Z</tspan>   <tspan class="key">version:</tspan> <tspan class="val">dev</tspan></text>
+    </g>
+
+    <!-- Step 3: Create a scoped client -->
+    <g class="s3c">
+      <text x="28" y="212" class="term"><tspan class="prompt">$</tspan> <tspan class="cmd">./wawarden-dev admin clients create</tspan> <tspan class="flag">--token-file</tspan> &quot;$dir/admin.token&quot; <tspan class="flag">--name</tspan> demo <tspan class="flag">--read</tspan> 120363000000000021@g.us</text>
+    </g>
+    <g class="s3o">
+      <text x="28" y="232" class="term"><tspan class="key">id:</tspan> <tspan class="val">v3rvssgt</tspan>   <tspan class="key">name:</tspan> <tspan class="val">demo</tspan>   <tspan class="key">state:</tspan> <tspan class="hi">active</tspan>   <tspan class="key">expires:</tspan> <tspan class="val">2027-01-21T13:31:57Z</tspan>   <tspan class="key">all chats:</tspan> <tspan class="val">false</tspan>   <tspan class="key">allow first contact:</tspan> <tspan class="val">false</tspan>   <tspan class="key">allow media:</tspan> <tspan class="val">false</tspan></text>
+      <text x="28" y="252" class="term"><tspan class="key">read chat:</tspan> <tspan class="val">120363000000000021@g.us (group, seen) Synthetic group, renamed</tspan></text>
+      <text x="28" y="272" class="term"><tspan class="key">token:</tspan> <tspan class="hi">ww_v3rvssgt_HUNLAvTn6AUQTgC0YaNcZBFj3X1XP6xOzyLeWZibogc_9e5d4460</tspan></text>
+      <text x="28" y="292" class="term key">Give the token to the client now and store it in its secret store, it is not shown again; revoke the client to withdraw it.</text>
+    </g>
+
+    <!-- Step 4: Read chats over REST -->
+    <g class="s4c">
+      <text x="28" y="320" class="term"><tspan class="prompt">$</tspan> <tspan class="cmd">curl</tspan> <tspan class="flag">-s -H</tspan> @&quot;$dir/client.header&quot; http://127.0.0.1:8080/v1/chats</text>
+    </g>
+    <g class="s4o">
+      <text x="28" y="340" class="term out">{&quot;chats&quot;:[{&quot;id&quot;:&quot;<tspan class="hi">598c0b9f879e48a2f09b2471c22a4b6f</tspan>&quot;,&quot;kind&quot;:&quot;group&quot;,&quot;name&quot;:&quot;<tspan class="val">Synthetic group, renamed</tspan>&quot;,</text>
+      <text x="28" y="360" class="term out">  &quot;name_source&quot;:&quot;group_subject&quot;,&quot;last_message_at&quot;:&quot;2026-10-23T13:31:49.087Z&quot;}],&quot;next&quot;:null,&quot;truncated&quot;:false,&quot;session&quot;:{&quot;state&quot;:&quot;connected&quot;}}</text>
+    </g>
+
+    <!-- Step 5: Call MCP list_chats -->
+    <g class="s5c">
+      <text x="28" y="388" class="term"><tspan class="prompt">$</tspan> <tspan class="cmd">curl</tspan> <tspan class="flag">-s -H</tspan> @&quot;$dir/client.header&quot; <tspan class="flag">-H</tspan> &apos;Content-Type: application/json&apos; <tspan class="flag">-H</tspan> &apos;Accept: application/json, text/event-stream&apos; \</text>
+      <text x="28" y="408" class="term">    <tspan class="flag">-d</tspan> &apos;{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:1,&quot;method&quot;:&quot;tools/call&quot;,&quot;params&quot;:{&quot;name&quot;:&quot;<tspan class="hi">list_chats</tspan>&quot;,&quot;arguments&quot;:{}}}&apos; http://127.0.0.1:8080/mcp</text>
+    </g>
+    <g class="s5o">
+      <text x="28" y="428" class="term out">{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:1,&quot;result&quot;:{&quot;structuredContent&quot;:{&quot;chats&quot;:[{&quot;id&quot;:&quot;<tspan class="hi">598c0b9f879e48a2f09b2471c22a4b6f</tspan>&quot;,&quot;kind&quot;:&quot;group&quot;,</text>
+      <text x="28" y="448" class="term out">  &quot;name&quot;:&quot;<tspan class="val">Synthetic group, renamed</tspan>&quot;,&quot;name_source&quot;:&quot;group_subject&quot;,&quot;last_message_at&quot;:&quot;2026-10-23T13:31:49.087Z&quot;}],&quot;next&quot;:null,&quot;truncated&quot;:false,&quot;session&quot;:{&quot;state&quot;:&quot;connected&quot;}}}}</text>
+    </g>
+
+    <!-- Step 6: Call MCP search_messages -->
+    <g class="s6c">
+      <text x="28" y="476" class="term"><tspan class="prompt">$</tspan> <tspan class="cmd">curl</tspan> <tspan class="flag">-s -H</tspan> @&quot;$dir/client.header&quot; <tspan class="flag">-H</tspan> &apos;Content-Type: application/json&apos; <tspan class="flag">-H</tspan> &apos;Accept: application/json, text/event-stream&apos; \</text>
+      <text x="28" y="496" class="term">    <tspan class="flag">-d</tspan> &apos;{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:2,&quot;method&quot;:&quot;tools/call&quot;,&quot;params&quot;:{&quot;name&quot;:&quot;<tspan class="hi">search_messages</tspan>&quot;,&quot;arguments&quot;:{&quot;query&quot;:&quot;<tspan class="val">Alice</tspan>&quot;}}}&apos; http://127.0.0.1:8080/mcp</text>
+    </g>
+    <g class="s6o">
+      <text x="28" y="516" class="term out">{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:2,&quot;result&quot;:{&quot;structuredContent&quot;:{&quot;messages&quot;:[</text>
+      <text x="28" y="536" class="term out">  {&quot;mref&quot;:&quot;m1_AT71ykvR4UIBUoSr...&quot;,&quot;chat&quot;:&quot;598c0b9f879e48a2f09b2471c22a4b6f&quot;,&quot;sender&quot;:{&quot;id&quot;:&quot;100000000000021@lid&quot;,&quot;name&quot;:&quot;<tspan class="val">Alice (synthetic)</tspan>&quot;},</text>
+      <text x="28" y="556" class="term out">   &quot;from_me&quot;:false,&quot;ts&quot;:&quot;2026-10-23T13:31:46.256Z&quot;,&quot;kind&quot;:&quot;text&quot;,&quot;text&quot;:&quot;<tspan class="val">Alice quotes Bob wrongly</tspan>&quot;,&quot;quote_verified&quot;:<tspan class="warn">false</tspan>,&quot;origin&quot;:&quot;peer&quot;,&quot;untrusted&quot;:<tspan class="hi">true</tspan>},</text>
+      <text x="28" y="576" class="term out">  {&quot;mref&quot;:&quot;m1_AT71ykviXhfqJkf_...&quot;,&quot;chat&quot;:&quot;598c0b9f879e48a2f09b2471c22a4b6f&quot;,&quot;sender&quot;:{&quot;id&quot;:&quot;100000000000021@lid&quot;,&quot;name&quot;:&quot;<tspan class="val">Alice (synthetic)</tspan>&quot;},</text>
+      <text x="28" y="596" class="term out">   &quot;from_me&quot;:false,&quot;ts&quot;:&quot;2026-10-23T13:31:46.155Z&quot;,&quot;kind&quot;:&quot;text&quot;,&quot;text&quot;:&quot;<tspan class="val">Alice quotes Bob</tspan>&quot;,&quot;quote_verified&quot;:<tspan class="hi">true</tspan>,&quot;origin&quot;:&quot;peer&quot;,&quot;untrusted&quot;:<tspan class="hi">true</tspan>}],</text>
+      <text x="28" y="616" class="term out">  &quot;next&quot;:null,&quot;more&quot;:false,&quot;truncated&quot;:false,&quot;session&quot;:{&quot;state&quot;:&quot;connected&quot;}}}}</text>
+    </g>
+
+    <!-- Step 7: Register with Claude Code -->
+    <g class="s7c">
+      <text x="28" y="644" class="term"><tspan class="prompt">$</tspan> <tspan class="cmd">claude mcp add</tspan> <tspan class="flag">--transport</tspan> http whatsapp-demo http://127.0.0.1:8080/mcp <tspan class="flag">--header</tspan> &quot;Authorization: Bearer $demo_token&quot;</text>
+    </g>
+    <g class="s7o">
+      <text x="28" y="664" class="term"><tspan class="hi">Added HTTP MCP server whatsapp-demo with URL: http://127.0.0.1:8080/mcp to local config</tspan> <tspan class="key">(tools: get_changes, get_chat, get_messages, list_chats, search_messages)</tspan></text>
+      <text x="28" y="692" class="term"><tspan class="prompt">$</tspan> </text>
+      <rect class="cursor" x="44" y="679" width="8" height="16" rx="1"/>
+    </g>
+  </g>
+
+  <rect class="frame" x="0.5" y="0.5" width="1279" height="739" rx="24"/>
+</svg>
